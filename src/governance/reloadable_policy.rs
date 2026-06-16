@@ -311,12 +311,6 @@ impl RedLinePolicy {
             config: None,
         }
     }
-
-    /// Returns a reference to the parsed config, if any.
-    #[allow(dead_code)] // F-GAP-49 — reserved for policy config inspection
-    pub fn config(&self) -> Option<&serde_json::Value> {
-        self.config.as_ref()
-    }
 }
 
 impl ReloadablePolicy for RedLinePolicy {

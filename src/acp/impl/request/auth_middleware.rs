@@ -121,7 +121,7 @@ mod tests {
     fn test_server_with_auth(enabled: bool) -> AcpServer {
         // Minimal server with auth config
         let builder = crate::acp::server::ServerBuilder::new();
-        let mut server = builder.build().expect("test server");
+        let mut server = builder.build();
         server.runtime_config.user_auth_enabled = enabled;
         if enabled {
             let auth_cfg = AuthConfig::from(&server.runtime_config);

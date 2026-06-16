@@ -146,7 +146,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_review_gate_returns_review_outcome() {
-        let server = ServerBuilder::new().build().expect("server should build");
+        let server = ServerBuilder::new().build();
         let trace = RequestTraceContext {
             trace_id: "test".to_string(),
             span_id: "test".to_string(),

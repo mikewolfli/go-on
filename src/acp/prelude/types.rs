@@ -203,6 +203,9 @@ pub struct ServerStatus {
     pub lifecycle: LifecycleSnapshot,
     /// Maintenance snapshot
     pub maintenance: MaintenanceSnapshot,
+    /// Governance subsystem health snapshot.
+    /// Present when the harness bus is wired.
+    pub governance: Option<crate::governance::status::GovernanceStatus>,
     /// Timestamp of this status
     pub timestamp: i64,
 }

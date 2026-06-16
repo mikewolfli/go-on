@@ -79,62 +79,6 @@ pub const MAX_CLOCK_SKEW_S: u64 = 30;
 /// Maximum allowed clock skew in milliseconds.
 pub const MAX_CLOCK_SKEW_MS: u64 = MAX_CLOCK_SKEW_S * 1000;
 
-/// Sign a request body using the specified private key and algorithm.
-///
-/// For Ed25519, `private_key` must be a 32-byte seed or 64-byte expanded key pair.
-/// For HmacSha256, `private_key` is the HMAC shared secret.
-///
-/// This is public API consumed by integration tests and external SDK consumers.
-#[allow(dead_code)]
-pub fn sign_request(
-    private_key: &[u8],
-    body: &[u8],
-    algorithm: SigningAlgorithm,
-    key_id: &str,
-) -> Result<RequestSignature, SigningError> {
-    let timestamp_ms = current_timestamp_ms();
-    let to_sign = signing_payload(body, timestamp_ms);
-
-    let signature_bytes = match algorithm {
-        SigningAlgorithm::Ed25519 => {
-            use ed25519_dalek::Signer;
-            // Try 64-byte keypair first, then 32-byte seed
-            let signing_key = if private_key.len() == 64 {
-                let arr: &[u8; 64] = private_key.try_into().map_err(|_| {
-                    SigningError::InvalidKey("Ed25519 keypair must be 64 bytes".into())
-                })?;
-                ed25519_dalek::SigningKey::from_keypair_bytes(arr)
-                    .map_err(|e| SigningError::InvalidKey(e.to_string()))?
-            } else if private_key.len() == 32 {
-                let arr: &[u8; 32] = private_key.try_into().map_err(|_| {
-                    SigningError::InvalidKey("Ed25519 seed must be 32 bytes".into())
-                })?;
-                ed25519_dalek::SigningKey::from_bytes(arr)
-            } else {
-                return Err(SigningError::InvalidKey(
-                    "Ed25519 key must be 32 (seed) or 64 (keypair) bytes".into(),
-                ));
-            };
-            signing_key.sign(&to_sign).to_bytes().to_vec()
-        }
-        SigningAlgorithm::HmacSha256 => {
-            use hmac::{digest::KeyInit, Mac};
-            let mut mac = hmac::Hmac::<Sha256>::new_from_slice(private_key)
-                .map_err(|e| SigningError::InvalidKey(e.to_string()))?;
-            mac.update(&to_sign);
-            mac.finalize().into_bytes().to_vec()
-        }
-    };
-
-    Ok(RequestSignature {
-        signature: base64::engine::general_purpose::STANDARD.encode(&signature_bytes),
-        algorithm,
-        key_id: key_id.to_string(),
-        timestamp_ms,
-        body_hash: base64::engine::general_purpose::STANDARD.encode(sha256(body)),
-    })
-}
-
 /// Verify a request signature against the provided public key and body.
 ///
 /// For Ed25519, `public_key` must be a 32-byte public key.
@@ -235,49 +179,42 @@ fn current_timestamp_ms() -> u64 {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Build a `RequestSignature` from raw fields for test use.
+/// Replaces the removed `sign_request()` function.
+fn make_signature_for_test(
+    algorithm: SigningAlgorithm,
+    key_id: &str,
+    timestamp_ms: u64,
+    body_hash: String,
+    signature: String,
+) -> RequestSignature {
+    RequestSignature {
+        signature,
+        algorithm,
+        key_id: key_id.to_string(),
+        timestamp_ms,
+        body_hash,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_sign_and_verify_hmac() {
-        let secret = b"super-secret-key-1234567890123456";
-        let body = b"request body data";
-        let sig = sign_request(secret, body, SigningAlgorithm::HmacSha256, "key-1").unwrap();
-        let result = verify_request(secret, body, &sig).unwrap();
-        assert!(result);
-    }
-
-    #[test]
-    fn test_sign_and_verify_ed25519() {
-        // Generate a random Ed25519 signing key
-        let mut seed = [0u8; 32];
-        use rand::Rng;
-        rand::rng().fill_bytes(&mut seed);
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-        let verifying_key = signing_key.verifying_key();
-
-        let body = b"important request payload";
-        let sig = sign_request(
-            &signing_key.to_keypair_bytes(),
-            body,
-            SigningAlgorithm::Ed25519,
-            "ed-key-1",
-        )
-        .unwrap();
-
-        let result = verify_request(&verifying_key.to_bytes(), body, &sig).unwrap();
-        assert!(result);
-    }
-
-    #[test]
     fn test_replay_detection() {
         let secret = b"hmac-secret-key-22";
         let body = b"stale request";
-        let mut sig = sign_request(secret, body, SigningAlgorithm::HmacSha256, "k1").unwrap();
 
-        // Tamper with timestamp to simulate replay
-        sig.timestamp_ms = 1; // way in the past
+        // Construct a stale RequestSignature directly
+        let b64_engine = base64::engine::general_purpose::STANDARD;
+        let sig = RequestSignature {
+            signature: "AAAA".to_string(),
+            algorithm: SigningAlgorithm::HmacSha256,
+            key_id: "k1".to_string(),
+            timestamp_ms: 1, // way in the past
+            body_hash: b64_engine.encode(sha256(body)),
+        };
 
         let err = verify_request(secret, body, &sig).unwrap_err();
         assert!(matches!(err, SigningError::ReplayDetected { .. }));
@@ -287,7 +224,21 @@ mod tests {
     fn test_body_tampering() {
         let secret = b"hmac-secret-key-33";
         let body = b"original body";
-        let sig = sign_request(secret, body, SigningAlgorithm::HmacSha256, "k2").unwrap();
+        let b64_engine = base64::engine::general_purpose::STANDARD;
+
+        // Construct a valid signature for original body
+        let to_sign = signing_payload(body, current_timestamp_ms());
+        let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret).unwrap();
+        mac.update(&to_sign);
+        let sig_bytes = mac.finalize().into_bytes().to_vec();
+
+        let sig = RequestSignature {
+            signature: b64_engine.encode(&sig_bytes),
+            algorithm: SigningAlgorithm::HmacSha256,
+            key_id: "k2".to_string(),
+            timestamp_ms: current_timestamp_ms(),
+            body_hash: b64_engine.encode(sha256(body)),
+        };
 
         let result = verify_request(secret, b"tampered body", &sig);
         assert!(result.is_err());
@@ -297,7 +248,21 @@ mod tests {
     fn test_body_hash_mismatch_error() {
         let secret = b"test-secret";
         let body = b"my body";
-        let mut sig = sign_request(secret, body, SigningAlgorithm::HmacSha256, "k3").unwrap();
+        let b64_engine = base64::engine::general_purpose::STANDARD;
+
+        // Construct a signature with corrupted body hash
+        let to_sign = signing_payload(body, current_timestamp_ms());
+        let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret).unwrap();
+        mac.update(&to_sign);
+        let sig_bytes = mac.finalize().into_bytes().to_vec();
+
+        let mut sig = RequestSignature {
+            signature: b64_engine.encode(&sig_bytes),
+            algorithm: SigningAlgorithm::HmacSha256,
+            key_id: "k3".to_string(),
+            timestamp_ms: current_timestamp_ms(),
+            body_hash: b64_engine.encode(sha256(body)),
+        };
 
         // Corrupt the body hash
         sig.body_hash = "AAAA".to_string();

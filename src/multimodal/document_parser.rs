@@ -1,5 +1,5 @@
 //! Document parser — extracts structured content (text, images, tables, metadata)
-//! from PDF, DOCX, HTML, and Markdown files.
+//! from PDF, DOCX, HTML, Markdown, Excel, and PowerPoint files.
 //!
 //! Each backend is gated behind its own Cargo feature:
 //!
@@ -9,6 +9,8 @@
 //! | `document-docx` | `docx-rs` | Office Open XML (.docx) |
 //! | `document-html` | `scraper` | HTML / XHTML |
 //! | `document-markdown` | `comrak` | Markdown |
+//! | `document-excel` | `calamine` | Excel (.xlsx, .xls) |
+//! | `document-ppt` | `quick-xml` + `zip` | PowerPoint (.pptx) |
 //!
 //! When a feature is disabled the corresponding `parse_*` method returns
 //! a [`DocumentParserError::FeatureDisabled`] error.
@@ -64,6 +66,16 @@ pub enum DocumentParserError {
     #[cfg(feature = "document-markdown")]
     #[error("Markdown parse error: {0}")]
     Markdown(String),
+
+    /// Excel backend-specific error (calamine).
+    #[cfg(feature = "document-excel")]
+    #[error("Excel parse error: {0}")]
+    Excel(String),
+
+    /// PowerPoint backend-specific error (quick-xml).
+    #[cfg(feature = "document-ppt")]
+    #[error("PowerPoint parse error: {0}")]
+    Ppt(String),
 
     /// Catch-all for unexpected errors.
     #[error("{0}")]
@@ -240,6 +252,8 @@ impl DocumentParser {
             "docx" => self.parse_docx(path),
             "html" | "htm" => self.parse_html(path),
             "md" | "markdown" => self.parse_markdown(path),
+            "xls" | "xlsx" => self.parse_excel(path),
+            "pptx" => self.parse_pptx(path),
             _ => return Err(DocumentParserError::UnsupportedExtension(ext)),
         }?;
 
@@ -275,6 +289,8 @@ impl DocumentParser {
             "docx" => self.parse_docx_bytes(bytes),
             "html" | "htm" => self.parse_html_bytes(bytes),
             "md" | "markdown" => self.parse_markdown_bytes(bytes),
+            "xls" | "xlsx" => self.parse_excel_bytes(bytes),
+            "pptx" => self.parse_pptx_bytes(bytes),
             _ => return Err(DocumentParserError::UnsupportedExtension(ext)),
         }?;
 
@@ -388,8 +404,10 @@ impl DocumentParser {
         for key in INFO_KEYS {
             if let Ok(val) = doc.trailer.get(key) {
                 let key_str = std::str::from_utf8(key).unwrap_or_default().to_string();
-                if let Ok(cow_str) = val.as_string() {
-                    content.metadata.insert(key_str, cow_str.to_string());
+                if let Ok(bytes) = val.as_str() {
+                    if let Ok(s) = std::str::from_utf8(bytes) {
+                        content.metadata.insert(key_str, s.to_string());
+                    }
                 }
             }
         }
@@ -772,11 +790,11 @@ impl DocumentParser {
 
     #[cfg(feature = "document-markdown")]
     fn parse_markdown_str(&self, md_str: &str) -> Result<ParsedContent, DocumentParserError> {
-        use comrak::{markdown_to_html, ComrakOptions};
+        use comrak::{markdown_to_html, Options};
         use scraper::{Html, Selector};
 
         // Render to HTML, then reuse the HTML parser for extraction.
-        let html = markdown_to_html(md_str, &ComrakOptions::default());
+        let html = markdown_to_html(md_str, &Options::default());
         let document = Html::parse_document(&html);
         let mut content = ParsedContent::default();
 
@@ -886,6 +904,56 @@ impl DocumentParser {
     #[allow(dead_code)] // F-GAP-49 — reserved for conditional markdown parsing
     fn parse_markdown_str(&self, _md_str: &str) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("Markdown"))
+    }
+
+    // =======================================================================
+    // Excel backend  (feature = "document-excel", crate: calamine)
+    // =======================================================================
+
+    #[cfg(feature = "document-excel")]
+    fn parse_excel(&self, path: &Path) -> Result<ParsedContent, DocumentParserError> {
+        let bytes = std::fs::read(path).map_err(DocumentParserError::from_io)?;
+        self.parse_excel_bytes(&bytes)
+    }
+
+    #[cfg(not(feature = "document-excel"))]
+    fn parse_excel(&self, _path: &Path) -> Result<ParsedContent, DocumentParserError> {
+        Err(DocumentParserError::feature_disabled("Excel"))
+    }
+
+    #[cfg(feature = "document-excel")]
+    fn parse_excel_bytes(&self, bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+        crate::multimodal::excel_processor::parse_excel_bytes(bytes)
+    }
+
+    #[cfg(not(feature = "document-excel"))]
+    fn parse_excel_bytes(&self, _bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+        Err(DocumentParserError::feature_disabled("Excel"))
+    }
+
+    // =======================================================================
+    // PPT backend  (feature = "document-ppt", crate: quick-xml + zip)
+    // =======================================================================
+
+    #[cfg(feature = "document-ppt")]
+    fn parse_pptx(&self, path: &Path) -> Result<ParsedContent, DocumentParserError> {
+        let bytes = std::fs::read(path).map_err(DocumentParserError::from_io)?;
+        self.parse_pptx_bytes(&bytes)
+    }
+
+    #[cfg(not(feature = "document-ppt"))]
+    fn parse_pptx(&self, _path: &Path) -> Result<ParsedContent, DocumentParserError> {
+        Err(DocumentParserError::feature_disabled("PPT"))
+    }
+
+    #[cfg(feature = "document-ppt")]
+    fn parse_pptx_bytes(&self, bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+        crate::multimodal::ppt_processor::parse_pptx_bytes(bytes)
+    }
+
+    #[cfg(not(feature = "document-ppt"))]
+    fn parse_pptx_bytes(&self, _bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+        Err(DocumentParserError::feature_disabled("PPT"))
     }
 }
 

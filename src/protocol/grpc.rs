@@ -219,41 +219,8 @@ pub async fn call_health_check(
 }
 
 // ---------------------------------------------------------------------------
-// Conversion helpers
+// Conversion helpers (dead due to distributed module removal)
 // ---------------------------------------------------------------------------
-
-impl From<&crate::orchestration::distributed::remote_executor::TaskPacket> for ExecuteParams {
-    fn from(packet: &crate::orchestration::distributed::remote_executor::TaskPacket) -> Self {
-        Self {
-            node_id: packet.node_id.to_string(),
-            dag_id: packet.dag_id.to_string(),
-            tool_name: packet.tool_name.clone(),
-            input: packet.input.clone(),
-            dep_outputs: packet
-                .dep_outputs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect(),
-            retry_count: packet.retry_count,
-            max_retries: packet.max_retries,
-        }
-    }
-}
-
-impl From<ExecuteResult> for crate::orchestration::distributed::remote_executor::NodeOutput {
-    fn from(res: ExecuteResult) -> Self {
-        Self {
-            node_id: crate::orchestration::distributed::remote_executor::NodeId(res.node_id),
-            dag_id: crate::orchestration::distributed::remote_executor::DagId(res.dag_id),
-            tool_name: res.tool_name,
-            success: res.success,
-            output: res.output,
-            error: res.error,
-            duration_ms: res.duration_ms,
-            completed_at_ms: res.completed_at_ms,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -289,25 +256,5 @@ mod tests {
         let deserialized: JsonRpcRequest<ExecuteParams> = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.method, "execute");
         assert_eq!(deserialized.params.node_id, "node-1");
-    }
-
-    #[test]
-    fn test_execute_result_conversion() {
-        let result = ExecuteResult {
-            node_id: "n1".into(),
-            dag_id: "d1".into(),
-            tool_name: "t1".into(),
-            success: true,
-            output: Some(serde_json::json!({"result": "ok"})),
-            error: None,
-            duration_ms: 42,
-            completed_at_ms: 1000,
-        };
-
-        let output: crate::orchestration::distributed::remote_executor::NodeOutput = result.into();
-
-        assert!(output.success);
-        assert_eq!(output.node_id, "n1".into());
-        assert_eq!(output.duration_ms, 42);
     }
 }

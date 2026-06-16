@@ -53,15 +53,12 @@ pub struct SystemMemoryInfo {
     /// Approximate free (available) memory in bytes.
     pub free_bytes: u64,
     /// Active memory in bytes.
-    #[allow(dead_code)] // F-GAP-49 — reserved health metrics fields
     // populated by query_system_memory; reserved for future pressure analysis
     pub active_bytes: u64,
     /// Wired (unpageable) memory in bytes.
-    #[allow(dead_code)] // F-GAP-49 — reserved health metrics fields
     // populated by query_system_memory; reserved for future pressure analysis
     pub wired_bytes: u64,
     /// Swap usage in bytes (0 if swap is disabled).
-    #[allow(dead_code)] // F-GAP-49 — reserved health metrics fields
     // populated by query_system_memory; reserved for future pressure analysis
     pub swap_used_bytes: u64,
     /// Swap total capacity in bytes.
@@ -398,147 +395,6 @@ fn query_windows_memory() -> SystemMemoryInfo {
     }
 }
 
-// ── Startup Health Check ────────────────────────────────────────────────────
-
-/// Result of a pre-startup memory health check.
-// F-GAP-11 — reserved for future startup health-check integration
-#[allow(dead_code)]
-// F-GAP-49 — reserved memory health features
-// F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
-// F-GAP-49 — reserved for future use
-#[derive(Debug, Clone, PartialEq)]
-pub enum MemoryHealth {
-    /// Memory is sufficient to run normally.
-    Healthy,
-    /// Memory is low — server will start but with warnings.
-    Low { free_mb: u64, message: String },
-    /// Memory is critically low — server should refuse to start.
-    Critical { free_mb: u64, message: String },
-    /// Could not determine memory status.
-    Unknown,
-}
-
-/// Perform a pre-startup memory health check.
-///
-/// Returns `MemoryHealth::Healthy` if the system has sufficient memory.
-/// Returns `MemoryHealth::Low` if memory is constrained (warns user).
-/// Returns `MemoryHealth::Critical` if starting would likely trigger OOM.
-// F-GAP-11 — reserved for future startup health-check integration
-#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
-                    // F-GAP-49 — reserved for future use
-pub fn check_startup_memory() -> MemoryHealth {
-    let info = query_system_memory();
-    let free_mb = info.free_mb();
-
-    // Check pressure level first (macOS)
-    if info.pressure_level >= 4 {
-        return MemoryHealth::Critical {
-            free_mb,
-            message: format!(
-                "System memory pressure level is PANIC ({})! System is at imminent risk of crash.",
-                info.pressure_level
-            ),
-        };
-    }
-    if info.pressure_level >= 3 {
-        return MemoryHealth::Critical {
-            free_mb,
-            message: format!(
-                "System memory pressure level is CRITICAL ({}). Server cannot start safely.",
-                info.pressure_level
-            ),
-        };
-    }
-
-    // Check available free memory
-    if free_mb < MEMORY_JETSAM_RISK_MB && info.total_bytes > 0 {
-        return MemoryHealth::Critical {
-            free_mb,
-            message: format!(
-                "Only {} MB free memory available (below {} MB threshold). \
-                 The server would likely be killed by the OOM killer immediately.",
-                free_mb, MEMORY_JETSAM_RISK_MB,
-            ),
-        };
-    }
-    if free_mb < MEMORY_CRITICAL_MB && info.total_bytes > 0 {
-        return MemoryHealth::Critical {
-            free_mb,
-            message: format!(
-                "Only {} MB free memory available (below {} MB critical threshold). \
-                 Risk of OOM killer (SIGKILL).",
-                free_mb, MEMORY_CRITICAL_MB,
-            ),
-        };
-    }
-    if free_mb < MEMORY_WARN_MB && info.total_bytes > 0 {
-        return MemoryHealth::Low {
-            free_mb,
-            message: format!(
-                "Only {} MB free memory available (below {} MB warning threshold). \
-                 Consider closing other applications or using --low-memory mode.",
-                free_mb, MEMORY_WARN_MB,
-            ),
-        };
-    }
-
-    // Warn if swap is disabled and memory is tight
-    if info.swap_disabled() && info.total_bytes > 0 && free_mb < 2048 {
-        return MemoryHealth::Low {
-            free_mb,
-            message: format!(
-                "Swap is disabled and only {} MB free. Without swap, the system has \
-                 no fallback when memory is exhausted.",
-                free_mb,
-            ),
-        };
-    }
-
-    if info.total_bytes == 0 {
-        return MemoryHealth::Unknown;
-    }
-
-    MemoryHealth::Healthy
-}
-
-/// Print a formatted memory health report to stderr.
-pub fn print_memory_health(health: &MemoryHealth) {
-    match health {
-        MemoryHealth::Healthy => {
-            let info = query_system_memory();
-            info!(
-                "system memory: total={} MB, free={} MB, pressure_level={}",
-                info.total_mb(),
-                info.free_mb(),
-                info.pressure_level,
-            );
-        }
-        MemoryHealth::Low { free_mb, message } => {
-            warn!(
-                free_mb = %free_mb,
-                "{}", message,
-            );
-            eprintln!(
-                "\n⚠️  Low Memory Warning: {} MB free\n   {}\n",
-                free_mb, message
-            );
-        }
-        MemoryHealth::Critical { free_mb, message } => {
-            error!(
-                free_mb = %free_mb,
-                "MEMORY CRITICAL: {}", message,
-            );
-            eprintln!(
-                "\n🚫 MEMORY CRITICAL: {} MB free\n   {}\n",
-                free_mb, message
-            );
-        }
-        MemoryHealth::Unknown => {
-            info!("could not determine system memory state — proceeding without checks");
-        }
-    }
-}
-
 // ── Runtime Memory Monitor ──────────────────────────────────────────────────
 
 /// Runtime memory state, accessed atomically.
@@ -547,19 +403,16 @@ static RUNTIME_MEMORY_TOTAL_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
 static MEMORY_MONITOR_INITIALIZED: OnceLock<bool> = OnceLock::new();
 
-#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 /// Get the last known free memory in MB (from the runtime monitor).
 pub fn runtime_free_mb() -> u64 {
     RUNTIME_MEMORY_FREE_MB.load(Ordering::Relaxed)
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 /// Get the last known total memory in MB.
 pub fn runtime_total_mb() -> u64 {
     RUNTIME_MEMORY_TOTAL_MB.load(Ordering::Relaxed)
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 /// Get the last known macOS memory pressure level.
 pub fn runtime_pressure_level() -> u8 {
     RUNTIME_PRESSURE_LEVEL.load(Ordering::Relaxed) as u8
@@ -626,6 +479,74 @@ pub fn start_memory_monitor() {
             }
         }
     });
+}
+
+// ── Memory Health Check ───────────────────────────────────────────────────
+
+/// Categorization of system memory health for startup decisions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemoryHealth {
+    /// Sufficient memory available.
+    Healthy,
+    /// Low memory — warning but not fatal.
+    Low { free_mb: u64 },
+    /// Critically low memory — should refuse to start.
+    Critical { free_mb: u64, message: String },
+    /// Unable to determine memory status.
+    Unknown,
+}
+
+/// Perform a pre-startup memory availability check.
+pub fn check_startup_memory() -> MemoryHealth {
+    let info = query_system_memory();
+    let free_mb = info.free_mb();
+
+    if free_mb == 0 && info.total_bytes == 0 {
+        return MemoryHealth::Unknown;
+    }
+
+    if free_mb < MEMORY_JETSAM_RISK_MB {
+        MemoryHealth::Critical {
+            free_mb,
+            message: format!(
+                "Only {} MB free — below Jetsam risk threshold ({} MB). Aborting to prevent data corruption.",
+                free_mb, MEMORY_JETSAM_RISK_MB
+            ),
+        }
+    } else if free_mb < MEMORY_CRITICAL_MB {
+        MemoryHealth::Critical {
+            free_mb,
+            message: format!(
+                "Only {} MB free — below critical threshold ({} MB). Refusing to start.",
+                free_mb, MEMORY_CRITICAL_MB
+            ),
+        }
+    } else if free_mb < MEMORY_WARN_MB {
+        MemoryHealth::Low { free_mb }
+    } else {
+        MemoryHealth::Healthy
+    }
+}
+
+/// Log a human-readable summary of the memory health check.
+pub fn print_memory_health(health: &MemoryHealth) {
+    match health {
+        MemoryHealth::Healthy => {
+            info!("Memory check: Healthy");
+        }
+        MemoryHealth::Low { free_mb } => {
+            warn!(
+                "Memory check: Low — only {} MB free (threshold: {} MB)",
+                free_mb, MEMORY_WARN_MB
+            );
+        }
+        MemoryHealth::Critical { free_mb, message } => {
+            error!("Memory check: CRITICAL — {} MB free. {}", free_mb, message);
+        }
+        MemoryHealth::Unknown => {
+            info!("Memory check: Unable to determine system memory (assuming healthy)");
+        }
+    }
 }
 
 /// Estimate safe resource limits based on available memory.

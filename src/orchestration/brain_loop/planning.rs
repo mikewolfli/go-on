@@ -19,19 +19,23 @@ use super::{
 };
 
 // ---------------------------------------------------------------------------
-// Plan lifecycle (sync fast paths)
+// Plan lifecycle (async lock acquisition)
 // ---------------------------------------------------------------------------
 
 impl BrainLoop {
     /// Start a new plan with the given `goal` and initial `steps`.
     ///
     /// Returns the assigned plan id on success.
-    pub fn start_plan(&self, goal: &str, steps: Vec<BrainLoopStep>) -> anyhow::Result<String> {
+    pub async fn start_plan(
+        &self,
+        goal: &str,
+        steps: Vec<BrainLoopStep>,
+    ) -> anyhow::Result<String> {
         let id_num = self.next_plan_id.fetch_add(1, Ordering::AcqRel);
         let id = format!("plan-{id_num}");
 
         let now = now_epoch_ms();
-        let mut inner = self.sync_write();
+        let mut inner = self.inner.write().await;
         let max_iterations = inner.config.max_iterations;
         let plan = BrainLoopPlan {
             id: id.clone(),
@@ -51,8 +55,10 @@ impl BrainLoop {
     }
 
     /// Get a clone of a plan by its id.
-    pub fn get_plan(&self, id: &str) -> anyhow::Result<BrainLoopPlan> {
-        self.sync_read()
+    pub async fn get_plan(&self, id: &str) -> anyhow::Result<BrainLoopPlan> {
+        self.inner
+            .read()
+            .await
             .plans
             .get(id)
             .cloned()
@@ -63,11 +69,11 @@ impl BrainLoop {
     ///
     /// When set, the brain loop will emit phase and progress tokens
     /// through the reporter during its Think-Act-Observe cycle.
-    pub fn set_progress_reporter(
+    pub async fn set_progress_reporter(
         &self,
         reporter: crate::agents::progress_reporter::ProgressReporter,
     ) {
-        let mut inner = self.sync_write();
+        let mut inner = self.inner.write().await;
         inner.progress_reporter = Some(reporter);
     }
 
@@ -76,28 +82,28 @@ impl BrainLoop {
     /// When set, `run_async` will query the controller for historical
     /// corrective actions and inject preventive measures as constraints
     /// into the planning loop.
-    pub fn set_metacognitive(
+    pub async fn set_metacognitive(
         &self,
         mc: crate::intelligence::metacognitive::MetacognitiveController,
     ) {
-        let mut inner = self.sync_write();
+        let mut inner = self.inner.write().await;
         inner.metacognitive = Some(mc);
     }
 
     /// Set the agent registry for LLM-backed deep reasoning (B51-08).
-    pub fn set_agent_registry(&self, registry: std::sync::Arc<AgentRegistry>) {
-        let mut inner = self.sync_write();
+    pub async fn set_agent_registry(&self, registry: std::sync::Arc<AgentRegistry>) {
+        let mut inner = self.inner.write().await;
         inner.agent_registry = Some(registry);
     }
 
     /// Return accumulated planner hints (e.g. from metacognitive feedback).
-    pub fn get_planner_hints(&self) -> Vec<PlannerHint> {
-        self.sync_read().planner_hints.clone()
+    pub async fn get_planner_hints(&self) -> Vec<PlannerHint> {
+        self.inner.read().await.planner_hints.clone()
     }
 
     /// Return a list of all known plan ids.
-    pub fn list_plans(&self) -> Vec<String> {
-        self.sync_read().plans.keys().cloned().collect()
+    pub async fn list_plans(&self) -> Vec<String> {
+        self.inner.read().await.plans.keys().cloned().collect()
     }
 }
 
@@ -660,7 +666,7 @@ impl BrainLoop {
         task: &str,
         steps: Vec<BrainLoopStep>,
     ) -> anyhow::Result<BrainLoopProfile> {
-        let plan_id = self.start_plan(task, steps)?;
+        let plan_id = self.start_plan(task, steps).await?;
         let task_type = task.to_string();
 
         // ── Check deep-reasoning configuration ────────────────────────
@@ -679,7 +685,7 @@ impl BrainLoop {
 
         // ── Deep-reasoning planning pass ──────────────────────────────
         if enable_deep {
-            let plan = self.get_plan(&plan_id)?;
+            let plan = self.get_plan(&plan_id).await?;
             let context = TaskContext {
                 id: plan_id.clone(),
                 reasoning_trace: vec!["Initial planning via BrainLoop run_async".to_string()],
@@ -726,7 +732,7 @@ impl BrainLoop {
             if pending.is_empty() {
                 // ── Validate plan quality (deep mode) ─────────────────
                 if enable_deep {
-                    let plan = self.get_plan(&plan_id)?;
+                    let plan = self.get_plan(&plan_id).await?;
                     let quality = engine.quality_validate(&plan).await;
                     tracing::debug!(
                         "BrainLoop: deep quality validation score = {:.2} for plan `{plan_id}`",
@@ -779,7 +785,7 @@ impl BrainLoop {
 
                 if enable_deep {
                     // Use deep-reasoning reflection.
-                    let plan = self.get_plan(&plan_id)?;
+                    let plan = self.get_plan(&plan_id).await?;
                     let history = {
                         let inner = read_guard(&self.inner).await;
                         inner.reflections.clone()
@@ -830,7 +836,7 @@ impl BrainLoop {
                         inner.reflections.clone()
                     };
                     if let Some(latest_reflection) = reflections.last() {
-                        let plan = self.get_plan(&plan_id)?;
+                        let plan = self.get_plan(&plan_id).await?;
                         let new_steps =
                             engine.replan_with_reasoning(latest_reflection, &plan).await;
                         if !new_steps.is_empty() {

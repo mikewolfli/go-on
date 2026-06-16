@@ -325,7 +325,7 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
 /// Must be called once before the first `handle_initialize` invocation,
 /// typically immediately after protocol negotiation completes.
 /// If never called, defaults to `ProtocolVersion::LATEST` (V3).
-#[allow(dead_code)] // Public API for protocol integration; called after negotiation completes
+#[allow(dead_code)]
 pub fn set_negotiated_protocol_version(version: ProtocolVersion) {
     let _ = NEGOTIATED_PROTOCOL_VERSION.set(version);
 }
@@ -703,14 +703,65 @@ async fn send_chunk(server: &AcpServer, session_id: &str, chunk_type: &str, text
 
 /// agent stops processing and returns `StopReason::Cancelled`.
 pub(super) async fn handle_session_cancel(
-    _server: &AcpServer,
-    _params: Value,
-    _request_id: Option<Value>,
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
 ) -> Result<()> {
-    // session/cancel is a notification — no response expected per JSON-RPC spec.
-    // In the future, we can hook into active request cancellation here.
-    // For now, the chat handler detects cancellation via its own mechanisms.
-    Ok(())
+    let session_id = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    tracing::warn!(
+        target: "acp::protocol_pack",
+        session_id = %session_id,
+        "handle_session_cancel: session {} cancelled via notification",
+        session_id
+    );
+
+    // session/cancel is a notification per JSON-RPC spec
+    if let Some(rid) = request_id {
+        crate::acp::r#impl::io::send_error(
+            server,
+            Some(rid),
+            -32800,
+            format!("session {} cancelled", session_id),
+            None,
+        )
+        .await
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) async fn handle_cancel_request(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let target_id = params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    tracing::warn!(
+        target: "acp::protocol_pack",
+        target_request = %target_id,
+        "handle_cancel_request: cancelling request {}",
+        target_id
+    );
+
+    // $/cancel_request is a notification per JSON-RPC spec
+    if let Some(rid) = request_id {
+        crate::acp::r#impl::io::send_error(
+            server,
+            Some(rid),
+            -32800,
+            format!("request {} cancelled", target_id),
+            None,
+        )
+        .await
+    } else {
+        Ok(())
+    }
 }
 
 /// Handle `session/list` — lists existing sessions.
@@ -838,6 +889,7 @@ pub(super) async fn handle_session_close(
         let mut state = acp_session_state().lock().await;
         state.remove(session_id);
         // B51-36: Evict tenant rate limiter state on session close.
+        #[cfg(feature = "multi-users-server")]
         if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
             limiter.evict_tenant(session_id).await;
         }
@@ -1018,14 +1070,17 @@ pub(super) async fn handle_authenticate(
 /// Handle `logout` — terminates the current authenticated session.
 pub(super) async fn handle_logout(
     server: &AcpServer,
-    params: Value,
+    _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
     // B51-36: Evict tenant rate limiter state on logout if session info is present.
-    if let Some(session_id) = params.get("sessionId").and_then(Value::as_str) {
-        if !session_id.is_empty() {
-            if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
-                limiter.evict_tenant(session_id).await;
+    #[cfg(feature = "multi-users-server")]
+    {
+        if let Some(session_id) = _params.get("sessionId").and_then(Value::as_str) {
+            if !session_id.is_empty() {
+                if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
+                    limiter.evict_tenant(session_id).await;
+                }
             }
         }
     }
@@ -1036,19 +1091,6 @@ pub(super) async fn handle_logout(
         &crate::schema::LogoutResponse { meta: None },
     )
     .await
-}
-
-/// Handle `$/cancel_request` — protocol-level request cancellation notification.
-/// JSON-RPC notification: client can cancel an in-flight request by ID.
-/// No response expected per JSON-RPC spec.
-pub(super) async fn handle_cancel_request(
-    _server: &AcpServer,
-    _params: Value,
-    _request_id: Option<Value>,
-) -> Result<()> {
-    // $/cancel_request is a notification — no response expected.
-    // Future enhancement: route cancellation to the active request handler.
-    Ok(())
 }
 
 // ── MCP bridge handlers (mcp.* methods routed through ACP dispatch) ──────

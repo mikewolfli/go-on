@@ -64,9 +64,6 @@ pub(crate) use session::handle_chat;
 pub(crate) use tool_extraction::{detect_repeated_task_pattern, extract_tool_calls_from_response};
 
 // Re-export streaming items that are part of the chat module's public API
-pub(crate) use self::params::agent_switch_state;
-#[cfg(all(test, not(feature = "backend-postgres")))]
-pub(crate) use self::params::reset_agent_switch_state;
 pub use self::params::ChatParams;
 pub use self::params::ChatRequestContext;
 pub(crate) use self::voting::{
@@ -74,6 +71,7 @@ pub(crate) use self::voting::{
     AgentStrongVoteOutcome, AgentVoteSource, HighRiskVoteAttemptResult, RiskAssessment,
     RiskVotePolicy,
 };
+pub(crate) use crate::acp::helpers::agent_preference::agent_switch_state;
 pub(crate) use knowledge::{
     persist_chat_knowledge, persist_session_distillation, persist_vector_memory, round_metric,
     truncate_chars,
@@ -480,7 +478,7 @@ pub(crate) async fn process_chat_request(
             })
             .start_child_span(parent, "chat.observe", vec![])
     });
-    let mut resolve_out = observe_phase(server, params, trace, ctx).await?;
+    let mut resolve_out = observe_phase(server, params, ctx).await?;
     if let Some(cx) = observe_cx {
         server
             .observability
@@ -784,14 +782,10 @@ pub(crate) async fn resolve_request_phase(
 pub(crate) async fn evaluate_pre_route_policies(
     server: &AcpServer,
     params: &ChatParams,
-    trace: &RequestTraceContext,
     tenant_id: &str,
 ) -> Result<()> {
-    let _policy_result = crate::acp::helpers::pre_route_policy::evaluate_pre_route_policies(
-        server, params, trace, tenant_id,
-    )
-    .await?;
-    Ok(())
+    crate::acp::helpers::pre_route_policy::evaluate_pre_route_policies(server, params, tenant_id)
+        .await
 }
 
 pub(crate) use agent_selection::{select_and_score_agents, AutonomyOutcome};
@@ -1544,19 +1538,6 @@ pub(crate) fn reorder_chat_agents_by_runtime_score(
             .partial_cmp(&score_a)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-}
-
-/// Run tool execution loop for full_auto mode
-/// This function integrates the tool execution loop from request.rs into the chat flow
-#[cfg(test)]
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
-fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> String {
-    // Simplified tool execution loop
-    format!(
-        "Tool execution loop for task: {} (subtask: {}, index: {})",
-        task, subtask, record_index
-    )
 }
 
 /// Analyze a completed chat conversation and auto-create skills for

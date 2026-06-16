@@ -31,8 +31,6 @@ use super::sse::write_sse_event;
 use super::sse::write_sse_headers;
 use super::tcp_write_timeout;
 use super::tls::build_root_capabilities_response;
-use super::RPC_SERIAL;
-
 /// Main HTTP connection handler — parses, guards, routes, and times the request.
 pub(crate) async fn handle_http_connection(
     socket: &mut TcpStream,
@@ -567,8 +565,8 @@ async fn route_http_post(
                     .await?;
                 }
                 "/" | "/rpc" => {
-                    // SERIALIZED: Only one RPC call at a time.
-                    let _rpc_guard = RPC_SERIAL.lock().await;
+                    // SERIALIZED via per-server rpc_serial: only one RPC call at a time.
+                    let _rpc_guard = server.rpc_serial.lock().await;
 
                     let request: JsonRpcRequest = match serde_json::from_value(body) {
                         Ok(r) => r,

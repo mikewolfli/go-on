@@ -5,7 +5,9 @@
 //!
 //! | Module | Description |
 //! |--------|-------------|
-//! | [`document_parser`] | Extracts text, images, tables, and metadata from PDF, DOCX, HTML, Markdown |
+//! | [`document_parser`] | Extracts text, images, tables, and metadata from PDF, DOCX, HTML, Markdown, Excel, PPT |
+//! | [`excel_processor`] | Excel (.xlsx / .xls) workbook text extraction using `calamine` |
+//! | [`ppt_processor`] | PowerPoint (.pptx) slide text extraction using `quick-xml` |
 //! | [`audio_processor`] | Speech-to-text transcription with speaker diarization support |
 //!
 //! # Re-exports
@@ -17,6 +19,11 @@ pub mod audio_processor;
 pub mod code_repo_analyzer;
 pub mod document_parser;
 pub mod video_processor;
+
+#[cfg(feature = "document-excel")]
+pub mod excel_processor;
+#[cfg(feature = "document-ppt")]
+pub mod ppt_processor;
 
 // ── Re-exports from document_parser ────────────────────────────────────────
 #[allow(unused_imports)]

@@ -257,18 +257,8 @@ impl HotCache {
         self.remove(&lru_id)
     }
 
-    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
-    fn contains(&self, id: &str) -> bool {
-        self.entries.contains_key(id)
-    }
-
     fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     fn clear(&mut self) {
@@ -276,7 +266,6 @@ impl HotCache {
         self.lru_order.clear();
     }
 
-    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     fn iter_entries(&self) -> impl Iterator<Item = &MemoryEntry> {
         self.entries.values().map(|he| &he.entry)
     }
@@ -321,31 +310,6 @@ impl ColdStorageIndex {
     ) -> Option<&(String, String, u64)> {
         let uid = user_id.unwrap_or("").to_string();
         self.entries.get(&(uid, memory_id.to_string()))
-    }
-
-    /// Returns the number of indexed entries.
-    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Returns true if the index is empty.
-    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Remove an entry from the index.
-    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
-    pub fn remove(&mut self, user_id: Option<&str>, memory_id: &str) {
-        let uid = user_id.unwrap_or("").to_string();
-        self.entries.remove(&(uid, memory_id.to_string()));
-    }
-
-    /// Clear all entries.
-    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
-    pub fn clear(&mut self) {
-        self.entries.clear();
     }
 }
 

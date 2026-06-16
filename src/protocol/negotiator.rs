@@ -154,33 +154,12 @@ impl ProtocolNegotiator {
         ProtocolVersion::select_highest_common(client_versions)
     }
 
-    /// Convenience wrapper around [`negotiate`] that accepts a slice of client-supported
-    /// protocol versions directly.
-    ///
-    /// Delegates to [`Self::negotiate`] with `client_versions: Some(client_versions)`.
-    #[allow(dead_code)]
-    // F-GAP — reserved for version-aware client negotiation
-    pub fn negotiate_with_versions(
-        &mut self,
-        client_hint: Option<&str>,
-        client_versions: &[ProtocolVersion],
-    ) -> NegotiatedProtocol {
-        self.negotiate(client_hint, Some(client_versions))
-    }
-
     /// Attempt fallback to next protocol in the chain
     pub fn try_fallback(&mut self) -> Option<ProtocolMode> {
         let fallback = self.active.fallback()?;
         warn!("protocol fallback: {} → {}", self.active, fallback);
         self.active = fallback;
         Some(fallback)
-    }
-
-    /// Get current active protocol
-    #[allow(dead_code)]
-    // F-GAP — reserved for client introspection; negotiated.mode used in production logging
-    pub fn active(&self) -> ProtocolMode {
-        self.active
     }
 }
 
@@ -241,60 +220,7 @@ pub enum ProtocolError {
     },
 }
 
-impl ProtocolError {
-    /// Translate a [`ProtocolError`] variant into an MCP-compatible
-    /// [`crate::mcp::JsonRpcError`].
-    ///
-    /// Mapping:
-    /// - [`VersionMismatch`](ProtocolError::VersionMismatch) → `METHOD_NOT_FOUND` (-32601)
-    /// - [`NegotiationFailed`](ProtocolError::NegotiationFailed) → `INTERNAL_ERROR` (-32603)
-    /// - [`TransportError`](ProtocolError::TransportError) → `INTERNAL_ERROR` (-32603)
-    /// - [`UnsupportedMethod`](ProtocolError::UnsupportedMethod) → `METHOD_NOT_FOUND` (-32601)
-    /// - [`CapabilityMissing`](ProtocolError::CapabilityMissing) → `INVALID_REQUEST` (-32600)
-    #[allow(dead_code)]
-    // F-GAP — reserved for JSON-RPC error responses in production error paths
-    pub fn to_mcp(&self) -> crate::mcp::JsonRpcError {
-        use crate::mcp::error_codes;
-        match self {
-            ProtocolError::VersionMismatch { expected, got } => crate::mcp::JsonRpcError {
-                code: error_codes::METHOD_NOT_FOUND,
-                message: format!("version mismatch: expected {}, got {}", expected, got),
-                data: Some(serde_json::json!({
-                    "expected": expected,
-                    "got": got,
-                })),
-            },
-            ProtocolError::NegotiationFailed { reason } => crate::mcp::JsonRpcError {
-                code: error_codes::INTERNAL_ERROR,
-                message: format!("protocol negotiation failed: {}", reason),
-                data: Some(serde_json::json!({
-                    "reason": reason,
-                })),
-            },
-            ProtocolError::TransportError { detail } => crate::mcp::JsonRpcError {
-                code: error_codes::INTERNAL_ERROR,
-                message: format!("transport error: {}", detail),
-                data: Some(serde_json::json!({
-                    "detail": detail,
-                })),
-            },
-            ProtocolError::UnsupportedMethod { method } => crate::mcp::JsonRpcError {
-                code: error_codes::METHOD_NOT_FOUND,
-                message: format!("unsupported method: {}", method),
-                data: Some(serde_json::json!({
-                    "method": method,
-                })),
-            },
-            ProtocolError::CapabilityMissing { capability } => crate::mcp::JsonRpcError {
-                code: error_codes::INVALID_REQUEST,
-                message: format!("missing required capability: {}", capability),
-                data: Some(serde_json::json!({
-                    "capability": capability,
-                })),
-            },
-        }
-    }
-}
+impl ProtocolError {}
 
 #[cfg(test)]
 mod tests {
@@ -433,68 +359,6 @@ mod tests {
         // No overlap
         let client = vec![ProtocolVersion::from_u16(42)];
         assert_eq!(ProtocolVersion::select_highest_common(&client), None);
-    }
-
-    #[test]
-    fn test_protocol_error_to_mcp_version_mismatch() {
-        let err = ProtocolError::VersionMismatch {
-            expected: "2024-11-05".into(),
-            got: "2024-10-01".into(),
-        };
-        let mcp_err = err.to_mcp();
-        assert_eq!(mcp_err.code, crate::mcp::error_codes::METHOD_NOT_FOUND);
-        assert!(mcp_err.message.contains("version mismatch"));
-        assert!(mcp_err.message.contains("2024-11-05"));
-        assert!(mcp_err.message.contains("2024-10-01"));
-        assert!(mcp_err.data.is_some());
-    }
-
-    #[test]
-    fn test_protocol_error_to_mcp_negotiation_failed() {
-        let err = ProtocolError::NegotiationFailed {
-            reason: "no common protocol version".into(),
-        };
-        let mcp_err = err.to_mcp();
-        assert_eq!(mcp_err.code, crate::mcp::error_codes::INTERNAL_ERROR);
-        assert!(mcp_err.message.contains("protocol negotiation failed"));
-        assert!(mcp_err.message.contains("no common protocol version"));
-        assert!(mcp_err.data.is_some());
-    }
-
-    #[test]
-    fn test_protocol_error_to_mcp_transport_error() {
-        let err = ProtocolError::TransportError {
-            detail: "connection reset by peer".into(),
-        };
-        let mcp_err = err.to_mcp();
-        assert_eq!(mcp_err.code, crate::mcp::error_codes::INTERNAL_ERROR);
-        assert!(mcp_err.message.contains("transport error"));
-        assert!(mcp_err.message.contains("connection reset by peer"));
-        assert!(mcp_err.data.is_some());
-    }
-
-    #[test]
-    fn test_protocol_error_to_mcp_unsupported_method() {
-        let err = ProtocolError::UnsupportedMethod {
-            method: "tools/invoke".into(),
-        };
-        let mcp_err = err.to_mcp();
-        assert_eq!(mcp_err.code, crate::mcp::error_codes::METHOD_NOT_FOUND);
-        assert!(mcp_err.message.contains("unsupported method"));
-        assert!(mcp_err.message.contains("tools/invoke"));
-        assert!(mcp_err.data.is_some());
-    }
-
-    #[test]
-    fn test_protocol_error_to_mcp_capability_missing() {
-        let err = ProtocolError::CapabilityMissing {
-            capability: "streamable_http".into(),
-        };
-        let mcp_err = err.to_mcp();
-        assert_eq!(mcp_err.code, crate::mcp::error_codes::INVALID_REQUEST);
-        assert!(mcp_err.message.contains("missing required capability"));
-        assert!(mcp_err.message.contains("streamable_http"));
-        assert!(mcp_err.data.is_some());
     }
 
     #[test]

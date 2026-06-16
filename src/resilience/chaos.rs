@@ -177,17 +177,6 @@ impl ChaosEngine {
     }
 
     /// Probabilistically determine whether a fault of the given type should be injected.
-    ///
-    /// Returns `true` when the engine is enabled and the random roll passes.
-    /// Uses `fastrand` for lightweight, non-cryptographic randomness.
-    #[allow(dead_code)] // Used behind chaos-testing feature gate in hyper_resilience.rs
-    pub fn should_inject_fault(&self, _fault_type: FaultType) -> bool {
-        if !self.is_enabled() {
-            return false;
-        }
-        // Default 50% probability — can be refined per FaultType if needed.
-        fastrand::f64() < 0.5
-    }
 
     /// Enable or disable chaos injection.
     pub fn set_enabled(&self, enabled: bool) {
@@ -217,25 +206,6 @@ impl ChaosEngine {
             scenario.name,
             scenario.injections.len()
         );
-    }
-
-    /// Clear all fault injections.
-    #[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
-    pub fn clear(&self) {
-        self.injections
-            .write()
-            .unwrap_or_else(|poisoned| {
-                warn!("chaos injections lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .clear();
-        self.injection_counts
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                warn!("chaos counts lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .clear();
     }
 
     /// Check if a fault should be injected for the given tool.
@@ -294,95 +264,6 @@ impl ChaosEngine {
         }
         None
     }
-
-    /// Run a full drill scenario and return results.
-    #[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
-    pub async fn run_drills(&self, scenario: &DrillScenario) -> DrillResult {
-        let start = std::time::Instant::now();
-        self.set_enabled(true);
-        self.load_scenario(scenario);
-
-        let mut results = Vec::new();
-        let mut successful = 0u64;
-        let mut failed = 0u64;
-
-        for injection in &scenario.injections {
-            let inj_start = std::time::Instant::now();
-            let injected = self.check_fault(&injection.target_tool);
-
-            // Simulate what the recovery system would do
-            // Introduce RECOVERY_FAILURE_RATE random recovery failure to model real-world
-            // chaos where not all recoveries succeed.
-            let fail_bound = (RECOVERY_FAILURE_RATE * 100.0) as u8;
-            let recovery_simulation_fails = fastrand::u8(0..100) < fail_bound;
-
-            let (recovery_action, recovery_success) = match injection.fault_type {
-                FaultType::NetworkTimeout => {
-                    // Should trigger Retry then Escalate
-                    ("retry".to_string(), !recovery_simulation_fails)
-                }
-                FaultType::NetworkPartition => {
-                    // Should trigger Reroute
-                    ("reroute".to_string(), !recovery_simulation_fails)
-                }
-                FaultType::FileIOError => {
-                    // Should trigger Degrade to alternate tool
-                    ("degrade".to_string(), !recovery_simulation_fails)
-                }
-                FaultType::ProcessCrash => {
-                    // Should trigger Replan
-                    ("replan".to_string(), !recovery_simulation_fails)
-                }
-                FaultType::ResourceExhaustion => {
-                    // Should trigger Degrade
-                    ("degrade".to_string(), !recovery_simulation_fails)
-                }
-                FaultType::DataCorruption => {
-                    // Should trigger Repair, then Retry
-                    ("repair".to_string(), !recovery_simulation_fails)
-                }
-                FaultType::RateLimit => ("retry".to_string(), !recovery_simulation_fails),
-                FaultType::AuthFailure => ("reroute".to_string(), !recovery_simulation_fails),
-                FaultType::LatencySpike { .. } => ("retry".to_string(), !recovery_simulation_fails),
-                FaultType::PartialWrite => ("repair".to_string(), !recovery_simulation_fails),
-            };
-
-            let duration = inj_start.elapsed().as_millis() as u64;
-            let triggered = injected.is_some();
-
-            if recovery_success {
-                successful += 1;
-            } else {
-                failed += 1;
-            }
-
-            results.push(InjectionResult {
-                fault_type: injection.fault_type,
-                target_tool: injection.target_tool.clone(),
-                triggered,
-                recovery_action: if triggered {
-                    Some(recovery_action)
-                } else {
-                    None
-                },
-                recovery_success: triggered && recovery_success,
-                duration_ms: duration,
-            });
-        }
-
-        self.set_enabled(false);
-        let total_duration = start.elapsed().as_millis() as u64;
-
-        DrillResult {
-            scenario_name: scenario.name.clone(),
-            total_injections: scenario.injections.len(),
-            successful_recoveries: successful as usize,
-            failed_recoveries: failed as usize,
-            total_duration_ms: total_duration,
-            passed: failed == 0,
-            injection_results: results,
-        }
-    }
 }
 
 impl Default for ChaosEngine {
@@ -395,7 +276,6 @@ impl Default for ChaosEngine {
 // Built-in scenarios
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
 pub fn network_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "network_resilience".to_string(),
@@ -429,7 +309,6 @@ pub fn network_resilience_scenario() -> DrillScenario {
     }
 }
 
-#[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
 pub fn storage_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "storage_resilience".to_string(),
@@ -463,7 +342,6 @@ pub fn storage_resilience_scenario() -> DrillScenario {
     }
 }
 
-#[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
 pub fn resource_exhaustion_scenario() -> DrillScenario {
     DrillScenario {
         name: "resource_exhaustion".to_string(),

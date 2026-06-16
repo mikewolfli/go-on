@@ -192,7 +192,7 @@ pub fn authenticate_request(
 #[tracing::instrument(skip(server, request))]
 pub async fn handle_request(
     server: &AcpServer,
-    request: JsonRpcRequest,
+    mut request: JsonRpcRequest,
     http_headers: Option<&str>,
 ) -> Result<()> {
     // GAP-B50-36: Authenticate request before dispatch
@@ -249,27 +249,8 @@ pub async fn handle_request(
             )
             .await;
         }
-        // Acquire global concurrency permit (non-blocking try)
-        match limiter.global_semaphore.try_acquire() {
-            Ok(_permit) => {
-                // Permit held for the duration of request processing
-                tokio::spawn(async move {
-                    drop(_permit);
-                });
-            }
-            Err(_) => {
-                return send_error(
-                    server,
-                    request.id,
-                    -32029,
-                    "Server too busy — try again later".to_string(),
-                    Some(serde_json::json!({
-                        "code": "SERVER_BUSY",
-                    })),
-                )
-                .await;
-            }
-        }
+        // Global concurrency limiting via semaphore was removed (F-GAP-49).
+        // The per-tenant rate limiter above provides sufficient throttling.
     }
 
     // GAP-B52-23: Request signature verification
@@ -326,16 +307,22 @@ pub async fn handle_request(
 
             match sig_from_params {
                 Some(ref request_sig) => {
-                    // Serialize the params without the _signature field for body verification
+                    // Serialize the params without the _signature field for body verification.
+                    // Use mutable access to temporarily remove _signature, serialize, then restore.
                     let body_for_verification = request
                         .params
-                        .as_ref()
+                        .as_mut()
                         .map(|params| {
-                            let mut params_copy = params.clone();
-                            if let serde_json::Value::Object(ref mut map) = params_copy {
-                                map.remove("_signature");
+                            let removed = params
+                                .as_object_mut()
+                                .and_then(|map| map.remove("_signature"));
+                            let serialized = serde_json::to_vec(params).unwrap_or_default();
+                            if let Some(sig) = removed {
+                                if let serde_json::Value::Object(ref mut map) = params {
+                                    map.insert("_signature".to_string(), sig);
+                                }
                             }
-                            serde_json::to_vec(&params_copy).unwrap_or_default()
+                            serialized
                         })
                         .unwrap_or_default();
 
@@ -403,12 +390,8 @@ pub async fn handle_request(
     {
         let rate_limiter = crate::security::rate_limiter::global_rate_limiter();
 
-        // Acquire a global concurrency permit (semaphore-based).
-        let _permit = rate_limiter
-            .global_semaphore
-            .acquire()
-            .await
-            .map_err(|_| anyhow::anyhow!("rate limit exceeded"))?;
+        // Global concurrency semaphore was removed (F-GAP-49).
+        // Per-tenant throttling is retained below.
 
         // Extract tenant_id from request params for per-tenant throttling.
         let tenant_id = request

@@ -38,7 +38,6 @@ use tokio::sync::RwLock;
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::orchestration::complexity_estimator::ComplexityEstimator;
-use crate::orchestration::diagnostic_feedback::DiagnosticFeedbackEngine;
 use crate::orchestration::fast_path_cache::{
     EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
 };
@@ -47,7 +46,6 @@ use crate::orchestration::skill_import::SkillImportPolicy;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::threshold_learner::ThresholdLearner;
 use crate::orchestration::tool::ToolRegistry;
-use crate::orchestration::tool_lock::ToolLockManager;
 use crate::orchestration::tool_recommender::ToolRecommender;
 
 /// Default minimum composite score for a skill to be considered a match.
@@ -123,14 +121,8 @@ pub struct FullAutoFlow {
     pub(crate) threshold_learner: Option<Mutex<ThresholdLearner>>,
     /// Complexity estimator for dynamic BrainLoop iteration tuning.
     pub(crate) complexity_estimator: ComplexityEstimator,
-    /// Diagnostic feedback engine for error analysis and recovery.
-    #[allow(dead_code)]
-    pub(crate) diagnostic_engine: Mutex<DiagnosticFeedbackEngine>,
     /// Tool recommender for suggesting complementary tools.
     pub(crate) tool_recommender: Mutex<ToolRecommender>,
-    /// Tool lock manager for safe concurrent file access.
-    #[allow(dead_code)]
-    pub(crate) tool_lock_manager: ToolLockManager,
     /// Optional skill market registry for external skill discovery.
     pub(crate) skill_market: Option<SkillMarketRegistry>,
     /// Semaphore for limiting concurrent skill execution.
@@ -147,9 +139,7 @@ impl std::fmt::Debug for FullAutoFlow {
             .field("config", &self.config)
             .field("cache", &"FastPathCache")
             .field("complexity_estimator", &"ComplexityEstimator")
-            .field("diagnostic_engine", &"Mutex<DiagnosticFeedbackEngine>")
             .field("tool_recommender", &"Mutex<ToolRecommender>")
-            .field("tool_lock_manager", &"ToolLockManager")
             .field("model_selector", &"AdaptiveModelSelector")
             .finish()
     }
@@ -169,9 +159,7 @@ impl FullAutoFlow {
             cache: Arc::new(FastPathCache::with_default_routes()),
             threshold_learner: None,
             complexity_estimator: ComplexityEstimator::new(),
-            diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
             tool_recommender: Mutex::new(ToolRecommender::new()),
-            tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
             semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
             model_selector: AdaptiveModelSelector::new(),
@@ -255,9 +243,7 @@ impl FullAutoFlow {
             cache: Arc::new(FastPathCache::new()),
             threshold_learner: None,
             complexity_estimator: ComplexityEstimator::new(),
-            diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
             tool_recommender: Mutex::new(ToolRecommender::new()),
-            tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
             semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
             model_selector: AdaptiveModelSelector::new(),
@@ -279,9 +265,7 @@ impl FullAutoFlow {
             cache,
             threshold_learner: None,
             complexity_estimator: ComplexityEstimator::new(),
-            diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
             tool_recommender: Mutex::new(ToolRecommender::new()),
-            tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
             semaphore: Arc::new(tokio::sync::Semaphore::new(
                 FullAutoConfig::default().max_concurrency,

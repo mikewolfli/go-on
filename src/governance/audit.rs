@@ -237,16 +237,6 @@ impl ThreadSafeAuditLog {
         let path = dirs_or_fallback();
         Self::new_with_path(max_entries, path)
     }
-
-    /// Share the same underlying audit log by cloning the `Arc`.
-    ///
-    /// All clones share the same inner buffer and file path.
-    #[allow(dead_code)] // F-GAP-49 — reserved for Phase 2 audit pipeline integration
-    pub fn clone_arc(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

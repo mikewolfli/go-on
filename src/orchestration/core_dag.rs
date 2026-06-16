@@ -103,58 +103,6 @@ impl<T> CoreDag<T> {
         self.recompute_entry_points();
     }
 
-    /// Remove a node and all its edges from the DAG.
-    #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-    pub fn remove_node(&mut self, id: &str) -> Option<DagNode<T>> {
-        let node = self.nodes.remove(id)?;
-
-        // Remove forward edges from this node's dependencies
-        for dep in &node.dependencies {
-            if let Some(children) = self.edges.get_mut(dep) {
-                children.remove(id);
-                if children.is_empty() {
-                    self.edges.remove(dep);
-                }
-            }
-        }
-
-        // Remove forward edges where this node is a parent
-        self.edges.remove(id);
-
-        self.recompute_entry_points();
-        Some(node)
-    }
-
-    /// Get a reference to a node by ID.
-    #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-    pub fn get(&self, id: &str) -> Option<&DagNode<T>> {
-        self.nodes.get(id)
-    }
-
-    /// Get a mutable reference to a node by ID.
-    #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-    pub fn get_mut(&mut self, id: &str) -> Option<&mut DagNode<T>> {
-        self.nodes.get_mut(id)
-    }
-
-    /// Return `true` if the graph contains a node with the given ID.
-    #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-    pub fn contains(&self, id: &str) -> bool {
-        self.nodes.contains_key(id)
-    }
-
-    /// Return the number of nodes in the graph.
-    #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-    pub fn len(&self) -> usize {
-        self.nodes.len()
-    }
-
-    /// Return `true` if the graph has no nodes.
-    #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-    pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
-    }
-
     /// Return the children (direct successors) of a node.
     pub fn children(&self, id: &str) -> Vec<&str> {
         self.edges
@@ -218,12 +166,6 @@ impl<T> CoreDag<T> {
         }
 
         Ok(sorted)
-    }
-
-    /// Detect whether the graph contains a cycle.
-    #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-    pub fn has_cycle(&self) -> bool {
-        self.topological_sort().is_err()
     }
 
     /// Compute the width (maximum number of nodes at any depth level) and
@@ -341,123 +283,7 @@ pub struct DagMetrics {
     pub depth: usize,
 }
 
-// ── Unified Dag trait (A7 resolution) ────────────────────────────────────
-
-/// Unified trait for all DAG implementations.
-///
-/// All four DAG types (CoreDag, DagDriver, ExecutionGraph, TaskGraph)
-/// implement this trait, enabling polymorphic DAG operations across the
-/// orchestration layer.
-#[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-pub trait Dag<NodeId: ?Sized = str> {
-    type NodeData;
-
-    /// Add a node with the given dependencies.
-    fn add_node(&mut self, id: &str, data: Self::NodeData, dependencies: &[&str]);
-
-    /// Remove a node by ID.
-    fn remove_node(&mut self, id: &str) -> bool;
-
-    /// Get a reference to a node.
-    fn get(&self, id: &str) -> Option<&DagNode<Self::NodeData>>;
-
-    /// Return the number of nodes.
-    fn len(&self) -> usize;
-
-    /// Returns `true` if no nodes exist.
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Check if a node exists.
-    fn contains(&self, id: &str) -> bool;
-
-    /// Return children (direct successors) of a node.
-    fn children(&self, id: &str) -> Vec<&str>;
-
-    /// Return parents (direct dependencies) of a node.
-    fn parents(&self, id: &str) -> Vec<&str>;
-
-    /// Perform topological sort.
-    fn topological_sort(&self) -> Result<Vec<&str>, String>;
-
-    /// Detect cycles.
-    fn has_cycle(&self) -> bool {
-        self.topological_sort().is_err()
-    }
-
-    /// Compute DAG metrics (width, depth).
-    fn metrics(&self) -> DagMetrics;
-}
-
-impl<T> Dag for CoreDag<T> {
-    type NodeData = T;
-
-    fn add_node(&mut self, id: &str, data: T, dependencies: &[&str]) {
-        self.add_node(
-            id.to_string(),
-            data,
-            dependencies.iter().map(|s| s.to_string()).collect(),
-        );
-    }
-
-    fn remove_node(&mut self, id: &str) -> bool {
-        self.remove_node(id).is_some()
-    }
-
-    fn get(&self, id: &str) -> Option<&DagNode<T>> {
-        self.nodes.get(id)
-    }
-
-    fn len(&self) -> usize {
-        self.nodes.len()
-    }
-
-    fn contains(&self, id: &str) -> bool {
-        self.nodes.contains_key(id)
-    }
-
-    fn children(&self, id: &str) -> Vec<&str> {
-        self.edges
-            .get(id)
-            .map(|children| children.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default()
-    }
-
-    fn parents(&self, id: &str) -> Vec<&str> {
-        self.nodes
-            .get(id)
-            .map(|node| node.dependencies.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default()
-    }
-
-    fn topological_sort(&self) -> Result<Vec<&str>, String> {
-        CoreDag::topological_sort(self)
-    }
-
-    fn metrics(&self) -> DagMetrics {
-        CoreDag::metrics(self)
-    }
-}
-
 // ── Conversion traits (reserved for future use) ─────────────────────────────
-
-/// Trait for converting from a `CoreDag<T>` to another DAG type.
-///
-/// Implement this trait for each legacy DAG type to enable migration.
-///
-/// ```ignore
-/// impl From<CoreDag<MyNodeType>> for LegacyGraphType {
-///     fn from(dag: CoreDag<MyNodeType>) -> Self {
-///         // ... conversion logic ...
-///     }
-/// }
-/// ```
-#[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
-pub trait FromCoreDag<T, Target> {
-    /// Convert a `CoreDag<T>` into `Target`.
-    fn from_core_dag(dag: CoreDag<T>) -> Target;
-}
 
 /// Trait for converting from another DAG type into a `CoreDag<T>`.
 #[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
@@ -748,17 +574,15 @@ mod tests {
     #[test]
     fn test_empty_dag() {
         let dag: CoreDag<String> = CoreDag::new();
-        assert!(dag.is_empty());
-        assert_eq!(dag.len(), 0);
         assert!(dag.topological_sort().unwrap().is_empty());
+        assert!(dag.nodes.is_empty());
     }
 
     #[test]
     fn test_single_node() {
         let mut dag: CoreDag<String> = CoreDag::new();
         dag.add_node("a".into(), "task A".into(), vec![]);
-        assert!(!dag.is_empty());
-        assert_eq!(dag.len(), 1);
+        assert_eq!(dag.nodes.len(), 1);
         let sorted = dag.topological_sort().unwrap();
         assert_eq!(sorted, vec!["a"]);
     }
@@ -809,7 +633,6 @@ mod tests {
         dag.edges.entry("b".into()).or_default().insert("a".into());
         dag.recompute_entry_points();
 
-        assert!(dag.has_cycle());
         assert!(dag.topological_sort().is_err());
     }
 
@@ -856,18 +679,5 @@ mod tests {
 
         let ids: Vec<&str> = dag.iter_topo().unwrap().map(|(id, _)| id).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn test_remove_node() {
-        let mut dag: CoreDag<String> = CoreDag::new();
-        dag.add_node("a".into(), "A".into(), vec![]);
-        dag.add_node("b".into(), "B".into(), vec!["a".into()]);
-
-        let removed = dag.remove_node("a");
-        assert!(removed.is_some());
-        assert_eq!(dag.len(), 1);
-        assert!(!dag.contains("a"));
-        assert!(dag.contains("b"));
     }
 }

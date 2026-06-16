@@ -16,31 +16,18 @@ use tokio::sync::watch;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
-#[cfg(feature = "chaos-testing")]
-use super::chaos::{ChaosEngine, FaultType};
-
-/// Lock a Mutex, recovering from poison with a log.
-///
-/// Note: `tokio::sync::Mutex` does not have poisoning, so the recovery
-/// branch is retained only for forward-compatibility (e.g. a custom
-/// wrapper).
+/// Lock a tokio Mutex, recovering from poison with a log.
 async fn lock_mutex<T>(mtx: &Mutex<T>) -> tokio::sync::MutexGuard<'_, T> {
     mtx.lock().await
 }
 
 /// Lock a RwLock for reading, recovering from poison with a log.
-///
-/// Note: `tokio::sync::RwLock` does not have poisoning, so the recovery
-/// branch is retained only for forward-compatibility.
 async fn read_lock<T>(rw: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
     rw.read().await
 }
 
-/// Lock a RwLock for writing, recovering from poison with a log.
-#[allow(dead_code)] // F-GAP-49 — reserved for hyper-resilience write lock
-async fn write_lock<T>(rw: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
-    rw.write().await
-}
+#[cfg(feature = "chaos-testing")]
+use super::chaos::{ChaosEngine, FaultType};
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -151,48 +138,22 @@ pub struct HealingReport {
 /// Configuration for the hyper-resilience engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResilienceConfig {
-    #[serde(default = "default_circuit_breaker_threshold")]
+    #[serde(default)]
     pub circuit_breaker_threshold: u64,
-    #[serde(default = "default_recovery_timeout_ms")]
+    #[serde(default)]
     pub recovery_timeout_ms: u64,
-    #[serde(default = "default_health_check_interval_ms")]
+    #[serde(default)]
     pub health_check_interval_ms: u64,
-    #[serde(default = "default_max_failover_attempts")]
+    #[serde(default)]
     pub max_failover_attempts: u32,
-    #[serde(default = "default_self_healing_enabled")]
+    #[serde(default)]
     pub self_healing_enabled: bool,
     /// Interval (in ms) after which an open circuit breaker automatically
     /// transitions to HalfOpen during `is_available()` checks, enabling the
     /// self-healing / auto-recovery pattern without requiring an explicit
     /// `probe()` call.
-    #[serde(default = "default_half_open_probe_interval_ms")]
+    #[serde(default)]
     pub half_open_probe_interval_ms: u64,
-}
-
-#[allow(dead_code)] // F-GAP-49 — reserved for circuit breaker defaults
-fn default_circuit_breaker_threshold() -> u64 {
-    5
-}
-#[allow(dead_code)] // F-GAP-49 — reserved for recovery timeout defaults
-fn default_recovery_timeout_ms() -> u64 {
-    30_000
-}
-#[allow(dead_code)] // F-GAP-49 — reserved for health check interval defaults
-fn default_health_check_interval_ms() -> u64 {
-    5_000
-}
-#[allow(dead_code)] // F-GAP-49 — reserved for max failover defaults
-fn default_max_failover_attempts() -> u32 {
-    3
-}
-#[allow(dead_code)] // F-GAP-49 — reserved for self-healing default
-fn default_self_healing_enabled() -> bool {
-    true
-}
-
-#[allow(dead_code)] // F-GAP-49 — reserved for half-open probe interval default
-fn default_half_open_probe_interval_ms() -> u64 {
-    5000
 }
 
 impl Default for ResilienceConfig {

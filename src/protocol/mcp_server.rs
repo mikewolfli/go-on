@@ -28,7 +28,7 @@ use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::i18n::runtime::{t, tf};
 use crate::mcp::error_codes;
 use crate::mcp::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpServer};
-use crate::security::mtls::{MtlsAcceptor, MtlsConfig};
+use crate::security::mtls::MtlsAcceptor;
 use crate::tool::ToolRegistry;
 
 /// MCP Server with stdio transport
@@ -258,11 +258,13 @@ pub struct McpHttpServer {
     /// wrapped with TLS before handling HTTP requests. Defaults to `None`
     /// for local development / plaintext operation.
     tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
-    /// Optional mTLS configuration. When set, a `TlsAcceptor` is built from
-    /// this config (with client CA certificate verification) during `run()`.
-    /// This is a configuration wiring field — the actual acceptor is lazily
-    /// initialised if `tls_acceptor` is `None` and `tls_config` is `Some`.
-    tls_config: Option<MtlsConfig>,
+    /// Optional CA certificate path for mTLS. When set, a `TlsAcceptor` is built
+    /// with client CA certificate verification during `run()`.
+    mtls_ca_cert_path: Option<String>,
+    /// Optional server certificate path for mTLS.
+    mtls_server_cert_path: Option<String>,
+    /// Optional server key path for mTLS.
+    mtls_server_key_path: Option<String>,
     /// Optional rate limit middleware. When set, `check()` is called before
     /// processing each request in `handle_http_connection`.
     rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
@@ -291,7 +293,9 @@ impl McpHttpServer {
             connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server: None,
             tls_acceptor: None,
-            tls_config: None,
+            mtls_ca_cert_path: None,
+            mtls_server_cert_path: None,
+            mtls_server_key_path: None,
             rate_limiter: None,
             sse_broadcaster,
         }
@@ -322,7 +326,9 @@ impl McpHttpServer {
             connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server,
             tls_acceptor: None,
-            tls_config: None,
+            mtls_ca_cert_path: None,
+            mtls_server_cert_path: None,
+            mtls_server_key_path: None,
             rate_limiter: None,
             sse_broadcaster,
         }
@@ -336,8 +342,12 @@ impl McpHttpServer {
         // the MtlsAcceptor's build_server_config.
         let effective_acceptor: Option<tokio_rustls::TlsAcceptor> = if self.tls_acceptor.is_some() {
             self.tls_acceptor.clone()
-        } else if let Some(ref cfg) = self.tls_config {
-            let mtls_acceptor = MtlsAcceptor::new(cfg.clone());
+        } else if let (Some(ca), Some(cert), Some(key)) = (
+            self.mtls_ca_cert_path.as_ref(),
+            self.mtls_server_cert_path.as_ref(),
+            self.mtls_server_key_path.as_ref(),
+        ) {
+            let mtls_acceptor = MtlsAcceptor::new(ca.as_str(), cert.as_str(), key.as_str());
             let server_config = mtls_acceptor
                 .build_server_config()
                 .map_err(|e| anyhow::anyhow!("failed to build mTLS server config: {e}"))?;
@@ -478,12 +488,19 @@ impl McpHttpServer {
         self
     }
 
-    /// Configure the server with an mTLS config. If `tls_acceptor` has not
-    /// been set directly, the `TlsAcceptor` will be built from this config
-    /// when `run()` is called (lazy initialisation of the TLS acceptor from
-    /// the mTLS configuration with client CA certificate verification).
-    pub fn with_tls_config(mut self, config: MtlsConfig) -> Self {
-        self.tls_config = Some(config);
+    /// Configure the server with mTLS certificate paths. If `tls_acceptor` has not
+    /// been set directly, the `TlsAcceptor` will be built from these paths
+    /// when `run()` is called (lazy initialisation of the TLS acceptor with
+    /// client CA certificate verification).
+    pub fn with_tls_config(
+        mut self,
+        ca_cert_path: impl Into<String>,
+        server_cert_path: impl Into<String>,
+        server_key_path: impl Into<String>,
+    ) -> Self {
+        self.mtls_ca_cert_path = Some(ca_cert_path.into());
+        self.mtls_server_cert_path = Some(server_cert_path.into());
+        self.mtls_server_key_path = Some(server_key_path.into());
         self
     }
 

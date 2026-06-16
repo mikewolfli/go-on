@@ -59,14 +59,17 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         {
             #[cfg(feature = "multi-users-server")]
             {
-                use crate::security::mtls::MtlsConfig;
-                let mut mtls_config = MtlsConfig::new(
-                    &server.runtime_config.mtls_ca_cert_path,
-                    &server.runtime_config.mtls_server_cert_path,
-                    &server.runtime_config.mtls_server_key_path,
+                let ca_cert_path = &server.runtime_config.mtls_ca_cert_path;
+                let server_cert_path = &server.runtime_config.mtls_server_cert_path;
+                let server_key_path = &server.runtime_config.mtls_server_key_path;
+
+                let mut acceptor = crate::security::mtls::MtlsAcceptor::new(
+                    ca_cert_path.as_str(),
+                    server_cert_path.as_str(),
+                    server_key_path.as_str(),
                 );
                 if !server.runtime_config.mtls_ca_cert_path.is_empty() {
-                    mtls_config = mtls_config.with_client_cert(true);
+                    acceptor = acceptor.with_client_cert(true);
                 }
                 if !server.runtime_config.mtls_allowed_cns.is_empty() {
                     let allowed: Vec<String> = server
@@ -76,10 +79,8 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
-                    mtls_config = mtls_config.with_allowed_cns(allowed);
+                    acceptor = acceptor.with_allowed_cns(allowed);
                 }
-
-                let acceptor = crate::security::mtls::MtlsAcceptor::new(mtls_config);
                 // Validate the config by building once; accept() will lazily
                 // build the ServerConfig on the first connection.
                 match acceptor.build_server_config() {

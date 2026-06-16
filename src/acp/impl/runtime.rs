@@ -13,7 +13,7 @@
 //!   - `security` — mTLS, TLS, entry auth, RBAC authorization
 //!   - `protocol` — Protocol negotiation, HTTP request parsing, version handshake
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -55,15 +55,6 @@ pub use http_server::run_acp_http_server;
 
 /// Re-export server builder functions from server_builder module.
 pub(crate) use server_builder::new_acp_server;
-
-// ---------------------------------------------------------------------------
-// Shared statics
-// ---------------------------------------------------------------------------
-
-/// Serializes concurrent `/rpc` calls to prevent pipe-swapping race conditions.
-/// `server.output` is a global singleton — without this guard, two concurrent
-/// `/rpc` requests would corrupt each other's response capture pipes.
-static RPC_SERIAL: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 // ---------------------------------------------------------------------------
 // Shared utilities

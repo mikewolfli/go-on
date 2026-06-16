@@ -65,14 +65,14 @@ pub struct AgentPreferenceResult {
 // ── Agent Switch State (global, process-wide) ────────────────────────────
 
 #[derive(Default)]
-struct AgentSwitchState {
-    forced_agent_by_phase: HashMap<String, String>,
-    primary_agent_by_phase: HashMap<String, String>,
+pub(crate) struct AgentSwitchState {
+    pub(crate) forced_agent_by_phase: HashMap<String, String>,
+    pub(crate) primary_agent_by_phase: HashMap<String, String>,
 }
 
 static AGENT_SWITCH_STATE: OnceLock<StdMutex<AgentSwitchState>> = OnceLock::new();
 
-fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
+pub(crate) fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
     AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
 }
 

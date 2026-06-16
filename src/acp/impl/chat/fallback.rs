@@ -155,7 +155,7 @@ pub(crate) async fn execute_fallback_agents(
         let msg_clone = agent_messages.clone();
         let principles = phase.principles.clone();
         let timeout = request_timeout(phase.options.as_ref());
-        let tenant_id_owned = tenant_id.to_string();
+        let _tenant_id_owned = tenant_id.to_string();
 
         let fut = async move {
             let _permit = sem_clone.acquire().await.map_err(|_| {
@@ -180,6 +180,7 @@ pub(crate) async fn execute_fallback_agents(
             };
 
             // ── Tenant budget check before LLM call (B54-075) ─────────
+            #[cfg(feature = "multi-users-server")]
             {
                 let budget_guard =
                     server
@@ -190,13 +191,13 @@ pub(crate) async fn execute_fallback_agents(
                             warn!("execute_fallback_agents: tenant_budget poisoned, recovering");
                             poisoned.into_inner()
                         });
-                if let Err(e) = budget_guard.check_can_start(&tenant_id_owned) {
+                if let Err(e) = budget_guard.check_can_start(&_tenant_id_owned) {
                     return (
                         agent_name_owned,
                         attempt_started,
                         Err(anyhow::anyhow!(
                             "tenant '{}' token budget exceeded: {}",
-                            tenant_id_owned,
+                            _tenant_id_owned,
                             e
                         )),
                     );

@@ -69,12 +69,6 @@ impl TripleFusionBridge {
         }
     }
 
-    /// Returns the number of fusion cycles executed.
-    #[allow(dead_code)] // F-GAP-49: reserved for fusion cycle instrumentation
-    pub fn fusion_cycles(&self) -> u64 {
-        self.fusion_cycles.load(Ordering::Relaxed)
-    }
-
     /// Phase 1: Push metacognitive observations into Consciousness metrics.
     ///
     /// Each unresolved observation becomes an EnvironmentalAwareness metric

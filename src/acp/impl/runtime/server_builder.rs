@@ -4,27 +4,15 @@
 //! `new_acp_server` constructor and the shared `wire_server` helper.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 
-use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info};
 
-use crate::acp::server::{
-    AcpServer, CacheLayer, CacheServerDeps, GovernanceServerDeps, ModelServerDeps,
-    ObservabilityLayer, OrchestrationServerDeps, PersistenceContext, RateLimitContext,
-    RegistryContext, ResilienceContext, SessionContext,
-};
-use crate::adaptive_selector::AdaptiveModelSelector;
+use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
-use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
-use crate::flow_with_models::FlowModelSelector;
-use crate::memory_module::{MemoryPolicy, MemoryStore};
-use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::live_performance::LivePerformanceFeed;
-use crate::observability::telemetry::TelemetryRuntime;
-use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
 
@@ -365,18 +353,8 @@ pub async fn new_acp_server(
         advisor
     };
 
-    // Wire multimodal processor for document, audio, video, and repo analysis (GAP-B55-110)
-    // MM-FIX1: Activate all sub-processors when multimodal features are available.
-    #[cfg(any(feature = "sub-bus-multimodal", feature = "full"))]
-    {
-        use crate::multimodal::MultimodalProcessor;
-        builder = builder.with_multimodal_processor(MultimodalProcessor::new_with_all_processors());
-    }
-    #[cfg(not(any(feature = "sub-bus-multimodal", feature = "full")))]
-    {
-        use crate::multimodal::MultimodalProcessor;
-        builder = builder.with_multimodal_processor(MultimodalProcessor::default());
-    }
+    // Multimodal processor wiring removed — with_multimodal_processor was dead code.
+    // (F-GAP-49 reserved). multimodal_processor defaults to None.
 
     // Wire policy reloader for hot-reloading governance policies (GAP-B58-D04)
     {
@@ -396,354 +374,162 @@ pub async fn new_acp_server(
         builder = builder.with_policy_reloader(reloader);
     }
 
-    eprintln!("DEBUG: calling builder.build()...");
-    match builder.build() {
-        Ok(mut server) => {
-            eprintln!("DEBUG: builder.build() succeeded, calling wire_server...");
-            // Set fields that aren't available in ServerBuilder yet
-            server.cache_deps.vector_config = vector_config;
-            server.cache_deps.autotune = autotune;
-            server.cache_deps.autotune_config = autotune_config;
-            server.cache_deps.autotune_state_path = autotune_state_path;
-            server.config_path = config_path;
-            server.runtime_config = runtime_config;
-            server.verbose = _verbose;
-            server.governance_deps.harness_bus = Some(harness_bus);
-            server.governance_deps.capability_bus = Some(capability_bus);
-            server.governance_deps.provenance_ledger = Some(provenance_ledger);
-            server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
-            server.skill_market_registry = None;
-            server.rate_limiting.rate_limit_middleware = Some(Arc::new(
-                crate::protocol::rate_limit::RateLimitMiddleware::new(
-                    crate::protocol::rate_limit::TenantRateLimit::default(),
-                ),
-            ));
+    let mut server = builder.build();
+    // Set fields that aren't available in ServerBuilder yet
+    server.cache_deps.vector_config = vector_config;
+    server.cache_deps.autotune = autotune;
+    server.cache_deps.autotune_config = autotune_config;
+    server.cache_deps.autotune_state_path = autotune_state_path;
+    server.config_path = config_path;
+    server.runtime_config = runtime_config;
+    server.verbose = _verbose;
+    server.governance_deps.harness_bus = Some(harness_bus);
+    server.governance_deps.capability_bus = Some(capability_bus);
+    server.governance_deps.provenance_ledger = Some(provenance_ledger);
+    server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
+    server.skill_market_registry = None;
 
-            // B51-26: Shared wiring extracted to wire_server()
-            eprintln!("DEBUG: about to call wire_server (success path)...");
-            wire_server(&mut server, &registry).await;
-            eprintln!("DEBUG: wire_server completed (success path)");
+    #[cfg(feature = "multi-users-server")]
+    {
+        server.rate_limiting.rate_limit_middleware = Some(Arc::new(
+            crate::protocol::rate_limit::RateLimitMiddleware::new(
+                crate::protocol::rate_limit::TenantRateLimit::default(),
+            ),
+        ));
+    }
 
-            // GAP-B52-30: Register security advisor alert channel with the alert manager.
-            // Forward security alerts to the observability pipeline.
-            // Use spawn to circumvent the non-async context of new_acp_server.
-            if let Some(ref advisor) = server.governance_deps.security_advisor {
-                let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel();
-                let alert_tx_clone = alert_tx.clone();
-                let advisor_clone = Arc::clone(advisor);
-                tokio::spawn(async move {
-                    advisor_clone.register_ws_sender(alert_tx_clone).await;
-                });
-                let alert_manager = Arc::clone(&server.observability.alert_manager);
-                tokio::spawn(async move {
-                    use crate::shared::alert_severity::AlertSeverity;
-                    while let Some(security_alert) = alert_rx.recv().await {
-                        let _severity = match &security_alert.severity {
-                            crate::security::vulnerability_scan::Severity::Critical => {
-                                AlertSeverity::Critical
-                            }
-                            crate::security::vulnerability_scan::Severity::High => {
-                                AlertSeverity::Warning
-                            }
-                            _ => AlertSeverity::Info,
-                        };
-                        let mut mgr = alert_manager.lock().unwrap_or_else(|poisoned| {
-                            tracing::warn!("alert_manager lock poisoned");
-                            poisoned.into_inner()
-                        });
-                        // Map AlertSource to a string label
-                        let source_label = match &security_alert.source {
-                            crate::security::security_advisor::AlertSource::DependencyVulnerability => "dependency",
-                            crate::security::security_advisor::AlertSource::SecretExposure => "secret",
-                            crate::security::security_advisor::AlertSource::PermitExposure => "permit",
-                            crate::security::security_advisor::AlertSource::SecurityAdvisor => "advisor",
-                            crate::security::security_advisor::AlertSource::UserReported => "user",
-                        };
-                        mgr.evaluate(
-                            &format!("security.{}", source_label),
-                            match security_alert.severity {
-                                crate::security::vulnerability_scan::Severity::Critical => 9.0,
-                                crate::security::vulnerability_scan::Severity::High => 7.0,
-                                crate::security::vulnerability_scan::Severity::Medium => 5.0,
-                                crate::security::vulnerability_scan::Severity::Low => 2.0,
-                                crate::security::vulnerability_scan::Severity::Unknown => 0.0,
-                            },
-                        );
+    // Fix 6: Inject shared PuaEnforcementPlan into harness_bus evaluator
+    if let Some(ref hb) = server.governance_deps.harness_bus {
+        let mut engine = hb.evaluator.rule_engine.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("rule_engine lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        engine.set_plan(server.governance_deps.pua_enforcement_plan.clone());
+    }
+
+    // B51-26: Shared wiring extracted to wire_server()
+    eprintln!("DEBUG: about to call wire_server...");
+    wire_server(&mut server, &registry).await;
+    eprintln!("DEBUG: wire_server completed");
+
+    // GAP-B52-30: Register security advisor alert channel with the alert manager.
+    // Forward security alerts to the observability pipeline.
+    // Use spawn to circumvent the non-async context of new_acp_server.
+    if let Some(ref advisor) = server.governance_deps.security_advisor {
+        let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel();
+        let alert_tx_clone = alert_tx.clone();
+        let advisor_clone = Arc::clone(advisor);
+        tokio::spawn(async move {
+            advisor_clone.register_ws_sender(alert_tx_clone).await;
+        });
+        let alert_manager = Arc::clone(&server.observability.alert_manager);
+        tokio::spawn(async move {
+            use crate::shared::alert_severity::AlertSeverity;
+            while let Some(security_alert) = alert_rx.recv().await {
+                let _severity = match &security_alert.severity {
+                    crate::security::vulnerability_scan::Severity::Critical => {
+                        AlertSeverity::Critical
                     }
+                    crate::security::vulnerability_scan::Severity::High => AlertSeverity::Warning,
+                    _ => AlertSeverity::Info,
+                };
+                let mut mgr = alert_manager.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("alert_manager lock poisoned");
+                    poisoned.into_inner()
                 });
-            }
-
-            // BLUE48 Step 2: Pre-initialize SSE buffer pool at startup to
-            // avoid first-request latency penalty from lazy initialization.
-            crate::acp::r#impl::chat::pre_init_sse_buffer_pool();
-
-            // PERF-FIX: Removed init_memory_persistence_with_auto_migrate(None) from
-            // the critical startup path.  This call created a *third* MemoryPersistence
-            // instance (third SQLite connection + fs::create_dir_all + table/index DDL)
-            // synchronously on the tokio worker thread.  The auto-migrate background
-            // task is now started in start_background_tasks() using the server's
-            // existing MemoryPersistence, after the HTTP port is already bound.
-            // See: start_background_tasks() in src/acp/background.rs
-            tracing::info!("memory bridge: auto-migration deferred to start_background_tasks");
-
-            // BLUE48 Step 1: Initialize global embedding vector store for
-            // semantic task classification in the Planner.
-            if let Some(ref vs) = server.cache_deps.cache.vector_store {
-                crate::orchestration::planner_embedding::init_global_task_vector_store(Arc::clone(
-                    vs,
-                ));
-
-                // GAP-B58-B12: Pre-initialize AgentMemoryBus with VectorStore
-                // so retrieve_memories() uses vector similarity instead of linear scan.
-                crate::memory::agent_memory_bus::init_agent_memory_bus_with_vector_store(
-                    Arc::clone(vs),
-                    None,
+                // Map AlertSource to a string label
+                let source_label = match &security_alert.source {
+                    crate::security::security_advisor::AlertSource::DependencyVulnerability => {
+                        "dependency"
+                    }
+                    crate::security::security_advisor::AlertSource::SecretExposure => "secret",
+                    crate::security::security_advisor::AlertSource::PermitExposure => "permit",
+                    crate::security::security_advisor::AlertSource::SecurityAdvisor => "advisor",
+                    crate::security::security_advisor::AlertSource::UserReported => "user",
+                };
+                mgr.evaluate(
+                    &format!("security.{}", source_label),
+                    match security_alert.severity {
+                        crate::security::vulnerability_scan::Severity::Critical => 9.0,
+                        crate::security::vulnerability_scan::Severity::High => 7.0,
+                        crate::security::vulnerability_scan::Severity::Medium => 5.0,
+                        crate::security::vulnerability_scan::Severity::Low => 2.0,
+                        crate::security::vulnerability_scan::Severity::Unknown => 0.0,
+                    },
                 );
             }
+        });
+    }
 
-            // BLUE57-B01: Inject cache backends into CapabilityBus MemoryBus
-            // CapabilityBus does not implement Clone, so Arc::make_mut cannot be used.
-            // Arc::get_mut warns if the Arc is already shared (GAP-B58-C08).
-            if let Some(ref mut cb_arc) = server.governance_deps.capability_bus {
-                if let Some(cb_mut) = Arc::get_mut(cb_arc) {
-                    #[cfg(feature = "sub-bus-memory")]
-                    cb_mut.memory_bus.set_backends(
-                        Some(server.cache_deps.cache.response_cache.clone()),
-                        Some(server.cache_deps.cache.vector_store.clone()),
-                        None,
-                        Some(Some(Arc::clone(
-                            &server.cache_deps.cache.memory_response_cache,
-                        ))),
-                    );
-                    tracing::info!("capability_bus: memory bus backends injected");
-                } else {
-                    tracing::warn!(
-                        "capability_bus: Arc already shared, cannot inject memory backends"
-                    );
-                }
-            }
+    // BLUE48 Step 2: Pre-initialize SSE buffer pool at startup to
+    // avoid first-request latency penalty from lazy initialization.
+    crate::acp::r#impl::chat::pre_init_sse_buffer_pool();
 
-            // GAP-B55-042: Start approval engine timeout processing background task
-            if let Some(ref approval_engine) = server.governance_deps.approval_engine {
-                let engine = Arc::clone(approval_engine);
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-                    loop {
-                        interval.tick().await;
-                        let mut guard = match engine.write() {
-                            Ok(g) => g,
-                            Err(poisoned) => {
-                                tracing::error!("approval_engine lock poisoned in timeout task");
-                                poisoned.into_inner()
-                            }
-                        };
-                        let changed = guard.process_timeouts();
-                        if !changed.is_empty() {
-                            tracing::info!(
-                                "approval engine timed out {} request(s)",
-                                changed.len()
-                            );
-                        }
-                    }
-                });
-            }
+    // PERF-FIX: Removed init_memory_persistence_with_auto_migrate(None) from
+    // the critical startup path.  This call created a *third* MemoryPersistence
+    // instance (third SQLite connection + fs::create_dir_all + table/index DDL)
+    // synchronously on the tokio worker thread.  The auto-migrate background
+    // task is now started in start_background_tasks() using the server's
+    // existing MemoryPersistence, after the HTTP port is already bound.
+    // See: start_background_tasks() in src/acp/background.rs
+    tracing::info!("memory bridge: auto-migration deferred to start_background_tasks");
 
-            server
-        }
-        Err(err) => {
-            // Fallback to creating a minimal server if builder fails
-            eprintln!("DEBUG: builder.build() FAILED: {}", err);
-            tracing::error!("Failed to build server with ServerBuilder: {}", err);
+    // BLUE48 Step 1: Initialize global embedding vector store for
+    // semantic task classification in the Planner.
+    if let Some(ref vs) = server.cache_deps.cache.vector_store {
+        crate::orchestration::planner_embedding::init_global_task_vector_store(Arc::clone(vs));
 
-            // Create a minimal server with just the essential components
-            use crate::acp::prelude::{
-                AcpLockMonitor, CircuitBreakerRegistry, ConversationState, InflightLimiter,
-                LifecycleState, MaintenanceTracker, OnlineControllerState, PhaseRateLimiter,
-                ReviewTimeoutPolicy, RuntimeMetrics,
-            };
+        // GAP-B58-B12: Pre-initialize AgentMemoryBus with VectorStore
+        // so retrieve_memories() uses vector similarity instead of linear scan.
+        crate::memory::agent_memory_bus::init_agent_memory_bus_with_vector_store(
+            Arc::clone(vs),
+            None,
+        );
+    }
 
-            let mut failure_prevention_state = FailurePrevention::new();
-            for name in registry.names() {
-                failure_prevention_state.register_service(&name);
-            }
-
-            let cache_layer = CacheLayer {
-                response_cache: cache.clone(),
-                memory_response_cache: Arc::new(StdMutex::new(MemoryResponseCache::default())),
-                vector_store: vector_store.clone(),
-                token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
-                    500,
-                    200,
-                    ".goon/token_cache",
-                )),
-                semantic_cache: Arc::new(StdMutex::new(
-                    crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
-                )),
-            };
-            let mut fallback_server = AcpServer {
-                cache_deps: CacheServerDeps {
-                    cache: cache_layer,
-                    vector_config,
-                    autotune,
-                    autotune_config,
-                    autotune_state_path,
-                },
-                model_deps: ModelServerDeps {
-                    flow_manager: Some(flow.clone()),
-                    agent_registry: Some(registry.clone()),
-                    adaptive_model_selector: Arc::new(StdMutex::new(AdaptiveModelSelector::new())),
-                    flow_model_selector: Arc::new(StdMutex::new(FlowModelSelector {})),
-                },
-                governance_deps: GovernanceServerDeps {
-                    harness_bus: Some(Arc::clone(&harness_bus)),
-                    capability_bus: Some(Arc::clone(&capability_bus)),
-                    pua_enforcement_plan: Arc::new(StdMutex::new(crate::pua::PuaEnforcementPlan {
-                        escalation_level: String::new(),
-                        mandatory_roles: Vec::new(),
-                        red_lines: Vec::new(),
-                        quality_compass: Vec::new(),
-                        mandatory_safeguards: Vec::new(),
-                        mandatory_evidence: Vec::new(),
-                        stage_requirements: Vec::new(),
-                    })),
-                    rbac_enforcer: None,
-                    provenance_ledger: Some(provenance_ledger),
-                    approval_engine: None,
-                    injection_detector: None,
-                    safety_checker: None,
-                    hash_chain_auditor: None,
-                    secret_manager: None,
-                    memory_persistence: None,
-                    memory_retrieval_engine: None,
-                    evolution_loop: None,
-                    dependency_vulnerability_scanner: None,
-                    secret_exposure_detector: None,
-                    permit_exposure_analyzer: None,
-                    security_advisor: None,
-                    policy_reloader: None,
-                },
-                orchestration_deps: OrchestrationServerDeps {
-                    scheduler: None,
-                    planner: crate::orchestration::planner_executor::Planner,
-                    executor: crate::orchestration::planner_executor::Executor,
-                    planner_executor_config: Default::default(),
-                    skill_registry: {
-                        let mut registry = SkillRegistry::default();
-                        let prompt_skills_path =
-                            std::path::PathBuf::from(&runtime_config.skills_cache_dir)
-                                .join("prompt_skills.json");
-                        registry.set_persistence_path(prompt_skills_path);
-                        if let Err(e) = registry.load_prompt_skills_from_disk() {
-                            tracing::warn!("Failed to load prompt skills from disk: {}", e);
-                        }
-                        Arc::new(StdMutex::new(registry))
-                    },
-                },
-                config_path: config_path.clone(),
-                runtime_config: runtime_config.clone(),
-                observability: ObservabilityLayer {
-                    metrics: Arc::new(RuntimeMetrics::new()),
-                    lock_monitor: Arc::new(AcpLockMonitor::default()),
-                    telemetry_runtime: Arc::new(StdMutex::new(TelemetryRuntime::new(
-                        &runtime_config,
-                    ))),
-                    alert_manager: Arc::new(StdMutex::new(
-                        crate::observability::alert_manager::AlertManager::new(
-                            crate::observability::alert_manager::default_alert_rules(),
-                        ),
-                    )),
-                },
-                resilience: ResilienceContext {
-                    online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
-                    circuit_breakers: Arc::new(StdMutex::new(CircuitBreakerRegistry::new())),
-                    hyper_resilience: Arc::new(
-                        crate::resilience::hyper_resilience::HyperResilienceEngine::new(
-                            crate::resilience::hyper_resilience::ResilienceConfig::default(),
-                        )
-                        .with_fault_consensus(
-                            crate::resilience::hyper_resilience::FaultConsensus::new(2, 10_000),
-                        ),
-                    ),
-                    maintenance_tracker: Arc::new(StdMutex::new(MaintenanceTracker::new())),
-                    inflight_limiter: Arc::new(StdMutex::new(InflightLimiter::default())),
-                    lifecycle_state: Arc::new(StdMutex::new(LifecycleState::new())),
-                    review_timeout_policy: Arc::new(StdMutex::new(ReviewTimeoutPolicy {
-                        timeout_seconds: None,
-                        fail_on_timeout: false,
-                    })),
-                    failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
-                    phase_rate_limiter: Arc::new(StdMutex::new(PhaseRateLimiter::default())),
-                },
-                session: SessionContext {
-                    conversation_state: Arc::new(Mutex::new(ConversationState::default())),
-                    session_manager: None,
-                    session_registry: None,
-                    audit_log: crate::governance::audit::ThreadSafeAuditLog::new_with_default_path(
-                        10_000,
-                    ),
-                    responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
-                },
-                rate_limiting: RateLimitContext {
-                    rate_limit_middleware: None,
-                    tenant_budget: Arc::new(StdMutex::new(
-                        crate::governance::hardening::TenantBudgetEnforcer::new(),
-                    )),
-                },
-                registries: RegistryContext {
-                    schema_registry: Arc::new(StdMutex::new(
-                        crate::orchestration::task_schema::SchemaRegistry::new(),
-                    )),
-                    optimizer_registry: Arc::new(StdMutex::new(
-                        crate::orchestration::workflow_optimizer::OptimizerRegistry::new(),
-                    )),
-                    promotion_registry: Arc::new(StdMutex::new(
-                        crate::orchestration::promotion_plugin::PromotionRegistry::new(),
-                    )),
-                    evaluation_suite: Arc::new(StdMutex::new(
-                        crate::intelligence::evaluation::BenchmarkSuite::new(),
-                    )),
-                    fork_registry: Arc::new(StdMutex::new(
-                        crate::orchestration::fork_registry::ForkRegistry::new(
-                            crate::orchestration::fork_registry::ForkConfig::default(),
-                        ),
-                    )),
-                },
-                persistence: PersistenceContext {
-                    memory_store: Arc::new(StdMutex::new(
-                        MemoryStore::new(MemoryPolicy::default()),
-                    )),
-                    artifact_ledger: Arc::new(StdMutex::new(ArtifactLedger::new(
-                        config_path.as_deref().map(Path::new),
-                    ))),
-                    task_graph_store: None,
-                },
-                prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
-                prompt_manager: crate::acp::r#impl::request::prompts_pack::PromptManager::new(
-                    std::path::PathBuf::from("./prompts"),
-                ),
-                verbose: _verbose,
-                output: Arc::new(Mutex::new(
-                    Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
-                )),
-                shutdown_notify: Arc::new(Notify::new()),
-                skill_market_registry: None,
-                drain_guard: crate::acp::server::DrainGuard::default(),
-                tool_registry: Arc::new(crate::orchestration::tool::ToolRegistry::new()),
-                websocket_hub: None,
-                multimodal_processor: Some(crate::multimodal::MultimodalProcessor::default()),
-            };
-
-            // Wire RBAC enforcer into the fallback server for HTTP-level authorization
-            fallback_server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
-
-            // B51-26: Shared wiring extracted to wire_server()
-            eprintln!("DEBUG: about to call wire_server (fallback path)...");
-            wire_server(&mut fallback_server, &registry).await;
-            eprintln!("DEBUG: wire_server completed (fallback path)");
-
-            fallback_server
+    // BLUE57-B01: Inject cache backends into CapabilityBus MemoryBus
+    // CapabilityBus does not implement Clone, so Arc::make_mut cannot be used.
+    // Arc::get_mut warns if the Arc is already shared (GAP-B58-C08).
+    if let Some(ref mut cb_arc) = server.governance_deps.capability_bus {
+        if let Some(cb_mut) = Arc::get_mut(cb_arc) {
+            #[cfg(feature = "sub-bus-memory")]
+            cb_mut.memory_bus.set_backends(
+                Some(server.cache_deps.cache.response_cache.clone()),
+                Some(server.cache_deps.cache.vector_store.clone()),
+                None,
+                Some(Some(Arc::clone(
+                    &server.cache_deps.cache.memory_response_cache,
+                ))),
+            );
+            tracing::info!("capability_bus: memory bus backends injected");
+        } else {
+            tracing::warn!("capability_bus: Arc already shared, cannot inject memory backends");
         }
     }
+
+    // GAP-B55-042: Start approval engine timeout processing background task
+    if let Some(ref approval_engine) = server.governance_deps.approval_engine {
+        let engine = Arc::clone(approval_engine);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                let mut guard = match engine.write() {
+                    Ok(g) => g,
+                    Err(poisoned) => {
+                        tracing::error!("approval_engine lock poisoned in timeout task");
+                        poisoned.into_inner()
+                    }
+                };
+                let changed = guard.process_timeouts();
+                if !changed.is_empty() {
+                    tracing::info!("approval engine timed out {} request(s)", changed.len());
+                }
+            }
+        });
+    }
+
+    server
 }
 
 /// Shared wiring applied after AcpServer construction in both the primary builder

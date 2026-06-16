@@ -571,7 +571,7 @@ impl FullAutoFlow {
                 })
                 .collect();
 
-            match bl.start_plan(task, bl_steps) {
+            match bl.start_plan(task, bl_steps).await {
                 Ok(plan_id) => {
                     debug!("BrainLoop plan `{plan_id}` started for task");
 

@@ -4,7 +4,6 @@
 //! style violations) and generate evolution triggers for the self-improvement
 //! loop. Hooks run periodically and on plan completion.
 
-use crate::orchestration::self_evolution::evolution_loop::EvolutionTrigger;
 use serde::{Deserialize, Serialize};
 
 /// Types of code quality issues that can be detected.
@@ -37,59 +36,6 @@ impl CodeQualityReport {
     /// Returns true if no issues were found.
     pub fn is_clean(&self) -> bool {
         self.issues.is_empty()
-    }
-
-    /// Returns only dead code issues.
-    /// Public API for consumers of `CodeQualityReport`.
-    #[allow(dead_code)] // F-GAP-49 — reserved for self-evolution API integration
-    pub fn dead_code_issues(&self) -> Vec<&CodeQualityIssue> {
-        self.issues
-            .iter()
-            .filter(|i| matches!(i, CodeQualityIssue::DeadCode { .. }))
-            .collect()
-    }
-
-    /// Converts the report into evolution triggers for self-improvement.
-    /// Public API for consumers of `CodeQualityReport`.
-    #[allow(dead_code)] // F-GAP-49 — reserved for self-evolution API integration
-    pub fn to_evolution_triggers(&self) -> Vec<EvolutionTrigger> {
-        let mut triggers = Vec::new();
-
-        for issue in &self.issues {
-            match issue {
-                CodeQualityIssue::DeadCode { module, ratio } => {
-                    triggers.push(EvolutionTrigger::DeadCodeDetected {
-                        module: module.clone(),
-                        ratio: *ratio,
-                    });
-                }
-                CodeQualityIssue::HighComplexity { module, .. } => {
-                    triggers.push(EvolutionTrigger::PerformanceRegression {
-                        metric: format!("complexity::{module}"),
-                        threshold: 0.5,
-                        direction: crate::orchestration::self_evolution::evolution_loop::RegressionDirection::Increasing,
-                    });
-                }
-                CodeQualityIssue::MissingDocs { module, count } => {
-                    if *count > 5 {
-                        triggers.push(EvolutionTrigger::ManualRequest {
-                            instruction: format!(
-                                "Add missing documentation in module '{module}' ({count} items)"
-                            ),
-                        });
-                    }
-                }
-                CodeQualityIssue::UnsafePattern { module, pattern } => {
-                    triggers.push(EvolutionTrigger::ConfigDrift {
-                        key: format!("unsafe_pattern::{module}"),
-                        expected: "no_unsafe_usage".to_string(),
-                        actual: format!("unsafe pattern: {pattern}"),
-                    });
-                }
-            }
-        }
-
-        triggers
     }
 }
 
@@ -195,16 +141,6 @@ pub fn run_code_quality_scan() -> CodeQualityReport {
     }
 }
 
-/// Hook: call this after a BrainLoop plan completes to check for
-/// code quality regressions introduced during the plan.
-///
-/// Wired via pre_patch_quality_gate() in sandbox.apply_patch();
-/// post_plan variant is public API for external plan-completion hooks.
-#[allow(dead_code)] // F-GAP-49 — reserved for post-plan quality gate integration
-pub fn post_plan_quality_hook() -> CodeQualityReport {
-    run_code_quality_scan()
-}
-
 /// Hook: call this before an EvolutionLoop patch is applied to ensure
 /// the change does not degrade code quality.
 pub fn pre_patch_quality_gate() -> CodeQualityReport {
@@ -214,63 +150,6 @@ pub fn pre_patch_quality_gate() -> CodeQualityReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_clean_report() {
-        let report = CodeQualityReport {
-            issues: vec![],
-            health_score: 1.0,
-            modules_scanned: 10,
-            scanned_at_ms: 1000,
-        };
-        assert!(report.is_clean());
-        assert!(report.to_evolution_triggers().is_empty());
-    }
-
-    #[test]
-    fn test_dead_code_issue_creates_trigger() {
-        let report = CodeQualityReport {
-            issues: vec![CodeQualityIssue::DeadCode {
-                module: "src/foo.rs".to_string(),
-                ratio: 0.3,
-            }],
-            health_score: 0.7,
-            modules_scanned: 1,
-            scanned_at_ms: 1000,
-        };
-
-        let triggers = report.to_evolution_triggers();
-        assert_eq!(triggers.len(), 1);
-        match &triggers[0] {
-            EvolutionTrigger::DeadCodeDetected { module, ratio } => {
-                assert_eq!(module, "src/foo.rs");
-                assert!((ratio - 0.3).abs() < 1e-6);
-            }
-            _ => panic!("Expected DeadCodeDetected trigger"),
-        }
-    }
-
-    #[test]
-    fn test_dead_code_filter() {
-        let report = CodeQualityReport {
-            issues: vec![
-                CodeQualityIssue::DeadCode {
-                    module: "a.rs".to_string(),
-                    ratio: 0.2,
-                },
-                CodeQualityIssue::HighComplexity {
-                    module: "b.rs".to_string(),
-                    score: 50,
-                },
-            ],
-            health_score: 0.5,
-            modules_scanned: 2,
-            scanned_at_ms: 1000,
-        };
-
-        let dead = report.dead_code_issues();
-        assert_eq!(dead.len(), 1);
-    }
 
     #[test]
     fn test_run_code_quality_scan() {
@@ -286,21 +165,6 @@ mod tests {
         assert!(
             report.health_score <= 1.0,
             "health_score must not exceed 1.0"
-        );
-    }
-
-    #[test]
-    fn test_post_plan_quality_hook() {
-        let report = post_plan_quality_hook();
-        // post_plan_quality_hook delegates to run_code_quality_scan.
-        // Validate report structure.
-        assert!(
-            report.scanned_at_ms > 0,
-            "post_plan hook should produce a timestamp"
-        );
-        assert!(
-            report.health_score >= 0.0,
-            "health_score must be non-negative"
         );
     }
 }

@@ -43,18 +43,6 @@ pub static AUDIT_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Whether Delphi-method debate voting is enabled in rationalize_decision.
 static USE_DELPHI_DEBATE: AtomicBool = AtomicBool::new(true);
 
-/// Enable or disable the Delphi debate integration in rationalize_decision.
-#[allow(dead_code)] // Public API for runtime configuration
-pub fn set_delphi_debate_enabled(enabled: bool) {
-    USE_DELPHI_DEBATE.store(enabled, Ordering::Relaxed);
-}
-
-/// Returns whether Delphi debate is currently enabled.
-#[allow(dead_code)] // Public API for runtime configuration
-pub fn delphi_debate_enabled() -> bool {
-    USE_DELPHI_DEBATE.load(Ordering::Relaxed)
-}
-
 // ── Global instances ──────────────────────────────────────────────────────
 
 static GLOBAL_CONSENSUS: LazyLock<Mutex<ConsensusEngine>> =

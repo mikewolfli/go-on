@@ -115,32 +115,6 @@ impl SseDecompressor {
 }
 
 // ---------------------------------------------------------------------------
-// Compression helper for outgoing SSE payloads
-// ---------------------------------------------------------------------------
-
-/// Compress a byte slice using gzip.
-///
-/// Returns `None` when compression would expand the data (payload too small),
-/// allowing callers to fall back to uncompressed output.
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
-pub fn compress_sse_payload(data: &[u8]) -> Option<Vec<u8>> {
-    if data.len() < 128 {
-        return None;
-    }
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-    if encoder.write_all(data).is_err() {
-        return None;
-    }
-    let compressed = encoder.finish().ok()?;
-    // Only return compressed if it actually saves space
-    if compressed.len() < data.len() {
-        Some(compressed)
-    } else {
-        None
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Deprecated aliases for backward compatibility
 // ---------------------------------------------------------------------------
 
@@ -267,29 +241,5 @@ mod tests {
         // Feed compressed data to the decompressor
         let decompressed = comp.decompress_chunk(&compressed);
         assert_eq!(decompressed, original);
-    }
-
-    #[test]
-    fn compress_sse_payload_small_data_returns_none() {
-        let small = b"hello";
-        assert!(compress_sse_payload(small).is_none());
-    }
-
-    #[test]
-    fn compress_sse_payload_large_data_compresses() {
-        let large = b"The quick brown fox jumps over the lazy dog. ".repeat(10);
-        let large_slice: &[u8] = &large;
-        let compressed = compress_sse_payload(large_slice);
-        assert!(compressed.is_some());
-        let compressed =
-            compressed.expect("compress_sse_payload should return Some for large data");
-        assert!(compressed.len() < large_slice.len());
-        // Verify roundtrip
-        let mut decoder = MultiGzDecoder::new(&compressed[..]);
-        let mut result = Vec::new();
-        decoder
-            .read_to_end(&mut result)
-            .expect("decompression should succeed");
-        assert_eq!(result, large_slice);
     }
 }

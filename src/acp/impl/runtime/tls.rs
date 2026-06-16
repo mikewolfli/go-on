@@ -14,7 +14,6 @@ use tracing::warn;
 use super::http::http_trace_context;
 use super::protocol::parse_http_request;
 use super::sse::{write_sse_event, write_sse_headers};
-use super::RPC_SERIAL;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::acp::server::AcpServer;
 use crate::rpc_protocol::JsonRpcRequest;
@@ -68,9 +67,8 @@ pub(crate) fn build_root_capabilities_response() -> serde_json::Value {
 /// Process a JSON-RPC request over an mTLS connection and return the
 /// JSON-RPC response value.
 async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serde_json::Value {
-    // SERIALIZED: Acquire the RPC_SERIAL lock to prevent pipe-swapping race
-    // conditions on server.output, matching the same guard used in route_http_post.
-    let _rpc_guard = RPC_SERIAL.lock().await;
+    // SERIALIZED via per-server rpc_serial: only one RPC call at a time.
+    let _rpc_guard = server.rpc_serial.lock().await;
 
     let method = request.method.clone();
     match handle_request(server, request, None).await {

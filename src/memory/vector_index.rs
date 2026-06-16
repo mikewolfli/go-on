@@ -104,12 +104,6 @@ impl VectorIndex {
         results
     }
 
-    /// Return the raw vector entries (used by `ClusterIndex` for reclustering).
-    #[allow(dead_code)] // F-GAP-49 — reserved for vector index entries
-    pub(crate) fn entries(&self) -> &[IndexEntry] {
-        &self.vectors
-    }
-
     /// Build a vector index from a slice of persistence entries that have
     /// pre-computed embeddings.  Entries without an embedding are skipped.
     ///
@@ -203,7 +197,7 @@ impl ClusterIndex {
     #[allow(clippy::needless_range_loop)]
     pub fn recluster(&mut self) {
         self.clusters.clear();
-        let entries = self.flat.entries();
+        let entries = &self.flat.vectors;
         if entries.is_empty() {
             return;
         }

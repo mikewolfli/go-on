@@ -41,21 +41,6 @@ pub enum LinkType {
     Custom(String),
 }
 
-impl LinkType {
-    /// Human-readable label.
-    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
-    pub fn label(&self) -> &str {
-        match self {
-            LinkType::Similar => "similar",
-            LinkType::Continuation => "continuation",
-            LinkType::Supports => "supports",
-            LinkType::Contradicts => "contradicts",
-            LinkType::DerivedFrom => "derived_from",
-            LinkType::Custom(s) => s.as_str(),
-        }
-    }
-}
-
 /// A directed link between two memory entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryLink {
@@ -162,22 +147,6 @@ impl LinkGraph {
             }
         }
         result
-    }
-
-    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
-    fn has_link(&self, m1: &str, m2: &str) -> bool {
-        self.links.contains_key(&(m1.to_string(), m2.to_string()))
-            || self.links.contains_key(&(m2.to_string(), m1.to_string()))
-    }
-
-    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
-    fn len(&self) -> usize {
-        self.links.len()
-    }
-
-    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
-    fn is_empty(&self) -> bool {
-        self.links.is_empty()
     }
 }
 
@@ -430,7 +399,8 @@ impl MemoryRetrievalEngine {
             .links
             .lock()
             .map_err(|e| anyhow::anyhow!("link graph mutex poisoned: {}", e))?;
-        Ok(graph.has_link(m1, m2))
+        Ok(graph.links.contains_key(&(m1.to_string(), m2.to_string()))
+            || graph.links.contains_key(&(m2.to_string(), m1.to_string())))
     }
 
     /// Return the total number of links in the graph.
@@ -439,7 +409,7 @@ impl MemoryRetrievalEngine {
             .links
             .lock()
             .map_err(|e| anyhow::anyhow!("link graph mutex poisoned: {}", e))?;
-        Ok(graph.len())
+        Ok(graph.links.len())
     }
 
     /// Register a memory ID as belonging to a session.
@@ -539,7 +509,6 @@ impl MemoryRetrievalEngine {
 // Helpers
 // ===========================================================================
 
-#[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

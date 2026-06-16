@@ -225,34 +225,6 @@ impl OnlineControllerState {
             .record(success, duration_ms);
     }
 
-    /// Record agent outcome with an additional **task-type** dimension.
-    ///
-    /// Same as `record_agent_outcome` but also stores the outcome in a
-    /// per-task-type-per-agent window, enabling scoring queries scoped
-    /// to a specific task type on top of the existing phase+agent view.
-    ///
-    /// Available for callers that have explicit task-type context.
-    /// When task type is unknown, prefer `record_agent_outcome` which
-    /// infers it from the phase name.
-    #[allow(dead_code)]
-    pub(crate) fn record_agent_outcome_with_task_type(
-        &mut self,
-        phase_name: &str,
-        task_type: &str,
-        agent_name: &str,
-        success: bool,
-        duration_ms: u64,
-    ) {
-        // Keep existing recording paths unchanged.
-        self.record_agent_outcome(phase_name, agent_name, success, duration_ms);
-
-        // Add task-type dimension.
-        self.task_type_agent_windows
-            .entry(Self::task_type_agent_key(task_type, agent_name))
-            .or_default()
-            .record(success, duration_ms);
-    }
-
     fn agent_reliability_score(&self, phase_name: &str, agent_name: &str) -> f64 {
         let phase_key = Self::phase_agent_key(phase_name, agent_name);
         let phase_score = self
@@ -316,45 +288,6 @@ impl OnlineControllerState {
             }
             None => base,
         }
-    }
-
-    /// Rank agents for a phase **and task type**.
-    ///
-    /// Same signature intent as `rank_agent_names_for_phase` but also
-    /// factors in per-task-type reliability where data exists.  Falls
-    /// back seamlessly to the phase-only ranking when no task-type
-    /// data is available.
-    ///
-    /// Available for callers that have explicit task-type context.
-    /// When task type is unknown, prefer `rank_agent_names_for_phase`.
-    #[allow(dead_code)]
-    pub(crate) fn rank_agent_names_for_phase_and_task_type(
-        &self,
-        phase_name: &str,
-        task_type: &str,
-        agent_names: &[String],
-    ) -> Vec<(String, f64)> {
-        let mut scored = agent_names
-            .iter()
-            .enumerate()
-            .map(|(idx, name)| {
-                (
-                    idx,
-                    name.clone(),
-                    self.agent_reliability_score_with_task_type(phase_name, task_type, name),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        scored.sort_by(|left, right| match right.2.partial_cmp(&left.2) {
-            Some(std::cmp::Ordering::Equal) | None => left.0.cmp(&right.0),
-            Some(other) => other,
-        });
-
-        scored
-            .into_iter()
-            .map(|(_, name, score)| (name, score))
-            .collect()
     }
 
     pub(crate) fn rank_agent_names_for_phase(
@@ -527,31 +460,72 @@ impl OnlineControllerState {
 
 /// Periodic timeout check called from background tasks (BLUE56-D02).
 /// Scans for operations that have exceeded their timeout budget and
-/// logs warnings for any detected timeouts.
+/// Tracks the earliest cycle at which pending operations were first observed.
+static TIMEOUT_START_CYCLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Tracks whether a timeout warning has already been emitted for the current
+/// pending batch (to avoid log spam every 5-second cycle).
+static TIMEOUT_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Check for timed-out operations and log/escalate if any have expired.
 ///
-/// When `pending_count` and `timeout_secs` are provided, checks if any
-/// operations have exceeded their timeout budget.
+/// When `pending_count` and `timeout_secs` are provided, tracks the duration
+/// that operations have been pending. If the deadline has passed (pending_count
+/// remains > 0 longer than `timeout_secs` at 5s/cycle), logs a warning and
+/// resets the tracking.
 pub fn run_timeout_check(cycle: u64, pending_count: Option<usize>, timeout_secs: Option<u64>) {
-    // Check for timed-out operations if we have context
     if let (Some(count), Some(timeout)) = (pending_count, timeout_secs) {
         if count > 0 {
-            tracing::debug!(
-                target: "runtime_controls",
-                cycle,
-                pending = count,
-                timeout_secs = timeout,
-                "timeout check: {} pending operations, max timeout {}s",
-                count, timeout
-            );
+            // First cycle with pending work — record start
+            TIMEOUT_START_CYCLE
+                .compare_exchange(
+                    0,
+                    cycle,
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                )
+                .ok();
+
+            let start = TIMEOUT_START_CYCLE.load(std::sync::atomic::Ordering::Relaxed);
+            let cycles_elapsed = cycle.wrapping_sub(start);
+            let elapsed_secs = cycles_elapsed * 5; // each cycle is 5 seconds
+
+            if elapsed_secs >= timeout && !TIMEOUT_WARNED.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tracing::warn!(
+                    target: "runtime_controls",
+                    cycle,
+                    pending = count,
+                    timeout_secs = timeout,
+                    elapsed_secs = elapsed_secs,
+                    cycles_since_pending = cycles_elapsed,
+                    "TIMEOUT: {} pending operations exceeded {}s timeout (elapsed: {}s)",
+                    count, timeout, elapsed_secs
+                );
+                TIMEOUT_WARNED.store(true, std::sync::atomic::Ordering::Relaxed);
+            } else if elapsed_secs < timeout {
+                tracing::debug!(
+                    target: "runtime_controls",
+                    cycle,
+                    pending = count,
+                    timeout_secs = timeout,
+                    elapsed_secs = elapsed_secs,
+                    "timeout check: {} pending, {}s elapsed of {}s budget",
+                    count, elapsed_secs, timeout
+                );
+            }
+        } else {
+            // No pending work — reset tracking
+            TIMEOUT_START_CYCLE.store(0, std::sync::atomic::Ordering::Relaxed);
+            TIMEOUT_WARNED.store(false, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     if cycle > 0 && cycle.is_multiple_of(12) {
-        // Log every 60 seconds (12 * 5s)
         tracing::debug!(
             target: "runtime_controls",
             cycle,
-            "timeout check: no timeouts detected"
+            "timeout check: periodic health tick"
         );
     }
 }

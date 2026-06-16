@@ -134,18 +134,10 @@ impl SemanticResponseCache {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
-        let mut guard = self
-            .entries
-            .write()
-            .expect("SemanticCache entries poisoned");
-        if let Some(bucket) = guard.get_mut(&hash) {
-            // First, remove expired entries
-            let before = bucket.len();
-            bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
-            self.expired_count
-                .fetch_add((before - bucket.len()) as u64, Ordering::Relaxed);
-
+        let guard = self.entries.read().expect("SemanticCache entries poisoned");
+        if let Some(bucket) = guard.get(&hash) {
             // Find matching entry index — try exact match first, then similarity
+            // Expired entry removal is handled by the background cleanup task.
             let match_idx = bucket
                 .iter()
                 .position(|entry| {
@@ -159,12 +151,8 @@ impl SemanticResponseCache {
                 });
 
             if let Some(idx) = match_idx {
-                let entry = &mut bucket[idx];
-                entry.access_count += 1;
-                entry.hits += 1;
-                entry.last_accessed = now;
                 self.total_hits.fetch_add(1, Ordering::Relaxed);
-                return Some(entry.response.clone());
+                return Some(bucket[idx].response.clone());
             }
         }
 

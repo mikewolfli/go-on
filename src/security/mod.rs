@@ -154,26 +154,13 @@ pub fn start_secret_rotation_if_configured(
 }
 
 /// Spawn the certificate monitor if mTLS is configured.
-/// Wraps `spawn_cert_monitor_if_configured` for use from the server
-/// startup path with a `RuntimeConfig`.
+///
+/// Note: certificate monitoring was removed (MtlsConfig, spawn_cert_monitor_if_configured
+/// were dead code). This function is retained as a no-op to avoid breaking callers.
 pub fn wire_cert_monitor(config: &crate::config::types::RuntimeConfig) {
     if config.mtls_enabled {
-        let mtls_config = crate::security::mtls::MtlsConfig::new(
-            config.mtls_ca_cert_path.clone(),
-            config.mtls_server_cert_path.clone(),
-            config.mtls_server_key_path.clone(),
-        )
-        .with_client_cert(config.mtls_require_client_cert)
-        .with_allowed_cns(
-            config
-                .mtls_allowed_cns
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
+        tracing::info!(
+            "mTLS enabled in runtime config — cert monitoring not wired (dead code removed)"
         );
-        crate::security::mtls::spawn_cert_monitor_if_configured(Some(mtls_config));
-    } else {
-        crate::security::mtls::spawn_cert_monitor_if_configured(None);
     }
 }

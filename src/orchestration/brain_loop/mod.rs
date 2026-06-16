@@ -341,74 +341,6 @@ impl BrainLoop {
             next_plan_id: Arc::new(AtomicU64::new(1)),
         }
     }
-
-    // ── Plan lifecycle (sync fast paths) ────────────────────────────────
-
-    /// Acquire a write guard from a sync context via try-write + yield loop.
-    ///
-    /// TODO: This module is deprecated (use cognitive loop in chat_phases.rs instead).
-    /// The busy-spin is replaced with a small sleep to avoid CPU burning.
-    /// Will panic after `max_spin_ms` to avoid unbounded blocking.
-    #[allow(clippy::needless_continue)]
-    pub(crate) fn sync_write(&self) -> tokio::sync::RwLockWriteGuard<'_, BrainLoopInner> {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(
-                self.inner
-                    .try_read()
-                    .map(|g| g.config.max_spin_ms)
-                    .unwrap_or(5000),
-            );
-        loop {
-            match self.inner.try_write() {
-                Ok(guard) => return guard,
-                Err(_) => {
-                    if std::time::Instant::now() > deadline {
-                        panic!(
-                            "sync_write timed out after {} ms",
-                            self.inner
-                                .try_read()
-                                .map(|g| g.config.max_spin_ms)
-                                .unwrap_or(5000)
-                        );
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-            }
-        }
-    }
-
-    /// Acquire a read guard from a sync context via try-read + yield loop.
-    ///
-    /// TODO: This module is deprecated (use cognitive loop in chat_phases.rs instead).
-    /// The busy-spin is replaced with a small sleep to avoid CPU burning.
-    /// Will panic after `max_spin_ms` to avoid unbounded blocking.
-    #[allow(clippy::needless_continue)]
-    pub(crate) fn sync_read(&self) -> tokio::sync::RwLockReadGuard<'_, BrainLoopInner> {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(
-                self.inner
-                    .try_read()
-                    .map(|g| g.config.max_spin_ms)
-                    .unwrap_or(5000),
-            );
-        loop {
-            match self.inner.try_read() {
-                Ok(guard) => return guard,
-                Err(_) => {
-                    if std::time::Instant::now() > deadline {
-                        panic!(
-                            "sync_read timed out after {} ms",
-                            self.inner
-                                .try_read()
-                                .map(|g| g.config.max_spin_ms)
-                                .unwrap_or(5000)
-                        );
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_brain_loop_empty() {
         let bl = BrainLoop::new(default_config());
-        let plans = bl.list_plans();
+        let plans = bl.list_plans().await;
         assert!(plans.is_empty(), "new brain loop should have no plans");
 
         let profile = bl.profile().await;
@@ -507,9 +439,9 @@ mod tests {
     async fn test_start_plan() {
         let bl = BrainLoop::new(default_config());
         let steps = vec![make_step("s1", "Step one"), make_step("s2", "Step two")];
-        let plan_id = bl.start_plan("Test goal", steps.clone()).unwrap();
+        let plan_id = bl.start_plan("Test goal", steps.clone()).await.unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.goal, "Test goal");
         assert_eq!(plan.steps.len(), 2);
         assert_eq!(plan.phase, BrainLoopPhase::Planning);
@@ -517,7 +449,7 @@ mod tests {
         assert!(plan.created_ms > 0);
 
         // Should appear in list.
-        let plans = bl.list_plans();
+        let plans = bl.list_plans().await;
         assert!(plans.contains(&plan_id));
     }
 
@@ -529,13 +461,13 @@ mod tests {
     async fn test_execute_step() {
         let bl = BrainLoop::new(default_config());
         let steps = vec![make_step("s1", "Step one")];
-        let plan_id = bl.start_plan("Goal", steps).unwrap();
+        let plan_id = bl.start_plan("Goal", steps).await.unwrap();
 
         bl.execute_step(&plan_id, "s1", "output from step 1")
             .await
             .unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.phase, BrainLoopPhase::Executing);
         assert_eq!(plan.current_iteration, 1);
 
@@ -554,6 +486,7 @@ mod tests {
         let bl = BrainLoop::new(default_config());
         let plan_id = bl
             .start_plan("Goal", vec![make_step("s1", "Real step")])
+            .await
             .unwrap();
 
         let err = bl.execute_step(&plan_id, "s999", "data").await.unwrap_err();
@@ -582,6 +515,7 @@ mod tests {
         let bl = BrainLoop::new(default_config());
         let plan_id = bl
             .start_plan("Goal", vec![make_step("s1", "Step A")])
+            .await
             .unwrap();
 
         bl.execute_step(&plan_id, "s1", "done").await.unwrap();
@@ -603,7 +537,7 @@ mod tests {
         assert!(reflection.reflection_ms > 0);
 
         // The plan should now be in Reflecting phase.
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.phase, BrainLoopPhase::Reflecting);
 
         // The step should be marked Done with a non-zero duration.
@@ -621,6 +555,7 @@ mod tests {
         let bl = BrainLoop::new(default_config());
         let plan_id = bl
             .start_plan("Goal", vec![make_step("s1", "Old step")])
+            .await
             .unwrap();
 
         // Execute and reflect.
@@ -636,7 +571,7 @@ mod tests {
         ];
         bl.replan(&plan_id, new_steps).await.unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.phase, BrainLoopPhase::Replanning);
         // The old step s1 remains (completed), plus two new ones.
         assert_eq!(plan.steps.len(), 3);
@@ -654,6 +589,7 @@ mod tests {
         let bl = BrainLoop::new(default_config());
         let plan_id = bl
             .start_plan("Context test", vec![make_step("c1", "Context step")])
+            .await
             .unwrap();
 
         let ctx = TaskContext::new("ctx-1".to_string());
@@ -667,7 +603,7 @@ mod tests {
         assert!((returned_ctx.confidence - 1.0).abs() < f64::EPSILON);
 
         // The step should have the context attached.
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         let step = &plan.steps[0];
         assert!(step.context.is_some(), "step should have context attached");
         let step_ctx = step.context.as_ref().unwrap();
@@ -686,6 +622,7 @@ mod tests {
                 "Reflect context",
                 vec![make_step("rct1", "Reflect with ctx")],
             )
+            .await
             .unwrap();
 
         // Execute with context.
@@ -736,6 +673,7 @@ mod tests {
                     make_step("m2", "Merge step 2"),
                 ],
             )
+            .await
             .unwrap();
 
         // Execute both steps with different contexts.
@@ -764,7 +702,7 @@ mod tests {
         ];
         bl.replan(&plan_id, new_steps).await.unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         // m1 and m2 are Done, m3 and m4 are new.
         assert_eq!(plan.steps.len(), 4);
 
@@ -806,6 +744,7 @@ mod tests {
                 "Chain propagation",
                 vec![make_step("a", "Step A"), make_step("b", "Step B")],
             )
+            .await
             .unwrap();
 
         // Step A: execute with context containing a reasoning trace.
@@ -872,11 +811,12 @@ mod tests {
         let bl = BrainLoop::new(default_config());
         let plan_id = bl
             .start_plan("Goal", vec![make_step("s1", "Step")])
+            .await
             .unwrap();
 
         bl.complete_plan(&plan_id).await.unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.phase, BrainLoopPhase::Completed);
         assert!(plan.phase.is_terminal());
 
@@ -894,13 +834,14 @@ mod tests {
         let bl = BrainLoop::new(default_config());
         let plan_id = bl
             .start_plan("Goal", vec![make_step("s1", "Step")])
+            .await
             .unwrap();
 
         bl.fail_plan(&plan_id, "Something went wrong")
             .await
             .unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.phase, BrainLoopPhase::Failed);
         assert!(plan.phase.is_terminal());
         assert_eq!(plan.fail_reason, "Something went wrong");
@@ -919,11 +860,12 @@ mod tests {
         let bl = BrainLoop::new(default_config());
         let plan_id = bl
             .start_plan("Goal", vec![make_step("s1", "Step")])
+            .await
             .unwrap();
 
         bl.cancel_plan(&plan_id).await.unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.phase, BrainLoopPhase::Cancelled);
         assert!(plan.phase.is_terminal());
 
@@ -947,12 +889,13 @@ mod tests {
         // Start a plan with a single step.
         let plan_id = bl
             .start_plan("Iteration test", vec![make_step("s1", "Step")])
+            .await
             .unwrap();
 
         // Iteration 1: execute step.
         bl.execute_step(&plan_id, "s1", "iter 1").await.unwrap();
         {
-            let plan = bl.get_plan(&plan_id).unwrap();
+            let plan = bl.get_plan(&plan_id).await.unwrap();
             assert_eq!(plan.current_iteration, 1);
             assert!(!plan.phase.is_terminal());
         }
@@ -968,7 +911,7 @@ mod tests {
         // Iteration 2: execute new step.
         bl.execute_step(&plan_id, "s2", "iter 2").await.unwrap();
         {
-            let plan = bl.get_plan(&plan_id).unwrap();
+            let plan = bl.get_plan(&plan_id).await.unwrap();
             assert_eq!(plan.current_iteration, 2);
             assert!(!plan.phase.is_terminal());
         }
@@ -984,7 +927,7 @@ mod tests {
         // Executing s3 pushes iteration to 3, which exceeds max_iterations.
         bl.execute_step(&plan_id, "s3", "iter 3").await.unwrap();
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(
             plan.phase,
             BrainLoopPhase::Failed,
@@ -1009,9 +952,11 @@ mod tests {
         // Start two plans.
         let pid_a = bl
             .start_plan("Plan A", vec![make_step("a1", "A1")])
+            .await
             .unwrap();
         let pid_b = bl
             .start_plan("Plan B", vec![make_step("b1", "B1")])
+            .await
             .unwrap();
 
         let p1 = bl.profile().await;
@@ -1050,7 +995,7 @@ mod tests {
     async fn test_get_nonexistent_plan_fails() {
         let bl = BrainLoop::new(default_config());
 
-        let err = bl.get_plan("does-not-exist").unwrap_err();
+        let err = bl.get_plan("does-not-exist").await.unwrap_err();
         assert!(err.to_string().contains("not found"));
 
         let err = bl.current_phase("phantom-plan").await.unwrap_err();
@@ -1072,8 +1017,9 @@ mod tests {
         // Verify the config is stored correctly by checking profile with a plan.
         let plan_id = bl
             .start_plan("Deep reasoning test", vec![make_step("d1", "Deep step")])
+            .await
             .unwrap();
-        assert!(bl.get_plan(&plan_id).is_ok());
+        assert!(bl.get_plan(&plan_id).await.is_ok());
 
         // The phase variant should exist and not be terminal.
         assert!(!BrainLoopPhase::DeepReasoning.is_terminal());
@@ -1245,9 +1191,10 @@ mod tests {
         let bl = BrainLoop::new(config);
         let plan_id = bl
             .start_plan("WM test", vec![make_step("w1", "World step")])
+            .await
             .unwrap();
         bl.query_world_model(&plan_id).await;
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert!(
             plan.world_model_data.is_none(),
             "world_model_data should be None when integration is disabled"
@@ -1261,9 +1208,10 @@ mod tests {
         let bl2 = BrainLoop::new(config);
         let plan_id2 = bl2
             .start_plan("WM test 2", vec![make_step("w2", "World step 2")])
+            .await
             .unwrap();
         bl2.query_world_model(&plan_id2).await;
-        let plan2 = bl2.get_plan(&plan_id2).unwrap();
+        let plan2 = bl2.get_plan(&plan_id2).await.unwrap();
         assert!(
             plan2.world_model_data.is_some(),
             "world_model_data should be populated when integration is enabled"
@@ -1329,7 +1277,7 @@ mod tests {
             }
         }
 
-        let plan = bl.get_plan(&plan_id).unwrap();
+        let plan = bl.get_plan(&plan_id).await.unwrap();
         assert_eq!(plan.reasoning.as_deref(), Some("manual reasoning chain"));
         assert!(plan.world_model_data.is_some());
         let wm = plan.world_model_data.unwrap();

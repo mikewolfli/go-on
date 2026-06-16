@@ -96,7 +96,7 @@ fn acp_method_registry() -> &'static std::sync::Mutex<Vec<&'static str>> {
 
 /// Returns true if the method is known to the ACP protocol (either built-in
 /// or dynamically registered).
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
+#[allow(dead_code)]
 pub fn is_registered_acp_method(method: &str) -> bool {
     if let Ok(guard) = acp_method_registry().lock() {
         guard.contains(&method)

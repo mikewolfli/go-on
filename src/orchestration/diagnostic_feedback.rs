@@ -286,18 +286,6 @@ impl DiagnosticFeedbackEngine {
         }
     }
 
-    /// Total errors across all batches in history.
-    #[allow(dead_code)] // F-GAP-11 — reserved for diagnostic statistics
-    pub fn total_errors(&self) -> usize {
-        self.history.iter().map(|b| b.error_count).sum()
-    }
-
-    /// Total warnings across all batches.
-    #[allow(dead_code)] // F-GAP-11 — reserved for diagnostic statistics
-    pub fn total_warnings(&self) -> usize {
-        self.history.iter().map(|b| b.warning_count).sum()
-    }
-
     /// Known patterns count.
     #[cfg(test)]
     pub fn pattern_count(&self) -> usize {

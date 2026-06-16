@@ -197,28 +197,6 @@ pub(crate) fn extract_tool_calls_from_response(response: &str, max_calls: usize)
     calls
 }
 
-/// Execute model tool calls
-#[cfg(test)]
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
-fn execute_tool_calls(
-    task: &str,
-    subtask: &str,
-    record_index: usize,
-    calls: &[String],
-) -> Vec<String> {
-    // Simplified tool execution
-    calls
-        .iter()
-        .map(|call| {
-            format!(
-                "Executed {} for task {} (subtask: {}, index: {})",
-                call, task, subtask, record_index
-            )
-        })
-        .collect()
-}
-
 /// Detect repeated task patterns across user messages.
 ///
 /// Analyzes all user messages for common keyword clusters that indicate

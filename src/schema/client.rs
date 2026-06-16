@@ -234,38 +234,6 @@ impl PermissionOptionId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-pub struct PermissionOption {
-    pub option_id: PermissionOptionId,
-    pub name: String,
-    pub kind: PermissionOptionKind,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionOptionKind {
-    AllowOnce,
-    AllowAlways,
-    RejectOnce,
-    RejectAlways,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-pub struct RequestPermissionRequest {
-    pub session_id: SessionId,
-    pub tool_call: ToolCallUpdate,
-    pub options: Vec<PermissionOption>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Terminal types
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -281,35 +249,7 @@ impl TerminalId {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-pub struct CreateTerminalRequest {
-    pub session_id: SessionId,
-    pub command: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub env: Vec<crate::schema::EnvVariable>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_byte_limit: Option<u64>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct CreateTerminalResponse {
-    pub terminal_id: TerminalId,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-pub struct TerminalOutputRequest {
-    pub session_id: SessionId,
     pub terminal_id: TerminalId,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
@@ -333,36 +273,6 @@ pub struct TerminalExitStatus {
     pub exit_code: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-pub struct ReleaseTerminalRequest {
-    pub session_id: SessionId,
-    pub terminal_id: TerminalId,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-pub struct KillTerminalRequest {
-    pub session_id: SessionId,
-    pub terminal_id: TerminalId,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
-pub struct WaitForTerminalExitRequest {
-    pub session_id: SessionId,
-    pub terminal_id: TerminalId,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }

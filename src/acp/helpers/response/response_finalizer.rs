@@ -61,7 +61,7 @@ pub fn finalize_chat_response(
     selected_model_name: &Option<String>,
     response_text: &str,
     reasoning_text: &str,
-    tenant_id: &str,
+    _tenant_id: &str,
     started: Instant,
     mut result: Value,
     conversation_id: &str,
@@ -92,7 +92,7 @@ pub fn finalize_chat_response(
         selected_agent,
         selected_model_name,
         response_text,
-        tenant_id,
+        _tenant_id,
         started,
         &result,
         conversation_id,
@@ -121,7 +121,7 @@ pub fn finalize_chat_response(
         schema_warnings,
         schema_error,
         layered_prompt_segments_len,
-        tenant_id,
+        _tenant_id,
         &metadata,
     );
 
@@ -142,7 +142,7 @@ fn collect_agent_outputs(
     selected_agent: &str,
     selected_model_name: &Option<String>,
     response_text: &str,
-    tenant_id: &str,
+    _tenant_id: &str,
     started: Instant,
     result: &Value,
     conversation_id: &str,
@@ -236,6 +236,7 @@ fn collect_agent_outputs(
     record_task_agent_outcome(phase_name, selected_agent, request_succeeded);
 
     // ── TenantBudgetEnforcer record usage (F-GAP-08) ───────────────────
+    #[cfg(feature = "multi-users-server")]
     {
         let mut budget = server
             .rate_limiting
@@ -245,7 +246,7 @@ fn collect_agent_outputs(
                 tracing::warn!("tenant_budget lock poisoned in collect_agent_outputs");
                 poisoned.into_inner()
             });
-        budget.record_usage(tenant_id, used_tokens as usize, 1);
+        budget.record_usage(_tenant_id, used_tokens as usize, 1);
     }
 
     AgentExecutionMetrics {
@@ -457,7 +458,7 @@ fn format_response_body(
     schema_warnings: Vec<String>,
     schema_error: Option<String>,
     layered_prompt_segments_len: usize,
-    tenant_id: &str,
+    _tenant_id: &str,
     metadata: &ResponseMetadata,
 ) {
     if let Some(obj) = result.as_object_mut() {
@@ -492,7 +493,7 @@ fn format_response_body(
             "evaluation_results".to_string(),
             json!(metadata.evaluation_results),
         );
-        obj.insert("tenant_id".to_string(), json!(tenant_id));
+        obj.insert("_tenant_id".to_string(), json!(_tenant_id));
         if !reasoning_text.is_empty() {
             obj.insert("thinking".to_string(), json!(reasoning_text));
         }
@@ -516,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_finalize_chat_response_returns_augmented_result() {
-        let server = ServerBuilder::new().build().expect("server should build");
+        let server = ServerBuilder::new().build();
         let trace = make_trace();
         let started = Instant::now();
         let result_input = json!({
@@ -572,14 +573,14 @@ mod tests {
             "should have schema_warnings"
         );
         assert!(
-            augmented.get("tenant_id").is_some(),
-            "should have tenant_id"
+            augmented.get("_tenant_id").is_some(),
+            "should have _tenant_id"
         );
     }
 
     #[tokio::test]
     async fn test_finalize_chat_response_handles_empty_tools() {
-        let server = ServerBuilder::new().build().expect("server should build");
+        let server = ServerBuilder::new().build();
         let trace = make_trace();
         let started = Instant::now();
         let result_input = json!({"response": "empty tools test"});
@@ -627,7 +628,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_finalize_chat_response_with_tool_results() {
-        let server = ServerBuilder::new().build().expect("server should build");
+        let server = ServerBuilder::new().build();
         let trace = make_trace();
         let started = Instant::now();
         let result_input = json!({

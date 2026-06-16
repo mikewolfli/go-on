@@ -80,18 +80,3 @@ pub fn stream_done_notification(
 
     Value::Object(payload)
 }
-
-/// Classify agent failure type
-#[cfg(test)]
-#[allow(dead_code)]
-// F-GAP-49 — reserved for metrics API
-pub fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
-    let msg = err.to_string().to_ascii_lowercase();
-    if msg.contains("timed out") || msg.contains("timeout") {
-        return "timeout";
-    }
-    if msg.contains("panic") {
-        return "panic";
-    }
-    "other"
-}

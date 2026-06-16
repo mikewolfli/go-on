@@ -3,7 +3,7 @@
 //! This module contains background task implementations for the ACP server,
 //! including maintenance cycles, health checks, and periodic operations.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -65,6 +65,11 @@ pub struct BackgroundContext {
     pub inflight_limiter: Arc<tokio::sync::Mutex<InflightLimiter>>,
     pub shutdown_notify: Arc<Notify>,
 }
+
+/// Shared BackgroundContext populated once by `start_background_tasks`.
+/// Used by one-shot `run_maintenance_cycle` and `run_health_check` to avoid
+/// creating duplicate lock and state instances for each call.
+static SHARED_BG_CTX: OnceLock<BackgroundContext> = OnceLock::new();
 
 /// Run background maintenance loop
 ///
@@ -500,6 +505,24 @@ pub async fn start_background_tasks(
     let inflight_limiter = Arc::new(tokio::sync::Mutex::new(InflightLimiter::default()));
 
     let shutdown_notify_clone = shutdown_notify.clone();
+
+    // Store shared context for reuse by one-shot maintenance/health-check calls.
+    let ctx = BackgroundContext {
+        lock_monitor: lock_monitor.clone(),
+        runtime_config: runtime_config.clone(),
+        memory_cache: memory_cache.clone(),
+        memory_store: memory_store.clone(),
+        cache: cache.clone(),
+        vector_store: vector_store.clone(),
+        maintenance: maintenance.clone(),
+        lifecycle: lifecycle.clone(),
+        circuit_breakers: circuit_breakers.clone(),
+        phase_rate_limiter: phase_rate_limiter.clone(),
+        inflight_limiter: inflight_limiter.clone(),
+        shutdown_notify: shutdown_notify.clone(),
+    };
+    let _ = SHARED_BG_CTX.set(ctx);
+
     spawn_background_task(
         async move {
             let bg_ctx = BackgroundContext {
@@ -580,25 +603,10 @@ pub async fn start_background_tasks(
     }
 
     // ── mTLS certificate monitor (GAP-B52) ──────────────────────────────
+    // Certificate monitor task removed — MtlsConfig, start_cert_monitor, and
+    // spawn_cert_monitor_if_configured were dead code (F-GAP-49 reserved mTLS).
     if server.runtime_config.mtls_enabled {
-        let mtls_config = crate::security::mtls::MtlsConfig::new(
-            server.runtime_config.mtls_ca_cert_path.clone(),
-            server.runtime_config.mtls_server_cert_path.clone(),
-            server.runtime_config.mtls_server_key_path.clone(),
-        )
-        .with_client_cert(server.runtime_config.mtls_require_client_cert)
-        .with_allowed_cns(
-            server
-                .runtime_config
-                .mtls_allowed_cns
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-        );
-        crate::security::mtls::spawn_cert_monitor_if_configured(Some(mtls_config));
-    } else {
-        crate::security::mtls::spawn_cert_monitor_if_configured(None);
+        tracing::info!("mTLS enabled in runtime config — cert monitoring not wired");
     }
 
     // ── Security scanning background tasks (GAP-B52-24, GAP-B52-30) ─────
@@ -1002,34 +1010,41 @@ pub async fn start_background_tasks(
     Ok(())
 }
 
-/// Run a single maintenance cycle on demand
+/// Run a single maintenance cycle on demand.
+///
+/// Uses the shared BackgroundContext (populated by `start_background_tasks`)
+/// to avoid creating duplicate lock and state instances.
 pub async fn run_maintenance_cycle(
     server: &super::server::AcpServer,
 ) -> Result<MaintenanceCycleResult> {
+    // Use shared context if available, otherwise fall back to creating fresh state.
+    if let Some(ctx) = SHARED_BG_CTX.get() {
+        return perform_maintenance_cycle(
+            ctx.lock_monitor.clone(),
+            ctx.memory_cache.clone(),
+            ctx.memory_store.clone(),
+            ctx.cache.clone(),
+            ctx.vector_store.clone(),
+            ctx.maintenance.clone(),
+            ctx.runtime_config.clone(),
+            "manual",
+        )
+        .await;
+    }
+
+    // Fallback: create fresh state (before start_background_tasks is called).
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let runtime_config = Arc::new(tokio::sync::Mutex::new(server.runtime_config.clone()));
-    let memory_cache = {
-        let _inner = server
-            .cache_deps
-            .cache
-            .memory_response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let fresh = MemoryResponseCache::default();
-        // _inner dropped here, releasing the lock
-        Arc::new(tokio::sync::Mutex::new(fresh))
-    };
-    let memory_store = Arc::new(tokio::sync::Mutex::new(
-        MemoryStore::new(Default::default()),
-    ));
-
     let cache = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.response_cache.clone(),
     ));
     let vector_store = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.vector_store.clone(),
     ));
-
+    let memory_cache = Arc::new(tokio::sync::Mutex::new(MemoryResponseCache::default()));
+    let memory_store = Arc::new(tokio::sync::Mutex::new(
+        MemoryStore::new(Default::default()),
+    ));
     let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
 
     perform_maintenance_cycle(
@@ -1045,32 +1060,39 @@ pub async fn run_maintenance_cycle(
     .await
 }
 
-/// Run a single health check on demand
+/// Run a single health check on demand.
+///
+/// Uses the shared BackgroundContext (populated by `start_background_tasks`)
+/// to avoid creating duplicate lock and state instances.
 pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
-    let lock_monitor = Arc::clone(&server.observability.lock_monitor);
-    let memory_cache = {
-        let _inner = server
-            .cache_deps
-            .cache
-            .memory_response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let fresh = MemoryResponseCache::default();
-        // _inner dropped here, releasing the lock
-        Arc::new(tokio::sync::Mutex::new(fresh))
-    };
+    // Use shared context if available, otherwise fall back to creating fresh state.
+    if let Some(ctx) = SHARED_BG_CTX.get() {
+        return perform_health_check_cycle(
+            ctx.lock_monitor.clone(),
+            ctx.memory_cache.clone(),
+            ctx.cache.clone(),
+            ctx.vector_store.clone(),
+            ctx.circuit_breakers.clone(),
+            ctx.phase_rate_limiter.clone(),
+            ctx.inflight_limiter.clone(),
+            ctx.lifecycle.clone(),
+            ctx.maintenance.clone(),
+        )
+        .await;
+    }
 
+    // Fallback: create fresh state (before start_background_tasks is called).
+    let lock_monitor = Arc::clone(&server.observability.lock_monitor);
+    let memory_cache = Arc::new(tokio::sync::Mutex::new(MemoryResponseCache::default()));
     let cache = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.response_cache.clone(),
     ));
     let vector_store = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.vector_store.clone(),
     ));
-
     let circuit_breakers = Arc::new(tokio::sync::Mutex::new(CircuitBreakerRegistry::default()));
     let lifecycle = Arc::new(tokio::sync::Mutex::new(LifecycleState::new()));
     let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
-
     let phase_rate_limiter = Arc::new(tokio::sync::Mutex::new(PhaseRateLimiter::default()));
     let inflight_limiter = Arc::new(tokio::sync::Mutex::new(InflightLimiter::default()));
 

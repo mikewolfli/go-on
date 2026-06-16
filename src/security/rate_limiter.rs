@@ -15,8 +15,6 @@ pub struct RateLimitConfig {
     pub tenant_rps: f64,
     /// Max burst size per tenant.
     pub tenant_burst: u32,
-    /// Global max concurrent requests.
-    pub global_max_concurrent: usize,
 }
 
 impl Default for RateLimitConfig {
@@ -24,7 +22,6 @@ impl Default for RateLimitConfig {
         Self {
             tenant_rps: 100.0,
             tenant_burst: 50,
-            global_max_concurrent: 1000,
         }
     }
 }
@@ -67,17 +64,13 @@ impl TenantBucket {
 pub struct GlobalRateLimiter {
     config: RateLimitConfig,
     tenants: tokio::sync::Mutex<HashMap<String, TenantBucket>>,
-    /// Semaphore for global max concurrent requests.
-    pub global_semaphore: tokio::sync::Semaphore,
 }
 
 impl GlobalRateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
-        let semaphore = tokio::sync::Semaphore::new(config.global_max_concurrent);
         Self {
             config,
             tenants: tokio::sync::Mutex::new(HashMap::new()),
-            global_semaphore: semaphore,
         }
     }
 

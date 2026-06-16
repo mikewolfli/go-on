@@ -281,30 +281,6 @@ pub enum DiffEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Per-frontend sync state tracking
-// ---------------------------------------------------------------------------
-
-/// Tracks what a specific frontend has already seen for a given session.
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
-#[derive(Debug, Clone)]
-pub struct FrontendSyncState {
-    pub session_id: SessionId,
-    pub last_synced_version: u64,
-    pub pending_diffs: Vec<SyncDiff>,
-}
-
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
-impl FrontendSyncState {
-    pub fn new(session_id: SessionId) -> Self {
-        Self {
-            session_id,
-            last_synced_version: 0,
-            pending_diffs: Vec::new(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // SessionRegistry
 // ---------------------------------------------------------------------------
 
@@ -1167,13 +1143,5 @@ mod tests {
         s.touch();
         assert!(s.version > v0);
         assert!(s.last_active >= a0);
-    }
-
-    #[tokio::test]
-    async fn test_frontend_sync_state_tracking() {
-        let state = FrontendSyncState::new("s1".to_string());
-        assert_eq!(state.session_id, "s1");
-        assert_eq!(state.last_synced_version, 0);
-        assert!(state.pending_diffs.is_empty());
     }
 }

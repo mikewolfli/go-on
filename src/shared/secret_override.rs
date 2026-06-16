@@ -51,22 +51,6 @@ pub fn set_secret_override(key: &str, value: &str) {
     }
 }
 
-/// Remove a secret override (restore env-var fallback).
-#[allow(dead_code)] // Public API — reserved for credential rotation flows
-                    // F-GAP-49 — reserved for future use
-pub fn remove_secret_override(key: &str) {
-    match SECRET_OVERRIDE_MAP.lock() {
-        Ok(mut map) => {
-            map.remove(key);
-        }
-        Err(poisoned) => {
-            tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in remove_secret_override");
-            let mut map = poisoned.into_inner();
-            map.remove(key);
-        }
-    }
-}
-
 /// Resolve a secret value: returns the in-memory override if set, otherwise
 /// falls back to `std::env::var(key)`.
 pub fn get_secret(key: &str) -> Option<String> {
@@ -78,17 +62,6 @@ pub fn get_secret(key: &str) -> Option<String> {
         return Some(value.clone());
     }
     std::env::var(key).ok()
-}
-
-/// Returns `true` if the given key has an in-memory override set.
-#[allow(dead_code)] // Public API — reserved for diagnostic use
-                    // F-GAP-49 — reserved for future use
-pub fn has_override(key: &str) -> bool {
-    let map = SECRET_OVERRIDE_MAP.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("lock poisoned, recovering");
-        poisoned.into_inner()
-    });
-    map.contains_key(key)
 }
 
 // ── Keyring cache ──────────────────────────────────────────────────
@@ -153,50 +126,6 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
     value
 }
 
-/// Invalidate a cached keyring entry.
-#[allow(dead_code)] // Public API — reserved for credential update flows
-                    // F-GAP-49 — reserved for future use
-pub fn invalidate_keyring_cache(service: &str, account: &str) {
-    let key = (service.to_string(), account.to_string());
-    match KEYRING_CACHE.lock() {
-        Ok(mut cache) => {
-            cache.remove(&key);
-        }
-        Err(poisoned) => {
-            tracing::warn!("KEYRING_CACHE mutex poisoned in invalidate_keyring_cache");
-            let mut cache = poisoned.into_inner();
-            cache.remove(&key);
-        }
-    }
-}
-
-/// Invalidate all cached keyring entries.
-#[allow(dead_code)] // Public API — reserved for credential reset flows
-                    // F-GAP-49 — reserved for future use
-pub fn clear_keyring_cache() {
-    match KEYRING_CACHE.lock() {
-        Ok(mut cache) => {
-            cache.clear();
-        }
-        Err(poisoned) => {
-            tracing::warn!("KEYRING_CACHE mutex poisoned in clear_keyring_cache");
-            let mut cache = poisoned.into_inner();
-            cache.clear();
-        }
-    }
-}
-
-/// Returns the number of overrides currently stored.
-#[allow(dead_code)] // Public API — reserved for diagnostic use
-                    // F-GAP-49 — reserved for future use
-pub fn override_count() -> usize {
-    let map = SECRET_OVERRIDE_MAP.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("lock poisoned, recovering");
-        poisoned.into_inner()
-    });
-    map.len()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,61 +137,10 @@ mod tests {
             get_secret("GO_ON_TEST_OVERRIDE"),
             Some("test-value-123".to_string())
         );
-        remove_secret_override("GO_ON_TEST_OVERRIDE");
-        assert_eq!(get_secret("GO_ON_TEST_OVERRIDE"), None);
     }
 
     #[test]
     fn test_get_falls_back_to_env() {
-        // This key is NOT overridden, so get_secret should return None
-        // (since it's not set in the real env either).
         assert_eq!(get_secret("GO_ON_TEST_NONEXISTENT_KEY_XYZ"), None);
-    }
-
-    #[test]
-    fn test_remove_nonexistent_key_is_safe() {
-        // Should not panic.
-        remove_secret_override("GO_ON_TEST_NONEXISTENT_KEY_XYZ");
-    }
-
-    #[test]
-    fn test_overrides_are_independent() {
-        set_secret_override("KEY_A", "value-a");
-        set_secret_override("KEY_B", "value-b");
-        assert_eq!(get_secret("KEY_A"), Some("value-a".to_string()));
-        assert_eq!(get_secret("KEY_B"), Some("value-b".to_string()));
-        remove_secret_override("KEY_A");
-        assert_eq!(get_secret("KEY_A"), None);
-        assert_eq!(get_secret("KEY_B"), Some("value-b".to_string()));
-        remove_secret_override("KEY_B");
-    }
-
-    #[test]
-    fn test_has_override() {
-        assert!(!has_override("GO_ON_TEST_OVERRIDE_CHECK"));
-        set_secret_override("GO_ON_TEST_OVERRIDE_CHECK", "x");
-        assert!(has_override("GO_ON_TEST_OVERRIDE_CHECK"));
-        remove_secret_override("GO_ON_TEST_OVERRIDE_CHECK");
-        assert!(!has_override("GO_ON_TEST_OVERRIDE_CHECK"));
-    }
-
-    #[test]
-    fn test_override_count() {
-        // Use unique keys to avoid interference from parallel tests.
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let k1 = format!("GO_ON_TEST_COUNT_A_{}", n);
-        let k2 = format!("GO_ON_TEST_COUNT_B_{}", n);
-
-        set_secret_override(&k1, "a");
-        set_secret_override(&k2, "b");
-        assert!(has_override(&k1));
-        assert!(has_override(&k2));
-        remove_secret_override(&k1);
-        remove_secret_override(&k2);
-        // Clean up: ensure our keys are gone
-        assert!(!has_override(&k1));
-        assert!(!has_override(&k2));
     }
 }

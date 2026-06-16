@@ -31,19 +31,6 @@ impl BuiltinRole {
         }
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
-    fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "admin" => Some(BuiltinRole::Admin),
-            "user" => Some(BuiltinRole::User),
-            "viewer" => Some(BuiltinRole::Viewer),
-            "monitor" => Some(BuiltinRole::Monitor),
-            _ => None,
-        }
-    }
-
     /// Default permissions for each built-in role
     pub fn default_permissions(&self) -> Vec<Permission> {
         match self {
@@ -107,43 +94,6 @@ pub enum Permission {
     ManageTenants,
     Audit,
     Monitor,
-}
-
-impl Permission {
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
-    fn as_str(&self) -> &'static str {
-        match self {
-            Permission::Read => "read",
-            Permission::Write => "write",
-            Permission::Execute => "execute",
-            Permission::Admin => "admin",
-            Permission::ManageUsers => "manage_users",
-            Permission::ManageConfig => "manage_config",
-            Permission::ManageTenants => "manage_tenants",
-            Permission::Audit => "audit",
-            Permission::Monitor => "monitor",
-        }
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
-    fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "read" => Some(Permission::Read),
-            "write" => Some(Permission::Write),
-            "execute" => Some(Permission::Execute),
-            "admin" => Some(Permission::Admin),
-            "manage_users" => Some(Permission::ManageUsers),
-            "manage_config" => Some(Permission::ManageConfig),
-            "manage_tenants" => Some(Permission::ManageTenants),
-            "audit" => Some(Permission::Audit),
-            "monitor" => Some(Permission::Monitor),
-            _ => None,
-        }
-    }
 }
 
 /// Role hierarchy levels for built-in roles (G-FIX6).
@@ -224,13 +174,6 @@ impl Principal {
 
     pub fn has_permission(&self, permission: &Permission) -> bool {
         self.permissions.contains(permission)
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
-    fn has_role(&self, role: &str) -> bool {
-        self.roles.iter().any(|r| r == role)
     }
 }
 
@@ -504,13 +447,6 @@ impl RbacEnforcer {
         perms
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
-    fn role_count(&self) -> usize {
-        self.role_permissions.len()
-    }
-
     /// Check access and tenant budget in a single call.
     /// Returns `Ok(())` when both RBAC access and tenant budget allow the operation.
     /// Returns `Err` with a human-readable reason when either check fails.
@@ -597,13 +533,6 @@ impl RbacEnforcer {
             }
         }
         self.tenants.len().saturating_sub(before)
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
-    fn tenant_count(&self) -> usize {
-        self.tenants.len()
     }
 }
 
@@ -837,15 +766,6 @@ mod tests {
         assert!(user.has_permission(&Permission::Write));
         assert!(!user.has_permission(&Permission::Execute)); // BLUE69: Execute is Admin-only
         assert!(!user.has_permission(&Permission::Admin));
-    }
-
-    #[test]
-    fn test_principal_role_check() {
-        let principal = Principal::new("test", vec!["admin", "user"], Some("tenant-1"));
-        assert!(principal.has_role("admin"));
-        assert!(principal.has_role("user"));
-        assert!(!principal.has_role("viewer"));
-        assert_eq!(principal.tenant_id, Some("tenant-1".to_string()));
     }
 
     #[test]

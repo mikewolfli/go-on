@@ -19,7 +19,6 @@ pub enum McpServerConfig {
     Stdio(McpServerStdio),
 }
 
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerHttp {
@@ -31,7 +30,6 @@ pub struct McpServerHttp {
     pub meta: Option<Meta>,
 }
 
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerSse {
@@ -43,7 +41,6 @@ pub struct McpServerSse {
     pub meta: Option<Meta>,
 }
 
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerStdio {
@@ -57,7 +54,6 @@ pub struct McpServerStdio {
     pub meta: Option<Meta>,
 }
 
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 impl McpServerStdio {
     pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
         Self {
@@ -70,7 +66,6 @@ impl McpServerStdio {
     }
 }
 
-#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 impl From<McpServerStdio> for McpServerConfig {
     fn from(s: McpServerStdio) -> Self {
         McpServerConfig::Stdio(s)

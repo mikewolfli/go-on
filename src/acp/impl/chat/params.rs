@@ -4,9 +4,6 @@
 //! throughout the chat request lifecycle. These were extracted from
 //! the parent `chat.rs` to reduce the monolithic file size.
 
-use std::collections::HashMap;
-use std::sync::{Mutex as StdMutex, OnceLock};
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -63,32 +60,5 @@ impl ChatRequestContext {
             .unwrap_or_else(|| "default-tenant".to_string());
         let user_id = user_session.map(|s| s.user_id);
         Self { tenant_id, user_id }
-    }
-}
-
-/// Tracks per-phase agent overrides for the Agent Switch mechanism.
-#[derive(Default)]
-pub(crate) struct AgentSwitchState {
-    pub forced_agent_by_phase: HashMap<String, String>,
-    #[allow(dead_code)] // F-GAP-49 — reserved for agent switch state extensibility
-    pub primary_agent_by_phase: HashMap<String, String>,
-}
-
-static AGENT_SWITCH_STATE: OnceLock<StdMutex<AgentSwitchState>> = OnceLock::new();
-
-pub(crate) fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
-    AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
-}
-
-/// Reset agent switch state to default. Used in tests to clear global state
-/// that may accumulate across test cases.
-/// Only available in non-Postgres profiles because the caller is gated.
-#[cfg(all(test, not(feature = "backend-postgres")))]
-pub(crate) fn reset_agent_switch_state() {
-    if let Some(state) = AGENT_SWITCH_STATE.get() {
-        if let Ok(mut guard) = state.lock() {
-            guard.forced_agent_by_phase.clear();
-            guard.primary_agent_by_phase.clear();
-        }
     }
 }

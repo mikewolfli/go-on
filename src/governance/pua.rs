@@ -343,6 +343,11 @@ impl PuaRuleEngine {
         self
     }
 
+    /// Replace the enforcement plan with a shared instance.
+    pub fn set_plan(&mut self, plan: Arc<StdMutex<PuaEnforcementPlan>>) {
+        self.plan = plan;
+    }
+
     /// Check whether the caller has Execute permission via the RBAC enforcer.
     /// Returns `true` if escalation is permitted, `false` if denied.
     fn check_escalation_permission(&self) -> bool {
@@ -367,7 +372,6 @@ impl PuaRuleEngine {
     /// Evaluate approval feedback from the ApprovalEngine.
     /// This allows the PUA rule engine to adjust enforcement plans based on
     /// approval outcomes (e.g., auto-deny patterns, escalation frequency).
-    #[allow(dead_code)] // Wired via governance approval pipeline; callable through HarnessBus
     pub fn evaluate_approval_feedback(
         &self,
         request: &super::approval_engine::ApprovalRequest,
@@ -375,17 +379,14 @@ impl PuaRuleEngine {
         use super::approval_engine::ApprovalStatus;
         match &request.status {
             ApprovalStatus::AutoDenied { reason, .. } => {
-                // Auto-deny is a strong signal — escalate the PUA level
                 self.escalate(&format!("auto-deny for {}: {}", request.action, reason));
                 Ok(())
             }
             ApprovalStatus::Rejected { reason, .. } => {
-                // Rejection triggers a moderate escalation
                 self.escalate(&format!("rejected {}: {}", request.action, reason));
                 Ok(())
             }
             ApprovalStatus::Approved { .. } => {
-                // Approval may allow de-escalation if the action completed safely
                 self.de_escalate(&format!("approved {}", request.action));
                 Ok(())
             }

@@ -18,7 +18,6 @@ pub trait EmbeddingProvider: Send + Sync {
     fn embed(&self, text: &str) -> Vec<f32>;
 
     /// Return the expected dimensionality of this provider's output vectors.
-    #[allow(dead_code)] // F-GAP-49 — reserved for embedding dimension validation
     fn expected_dimension(&self) -> usize;
 }
 
@@ -643,28 +642,8 @@ impl EmbeddingProvider for ConfigurableEmbeddingProvider {
 // Helper: create a ConfigurableEmbeddingProvider from environment variables
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // F-GAP-49 — reserved embedding provider feature
 /// Build a `ConfigurableEmbeddingProvider` based on the env var
 /// `GO_ON_EMBEDDING_BACKEND` (values: `local`, `openai`, `qwen3`, `ollama`).
-///
-/// - `local` (default): minhash fallback, no external service needed
-///   - `LOCAL_EMBEDDING_DIMENSIONS` (default: `128`)
-///
-/// - `openai`: OpenAI API
-///   - `OPENAI_API_KEY` or `GO_ON_OPENAI_API_KEY`
-///   - `OPENAI_EMBEDDING_MODEL`  (default: `text-embedding-3-small`)
-///   - `OPENAI_API_BASE`         (default: `https://api.openai.com/v1`)
-///   - `OPENAI_EMBEDDING_DIMENSIONS` (default: `1536`)
-///
-/// - `qwen3`: Alibaba Cloud DashScope API (Qwen3 embedding)
-///   - `DASHSCOPE_API_KEY` — get from https://dashscope.aliyun.com/
-///   - `QWEN_EMBEDDING_MODEL` (default: `text-embedding-v3`)
-///   - `QWEN_EMBEDDING_DIMENSIONS` (default: `1024`, supports 768/1024/1536)
-///
-/// - `ollama`: local Ollama instance (download models via `ollama pull`)
-///   - `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
-///   - `OLLAMA_EMBEDDING_MODEL` (default: `nomic-embed-text`)
-///   - `OLLAMA_EMBEDDING_DIMENSIONS` (default: `768`)
 pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
     let backend_str = std::env::var("GO_ON_EMBEDDING_BACKEND")
         .unwrap_or_else(|_| "local".to_string())

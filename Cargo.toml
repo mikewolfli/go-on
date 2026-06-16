@@ -80,11 +80,15 @@ document-pdf = ["dep:lopdf"]
 document-docx = ["dep:docx-rs"]
 document-html = ["dep:scraper"]
 document-markdown = ["dep:comrak"]
+document-excel = ["dep:calamine"]
+document-ppt = ["dep:quick-xml", "dep:zip"]
 sub-bus-multimodal = [
     "document-pdf",
     "document-docx",
     "document-html",
     "document-markdown",
+    "document-excel",
+    "document-ppt",
 ]
 
 # Audio processing backends (optional, feature-gated)
@@ -219,6 +223,9 @@ lopdf = { version = "0.41", optional = true }
 docx-rs = { version = "0.4", optional = true }
 scraper = { version = "0.27", optional = true }
 comrak = { version = "0.52", optional = true }
+calamine = { version = "0.26", optional = true }
+quick-xml = { version = "0.37", features = ["serialize"], optional = true }
+zip = { version = "2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { version = "8", features = ["macos_kqueue"] }

@@ -9,7 +9,6 @@ use std::sync::{
     Arc, Mutex as StdMutex,
 };
 
-use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify, Semaphore};
 
@@ -492,6 +491,9 @@ pub struct AcpServer {
     pub verbose: bool,
     /// Output stream for responses
     pub output: Arc<Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>>,
+    /// Serializes concurrent `/rpc` calls to prevent pipe-swapping race conditions.
+    /// Per-server-instance (not global) to avoid the RPC_SERIAL bottleneck (F-GAP-49).
+    pub rpc_serial: tokio::sync::Mutex<()>,
     /// Shutdown notification mechanism
     pub shutdown_notify: Arc<Notify>,
     /// Skill market registry for external skill discovery and installation
@@ -605,11 +607,18 @@ impl AcpServer {
             |guard| guard.snapshot(),
         );
 
+        // Snapshot governance subsystem health from the harness bus profile
+        let governance = self.governance_deps.harness_bus.as_ref().map(|hb| {
+            let profile = hb.governance_profile();
+            crate::governance::status::GovernanceStatus::current(&profile)
+        });
+
         ServerStatus {
             metrics,
             lifecycle,
             circuit_breakers,
             maintenance,
+            governance,
             timestamp: crate::acp::prelude::now_ts(),
         }
     }
@@ -898,67 +907,6 @@ impl ServerBuilder {
     }
 
     /// Set the memory response cache
-    #[allow(dead_code)] // F-GAP-49 — reserved for cache configuration wiring
-    pub fn with_memory_response_cache(
-        mut self,
-        memory_response_cache: MemoryResponseCache,
-    ) -> Self {
-        self.memory_response_cache = Some(memory_response_cache);
-        self
-    }
-
-    /// Set verbose mode
-    #[allow(dead_code)] // F-GAP-49 — planned wiring: lifecycle configuration
-    pub fn verbose(mut self, verbose: bool) -> Self {
-        self.verbose = verbose;
-        self
-    }
-
-    /// Set the harness bus
-    #[allow(dead_code)] // F-GAP-49 — planned wiring: capability bus/orchestration
-    pub fn with_harness_bus(mut self, harness_bus: Arc<HarnessBus>) -> Self {
-        self.harness_bus = Some(harness_bus);
-        self
-    }
-
-    /// Set the capability bus
-    #[allow(dead_code)] // F-GAP-49 — planned wiring: capability bus/orchestration
-    pub fn with_capability_bus(mut self, capability_bus: Arc<CapabilityBus>) -> Self {
-        self.capability_bus = Some(capability_bus);
-        self
-    }
-
-    /// Set the task graph store
-    #[allow(dead_code)] // F-GAP-49 — planned wiring: execution graph / circuit breakers
-    pub fn with_task_graph_store(mut self, store: Arc<TaskGraphStore>) -> Self {
-        self.task_graph_store = Some(store);
-        self
-    }
-
-    /// Set the dual-level task scheduler
-    #[allow(dead_code)] // F-GAP-49 — planned wiring: execution graph / circuit breakers
-    pub fn with_scheduler(mut self, scheduler: Arc<AgentWorkerScheduler>) -> Self {
-        self.scheduler = Some(scheduler);
-        self
-    }
-
-    /// Set the provenance ledger
-    #[allow(dead_code)] // F-GAP-49 — planned wiring: checkpoint/conversation
-    pub fn with_provenance_ledger(mut self, ledger: Arc<ProvenanceLedger>) -> Self {
-        self.provenance_ledger = Some(ledger);
-        self
-    }
-
-    /// Set the planner-executor configuration (timeouts, etc.)
-    #[allow(dead_code)] // F-GAP-49 — reserved for planner-executor integration
-    pub fn with_planner_executor_config(
-        mut self,
-        config: crate::orchestration::planner_executor::PlannerExecutorConfig,
-    ) -> Self {
-        self.planner_executor_config = config;
-        self
-    }
-
     /// Set the approval engine
     pub fn with_approval_engine(
         mut self,
@@ -1033,28 +981,6 @@ impl ServerBuilder {
         self
     }
 
-    /// Set the runtime config for gating governance, tenant quotas, etc.
-    #[allow(dead_code)] // F-GAP-49: reserved for runtime config injection
-    pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
-        self.runtime_config = Some(config);
-        self
-    }
-
-    /// Set the multimodal processor.
-    ///
-    /// When configured, the chat pipeline will route `repo:`-prefixed messages,
-    /// `data:` URIs, and `file://` references through the multimodal sub-processors
-    /// (document parser, audio/video processor, repo analyzer).
-    /// When `None` (the default), the system falls back to text-only processing.
-    #[allow(dead_code)] // F-GAP-49: reserved for multimodal chat pipeline integration
-    pub fn with_multimodal_processor(
-        mut self,
-        processor: crate::multimodal::MultimodalProcessor,
-    ) -> Self {
-        self.multimodal_processor = Some(processor);
-        self
-    }
-
     /// Set the dependency vulnerability scanner
     pub fn with_dependency_vulnerability_scanner(
         mut self,
@@ -1101,7 +1027,7 @@ impl ServerBuilder {
     }
 
     /// Build the server
-    pub fn build(self) -> Result<AcpServer> {
+    pub fn build(self) -> AcpServer {
         use crate::acp::prelude::{
             CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState,
             MaintenanceTracker, OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
@@ -1251,7 +1177,7 @@ impl ServerBuilder {
             )),
         };
 
-        Ok(AcpServer {
+        AcpServer {
             cache_deps: CacheServerDeps {
                 cache: cache_layer,
                 vector_config: None,
@@ -1422,13 +1348,14 @@ impl ServerBuilder {
             output: Arc::new(Mutex::new(
                 Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
             )),
+            rpc_serial: tokio::sync::Mutex::new(()),
             shutdown_notify: Arc::new(Notify::new()),
             skill_market_registry: None,
             drain_guard: DrainGuard::default(),
             tool_registry: Arc::new(ToolRegistry::new()),
             websocket_hub: None,
             multimodal_processor: self.multimodal_processor,
-        })
+        }
     }
 }
 

@@ -58,24 +58,6 @@ pub struct McpResource {
     pub mime_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — reserved for future MCP transport wiring
-pub struct ToolUseBlock {
-    pub r#type: String,
-    pub id: String,
-    pub name: String,
-    pub input: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-49 — reserved for future MCP transport wiring
-pub struct TextBlock {
-    pub r#type: String,
-    pub text: String,
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // MCP response/result types — used in ACP↔MCP bridge handlers
 // ═══════════════════════════════════════════════════════════════════════════════

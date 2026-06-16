@@ -159,7 +159,6 @@ static CHAT_THRESHOLD_LEARNER: OnceLock<
 pub(crate) async fn observe_phase(
     server: &AcpServer,
     params: &ChatParams,
-    trace: &RequestTraceContext,
     ctx: ChatRequestContext,
 ) -> Result<ObserveOutput> {
     clear_task_description_cache();
@@ -167,7 +166,7 @@ pub(crate) async fn observe_phase(
     let tenant_id = ctx.tenant_id.clone();
     let user_id = ctx.user_id.clone();
 
-    evaluate_pre_route_policies(server, params, trace, &tenant_id).await?;
+    evaluate_pre_route_policies(server, params, &tenant_id).await?;
 
     // ── Prompt injection detection ─────────────────────────────────
     if let Some(ref detector) = server.governance_deps.injection_detector {
@@ -195,8 +194,7 @@ pub(crate) async fn observe_phase(
 
     // ── HarnessBus during-execute checkpoint ───────────────────────
     if let Some(ref harness) = server.governance_deps.harness_bus {
-        let messages_json = serde_json::to_value(&params.messages).unwrap_or_default();
-        let verdict = harness.validate_action("chat.execute", &messages_json);
+        let verdict = harness.validate_action("chat.execute", &serde_json::Value::Null);
         if !verdict.is_allowed() {
             anyhow::bail!(
                 "harness_bus during-execute denied: sandbox={} budget={} permitted={}",
@@ -556,7 +554,7 @@ pub(crate) async fn act_phase(
 
     // Semantic cache
     if !cache_hit && response_text.is_empty() && !cache_bypassed_for_execution {
-        if let Some(text) = try_semantic_cache(server, &input_text).await {
+        if let Some(text) = try_semantic_cache(server, &input_text) {
             cache_hit = true;
             selected_agent = resolve_out
                 .resolved
@@ -1060,7 +1058,7 @@ async fn observe_submit_to_scheduler(
     }
 }
 
-async fn try_semantic_cache(server: &AcpServer, cache_key: &str) -> Option<String> {
+fn try_semantic_cache(server: &AcpServer, cache_key: &str) -> Option<String> {
     server
         .cache_deps
         .cache
@@ -1151,7 +1149,7 @@ async fn handle_execution_errors(
     params: &ChatParams,
     phase_name: &str,
     phase_origin: &str,
-    tenant_id: &str,
+    _tenant_id: &str,
     response_text: &str,
     last_err: &Option<anyhow::Error>,
     agent_attempts: &[Value],
@@ -1177,11 +1175,14 @@ async fn handle_execution_errors(
                         .map(|e| e == "empty_response")
                         .unwrap_or(false)
             });
-        let _ = server
-            .rate_limiting
-            .tenant_budget
-            .lock()
-            .map(|mut b| b.record_usage(tenant_id, 0, 0));
+        #[cfg(feature = "multi-users-server")]
+        {
+            let _ = server
+                .rate_limiting
+                .tenant_budget
+                .lock()
+                .map(|mut b| b.record_usage(_tenant_id, 0, 0));
+        }
         if all_empty {
             anyhow::bail!(tf("error.chat.all_agents_empty", &[("phase", phase_name)]));
         }
@@ -1202,11 +1203,14 @@ async fn handle_execution_errors(
             oc.record_phase_outcome(phase_name, false, started.elapsed().as_millis() as u64)
         });
         if all_quota {
-            let _ = server
-                .rate_limiting
-                .tenant_budget
-                .lock()
-                .map(|mut b| b.record_usage(tenant_id, 0, 0));
+            #[cfg(feature = "multi-users-server")]
+            {
+                let _ = server
+                    .rate_limiting
+                    .tenant_budget
+                    .lock()
+                    .map(|mut b| b.record_usage(_tenant_id, 0, 0));
+            }
             return Ok(Some(json!({
                 "done": false, "mode": params.mode, "phase": phase_name, "phase_origin": phase_origin,
                 "requires_user_action": true, "action": "switch_agent",
@@ -1221,11 +1225,14 @@ async fn handle_execution_errors(
                     "example": {"preferred_agent": candidate_agents.first().cloned().unwrap_or_else(|| "primary".into())}},
             })));
         }
-        let _ = server
-            .rate_limiting
-            .tenant_budget
-            .lock()
-            .map(|mut b| b.record_usage(tenant_id, 0, 0));
+        #[cfg(feature = "multi-users-server")]
+        {
+            let _ = server
+                .rate_limiting
+                .tenant_budget
+                .lock()
+                .map(|mut b| b.record_usage(_tenant_id, 0, 0));
+        }
     }
     Ok(None)
 }

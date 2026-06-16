@@ -39,17 +39,6 @@ pub struct AgentMemoryBus {
 }
 
 impl AgentMemoryBus {
-    /// Create a new agent memory bus wrapping the given store.
-    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
-    pub fn new(store: Arc<Mutex<MemoryStore>>) -> Self {
-        Self {
-            store,
-            max_insights_per_task: 5,
-            vector_store: None,
-            user_id: None,
-        }
-    }
-
     /// Create a new agent memory bus with a default `MemoryStore`.
     pub fn new_default() -> Self {
         let store = Arc::new(Mutex::new(MemoryStore::new(Default::default())));
@@ -59,36 +48,6 @@ impl AgentMemoryBus {
             vector_store: None,
             user_id: None,
         }
-    }
-
-    /// Set the user_id for multi-user isolation.
-    /// When set, stored memories are tagged with this user_id and retrieval
-    /// filters by it.
-    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
-    pub fn with_user_id(mut self, user_id: String) -> Self {
-        self.user_id = Some(user_id);
-        self
-    }
-
-    /// Set the maximum number of insights stored per task completion.
-    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
-    pub fn with_max_insights_per_task(mut self, n: usize) -> Self {
-        self.max_insights_per_task = n;
-        self
-    }
-
-    /// Return a reference to the underlying store.
-    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
-    pub fn store(&self) -> &Arc<Mutex<MemoryStore>> {
-        &self.store
-    }
-
-    /// Attach a VectorStore for similarity-based memory retrieval.
-    /// Wired via runtime.rs init_agent_memory_bus_with_vector_store.
-    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
-    pub fn with_vector_store(mut self, vs: Arc<VectorStore>) -> Self {
-        self.vector_store = Some(vs);
-        self
     }
 
     // ── Store ─────────────────────────────────────────────────────────

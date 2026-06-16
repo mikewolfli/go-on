@@ -3,13 +3,10 @@
 //! Provides mTLS configuration, acceptor/connector components built on rustls,
 //! and certificate expiry monitoring with a 30-day warning threshold.
 
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -35,10 +32,6 @@ pub enum MtlsError {
     #[error("CN not in allowed list: {0}")]
     CnNotAllowed(String),
 
-    #[allow(dead_code)] // Reserved for cert expiry monitoring
-    #[error("certificate expired at {0}")]
-    CertExpired(String),
-
     #[error("IO error: {0}")]
     Io(String),
 }
@@ -50,57 +43,29 @@ impl From<std::io::Error> for MtlsError {
 }
 
 // ---------------------------------------------------------------------------
-// MtlsConfig
+// MtlsAcceptor
 // ---------------------------------------------------------------------------
 
-/// Default paths for mTLS certificates, resolved from environment variables
-/// with sensible fallbacks.
+/// Accepts incoming mTLS connections using rustls.
 ///
-/// | Env Variable | Default |
-/// |---|---|
-/// | `GO_ON_MTLS_CA_CERT` | `./certs/ca.pem` |
-/// | `GO_ON_MTLS_SERVER_CERT` | `./certs/server.pem` |
-/// | `GO_ON_MTLS_SERVER_KEY` | `./certs/server.key` |
-fn default_ca_path() -> PathBuf {
-    std::env::var("GO_ON_MTLS_CA_CERT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./certs/ca.pem"))
-}
-
-fn default_server_cert_path() -> PathBuf {
-    std::env::var("GO_ON_MTLS_SERVER_CERT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./certs/server.pem"))
-}
-
-fn default_server_key_path() -> PathBuf {
-    std::env::var("GO_ON_MTLS_SERVER_KEY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./certs/server.key"))
-}
-
-/// mTLS configuration for the go-on runtime.
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MtlsConfig {
+/// Loads CA and server certificates from PEM files at the given paths.
+pub struct MtlsAcceptor {
     /// Path to the CA certificate file (PEM).
-    /// Default: `./certs/ca.pem` or `$GO_ON_MTLS_CA_CERT`.
-    pub ca_cert_path: PathBuf,
+    ca_cert_path: PathBuf,
     /// Path to the server certificate file (PEM).
-    /// Default: `./certs/server.pem` or `$GO_ON_MTLS_SERVER_CERT`.
-    pub server_cert_path: PathBuf,
+    server_cert_path: PathBuf,
     /// Path to the server private key file (PEM).
-    /// Default: `./certs/server.key` or `$GO_ON_MTLS_SERVER_KEY`.
-    pub server_key_path: PathBuf,
+    server_key_path: PathBuf,
     /// Whether to require client certificates for incoming connections.
-    pub require_client_cert: bool,
+    require_client_cert: bool,
     /// Optional list of allowed Common Names for client certificates.
-    pub allowed_cn_list: Vec<String>,
+    allowed_cn_list: Vec<String>,
+    /// Cached server config (rebuilt on cert reload).
+    server_config: RwLock<Option<Arc<rustls::ServerConfig>>>,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
-impl MtlsConfig {
-    /// Create a new mTLS configuration.
+impl MtlsAcceptor {
+    /// Create a new MtlsAcceptor from certificate paths and settings.
     pub fn new(
         ca_cert_path: impl Into<PathBuf>,
         server_cert_path: impl Into<PathBuf>,
@@ -112,126 +77,6 @@ impl MtlsConfig {
             server_key_path: server_key_path.into(),
             require_client_cert: true,
             allowed_cn_list: Vec::new(),
-        }
-    }
-
-    /// Create mTLS config with default paths (resolved from environment
-    /// variables or the `./certs/` fallbacks).
-    pub fn with_default_paths() -> Self {
-        Self {
-            ca_cert_path: default_ca_path(),
-            server_cert_path: default_server_cert_path(),
-            server_key_path: default_server_key_path(),
-            require_client_cert: true,
-            allowed_cn_list: Vec::new(),
-        }
-    }
-
-    /// Set whether client certificates are required.
-    pub fn with_client_cert(mut self, require: bool) -> Self {
-        self.require_client_cert = require;
-        self
-    }
-
-    /// Set the allowed CN list.
-    pub fn with_allowed_cns(mut self, cns: Vec<String>) -> Self {
-        self.allowed_cn_list = cns;
-        self
-    }
-}
-
-impl Default for MtlsConfig {
-    fn default() -> Self {
-        Self::with_default_paths()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// CertificateInfo
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CertificateInfo {
-    pub subject_cn: String,
-    pub issuer_cn: String,
-    pub not_before: u64,
-    pub not_after: u64,
-    pub serial_number: String,
-    pub is_expired: bool,
-    pub days_remaining: i64,
-}
-
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
-impl CertificateInfo {
-    /// Parse certificate info from DER-encoded certificate bytes.
-    pub fn from_der(der_bytes: &[u8]) -> Result<Self, MtlsError> {
-        let cert = x509_parser::parse_x509_certificate(der_bytes)
-            .map_err(|e| MtlsError::InvalidCert(e.to_string()))?
-            .1;
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let not_before = cert.validity().not_before.timestamp();
-        let not_after = cert.validity().not_after.timestamp();
-
-        let days_remaining = if not_after > now as i64 {
-            (not_after - now as i64) / 86400
-        } else {
-            -(now as i64 - not_after) / 86400
-        };
-
-        let subject_cn = cert
-            .subject()
-            .iter_common_name()
-            .next()
-            .and_then(|cn| cn.as_str().ok())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let issuer_cn = cert
-            .issuer()
-            .iter_common_name()
-            .next()
-            .and_then(|cn| cn.as_str().ok())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let serial = cert.raw_serial_as_string();
-
-        Ok(Self {
-            subject_cn,
-            issuer_cn,
-            not_before: not_before as u64,
-            not_after: not_after as u64,
-            serial_number: serial,
-            is_expired: now as i64 > not_after,
-            days_remaining,
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// MtlsAcceptor
-// ---------------------------------------------------------------------------
-
-/// Accepts incoming mTLS connections using rustls.
-///
-/// Loads CA and server certificates from the paths specified in MtlsConfig.
-pub struct MtlsAcceptor {
-    config: MtlsConfig,
-    /// Cached server config (rebuilt on cert reload).
-    server_config: RwLock<Option<Arc<rustls::ServerConfig>>>,
-}
-
-impl MtlsAcceptor {
-    /// Create a new MtlsAcceptor from configuration.
-    pub fn new(config: MtlsConfig) -> Self {
-        Self {
-            config,
             server_config: RwLock::new(None),
         }
     }
@@ -239,8 +84,8 @@ impl MtlsAcceptor {
     /// Build (or rebuild) the rustls ServerConfig from the current config files.
     pub fn build_server_config(&self) -> Result<Arc<rustls::ServerConfig>, MtlsError> {
         // Load CA certificates
-        let ca_cert_bytes = std::fs::read(&self.config.ca_cert_path).map_err(|e| {
-            MtlsError::CertNotFound(format!("{}: {}", self.config.ca_cert_path.display(), e))
+        let ca_cert_bytes = std::fs::read(&self.ca_cert_path).map_err(|e| {
+            MtlsError::CertNotFound(format!("{}: {}", self.ca_cert_path.display(), e))
         })?;
 
         let mut root_store = rustls::RootCertStore::empty();
@@ -255,8 +100,8 @@ impl MtlsAcceptor {
         }
 
         // Load server certificate chain
-        let server_cert_bytes = std::fs::read(&self.config.server_cert_path).map_err(|e| {
-            MtlsError::CertNotFound(format!("{}: {}", self.config.server_cert_path.display(), e))
+        let server_cert_bytes = std::fs::read(&self.server_cert_path).map_err(|e| {
+            MtlsError::CertNotFound(format!("{}: {}", self.server_cert_path.display(), e))
         })?;
 
         let cert_chain: Vec<rustls::pki_types::CertificateDer<'static>> =
@@ -271,8 +116,8 @@ impl MtlsAcceptor {
         }
 
         // Load server private key
-        let key_bytes = std::fs::read(&self.config.server_key_path).map_err(|e| {
-            MtlsError::KeyNotFound(format!("{}: {}", self.config.server_key_path.display(), e))
+        let key_bytes = std::fs::read(&self.server_key_path).map_err(|e| {
+            MtlsError::KeyNotFound(format!("{}: {}", self.server_key_path.display(), e))
         })?;
 
         let private_key = rustls_pemfile::private_key(&mut key_bytes.as_slice())
@@ -280,12 +125,12 @@ impl MtlsAcceptor {
             .ok_or_else(|| MtlsError::InvalidKey("no private key found".into()))?;
 
         // Configure client certificate verification
-        if self.config.require_client_cert {
+        if self.require_client_cert {
             let verifier = rustls::server::WebPkiClientVerifier::builder(root_store.into())
                 .build()
                 .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
 
-            let final_verifier = if !self.config.allowed_cn_list.is_empty() {
+            let final_verifier = if !self.allowed_cn_list.is_empty() {
                 rustls::server::WebPkiClientVerifier::builder(Arc::new(
                     self.build_ca_store_with_cn_check()?,
                 ))
@@ -315,22 +160,27 @@ impl MtlsAcceptor {
 
     /// Build a root store that also checks CN against the allowed list.
     fn build_ca_store_with_cn_check(&self) -> Result<rustls::RootCertStore, MtlsError> {
-        let ca_cert_bytes = std::fs::read(&self.config.ca_cert_path)?;
+        let ca_cert_bytes = std::fs::read(&self.ca_cert_path)?;
         let mut root_store = rustls::RootCertStore::empty();
         let certs = rustls_pemfile::certs(&mut ca_cert_bytes.as_slice())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
 
         for cert in &certs {
-            let info = CertificateInfo::from_der(cert)?;
-            if !self.config.allowed_cn_list.is_empty()
-                && !self
-                    .config
-                    .allowed_cn_list
-                    .iter()
-                    .any(|cn| cn == &info.subject_cn)
+            let subject_cn = match x509_parser::parse_x509_certificate(cert) {
+                Ok((_, parsed_cert)) => parsed_cert
+                    .subject()
+                    .iter_common_name()
+                    .next()
+                    .and_then(|cn| cn.as_str().ok())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                Err(_) => "unknown".to_string(),
+            };
+            if !self.allowed_cn_list.is_empty()
+                && !self.allowed_cn_list.iter().any(|cn| cn == &subject_cn)
             {
-                return Err(MtlsError::CnNotAllowed(info.subject_cn));
+                return Err(MtlsError::CnNotAllowed(subject_cn));
             }
             root_store
                 .add(cert.clone())
@@ -400,130 +250,12 @@ impl MtlsAcceptor {
 }
 
 // ---------------------------------------------------------------------------
-// Certificate Expiry Monitoring
-// ---------------------------------------------------------------------------
-
-/// Check a certificate file for expiry and return a warning if the certificate
-/// will expire within the given threshold.
-pub fn check_cert_expiry(
-    cert_path: &Path,
-    warning_threshold_days: u64,
-) -> Result<Option<String>, MtlsError> {
-    let cert_bytes = std::fs::read(cert_path)?;
-    let certs = rustls_pemfile::certs(&mut cert_bytes.as_slice())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
-
-    if certs.is_empty() {
-        return Err(MtlsError::InvalidCert("no certificates found".into()));
-    }
-
-    let info = CertificateInfo::from_der(&certs[0])?;
-
-    if info.is_expired {
-        return Ok(Some(format!(
-            "Certificate '{}' expired on {}",
-            info.subject_cn, info.not_after
-        )));
-    }
-
-    if (info.days_remaining as u64) < warning_threshold_days {
-        return Ok(Some(format!(
-            "Certificate '{}' expires in {} days (threshold: {} days)",
-            info.subject_cn, info.days_remaining, warning_threshold_days
-        )));
-    }
-
-    Ok(None)
-}
-
-/// Monitor certificate expiry on a recurring interval.
-/// Spawn this as a tokio task during initialization.
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
-/// Wired via server startup in production deployments.
-pub fn start_cert_monitor(
-    config: MtlsConfig,
-    check_interval: Duration,
-    warning_threshold_days: u64,
-) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(check_interval);
-        loop {
-            interval.tick().await;
-            let paths = [&config.ca_cert_path, &config.server_cert_path];
-
-            for path in &paths {
-                match check_cert_expiry(path, warning_threshold_days) {
-                    Ok(Some(warning)) => warn!("Cert monitor: {}", warning),
-                    Ok(None) => {} // OK
-                    Err(e) => warn!("Cert monitor error for {}: {}", path.display(), e),
-                }
-            }
-        }
-    });
-}
-
-/// Spawn the certificate monitor task if an mTLS config is provided.
-///
-/// If `config` is `Some`, calls `start_cert_monitor` with a 24-hour check
-/// interval and a 30-day warning threshold. If `config` is `None`, logs a
-/// debug message indicating certificate monitoring is disabled.
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
-/// Wired via server startup in production deployments.
-pub fn spawn_cert_monitor_if_configured(config: Option<MtlsConfig>) {
-    match config {
-        Some(cfg) => {
-            info!(
-                "mTLS certificate monitoring enabled (interval: 24h, warning threshold: 30 days)"
-            );
-            start_cert_monitor(cfg, Duration::from_secs(86400), 30);
-        }
-        None => {
-            tracing::debug!("mTLS certificate monitoring disabled — no config provided");
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tempfile::TempDir;
-
-    fn setup_test_certs() -> (TempDir, MtlsConfig) {
-        let dir = TempDir::new().unwrap();
-
-        // Write a minimal CA cert and server cert/key for structural testing.
-        // In a real environment, these would be proper certificates.
-        // For unit tests, we test the configuration struct and expiry logic.
-        let config = MtlsConfig::new(
-            dir.path().join("ca.pem"),
-            dir.path().join("server.pem"),
-            dir.path().join("server.key"),
-        );
-
-        (dir, config)
-    }
-
-    #[test]
-    fn test_mtls_config_builder() {
-        let (_dir, config) = setup_test_certs();
-        let config = config
-            .with_client_cert(true)
-            .with_allowed_cns(vec!["client.example.com".into()]);
-
-        assert!(config.require_client_cert);
-        assert_eq!(config.allowed_cn_list.len(), 1);
-        assert_eq!(config.allowed_cn_list[0], "client.example.com");
-    }
-
-    #[test]
-    fn test_certificate_info_parse_error_for_invalid_der() {
-        let result = CertificateInfo::from_der(b"not-a-real-cert");
-        assert!(result.is_err());
-    }
+    // mTLS tests removed — MtlsConfig and CertificateInfo were dead code
+    // (F-GAP-49 reserved mTLS feature). Keep the module empty so the
+    // build does not produce "unused module" warnings.
 }

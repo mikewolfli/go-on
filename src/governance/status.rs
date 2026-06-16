@@ -71,6 +71,36 @@ impl GovernanceStatus {
         }
     }
 
+    /// Create a status snapshot from a `PuaGovernanceProfile`.
+    ///
+    /// Each governance subsystem is considered healthy unless its counter of
+    /// blocks/denials/errors exceeds a reasonable threshold.
+    pub fn current(profile: &PuaGovernanceProfile) -> Self {
+        let mut status = Self::new();
+
+        // Mark subsystems degraded based on profile counters
+        if profile.rationalization_blocks > 100 {
+            status.mark_degraded("rationalization");
+        }
+        if profile.security_blocks > 100 {
+            status.mark_degraded("security_governor");
+        }
+        if profile.rbac_denials > 100 {
+            status.mark_degraded("rbac");
+        }
+        if profile.hardening_events > 50 {
+            status.mark_degraded("runtime_controls");
+        }
+        if profile.drift_detections > 50 {
+            status.mark_degraded("audit");
+        }
+        if profile.review_overrides > 20 {
+            status.mark_degraded("voting");
+        }
+
+        status
+    }
+
     /// Mark a specific subsystem as degraded (unhealthy).
     pub fn mark_degraded(&mut self, subsystem: &str) {
         match subsystem {
@@ -106,6 +136,7 @@ impl GovernanceStatus {
     }
 }
 
+use crate::governance::harness_bus::PuaGovernanceProfile;
 use std::collections::BTreeSet;
 
 use serde_json::Value;

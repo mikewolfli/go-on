@@ -26,7 +26,6 @@ pub mod dag_driver;
 #[allow(unused_imports)]
 pub use core_dag::TaskContext; // GAP-B50-05 (migrated from dag_executor to core_dag)
 pub mod diagnostic_feedback;
-pub mod distributed; // GAP-B52-21/22
 pub mod distributed_tx; // BLUE45 item 4: Two-Phase Commit (2PC) over multiple nodes
 pub mod execution_graph;
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
@@ -45,7 +44,6 @@ pub mod planner_executor;
 pub mod plugin_system;
 pub mod promotion_plugin;
 pub mod prompt_layers;
-pub mod provider_impl;
 pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
 pub mod roles;
 pub mod scheduler;

@@ -11,10 +11,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcpErrorCode {
     /// Invalid JSON was received by the server (-32700).
-    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
+    #[allow(dead_code)]
     ParseError = -32700,
     /// The JSON sent is not a valid Request object (-32600).
-    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
+    #[allow(dead_code)]
     InvalidRequest = -32600,
     /// The method does not exist / is not available (-32601).
     MethodNotFound = -32601,

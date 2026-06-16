@@ -5,28 +5,6 @@
 //!
 //! All structs use camelCase serialization for JSON consistency.
 
-/// SKILL.md / skill.mdc manifest — Claude Code compatible skill definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct SkillImportManifest {
-    pub name: String,
-    pub version: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default = "default_object_schema")]
-    pub input_schema: serde_json::Value,
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    #[serde(default)]
-    pub prompt_template: Option<String>,
-}
-
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-fn default_object_schema() -> serde_json::Value {
-    serde_json::json!({"type": "object"})
-}
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -56,67 +34,6 @@ pub struct SkillActionResponse {
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub versions: Option<Vec<Value>>,
-}
-
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-impl SkillActionResponse {
-    pub fn ok(action: impl Into<String>) -> Self {
-        Self {
-            ok: true,
-            action: action.into(),
-            name: None,
-            skill: None,
-            total: None,
-            enabled: None,
-            disabled: None,
-            skills: None,
-            removed: None,
-            unregistered: None,
-            version: None,
-            versions: None,
-        }
-    }
-
-    pub fn name(mut self, v: impl Into<String>) -> Self {
-        self.name = Some(v.into());
-        self
-    }
-    pub fn skill(mut self, v: Value) -> Self {
-        self.skill = Some(v);
-        self
-    }
-    pub fn total(mut self, v: usize) -> Self {
-        self.total = Some(v);
-        self
-    }
-    pub fn enabled(mut self, v: usize) -> Self {
-        self.enabled = Some(v);
-        self
-    }
-    pub fn disabled(mut self, v: usize) -> Self {
-        self.disabled = Some(v);
-        self
-    }
-    pub fn skills(mut self, v: Vec<Value>) -> Self {
-        self.skills = Some(v);
-        self
-    }
-    pub fn removed(mut self, v: bool) -> Self {
-        self.removed = Some(v);
-        self
-    }
-    pub fn unregistered(mut self, v: bool) -> Self {
-        self.unregistered = Some(v);
-        self
-    }
-    pub fn version(mut self, v: impl Into<String>) -> Self {
-        self.version = Some(v.into());
-        self
-    }
-    pub fn versions(mut self, v: Vec<Value>) -> Self {
-        self.versions = Some(v);
-        self
-    }
 }
 
 /// Normalised view of an imported skill record.
@@ -159,25 +76,8 @@ pub struct PhaseResponse {
     pub inflight: Value,
 }
 
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-impl PhaseResponse {
-    pub fn new(rate_limiter: Value, inflight: Value) -> Self {
-        Self {
-            rate_limiter,
-            inflight,
-        }
-    }
-}
-
 /// Models list response.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelsListResponse {
     pub models: Vec<Value>,
-}
-
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-impl ModelsListResponse {
-    pub fn new(models: Vec<Value>) -> Self {
-        Self { models }
-    }
 }

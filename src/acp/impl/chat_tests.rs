@@ -31,8 +31,7 @@ mod unit_tests {
     use crate::acp::helpers::agent_preference::reset_agent_switch_state_for_test;
     #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::r#impl::chat::{
-        extract_tool_calls_from_response, process_chat_request, reset_agent_switch_state,
-        ChatParams,
+        extract_tool_calls_from_response, process_chat_request, ChatParams,
     };
     #[cfg(not(feature = "backend-postgres"))]
     use crate::memory::agent_memory_bus::clear_agent_memory_bus;
@@ -51,7 +50,6 @@ mod unit_tests {
         let _guard = CHAT_TEST_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        reset_agent_switch_state();
         reset_agent_switch_state_for_test();
         clear_agent_memory_bus();
     }
@@ -228,7 +226,7 @@ mod unit_tests {
         let config = Arc::new(test_config());
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
-        let mut server = ServerBuilder::new().build().expect("server should build");
+        let mut server = ServerBuilder::new().build();
         setup_test_tenant_budget(&server);
         server.model_deps.flow_manager = Some(flow);
         server.model_deps.agent_registry = Some(Arc::new(registry));
@@ -441,7 +439,7 @@ mod unit_tests {
             ),
         );
 
-        let mut server = ServerBuilder::new().build().expect("server should build");
+        let mut server = ServerBuilder::new().build();
         setup_test_tenant_budget(&server);
         server.model_deps.flow_manager = Some(flow);
         server.model_deps.agent_registry = Some(Arc::new(registry));
@@ -542,7 +540,7 @@ mod unit_tests {
         let config = Arc::new(config);
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
-        let mut server = ServerBuilder::new().build().expect("server should build");
+        let mut server = ServerBuilder::new().build();
         setup_test_tenant_budget(&server);
         server.model_deps.flow_manager = Some(flow);
         server.model_deps.agent_registry = Some(Arc::new(registry));
@@ -625,7 +623,7 @@ mod unit_tests {
         let config = Arc::new(config);
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
-        let mut server = ServerBuilder::new().build().expect("server should build");
+        let mut server = ServerBuilder::new().build();
         setup_test_tenant_budget(&server);
         server.model_deps.flow_manager = Some(flow);
         server.model_deps.agent_registry = Some(Arc::new(registry));
@@ -683,7 +681,7 @@ mod unit_tests {
         let config = Arc::new(test_config());
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
-        let mut server = ServerBuilder::new().build().expect("server should build");
+        let mut server = ServerBuilder::new().build();
         setup_test_tenant_budget(&server);
         server.model_deps.flow_manager = Some(flow);
         server.model_deps.agent_registry = Some(Arc::new(registry));
@@ -773,7 +771,7 @@ mod unit_tests {
             ),
         );
 
-        let mut server = ServerBuilder::new().build().expect("server should build");
+        let mut server = ServerBuilder::new().build();
         setup_test_tenant_budget(&server);
         server.model_deps.flow_manager = Some(flow);
         server.model_deps.agent_registry = Some(Arc::new(registry));
@@ -844,7 +842,7 @@ mod unit_tests {
         let config = Arc::new(test_config());
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
-        let mut server = ServerBuilder::new().build().expect("server should build");
+        let mut server = ServerBuilder::new().build();
         setup_test_tenant_budget(&server);
         server.model_deps.flow_manager = Some(flow);
         server.model_deps.agent_registry = Some(Arc::new(registry));

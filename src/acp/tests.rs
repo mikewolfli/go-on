@@ -106,7 +106,7 @@ mod test_suite {
 
         // Note: In a real test, we would set up actual components
         // For now, we'll create a minimal server
-        builder.build().expect("Failed to build test server")
+        builder.build()
     }
 
     /// Test conversation state is accessible on startup
@@ -231,7 +231,7 @@ mod test_suite {
         assert!(config.phases.contains_key("coding"));
 
         let builder = ServerBuilder::new();
-        let server = builder.build().expect("Failed to build server");
+        let server = builder.build();
 
         // Note: The config field doesn't exist on the new AcpServer structure
         // This test is simplified for migration
