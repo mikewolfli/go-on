@@ -377,6 +377,7 @@ fn create_tool_jobs(
         .collect::<Vec<_>>()
 }
 
+#[cfg(test)]
 pub use crate::orchestration::core_dag::dag_trace_to_observability;
 
 #[cfg(test)]

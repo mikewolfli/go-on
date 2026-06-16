@@ -66,7 +66,7 @@ pub mod token_layers;
 pub mod tool;
 pub use tool::extended as tool_extended;
 pub use tool::lock as tool_lock;
-#[allow(unused_imports)]
+#[cfg(test)]
 pub use tool::native as tool_native;
 pub use tool::pipeline as tool_pipeline;
 pub use tool::recommender as tool_recommender;

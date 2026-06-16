@@ -320,16 +320,6 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
     crate::acp::r#impl::io::send_result(server, request_id, value).await
 }
 
-/// Set the negotiated protocol version for the ACP initialize response.
-///
-/// Must be called once before the first `handle_initialize` invocation,
-/// typically immediately after protocol negotiation completes.
-/// If never called, defaults to `ProtocolVersion::LATEST` (V3).
-#[allow(dead_code)]
-pub fn set_negotiated_protocol_version(version: ProtocolVersion) {
-    let _ = NEGOTIATED_PROTOCOL_VERSION.set(version);
-}
-
 /// Module-level storage for the negotiated protocol version, initially unset.
 /// When unset, `handle_initialize` falls back to `ProtocolVersion::LATEST`.
 static NEGOTIATED_PROTOCOL_VERSION: OnceLock<ProtocolVersion> = OnceLock::new();

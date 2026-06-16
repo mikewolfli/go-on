@@ -611,8 +611,6 @@ pub async fn handle_request(
             // B51-28: Try the MethodRouter first; fall through to legacy match
             // if no handler is registered.
             if let Some(router_result) = method_router::global_method_router()
-                .lock()
-                .await
                 .dispatch(
                     method.as_ref(),
                     server,

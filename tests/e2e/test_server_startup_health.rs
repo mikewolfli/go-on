@@ -6,7 +6,6 @@
 mod test_server_startup_health_placeholder {
     #[test]
     fn test_server_startup_health_placeholder() {
-        // Placeholder test to satisfy module declaration.
-        assert!(true);
+        // Placeholder test — no assertions yet.
     }
 }

@@ -314,40 +314,6 @@ impl PromptsView {
         }
     }
 
-    #[allow(dead_code)] // F-GAP-48: Reserved for future template category browsing
-    /// Get templates for the currently selected category.
-    pub fn current_category_templates(&self) -> Option<&[PromptTemplate]> {
-        self.selected_category.as_ref().and_then(|cat_id| {
-            self.collection
-                .iter()
-                .find(|c| c.id == *cat_id)
-                .map(|c| c.templates.as_slice())
-        })
-    }
-
-    #[allow(dead_code)] // F-GAP-48: Reserved for future template search
-    /// Search templates across all categories matching the query.
-    pub fn search_templates(&self, query: &str) -> Vec<(String, String, &PromptTemplate)> {
-        // Returns Vec of (category_id, category_name, template)
-        if query.is_empty() {
-            return Vec::new();
-        }
-        let q = query.to_lowercase();
-        let mut results = Vec::new();
-        for cat in &self.collection {
-            for tmpl in &cat.templates {
-                if tmpl.title.to_lowercase().contains(&q)
-                    || tmpl.description.to_lowercase().contains(&q)
-                    || tmpl.tags.iter().any(|t| t.to_lowercase().contains(&q))
-                    || tmpl.content.to_lowercase().contains(&q)
-                {
-                    results.push((cat.id.clone(), cat.name.clone(), tmpl));
-                }
-            }
-        }
-        results
-    }
-
     /// Show the prompts management view.
     pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
         // Detect language switch and auto-reload

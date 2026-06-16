@@ -66,14 +66,7 @@ pub struct LockHandle {
     manager: ToolLockManager,
 }
 
-impl LockHandle {
-    /// Release the lock manually (normally done on drop).
-    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
-    pub fn release(self) {
-        // Drop will call release automatically.
-        drop(self);
-    }
-}
+impl LockHandle {}
 
 impl Drop for LockHandle {
     fn drop(&mut self) {
@@ -201,7 +194,7 @@ impl ToolLockManager {
     /// Attempt to acquire a lock without blocking.
     ///
     /// Returns `Some(LockHandle)` on success, `None` if the lock would block.
-    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn try_acquire(&self, path: &str, mode: LockMode) -> Option<LockHandle> {
         let mut table = self.lock_table();
         if Self::try_acquire_inner(&mut table, path, mode) {

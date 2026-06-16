@@ -1008,9 +1008,9 @@ impl CapabilityBus {
     }
 
     /// Register evolve action as a FaultTolerance node and send heartbeat.
-    pub(crate) fn evolve_fault_tolerance(&self, node_id: &str) {
-        let _ = self.harness.fault_tolerance.register_node(node_id);
-        let _ = self.harness.fault_tolerance.report_heartbeat(node_id);
+    pub(crate) async fn evolve_fault_tolerance(&self, node_id: &str) {
+        let _ = self.harness.fault_tolerance.register_node(node_id).await;
+        let _ = self.harness.fault_tolerance.report_heartbeat(node_id).await;
     }
 
     /// Record an audit entry for the evolve cycle.
@@ -1169,7 +1169,7 @@ impl CapabilityBus {
         }
 
         let node_id = format!("evolve::{}_{}", state.0, action);
-        if timeout(timeout_dur, async { self.evolve_fault_tolerance(&node_id) })
+        if timeout(timeout_dur, self.evolve_fault_tolerance(&node_id))
             .await
             .is_err()
         {

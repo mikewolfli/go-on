@@ -867,10 +867,8 @@ pub async fn run_autonomy_loop(
                             (n.tool_name.clone(), decision)
                         })
                         .collect::<Vec<(String, LoopDecision)>>();
-                    // F-GAP-42: Legacy dag_driver — pending migration to core_dag
-                    let trace_data = crate::orchestration::dag_driver::dag_trace_to_observability(
-                        &dag_trace_data,
-                    );
+                    let trace_data =
+                        crate::orchestration::core_dag::dag_trace_to_observability(&dag_trace_data);
                     round_dag_trace = Some(trace_data);
                     dag_results
                 } else {

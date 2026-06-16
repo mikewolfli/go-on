@@ -156,12 +156,12 @@ pub enum MarkdownSegment {
     Link(String, String),
     /// Image with URL and alt text
     Image(String, String),
+    /// Raw text (no markdown interpretation, plain label)
+    Raw(String),
     /// Soft or hard line break
     /// F-GAP-57: Reserved for future markdown rendering
     #[allow(dead_code)] // F-GAP-57 — reserved chat types
     LineBreak,
-    /// Raw text (no markdown interpretation, plain label)
-    Raw(String),
 }
 
 /// Styling attributes for markdown text segments

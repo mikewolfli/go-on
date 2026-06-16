@@ -20,13 +20,13 @@ pub fn now_ts_ms() -> i64 {
 }
 
 /// Calculate checkpoint message characters
-#[allow(dead_code)] // F-GAP-49 — planned wiring
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49 — test-only utility
 pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
     messages.iter().map(|m| m.content.chars().count()).sum()
 }
 
 /// Touch conversation order (update LRU)
-#[allow(dead_code)] // F-GAP-49 — planned wiring
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49 — test-only utility
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
     let mut guard = order.lock().unwrap_or_else(|poisoned| {
         tracing::warn!("conversation order lock poisoned, recovering");
@@ -72,7 +72,7 @@ pub fn enforce_checkpoint_capacity(
 }
 
 /// Evict oldest conversation
-#[allow(dead_code)] // F-GAP-49 — planned wiring
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49 — test-only utility
 pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,

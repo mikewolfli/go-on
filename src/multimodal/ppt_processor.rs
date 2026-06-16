@@ -113,11 +113,10 @@ fn extract_text_from_slide_xml(xml: &str) -> String {
                 let tag_name = e.name().as_ref().to_ascii_lowercase();
                 if tag_name == b"a:t" || tag_name == b"t" {
                     in_text_tag = false;
-                } else if tag_name == b"a:p" || tag_name == b"p" {
-                    if !current_paragraph.is_empty() {
-                        text_runs.push(current_paragraph.join(" "));
-                        current_paragraph.clear();
-                    }
+                } else if (tag_name == b"a:p" || tag_name == b"p") && !current_paragraph.is_empty()
+                {
+                    text_runs.push(current_paragraph.join(" "));
+                    current_paragraph.clear();
                 }
             }
             Ok(Event::Eof) => break,

@@ -26,16 +26,6 @@ pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Save with backup: copy existing file to `.bak` before atomic write.
-/// F-GAP-61: Reserved for future safe-save operations
-#[allow(dead_code)] // F-GAP-61 — reserved filesystem features
-pub fn save_with_backup(path: &Path, content: &str) -> std::io::Result<()> {
-    if path.exists() {
-        let bak_path = path.with_extension("json.bak");
-        let _ = std::fs::copy(path, &bak_path);
-    }
-    atomic_write(path, content)
-}
 
 /// Load JSON with automatic corruption recovery from backup.
 pub fn load_json_with_backup<T>(path: &Path, label: &str) -> T

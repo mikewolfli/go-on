@@ -66,27 +66,6 @@ impl AutoTuneView {
         })
     }
 
-    /// DEPRECATED: Unused. Autotune state is currently not persisted during GUI operation.
-    /// The `save_state` method exists but is never called. Retained for reference;
-    /// remove in a future cleanup round if autotune state persistence is not needed.
-    #[allow(dead_code)] // F-GAP-48: Reserved for future autotune state persistence
-    fn save_state(&self) {
-        let path = Self::state_path();
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("Failed to create autotune state dir: {e}");
-                return;
-            }
-        }
-        match serde_json::to_string_pretty(&self.state) {
-            Ok(content) => {
-                if let Err(e) = crate::fs_util::atomic_write(&path, &content) {
-                    eprintln!("Failed to write autotune state {}: {e}", path.display());
-                }
-            }
-            Err(e) => eprintln!("Failed to serialize autotune state: {e}"),
-        }
-    }
 
     pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
         egui::ScrollArea::vertical()

@@ -37,38 +37,6 @@ pub enum StateSyncEvent {
     },
 }
 
-impl StateSyncEvent {
-    /// Human-readable summary for display in the UI.
-    #[allow(dead_code)] // F-GAP-49 — reserved state sync features
-    pub fn summary(&self) -> String {
-        match self {
-            StateSyncEvent::ModelsChanged { models } => {
-                format!("Models changed ({} models)", models.len())
-            }
-            StateSyncEvent::ConfigReloaded { changed_keys } => {
-                if changed_keys.is_empty() {
-                    "Config reloaded".to_string()
-                } else {
-                    format!("Config reloaded: {}", changed_keys.join(", "))
-                }
-            }
-            StateSyncEvent::AgentsChanged { added, removed } => {
-                let mut parts = vec![];
-                if !added.is_empty() {
-                    parts.push(format!("+{} agents", added.len()));
-                }
-                if !removed.is_empty() {
-                    parts.push(format!("-{} agents", removed.len()));
-                }
-                format!("Agents changed ({})", parts.join(", "))
-            }
-            StateSyncEvent::BackendRestarting { reason, .. } => {
-                format!("Backend restarting: {}", reason)
-            }
-            StateSyncEvent::Heartbeat { .. } => "heartbeat".to_string(),
-        }
-    }
-}
 
 /// Spawn a background task that listens to the backend's `/v1/state/events` SSE
 /// endpoint and forwards parsed events into a provided channel.

@@ -781,30 +781,6 @@ impl BackendClient {
     /// Returns `Ok(Some(catalog))` on success, `Ok(None)` if backend is unreachable,
     /// and `Err` on communication failure. This is the preferred async entry point
     /// for GUI startup flows; it wraps health check + remote call in one call.
-    ///
-    /// F-GAP-59: Async wrapper for post-startup catalog overlay
-    #[allow(dead_code)] // F-GAP-59: Wired when startup flow calls fetch_catalog
-    pub async fn fetch_provider_catalog_async(
-        &self,
-        health_timeout: std::time::Duration,
-    ) -> Result<Option<Value>, String> {
-        // Step 1: Quick health check
-        // health() returns HealthStatus directly (not Result), so timeout returns
-        // Result<HealthStatus, Elapsed>.
-        match tokio::time::timeout(health_timeout, self.health()).await {
-            Ok(status) if status.healthy => {
-                // Step 2: Backend is healthy — fetch catalog
-                match self.provider_catalog().await {
-                    Ok(catalog) => Ok(Some(catalog)),
-                    Err(e) => Err(e),
-                }
-            }
-            Ok(_) | Err(_) => {
-                // Backend unreachable or unhealthy — return None so caller falls back
-                Ok(None)
-            }
-        }
-    }
 
     pub async fn provider_capabilities(
         &self,

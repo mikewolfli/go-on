@@ -26,10 +26,8 @@ use crate::acp::r#impl::io::send_error;
 use crate::acp::r#impl::request::handle_request;
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
-use crate::config::{AutoTuneState, VectorConfig};
 use crate::flow::FlowManager;
 use crate::rpc_protocol::JsonRpcRequest;
-use crate::vector::VectorStore;
 
 // ---------------------------------------------------------------------------
 // Sub-module declarations
@@ -235,13 +233,6 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
     Ok((Arc::clone(flow), Arc::clone(registry)))
 }
 
-/// Get cache handle.
-#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
-#[must_use]
-pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCache>> {
-    server.cache_deps.cache.response_cache.clone()
-}
-
 /// Get artifact ledger.
 pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLedger {
     _server
@@ -254,25 +245,4 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
                 _server.config_path.as_deref().map(std::path::Path::new),
             )
         })
-}
-
-/// Get vector store handle.
-#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
-#[must_use]
-pub fn vector_store_handle(server: &AcpServer) -> Option<Arc<VectorStore>> {
-    server.cache_deps.cache.vector_store.clone()
-}
-
-/// Get vector configuration snapshot.
-#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
-#[must_use]
-pub fn vector_config_snapshot(server: &AcpServer) -> Option<VectorConfig> {
-    server.cache_deps.vector_config.clone()
-}
-
-/// Get autotune handle.
-#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
-#[must_use]
-pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<AutoTuneState>>> {
-    server.cache_deps.autotune.clone()
 }

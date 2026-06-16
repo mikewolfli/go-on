@@ -777,16 +777,6 @@ async fn handle_cors_preflight(
     Ok(())
 }
 
-/// Write a standard HTTP JSON response. Thin wrapper for consistency.
-#[allow(dead_code)] // F-GAP-49 — planned wiring: lifecycle/utility
-async fn write_http_response(
-    socket: &mut TcpStream,
-    status: u16,
-    body: serde_json::Value,
-) -> Result<()> {
-    write_http_json_response(socket, status, body, "").await
-}
-
 /// Write an HTTP JSON response with platform profiles injected.
 pub(crate) async fn write_http_json_response_with_context(
     socket: &mut TcpStream,

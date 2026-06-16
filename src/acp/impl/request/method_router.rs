@@ -11,7 +11,6 @@ use crate::acp::server::AcpServer;
 use crate::rpc_protocol::RequestTraceContext;
 use anyhow::Result;
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 /// A handler for a single JSON-RPC method.
 ///
@@ -67,11 +66,11 @@ impl MethodRouter {
 }
 
 /// Global method router singleton, lazily initialised on first access.
-static GLOBAL_ROUTER: OnceLock<Mutex<MethodRouter>> = OnceLock::new();
+static GLOBAL_ROUTER: OnceLock<MethodRouter> = OnceLock::new();
 
 /// Get the global method router, initialising it with default handlers on
 /// first call.
-pub fn global_method_router() -> &'static Mutex<MethodRouter> {
+pub fn global_method_router() -> &'static MethodRouter {
     GLOBAL_ROUTER.get_or_init(|| {
         let router = MethodRouter::new();
         // ── Built-in registrations ──────────────────────────────────────
@@ -82,25 +81,6 @@ pub fn global_method_router() -> &'static Mutex<MethodRouter> {
         // (Additional handlers will be migrated incrementally from the
         //  legacy match in `handle_request`.)
 
-        Mutex::new(router)
+        router
     })
-}
-
-// ── ACP method-name tracking ──────────────────────────────────────────────
-
-static ACP_METHOD_REGISTRY: OnceLock<std::sync::Mutex<Vec<&'static str>>> = OnceLock::new();
-
-fn acp_method_registry() -> &'static std::sync::Mutex<Vec<&'static str>> {
-    ACP_METHOD_REGISTRY.get_or_init(|| std::sync::Mutex::new(Vec::new()))
-}
-
-/// Returns true if the method is known to the ACP protocol (either built-in
-/// or dynamically registered).
-#[allow(dead_code)]
-pub fn is_registered_acp_method(method: &str) -> bool {
-    if let Ok(guard) = acp_method_registry().lock() {
-        guard.contains(&method)
-    } else {
-        false
-    }
 }
