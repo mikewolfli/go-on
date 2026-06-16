@@ -10,9 +10,7 @@
 //! data can be flushed at stream end.
 
 use flate2::read::MultiGzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use std::io::{Read, Write};
+use std::io::Read;
 
 /// Configuration for SSE streaming behavior
 #[derive(Debug, Clone)]

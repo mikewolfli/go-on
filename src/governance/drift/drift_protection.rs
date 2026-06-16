@@ -153,15 +153,26 @@ impl Default for DriftProtectionConfig {
 
 /// Thread-safe engine that monitors metrics, evaluates drift against policies,
 /// and produces alerts when deviation thresholds are exceeded.
+///
+/// # Lock design
+/// All mutable state is stored in a single `Mutex<DriftProtectionInner>` to avoid
+/// the overhead of 5 independent mutexes that would be acquired sequentially in
+/// every method. A single mutex is simpler, faster, and equally correct.
 #[derive(Debug)]
 pub struct DriftProtectionEngine {
     config: DriftProtectionConfig,
-    policies: Mutex<HashMap<String, DriftPolicy>>,
-    metrics: Mutex<HashMap<String, DriftMetric>>,
+    inner: Mutex<DriftProtectionInner>,
+}
+
+/// Inner state protected by a single mutex.
+#[derive(Debug)]
+struct DriftProtectionInner {
+    policies: HashMap<String, DriftPolicy>,
+    metrics: HashMap<String, DriftMetric>,
     /// Historical metrics grouped by drift type for trend analysis.
-    metric_history: Mutex<HashMap<DriftType, Vec<DriftMetric>>>,
-    alerts: Mutex<Vec<DriftAlert>>,
-    alert_counter: Mutex<u64>,
+    metric_history: HashMap<DriftType, Vec<DriftMetric>>,
+    alerts: Vec<DriftAlert>,
+    alert_counter: u64,
 }
 
 impl DriftProtectionEngine {
@@ -169,27 +180,29 @@ impl DriftProtectionEngine {
     pub fn new(config: DriftProtectionConfig) -> Self {
         Self {
             config,
-            policies: Mutex::new(HashMap::new()),
-            metrics: Mutex::new(HashMap::new()),
-            metric_history: Mutex::new(HashMap::new()),
-            alerts: Mutex::new(Vec::new()),
-            alert_counter: Mutex::new(0),
+            inner: Mutex::new(DriftProtectionInner {
+                policies: HashMap::new(),
+                metrics: HashMap::new(),
+                metric_history: HashMap::new(),
+                alerts: Vec::new(),
+                alert_counter: 0,
+            }),
         }
     }
 
     /// Registers a drift policy. Returns an error if a policy with the same name already exists.
     pub fn register_policy(&self, policy: DriftPolicy) -> Result<()> {
-        let mut policies = self
-            .policies
+        let mut inner = self
+            .inner
             .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock policies: {}", e))?;
-        if policies.contains_key(&policy.name) {
+            .map_err(|e| anyhow::anyhow!("failed to lock drift engine: {}", e))?;
+        if inner.policies.contains_key(&policy.name) {
             bail!(tf(
                 "error.policy_already_registered",
                 &[("name", &policy.name)]
             ));
         }
-        policies.insert(policy.name.clone(), policy);
+        inner.policies.insert(policy.name.clone(), policy);
         Ok(())
     }
 
@@ -203,13 +216,14 @@ impl DriftProtectionEngine {
         baseline_value: f64,
         drift_type: DriftType,
     ) -> Result<()> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("failed to lock drift engine: {}", e))?;
+
         // Auto-baseline: if baseline is 0 (unset), use first historical value.
         let effective_baseline = if baseline_value == 0.0 {
-            let history = self.metric_history.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "drift_protection", "metric_history Mutex poisoned – recovering");
-                poisoned.into_inner()
-            });
-            if let Some(historical) = history.get(&drift_type) {
+            if let Some(historical) = inner.metric_history.get(&drift_type) {
                 historical
                     .first()
                     .map(|m| m.current_value)
@@ -222,27 +236,18 @@ impl DriftProtectionEngine {
         };
         let deviation = compute_deviation(current_value, effective_baseline);
         let now_ms = current_time_ms();
-        let drift_type_for_history = drift_type.clone();
         let metric = DriftMetric {
             name: name.to_string(),
             current_value,
             baseline_value: effective_baseline,
             deviation,
-            drift_type,
+            drift_type: drift_type.clone(),
             measured_ms: now_ms,
         };
-        let mut metrics = self
-            .metrics
-            .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock metrics: {}", e))?;
-        metrics.insert(name.to_string(), metric.clone());
+        inner.metrics.insert(name.to_string(), metric.clone());
 
         // Track history for trend analysis (keep last 100 entries per type)
-        let mut history = self.metric_history.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "metric_history Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
-        let entry = history.entry(drift_type_for_history).or_default();
+        let entry = inner.metric_history.entry(drift_type).or_default();
         entry.push(metric);
         if entry.len() > 100 {
             entry.remove(0);
@@ -261,31 +266,17 @@ impl DriftProtectionEngine {
         let now_ms = current_time_ms();
         let config = &self.config;
 
-        let policies = self
-            .policies
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "drift_protection", "policies Mutex poisoned – recovering");
-                poisoned.into_inner()
-            })
-            .clone();
-        let metrics = self
-            .metrics
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "drift_protection", "metrics Mutex poisoned – recovering");
-                poisoned.into_inner()
-            })
-            .clone();
-
-        // Single lock for both auto-resolve and alert creation (reducing 3 locks to 1).
-        let mut alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
             poisoned.into_inner()
         });
 
+        // Clone policies and metrics for iteration (they are small).
+        let policies = inner.policies.clone();
+        let metrics = inner.metrics.clone();
+
         // Auto-resolve stale alerts before checking again.
-        for alert in alerts.iter_mut() {
+        for alert in inner.alerts.iter_mut() {
             if !alert.resolved
                 && now_ms.saturating_sub(alert.triggered_ms) >= config.auto_resolve_after_ms
             {
@@ -315,7 +306,7 @@ impl DriftProtectionEngine {
                 };
 
                 // Check cooldown: avoid duplicate alerts for the same metric within cooldown period.
-                let within_cooldown = alerts.iter().any(|a| {
+                let within_cooldown = inner.alerts.iter().any(|a| {
                     a.metric_name == metric.name
                         && a.drift_type == metric.drift_type
                         && a.severity == severity
@@ -326,14 +317,8 @@ impl DriftProtectionEngine {
                     continue;
                 }
 
-                let alert_id = format!("drift-{}", {
-                    let mut ctr = self.alert_counter.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!(target: "drift_protection", "alert_counter Mutex poisoned – recovering");
-                        poisoned.into_inner()
-                    });
-                    *ctr += 1;
-                    *ctr
-                });
+                inner.alert_counter += 1;
+                let alert_id = format!("drift-{}", inner.alert_counter);
 
                 let message = format!(
                     "{} drift detected in '{}': deviation {:.4} exceeds {} threshold ({:.2})",
@@ -374,13 +359,16 @@ impl DriftProtectionEngine {
                 new_alerts.push(alert.clone());
 
                 // Enforce alert capacity.
-                alerts.push(alert);
-                if alerts.len() > config.max_alerts {
-                    alerts.remove(0);
+                inner.alerts.push(alert);
+                if inner.alerts.len() > config.max_alerts {
+                    inner.alerts.remove(0);
                 }
 
                 // Auto-remediate: if the policy allows it, invoke remediation.
                 if policy.auto_remediate {
+                    // Temporarily release the lock to call suggest_remediation
+                    // (which would deadlock if we held it).
+                    drop(inner);
                     let remediation_suggestions = self.suggest_remediation();
                     for suggestion in &remediation_suggestions {
                         tracing::info!(
@@ -392,6 +380,10 @@ impl DriftProtectionEngine {
                         );
                         auto_remediation_actions.push(suggestion.clone());
                     }
+                    inner = self.inner.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
+                        poisoned.into_inner()
+                    });
                 }
             }
         }
@@ -411,11 +403,12 @@ impl DriftProtectionEngine {
 
     /// Marks an alert as resolved by its ID. Returns an error if no alert with that ID exists.
     pub fn resolve_alert(&self, alert_id: &str) -> Result<()> {
-        let mut alerts = self
-            .alerts
+        let mut inner = self
+            .inner
             .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock alerts: {}", e))?;
-        let alert = alerts
+            .map_err(|e| anyhow::anyhow!("failed to lock drift engine: {}", e))?;
+        let alert = inner
+            .alerts
             .iter_mut()
             .find(|a| a.id == alert_id)
             .ok_or_else(|| {
@@ -428,20 +421,26 @@ impl DriftProtectionEngine {
 
     /// Returns a list of all alerts that are currently unresolved.
     pub fn get_active_alerts(&self) -> Vec<DriftAlert> {
-        let alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
             poisoned.into_inner()
         });
-        alerts.iter().filter(|a| !a.resolved).cloned().collect()
+        inner
+            .alerts
+            .iter()
+            .filter(|a| !a.resolved)
+            .cloned()
+            .collect()
     }
 
     /// Returns all alerts (resolved and unresolved) filtered by severity.
     pub fn get_alerts_by_severity(&self, severity: DriftSeverity) -> Vec<DriftAlert> {
-        let alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
             poisoned.into_inner()
         });
-        alerts
+        inner
+            .alerts
             .iter()
             .filter(|a| a.severity == severity)
             .cloned()
@@ -450,23 +449,13 @@ impl DriftProtectionEngine {
 
     /// Returns a snapshot profile of the current drift protection state.
     pub fn profile(&self) -> DriftProfile {
-        let total_metrics = self
-            .metrics
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "drift_protection", "metrics Mutex poisoned – recovering");
-                poisoned.into_inner()
-            })
-            .len();
-        let alerts = self
-            .alerts
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
-                poisoned.into_inner()
-            })
-            .clone();
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
 
+        let total_metrics = inner.metrics.len();
+        let alerts = &inner.alerts;
         let active_alerts = alerts.iter().filter(|a| !a.resolved).count();
         let critical_alerts = alerts
             .iter()
@@ -490,17 +479,13 @@ impl DriftProtectionEngine {
     /// Analyze drift metrics over time to detect rising trends.
     /// Returns a list of drift types that show a statistically significant upward trend.
     pub fn detect_trends(&self) -> Vec<(DriftType, f64, String)> {
-        let history = self
-            .metric_history
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "drift_protection", "metric_history Mutex poisoned – recovering");
-                poisoned.into_inner()
-            })
-            .clone();
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
         let mut trends = Vec::new();
 
-        for (drift_type, metrics) in &history {
+        for (drift_type, metrics) in &inner.metric_history {
             if metrics.len() >= 5 {
                 // Simple linear regression slope
                 let n = metrics.len() as f64;
@@ -543,17 +528,13 @@ impl DriftProtectionEngine {
 
     /// Generate auto-remediation suggestions for detected drifts.
     pub fn suggest_remediation(&self) -> Vec<String> {
-        let alerts = self
-            .alerts
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
-                poisoned.into_inner()
-            })
-            .clone();
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
         let mut suggestions = Vec::new();
 
-        for alert in &alerts {
+        for alert in &inner.alerts {
             if alert.resolved {
                 continue;
             }

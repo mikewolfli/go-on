@@ -21,6 +21,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// Global tool lock manager for file access synchronization.
+static TOOL_LOCK_MANAGER: OnceLock<crate::orchestration::tool_lock::ToolLockManager> =
+    OnceLock::new();
+
+fn tool_lock_manager() -> &'static crate::orchestration::tool_lock::ToolLockManager {
+    TOOL_LOCK_MANAGER.get_or_init(crate::orchestration::tool_lock::ToolLockManager::new)
+}
 use std::process::Command;
 use std::time::Instant;
 use tempfile::NamedTempFile;
@@ -341,6 +350,38 @@ impl ToolRegistry {
                 fallback_chain: Vec::new(),
             },
         );
+
+        // ── Office document tools (feature-gated) ──────────────────
+        #[cfg(feature = "document-excel")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ReadExcelTool,
+            ToolCapabilityProfile {
+                capability: "document_excel_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        #[cfg(feature = "document-ppt")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ReadPptTool,
+            ToolCapabilityProfile {
+                capability: "document_ppt_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         registry
     }
 
@@ -645,6 +686,15 @@ impl Tool for ReadFileTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
         let validated_path = sanitize_path(input, path)?;
+
+        // Acquire a read lock to prevent concurrent writes on the same file.
+        let _lock = tool_lock_manager()
+            .acquire(
+                &validated_path.to_string_lossy(),
+                crate::orchestration::tool_lock::LockMode::Read,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to acquire read lock: {e}"))?;
+
         let content = std::fs::read_to_string(&validated_path)?;
         let elapsed = start.elapsed().as_millis() as u64;
         span.record("latency_ms", elapsed);
@@ -686,6 +736,15 @@ impl Tool for WriteFileTool {
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_content")))?;
         let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
         let path_buf = sanitize_path_for_write(input, path)?;
+
+        // Acquire an exclusive write lock to prevent concurrent reads/writes on the same file.
+        let _lock = tool_lock_manager()
+            .acquire(
+                &path_buf.to_string_lossy(),
+                crate::orchestration::tool_lock::LockMode::Write,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to acquire write lock: {e}"))?;
+
         if let Some(parent) = path_buf.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)?;

@@ -24,10 +24,8 @@ use tracing::warn;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockMode {
     /// Shared / read lock — multiple readers allowed concurrently.
-    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     Read,
     /// Exclusive / write lock — only one writer, no concurrent readers.
-    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     Write,
 }
 
@@ -161,7 +159,6 @@ impl ToolLockManager {
     /// # Panics
     ///
     /// Panics if the internal mutex is poisoned.
-    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     pub fn acquire(&self, path: &str, mode: LockMode) -> Result<LockHandle, AcquireError> {
         let deadline = Instant::now() + Self::ACQUIRE_TIMEOUT;
         let mut backoff_us = Self::BACKOFF_INITIAL_US;

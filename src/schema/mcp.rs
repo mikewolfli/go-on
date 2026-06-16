@@ -55,6 +55,7 @@ pub struct McpServerStdio {
 }
 
 impl McpServerStdio {
+    #[allow(dead_code)] // Public API for MCP server consumers
     pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
         Self {
             name: name.into(),

@@ -125,6 +125,14 @@ struct AuditLogInner {
 }
 
 impl ThreadSafeAuditLog {
+    /// Return a new `Arc`-cloned handle to the same underlying log.
+    #[allow(dead_code)] // Public API for test consumers
+    pub fn clone_arc(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+
     /// Create a new thread-safe audit log with the given capacity.
     pub fn new(max_entries: usize) -> Self {
         Self {

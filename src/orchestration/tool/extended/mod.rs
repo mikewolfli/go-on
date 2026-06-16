@@ -7,6 +7,7 @@ pub mod cargo;
 pub mod filesystem;
 pub mod git;
 pub mod http;
+pub mod office;
 pub mod search;
 pub mod shell;
 
@@ -14,6 +15,10 @@ pub use cargo::{CargoCheckTool, CargoTestTool};
 pub use filesystem::{FileDeleteTool, FileMoveTool, ListDirectoryTool};
 pub use git::GitTool;
 pub use http::HttpRequestTool;
+#[cfg(feature = "document-excel")]
+pub use office::ReadExcelTool;
+#[cfg(feature = "document-ppt")]
+pub use office::ReadPptTool;
 pub use search::{FindFilesTool, GrepTool};
 pub use shell::ShellExecTool;
 

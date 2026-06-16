@@ -1264,6 +1264,7 @@ mod tests {
         let bl = BrainLoop::new(config);
         let plan_id = bl
             .start_plan("Reasoning field test", vec![make_step("rf1", "RF step")])
+            .await
             .unwrap();
 
         // Manually set reasoning on the plan.

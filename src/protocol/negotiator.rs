@@ -154,6 +154,19 @@ impl ProtocolNegotiator {
         ProtocolVersion::select_highest_common(client_versions)
     }
 
+    /// Negotiate protocol with a client hint and client-supported versions.
+    ///
+    /// This is a convenience wrapper around [`negotiate`] that accepts
+    /// a `&[ProtocolVersion]` directly instead of `Option<&[ProtocolVersion]>`.
+    #[allow(dead_code)] // Public API for test consumers
+    pub fn negotiate_with_versions(
+        &mut self,
+        client_hint: Option<&str>,
+        client_versions: &[ProtocolVersion],
+    ) -> NegotiatedProtocol {
+        self.negotiate(client_hint, Some(client_versions))
+    }
+
     /// Attempt fallback to next protocol in the chain
     pub fn try_fallback(&mut self) -> Option<ProtocolMode> {
         let fallback = self.active.fallback()?;

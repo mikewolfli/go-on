@@ -4,11 +4,6 @@
 use std::sync::Mutex;
 use tracing;
 
-use crate::agent::StreamingSender;
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use std::io::Write;
-
 // ---------------------------------------------------------------------------
 // SseBufferPool
 // ---------------------------------------------------------------------------

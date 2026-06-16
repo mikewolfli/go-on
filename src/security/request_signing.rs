@@ -179,8 +179,54 @@ fn current_timestamp_ms() -> u64 {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Sign a request body and produce a `RequestSignature`.
+///
+/// For Ed25519, `key_bytes` must be a 32-byte signing key seed.
+/// For HmacSha256, `key_bytes` is the HMAC shared secret.
+#[allow(dead_code)] // Public API for test/tooling consumers
+pub fn sign_request(
+    key_bytes: &[u8],
+    body: &[u8],
+    algorithm: SigningAlgorithm,
+    key_id: &str,
+) -> Result<RequestSignature, SigningError> {
+    let b64_engine = base64::engine::general_purpose::STANDARD;
+    let body_hash = b64_engine.encode(sha256(body));
+    let now_ms = current_timestamp_ms();
+    let to_sign = signing_payload(body, now_ms);
+
+    let signature = match algorithm {
+        SigningAlgorithm::Ed25519 => {
+            use ed25519_dalek::Signer;
+            let signing_key =
+                ed25519_dalek::SigningKey::from_bytes(&key_bytes.try_into().map_err(|_| {
+                    SigningError::InvalidKey("Ed25519 key must be 32 bytes".into())
+                })?);
+            let sig = signing_key.sign(&to_sign);
+            b64_engine.encode(sig.to_bytes())
+        }
+        SigningAlgorithm::HmacSha256 => {
+            use hmac::{digest::KeyInit, Mac};
+            let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key_bytes)
+                .map_err(|e| SigningError::InvalidKey(e.to_string()))?;
+            mac.update(&to_sign);
+            let result = mac.finalize();
+            b64_engine.encode(result.into_bytes().as_slice())
+        }
+    };
+
+    Ok(RequestSignature {
+        signature,
+        algorithm,
+        key_id: key_id.to_string(),
+        timestamp_ms: now_ms,
+        body_hash,
+    })
+}
+
 /// Build a `RequestSignature` from raw fields for test use.
-/// Replaces the removed `sign_request()` function.
+#[allow(dead_code)]
+#[cfg(test)]
 fn make_signature_for_test(
     algorithm: SigningAlgorithm,
     key_id: &str,
@@ -200,6 +246,7 @@ fn make_signature_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hmac::{KeyInit, Mac};
 
     #[test]
     fn test_replay_detection() {

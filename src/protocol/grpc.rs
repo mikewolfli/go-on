@@ -14,12 +14,14 @@ use std::sync::LazyLock;
 /// Using `Ordering::Relaxed` because the only requirement is that IDs
 /// are non-zero and unique within the current process; there is no need
 /// for strict happens-before ordering between different callers.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a monotonically increasing request ID.
 ///
 /// If the counter reaches `u64::MAX`, a warning is logged and the counter
 /// wraps around to 1 (skipping 0 which is reserved for notifications).
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 fn next_request_id() -> u64 {
     loop {
         let prev = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
@@ -40,6 +42,7 @@ fn next_request_id() -> u64 {
 
 /// Shared reqwest client reused across all gRPC calls to avoid creating
 /// a new HTTP client (and TLS session) on every request.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -52,6 +55,7 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 // ---------------------------------------------------------------------------
 
 /// A JSON-RPC 2.0 request envelope.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest<T: Serialize> {
     pub jsonrpc: String,
@@ -61,6 +65,7 @@ pub struct JsonRpcRequest<T: Serialize> {
 }
 
 /// A JSON-RPC 2.0 response envelope.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse<T> {
     pub jsonrpc: String,
@@ -72,6 +77,7 @@ pub struct JsonRpcResponse<T> {
 }
 
 /// A JSON-RPC error object.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcError {
     pub code: i32,
@@ -83,6 +89,7 @@ pub struct JsonRpcError {
 // ---------------------------------------------------------------------------
 
 /// Parameters for the `execute` RPC method.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecuteParams {
     pub node_id: String,
@@ -95,6 +102,7 @@ pub struct ExecuteParams {
 }
 
 /// Result returned by a remote `execute` RPC call.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecuteResult {
     pub node_id: String,
@@ -108,12 +116,14 @@ pub struct ExecuteResult {
 }
 
 /// Parameters for the `health_check` RPC method.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheckParams {
     pub node_id: String,
 }
 
 /// Result of a health check.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheckResult {
     pub alive: bool,
@@ -128,6 +138,7 @@ pub struct HealthCheckResult {
 ///
 /// This is the core transport used by `GrpcRemoteExecutor` to dispatch
 /// `TaskPacket`s to remote nodes.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 pub async fn call_execute_remote(
     base_url: &str,
     params: &ExecuteParams,
@@ -176,6 +187,7 @@ pub async fn call_execute_remote(
 }
 
 /// Perform a health check against a remote node via HTTP JSON-RPC.
+#[allow(dead_code)] // reserved — wired when distributed execution is re-enabled
 pub async fn call_health_check(
     base_url: &str,
     node_id: &str,

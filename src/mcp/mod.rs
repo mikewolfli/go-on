@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
-use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::tool::ToolRegistry;
 
 mod handlers;

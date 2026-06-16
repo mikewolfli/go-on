@@ -19,8 +19,6 @@ use std::sync::Mutex;
 
 // ── Re-exports ──────────────────────────────────────────────────────────────
 
-pub use performance::record_global_operation;
-
 /// Configuration for initialising the observability stack independently of ACP.
 #[derive(Debug, Clone)]
 pub struct ObservabilityConfig {
@@ -48,10 +46,13 @@ impl Default for ObservabilityConfig {
 /// An independently constructed observability stack, decoupled from `AcpServer`.
 pub struct ObservabilityStack {
     /// Performance monitoring (latency, throughput, error rates).
+    #[allow(dead_code)] // F-GAP-49 — reserved observability fields
     pub performance_monitor: Arc<Mutex<crate::observability::performance::PerformanceMonitor>>,
     /// Telemetry runtime for distributed tracing.
+    #[allow(dead_code)] // F-GAP-49 — reserved observability fields
     pub telemetry_runtime: Arc<Mutex<crate::observability::telemetry::TelemetryRuntime>>,
     /// Alert manager for threshold-based alerting.
+    #[allow(dead_code)] // F-GAP-49 — reserved observability fields
     pub alert_manager: Arc<Mutex<crate::observability::alert_manager::AlertManager>>,
 }
 

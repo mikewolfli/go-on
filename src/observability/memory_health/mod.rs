@@ -54,12 +54,15 @@ pub struct SystemMemoryInfo {
     pub free_bytes: u64,
     /// Active memory in bytes.
     // populated by query_system_memory; reserved for future pressure analysis
+    #[allow(dead_code)] // reserved for future pressure analysis
     pub active_bytes: u64,
     /// Wired (unpageable) memory in bytes.
     // populated by query_system_memory; reserved for future pressure analysis
+    #[allow(dead_code)] // reserved for future pressure analysis
     pub wired_bytes: u64,
     /// Swap usage in bytes (0 if swap is disabled).
     // populated by query_system_memory; reserved for future pressure analysis
+    #[allow(dead_code)] // reserved for future pressure analysis
     pub swap_used_bytes: u64,
     /// Swap total capacity in bytes.
     pub swap_total_bytes: u64,
@@ -89,6 +92,7 @@ impl SystemMemoryInfo {
     }
 
     /// Whether the system has no swap available.
+    #[allow(dead_code)] // reserved for future swap-awareness features
     pub fn swap_disabled(&self) -> bool {
         self.swap_total_bytes == 0
     }
@@ -409,11 +413,13 @@ pub fn runtime_free_mb() -> u64 {
 }
 
 /// Get the last known total memory in MB.
+#[allow(dead_code)] // reserved for memory pressure awareness features
 pub fn runtime_total_mb() -> u64 {
     RUNTIME_MEMORY_TOTAL_MB.load(Ordering::Relaxed)
 }
 
 /// Get the last known macOS memory pressure level.
+#[allow(dead_code)] // reserved for memory pressure awareness features
 pub fn runtime_pressure_level() -> u8 {
     RUNTIME_PRESSURE_LEVEL.load(Ordering::Relaxed) as u8
 }

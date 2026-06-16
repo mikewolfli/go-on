@@ -5,7 +5,7 @@
 //!
 //! All structs use camelCase serialization for JSON consistency.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 /// Generic skill action response used by all skill.* handlers.

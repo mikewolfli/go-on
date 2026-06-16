@@ -32,8 +32,10 @@ struct CacheEntry {
     /// Time-to-live
     ttl: Duration,
     /// Access count
+    #[allow(dead_code)] // reserved for cache analytics
     access_count: u64,
     /// Hit count
+    #[allow(dead_code)] // reserved for cache analytics
     hits: u64,
     /// When this entry was last accessed (for LRU eviction)
     last_accessed: Instant,

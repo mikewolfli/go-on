@@ -183,6 +183,7 @@ impl SkillRegistry {
         removed
     }
 
+    /// List all skill descriptors sorted by score (comprehensive output).
     pub fn list(&self) -> Vec<SkillDescriptor> {
         let mut items = self
             .skills
@@ -405,11 +406,6 @@ impl SkillRegistry {
             .unwrap_or_default()
     }
 
-    /// List all known skill names (for discovery).
-    pub fn list_skills(&self) -> Vec<String> {
-        self.skills.keys().cloned().collect()
-    }
-
     // -----------------------------------------------------------------------
     // Disk persistence for prompt-based skills
     // -----------------------------------------------------------------------
@@ -446,9 +442,9 @@ impl SkillRegistry {
                 timeout_secs: 120,
                 max_retries: 2,
             };
-            self.prompt_skill_data.insert(name.clone(), entry);
-            self.skills.insert(name.clone(), Arc::new(ps));
-            self.stats.entry(name).or_default();
+            // Use register() for proper validation instead of raw insertion.
+            self.register(Arc::new(ps))?;
+            self.prompt_skill_data.insert(name, entry);
         }
         Ok(())
     }

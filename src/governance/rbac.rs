@@ -221,6 +221,12 @@ impl RbacEnforcer {
         enforcer
     }
 
+    /// Return the number of registered tenants.
+    #[allow(dead_code)] // Public API for test consumers
+    pub fn tenant_count(&self) -> usize {
+        self.tenants.len()
+    }
+
     /// Return all registered tenant IDs.
     pub fn tenant_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self.tenants.iter().cloned().collect();
