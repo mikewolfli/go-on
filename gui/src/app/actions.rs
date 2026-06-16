@@ -855,9 +855,6 @@ top_k = 2
 
     /// Detect the localized window title based on the saved config language.
     /// Called once at startup before the I18n instance is created.
-    /// NOTE: Currently unused — the window title is set via egui context directly.
-    /// Retained for reference in case programmatic title setting is re-enabled.
-    #[allow(dead_code)] // F-GAP-48: Reserved for future window title detection feature
     pub fn detect_initial_window_title(config: &AppConfig) -> String {
         if config.language == "zh-CN" {
             "Go-On 图形界面".to_string()

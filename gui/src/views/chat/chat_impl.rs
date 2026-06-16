@@ -133,10 +133,7 @@ pub struct ChatView {
     /// Per-message "expand full text" toggle for truncated content.
     /// Key = message index, value = whether full text is shown.
     expand_full_text: std::collections::HashSet<usize>,
-    /// SSE JSON parse error counter for the current stream.
-    /// F-GAP-58: Reserved for future stream quality monitoring
-    #[allow(dead_code)] // F-GAP-58 — reserved chat implementation features
-    sse_parse_errors: u32,
+
     /// Shared abort controller for cancelling in-progress streaming generations.
     abort_controller: Option<AbortController>,
     /// Token-level progress tracking for the active generation.
@@ -532,7 +529,6 @@ impl ChatView {
                 }),
             rendered_content_hashes: Vec::new(),
             expand_full_text: std::collections::HashSet::new(),
-            sse_parse_errors: 0,
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,
@@ -834,7 +830,7 @@ impl ChatView {
         }
     }
 
-    #[allow(dead_code)] // F-GAP-48: Reserved for future prompt command expansion
+    #[cfg(test)]
     fn expand_prompt_command(&self, raw_input: &str) -> String {
         self.expand_prompt_command_with_fallback(raw_input, None)
     }
@@ -1091,7 +1087,6 @@ mod tests {
             stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
             expand_full_text: std::collections::HashSet::new(),
-            sse_parse_errors: 0,
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 /// MCP server configuration. Tagged by `"type"` in JSON.
 /// Stdio variant is untagged (legacy format without explicit type field).
-// activated, formerly F-GAP-25 — used by agent.rs NewSessionRequest / LoadSessionRequest / ResumeSessionRequest
+/// Public schema type — mirrors `agent-client-protocol-schema` v0.13.2.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpServerConfig {
@@ -19,6 +20,9 @@ pub enum McpServerConfig {
     Stdio(McpServerStdio),
 }
 
+/// HTTP MCP server transport configuration.
+/// Public schema type — part of the ACP MCP server config enum.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerHttp {
@@ -30,6 +34,9 @@ pub struct McpServerHttp {
     pub meta: Option<Meta>,
 }
 
+/// SSE MCP server transport configuration.
+/// Public schema type — part of the ACP MCP server config enum.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerSse {

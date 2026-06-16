@@ -147,7 +147,7 @@ pub struct RouteTemplate {
 ///
 /// Each sub-cache has configurable TTL and max-entries limits.  When the
 /// entry count exceeds `max_entries`, the oldest 25 % of entries are evicted.
-
+///
 /// Internal state for `FastPathCache` — all sub-caches behind a single Mutex.
 struct FastPathCacheInner {
     intent_cache: HashMap<u64, CacheEntry<IntentCacheValue>>,

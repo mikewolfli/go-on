@@ -2,12 +2,17 @@
 //!
 //! Free functions used across the ACP system.
 
-use std::collections::HashMap;
-use std::sync::Mutex as StdMutex;
-
-use crate::acp::prelude::constants::{MAX_CHECKPOINTS_PER_CONVERSATION, MAX_CONVERSATIONS_TRACKED};
+use crate::acp::prelude::constants::MAX_CHECKPOINTS_PER_CONVERSATION;
 use crate::acp::prelude::types::ConversationState;
+
+#[cfg(test)]
+use crate::acp::prelude::constants::MAX_CONVERSATIONS_TRACKED;
+#[cfg(test)]
 use crate::agent::Message;
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Mutex as StdMutex;
 
 /// Get current timestamp in seconds (delegates to `crate::shared::timestamps`).
 pub fn now_ts() -> i64 {
@@ -17,29 +22,6 @@ pub fn now_ts() -> i64 {
 /// Get current timestamp in milliseconds (delegates to `crate::shared::timestamps`).
 pub fn now_ts_ms() -> i64 {
     crate::shared::timestamps::now_ts_ms()
-}
-
-/// Calculate checkpoint message characters
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49 — test-only utility
-pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
-    messages.iter().map(|m| m.content.chars().count()).sum()
-}
-
-/// Touch conversation order (update LRU)
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49 — test-only utility
-pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
-    let mut guard = order.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("conversation order lock poisoned, recovering");
-        poisoned.into_inner()
-    });
-    // Remove if exists
-    guard.retain(|id| id != conversation_id);
-    // Add to front (most recent)
-    guard.insert(0, conversation_id.to_string());
-    // Trim if too long
-    if guard.len() > MAX_CONVERSATIONS_TRACKED {
-        guard.truncate(MAX_CONVERSATIONS_TRACKED);
-    }
 }
 
 /// Enforce checkpoint capacity
@@ -71,8 +53,31 @@ pub fn enforce_checkpoint_capacity(
     }
 }
 
+/// Calculate checkpoint message characters
+#[cfg(test)]
+pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
+    messages.iter().map(|m| m.content.chars().count()).sum()
+}
+
+/// Touch conversation order (update LRU)
+#[cfg(test)]
+pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
+    let mut guard = order.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("conversation order lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    // Remove if exists
+    guard.retain(|id| id != conversation_id);
+    // Add to front (most recent)
+    guard.insert(0, conversation_id.to_string());
+    // Trim if too long
+    if guard.len() > MAX_CONVERSATIONS_TRACKED {
+        guard.truncate(MAX_CONVERSATIONS_TRACKED);
+    }
+}
+
 /// Evict oldest conversation
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49 — test-only utility
+#[cfg(test)]
 pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,

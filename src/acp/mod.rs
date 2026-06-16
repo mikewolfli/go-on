@@ -25,12 +25,9 @@ pub mod transport_factory;
 #[allow(unused_imports)]
 pub use prelude::{
     // re-exported for ACP consumer public API surface
-    checkpoint_message_chars,
     enforce_checkpoint_capacity,
-    evict_oldest_conversation,
     now_ts,
     now_ts_ms,
-    touch_conversation_order,
     with_acp_lock,
     AcpLockMonitor,
     AcpLockSnapshot,
@@ -66,17 +63,8 @@ pub use prelude::{
     ACP_LOCK_RESPONSE_CACHE,
     ACP_LOCK_RUNTIME_CONFIG,
     ACP_LOCK_VECTOR_STORE,
-    DEFAULT_BREAKER_FAILURE_THRESHOLD,
-    DEFAULT_BREAKER_OPEN_SECONDS,
-    HISTOGRAM_BUCKETS_SECONDS,
-    MAX_BRANCH_ID_LEN,
     MAX_CHECKPOINTS_PER_CONVERSATION,
-    MAX_CHECKPOINT_ID_LEN,
-    MAX_CHECKPOINT_MESSAGE_CHARS,
     MAX_CONVERSATIONS_TRACKED,
-    MAX_CONVERSATION_ID_LEN,
-    MAX_STREAM_CHARS,
-    MAX_STREAM_CHUNKS,
 };
 // `AcpServer` / `ServerBuilder` are re-exported for downstream consumers; allow unused here.
 #[allow(unused_imports)]

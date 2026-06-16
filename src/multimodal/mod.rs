@@ -22,6 +22,8 @@ pub mod video_processor;
 
 #[cfg(feature = "document-excel")]
 pub mod excel_processor;
+#[cfg(feature = "document-excel-write")]
+pub mod excel_writer;
 #[cfg(feature = "document-ppt")]
 pub mod ppt_processor;
 
@@ -101,6 +103,14 @@ pub use video_processor::MAX_FILE_SIZE_MB;
 #[cfg(feature = "document-excel")]
 #[allow(unused_imports)]
 pub use excel_processor::parse_excel_bytes;
+
+// ── Re-exports from excel_writer ──────────────────────────────────────────
+#[cfg(feature = "document-excel-write")]
+#[allow(unused_imports)]
+pub use excel_writer::write_excel_bytes;
+#[cfg(feature = "document-excel-write")]
+#[allow(unused_imports)]
+pub use excel_writer::WriteExcelConfig;
 
 // ── Re-exports from ppt_processor ────────────────────────────────────────
 #[cfg(feature = "document-ppt")]

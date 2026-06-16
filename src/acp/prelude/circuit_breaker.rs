@@ -50,7 +50,7 @@ struct CircuitBreakerState {
 
 /// Circuit breaker stage
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[allow(dead_code)] // variants `Open` / `HalfOpen` — F-GAP-49 planned wiring
+#[allow(dead_code)] // variants `Open`/`HalfOpen` — F-GAP-49 planned wiring; matched but not yet constructed
 enum CircuitBreakerStage {
     #[default]
     Closed,
@@ -71,8 +71,10 @@ impl Default for CircuitBreakerState {
 }
 
 /// Circuit breaker admission result
+///
+/// Public API type — re-exported for ACP consumers.
+#[allow(dead_code)]
 #[non_exhaustive]
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49 — planned wiring
 pub enum CircuitBreakerAdmission {
     Closed,
     Rejected {

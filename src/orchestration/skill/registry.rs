@@ -1,13 +1,16 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::i18n::runtime::tf;
+use crate::orchestration::skill_import::parse_skill_md;
 
 use super::execution::{
     extract_intent_tokens, name_similarity, normalize_name, semantic_similarity, PromptBasedSkill,
@@ -485,4 +488,161 @@ impl SkillRegistry {
         self.prompt_skill_data.remove(name);
         self.save_prompt_skills_to_disk()
     }
+
+    /// Discover and register local skills from `~/.agents/skills/` directory.
+    ///
+    /// Scans each subdirectory of the agents skills directory for a `SKILL.md`
+    /// (or `agent.md` as fallback) file, parses it via `parse_skill_md`,
+    /// and registers the resulting manifest as a `PromptBasedSkill` in the
+    /// registry. Skills that are already registered are skipped.
+    ///
+    /// Returns a summary of how many skills were registered vs skipped.
+    ///
+    /// # Arguments
+    ///
+    /// * `agents_skills_dir` — Optional path override. Defaults to
+    ///   `~/.agents/skills` when `None`.
+    pub fn discover_and_register_local_skills(
+        &mut self,
+        agents_skills_dir: Option<&Path>,
+    ) -> Result<LocalSkillDiscoverySummary> {
+        let dir = agents_skills_dir
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(default_agents_skills_dir);
+
+        if !dir.exists() {
+            return Ok(LocalSkillDiscoverySummary::default());
+        }
+
+        let mut registered = 0usize;
+        let mut skipped = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+
+        let read_dir = match fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(e) => {
+                anyhow::bail!(
+                    "failed to read agent skills directory '{}': {}",
+                    dir.display(),
+                    e
+                );
+            }
+        };
+
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let skill_md_path = path.join("SKILL.md");
+            let agent_md_path = path.join("agent.md");
+
+            let md_path = if skill_md_path.exists() {
+                skill_md_path
+            } else if agent_md_path.exists() {
+                agent_md_path
+            } else {
+                skipped += 1;
+                continue;
+            };
+
+            let content = match fs::read(&md_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to read {}: {}", md_path.display(), e);
+                    errors.push(format!("{}: read error: {}", md_path.display(), e));
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            let manifest = match parse_skill_md(&content) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!("Failed to parse {}: {}", md_path.display(), e);
+                    errors.push(format!("{}: parse error: {}", md_path.display(), e));
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            // Skip if already registered
+            if self.skills.contains_key(&manifest.name) {
+                skipped += 1;
+                continue;
+            }
+
+            // Create PromptBasedSkill from the parsed manifest
+            let prompt_text = manifest
+                .prompt_template
+                .clone()
+                .unwrap_or_else(|| manifest.description.clone());
+
+            let skill = PromptBasedSkill {
+                name: manifest.name.clone(),
+                description: manifest.description.clone(),
+                prompt_template: prompt_text,
+                input_schema: HashMap::new(),
+                timeout_secs: 120,
+                max_retries: 2,
+            };
+
+            match self.register(Arc::new(skill)) {
+                Ok(()) => {
+                    registered += 1;
+                    // Track the imported skill data for persistence
+                    self.prompt_skill_data.insert(
+                        manifest.name.clone(),
+                        SavedPromptSkill {
+                            name: manifest.name.clone(),
+                            description: manifest.description,
+                            prompt_template: manifest.prompt_template.unwrap_or_default(),
+                            input_schema: HashMap::new(),
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs() as i64,
+                        },
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to register skill '{}' from {}: {}",
+                        manifest.name,
+                        md_path.display(),
+                        e
+                    );
+                    errors.push(format!("{}: registration error: {}", manifest.name, e));
+                    skipped += 1;
+                }
+            }
+        }
+
+        Ok(LocalSkillDiscoverySummary {
+            registered,
+            skipped,
+            errors,
+        })
+    }
+}
+
+/// Returns the default path for Zed's agent skills directory (`~/.agents/skills`).
+fn default_agents_skills_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".agents").join("skills")
+    } else {
+        PathBuf::from(".agents/skills")
+    }
+}
+
+/// Summary of a local skill discovery operation.
+#[derive(Debug, Clone, Default)]
+pub struct LocalSkillDiscoverySummary {
+    /// Number of skills successfully registered.
+    pub registered: usize,
+    /// Number of skills skipped (already registered, missing SKILL.md, or parse failure).
+    pub skipped: usize,
+    /// Any error messages encountered during discovery.
+    pub errors: Vec<String>,
 }

@@ -482,9 +482,9 @@ async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
         .find("async fn handle_response_create(")
         .expect("handle_response_create marker must exist");
     let handler_end = source[handler_start..]
-        .find("fn infer_adaptive_signal(")
+        .find("fn artifact_ledger(")
         .map(|offset| handler_start + offset)
-        .expect("infer_adaptive_signal marker must exist");
+        .expect("artifact_ledger marker must exist");
     let section = &source[handler_start..handler_end];
 
     assert!(
@@ -509,9 +509,9 @@ async fn acp_http_responses_api_stream_failed_branch_keeps_platform_context() {
         .find("async fn handle_response_create(")
         .expect("handle_response_create marker must exist");
     let handler_end = source[handler_start..]
-        .find("fn infer_adaptive_signal(")
+        .find("fn artifact_ledger(")
         .map(|offset| handler_start + offset)
-        .expect("infer_adaptive_signal marker must exist");
+        .expect("artifact_ledger marker must exist");
     let section = &source[handler_start..handler_end];
 
     assert!(
@@ -531,9 +531,9 @@ async fn acp_http_chat_stream_error_branches_keep_platform_context() {
         .find("async fn route_http_post(")
         .expect("route_http_post marker must exist");
     let handler_end = source[handler_start..]
-        .find("fn infer_adaptive_signal(")
+        .find("fn artifact_ledger(")
         .map(|offset| handler_start + offset)
-        .expect("infer_adaptive_signal marker must exist");
+        .expect("artifact_ledger marker must exist");
     let section = &source[handler_start..handler_end];
 
     assert!(
@@ -879,9 +879,9 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
             .find("async fn route_http_post(")
             .expect("route_http_post marker must exist");
         let post_end = source[post_start..]
-            .find("fn infer_adaptive_signal(")
+            .find("fn artifact_ledger(")
             .map(|offset| post_start + offset)
-            .expect("infer_adaptive_signal marker must exist");
+            .expect("artifact_ledger marker must exist");
         let combined = format!(
             "{}\n{}",
             &source[get_start..get_end],

@@ -52,8 +52,10 @@ pub struct ConversationState {
 }
 
 /// Conversation prune result
+///
+/// Public API type for ACP consumers.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Default)]
-#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct ConversationPruneResult {
     /// Number of conversations removed
     pub removed: usize,
@@ -81,8 +83,10 @@ pub struct AcpLockSnapshot {
 // ============================================================================
 
 /// Review decision
+///
+/// Public API type for ACP consumers.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct ReviewDecision {
     /// Reviewer name
     pub reviewer: String,
@@ -97,9 +101,9 @@ pub struct ReviewDecision {
 /// This public enum uses `Pass`/`Fail`/`Invalid` semantics.
 /// There is a separate governance-internal `ReviewVerdict` in
 /// `crate::governance::review_controls` that uses `Approve`/`Reject`/`Invalid`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub enum ReviewVerdict {
     /// Review passed
     Pass,
@@ -109,9 +113,9 @@ pub enum ReviewVerdict {
     Invalid,
 }
 
+#[allow(dead_code)]
 impl ReviewVerdict {
     /// Convert to string
-    #[allow(dead_code)] // F-GAP-49 — planned wiring
     pub fn as_str(&self) -> &'static str {
         match self {
             ReviewVerdict::Pass => "pass",
@@ -126,8 +130,10 @@ impl ReviewVerdict {
 // ============================================================================
 
 /// Chat parameters structure
+///
+/// Public API type for ACP consumers.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct ChatParams {
     /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto")
     pub mode: String,
@@ -144,8 +150,10 @@ pub struct ChatParams {
 }
 
 /// Task characteristics
+///
+/// Public API type for ACP consumers.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct TaskCharacteristics {
     /// Task complexity (simple, medium, complex)
     pub complexity: String,
@@ -162,8 +170,10 @@ pub struct TaskCharacteristics {
 }
 
 /// Routing decision
+///
+/// Public API type for ACP consumers.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct RoutingDecision {
     /// Selected roles in execution order
     pub roles: Vec<AgentRole>,

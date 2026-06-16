@@ -18,7 +18,6 @@ use crate::acp::prelude::functions::now_ts;
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct MaintenanceSnapshot {
     /// Whether maintenance is running
-    #[allow(dead_code)] // F-GAP-49 — planned wiring
     pub running: bool,
     /// Total maintenance cycles completed
     pub cycles_total: u64,

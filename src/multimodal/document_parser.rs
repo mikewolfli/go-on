@@ -332,15 +332,14 @@ impl DocumentParser {
             return Err(DocumentParserError::EmptyInput("empty bytes".to_string()));
         }
         let text = String::from_utf8_lossy(bytes).to_string();
-        let mut content = ParsedContent::default();
-        content.text_content = text;
-        content
-            .metadata
-            .insert("parser".to_string(), "text".to_string());
-        content
-            .metadata
-            .insert("format".to_string(), format.to_string());
-        Ok(content)
+        let mut metadata = HashMap::new();
+        metadata.insert("parser".to_string(), "text".to_string());
+        metadata.insert("format".to_string(), format.to_string());
+        Ok(ParsedContent {
+            text_content: text,
+            metadata,
+            ..Default::default()
+        })
     }
 
     // =======================================================================

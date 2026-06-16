@@ -19,9 +19,6 @@
 //!   4. Cache the result so subsequent lookups use the backend data
 //!      See F-GAP-59 for tracking.
 
-use crate::backend::BackendClient;
-use serde_json::Value;
-
 /// Provider metadata: agent type, default URL, default model, supports system prompt.
 pub struct ProviderSpec {
     pub agent_type: &'static str,
@@ -76,21 +73,5 @@ pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
             default_model: "auto",
             supports_system: false,
         },
-    }
-}
-
-/// Fetch provider catalog from the backend asynchronously.
-/// Returns `None` if backend is unreachable.
-/// F-GAP-59: Reserved for post-startup catalog overlay
-#[expect(dead_code)] // F-GAP-59: Wired when startup flow calls fetch_catalog
-pub async fn fetch_catalog(backend: &BackendClient) -> Option<Value> {
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        backend.provider_catalog(),
-    )
-    .await
-    {
-        Ok(Ok(value)) => Some(value),
-        _ => None,
     }
 }

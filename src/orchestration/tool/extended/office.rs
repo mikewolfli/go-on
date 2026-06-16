@@ -1,20 +1,42 @@
 //! Office document tools (Excel and PowerPoint)
 //!
-//! Provides `ReadExcelTool` for reading `.xlsx` files and `ReadPptTool` for
-//! reading `.pptx` files. Both delegate to the multimodal parser infrastructure.
+//! Provides `ReadExcelTool` for reading `.xlsx` files, `WriteExcelTool` for
+//! writing `.xlsx` files, and `ReadPptTool` for reading `.pptx` files. All
+//! delegate to the multimodal infrastructure.
 //!
 //! - `ReadExcelTool` is only compiled when `feature = "document-excel"` is enabled.
+//! - `WriteExcelTool` is only compiled when `feature = "document-excel-write"` is enabled.
 //! - `ReadPptTool` is only compiled when `feature = "document-ppt"` is enabled.
 
-#[cfg(any(feature = "document-excel", feature = "document-ppt"))]
+#[cfg(any(
+    feature = "document-excel",
+    feature = "document-ppt",
+    feature = "document-excel-write"
+))]
 use crate::governance::pua::tool_execution_report;
-#[cfg(any(feature = "document-excel", feature = "document-ppt"))]
+#[cfg(any(
+    feature = "document-excel",
+    feature = "document-ppt",
+    feature = "document-excel-write"
+))]
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
-#[cfg(any(feature = "document-excel", feature = "document-ppt"))]
+#[cfg(any(
+    feature = "document-excel",
+    feature = "document-ppt",
+    feature = "document-excel-write"
+))]
 use anyhow::{Context, Result};
-#[cfg(any(feature = "document-excel", feature = "document-ppt"))]
+#[cfg(any(
+    feature = "document-excel",
+    feature = "document-ppt",
+    feature = "document-excel-write"
+))]
 use std::fs;
-#[cfg(any(feature = "document-excel", feature = "document-ppt"))]
+#[cfg(any(
+    feature = "document-excel",
+    feature = "document-ppt",
+    feature = "document-excel-write"
+))]
 use tracing::info;
 
 // ── ReadExcelTool ──────────────────────────────────────────────────────────
@@ -111,6 +133,66 @@ impl Tool for ReadPptTool {
                 parsed.metadata.get("slide_count").unwrap_or(&String::new()),
             )),
             pua_report: Some(tool_execution_report("read_ppt", Some("ppt_read"))),
+        })
+    }
+}
+
+// ── WriteExcelTool ─────────────────────────────────────────────────────────
+
+#[cfg(feature = "document-excel-write")]
+pub struct WriteExcelTool;
+
+#[cfg(feature = "document-excel-write")]
+impl Tool for WriteExcelTool {
+    fn name(&self) -> &'static str {
+        "write_excel"
+    }
+
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let path = input.payload["path"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing 'path' in payload"))?;
+
+        let validated = sanitize_path(input, path)?;
+
+        // Parse the sheet configuration from the payload
+        let config: crate::multimodal::excel_writer::WriteExcelConfig =
+            serde_json::from_value(input.payload["config"].clone())
+                .map_err(|e| anyhow::anyhow!("invalid 'config' in payload: {e}"))?;
+
+        let bytes = crate::multimodal::excel_writer::write_excel_bytes(&config)
+            .map_err(|e| anyhow::anyhow!("Excel write error: {e}"))?;
+
+        fs::write(&validated, &bytes).context("failed to write Excel file")?;
+
+        let sheet_count = config.sheets.len();
+        let row_count: usize = config.sheets.iter().map(|s| s.rows.len()).sum();
+
+        info!(
+            path = %validated.display(),
+            sheets = sheet_count,
+            rows = row_count,
+            "tool: Excel file written successfully"
+        );
+
+        Ok(ToolOutput {
+            success: true,
+            result: Some(serde_json::json!({
+                "path": validated.to_string_lossy(),
+                "sheets": sheet_count,
+                "rows": row_count,
+                "size_bytes": bytes.len(),
+            })),
+            error: None,
+            verification: Some("excel_write".to_string()),
+            audit_log: Some(format!(
+                "Wrote Excel file: {} ({} sheets, {} rows, {} bytes)",
+                validated.display(),
+                sheet_count,
+                row_count,
+                bytes.len(),
+            )),
+            pua_report: Some(tool_execution_report("write_excel", Some("excel_write"))),
         })
     }
 }

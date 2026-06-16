@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -80,11 +79,9 @@ impl Skill for PromptBasedSkill {
     }
 
     async fn execute(&self, input: &Value) -> Result<Value> {
-        // Execute the skill with timeout and retry support.
+        // Execute the prompt-based skill via the configured LLM agent.
         // The prompt_template is filled with input parameters and then
-        // executed via the LLM through the ACP chat handler pipeline.
-        let timeout = Duration::from_secs(self.timeout_secs.max(10));
-        let max_retries = self.max_retries;
+        // executed via the global PROMPT_SKILL_AGENT.
 
         // Build the prompt by substituting input parameters into the template
         let prompt = if let Some(obj) = input.as_object() {
@@ -105,79 +102,85 @@ impl Skill for PromptBasedSkill {
             self.prompt_template.clone()
         };
 
-        // If a global LLM prompt agent is available, use it directly for
-        // real LLM execution instead of the retry fallback loop.
+        // If a global LLM prompt agent is available, use it with
+        // configurable timeout and retry logic.
         if let Some(agent) = PROMPT_SKILL_AGENT.get() {
             let agent_prompt = prompt.clone();
-            return agent
-                .execute_prompt(&agent_prompt)
-                .await
-                .map(|response| {
-                    json!({
-                        "success": true,
-                        "response": response,
-                        "skill_type": "prompt_based_llm",
-                    })
-                })
-                .map_err(|e| {
-                    anyhow::anyhow!("Prompt skill '{}' LLM execution failed: {}", self.name, e)
-                });
-        }
+            let timeout_duration = std::time::Duration::from_secs(self.timeout_secs);
+            let max_attempts = (self.max_retries + 1) as usize;
+            let mut last_error: Option<anyhow::Error> = None;
 
-        // Execute with retry loop and timeout per attempt
-        let mut last_error = None;
-        for attempt in 0..=max_retries {
-            let _attempt_start = std::time::Instant::now();
-
-            // Async timeout wrapper
-            // tokio::time::timeout returns Result<T, Elapsed>. Since the inner
-            // async block returns Result<Value> (anyhow::Result), we flatten:
-            //   Ok(Ok(val)) -> success
-            //   Ok(Err(e))  -> execution error
-            //   Err(_)      -> timeout
-            let timed_result = tokio::time::timeout(timeout, async {
-                // NOTE: Actual LLM execution is performed by the ACP chat handler
-                // via the chat pipeline (SkillCreatorSkill). This execute() method
-                // returns the prepared prompt for the handler to execute.
-                // Full LLM integration will be wired in Phase 10+.
-                Ok::<Value, anyhow::Error>(json!({
-                    "success": true,
-                    "summary": format!("Skill '{}' executed via prompt template", self.name),
-                    "prompt": prompt,
-                    "skill_type": "prompt_based",
-                    "attempt": attempt + 1,
-                }))
-            })
-            .await;
-
-            match timed_result {
-                Ok(Ok(val)) => return Ok(val),
-                Ok(Err(e)) => {
-                    last_error = Some(e);
-                    if attempt < max_retries {
-                        let backoff = Duration::from_secs(1_u64 << attempt);
-                        tokio::time::sleep(backoff).await;
+            for attempt in 1..=max_attempts {
+                match tokio::time::timeout(timeout_duration, agent.execute_prompt(&agent_prompt))
+                    .await
+                {
+                    Ok(Ok(response)) => {
+                        return Ok(json!({
+                            "success": true,
+                            "response": response,
+                            "skill_type": "prompt_based_llm",
+                            "attempts": attempt,
+                        }));
                     }
-                }
-                Err(_elapsed) => {
-                    last_error = Some(anyhow::anyhow!(
-                        "Skill '{}' timed out after {}s on attempt {}/{}",
-                        self.name,
-                        self.timeout_secs,
-                        attempt + 1,
-                        max_retries + 1
-                    ));
-                    if attempt < max_retries {
-                        let backoff = Duration::from_secs(1_u64 << attempt);
-                        tokio::time::sleep(backoff).await;
+                    Ok(Err(e)) => {
+                        last_error = Some(anyhow::anyhow!(
+                            "Prompt skill '{}' LLM execution failed: {}",
+                            self.name,
+                            e
+                        ));
+                        if attempt < max_attempts {
+                            let backoff = std::time::Duration::from_millis(500 * attempt as u64);
+                            tracing::warn!(
+                                "Prompt skill '{}' attempt {}/{} failed, retrying in {:?}: {}",
+                                self.name,
+                                attempt,
+                                max_attempts,
+                                backoff,
+                                e
+                            );
+                            tokio::time::sleep(backoff).await;
+                        }
+                    }
+                    Err(_elapsed) => {
+                        last_error = Some(anyhow::anyhow!(
+                            "Prompt skill '{}' timed out after {}s",
+                            self.name,
+                            self.timeout_secs
+                        ));
+                        if attempt < max_attempts {
+                            tracing::warn!(
+                                "Prompt skill '{}' attempt {}/{} timed out, retrying",
+                                self.name,
+                                attempt,
+                                max_attempts
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
                     }
                 }
             }
+
+            return Err(last_error.unwrap_or_else(|| {
+                anyhow::anyhow!(
+                    "Prompt skill '{}' execution failed after {} attempts",
+                    self.name,
+                    max_attempts
+                )
+            }));
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            anyhow::anyhow!("Skill '{}' failed after {} retries", self.name, max_retries)
-        }))
+        // No global LLM agent configured — return a proper error instead of
+        // silently returning synthetic data. Prompt-based skills cannot execute
+        // without an LLM provider. Call set_prompt_skill_agent() with a valid
+        // PromptSkillAgent during server startup to enable real LLM execution.
+        anyhow::bail!(
+            "Prompt skill '{}' cannot execute: no LLM agent configured. \
+             Call set_prompt_skill_agent() with a valid PromptSkillAgent \
+             during startup to enable real LLM execution. \
+             Prompt template: {}..",
+            self.name,
+            &prompt.chars().take(120).collect::<String>()
+        )
     }
 }
 

@@ -182,7 +182,7 @@ impl ChaosEngine {
     }
 
     /// Probabilistically determine whether a fault of the given type should be injected.
-
+    ///
     /// Enable or disable chaos injection.
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Relaxed);

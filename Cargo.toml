@@ -82,6 +82,7 @@ document-html = ["dep:scraper"]
 document-markdown = ["dep:comrak"]
 document-excel = ["dep:calamine"]
 document-ppt = ["dep:quick-xml", "dep:zip"]
+document-excel-write = ["dep:rust_xlsxwriter"]
 sub-bus-multimodal = [
     "document-pdf",
     "document-docx",
@@ -148,6 +149,7 @@ full = [
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
     "sub-bus-multimodal",
+    "document-excel-write",
     "audio-whisper-openai",
     "audio-vosk",
     "vault",
@@ -224,6 +226,7 @@ docx-rs = { version = "0.4", optional = true }
 scraper = { version = "0.27", optional = true }
 comrak = { version = "0.52", optional = true }
 calamine = { version = "0.26", optional = true }
+rust_xlsxwriter = { version = "0.82", optional = true }
 quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 zip = { version = "2", optional = true }
 
@@ -241,7 +244,7 @@ serial_test = "3"
 temp-env = "0.3"
 
 # ── Optimisation profiles ──────────────────────────────────────────────────
-[workspace.profile.release]
+[profile.release]
 lto = "fat"
 codegen-units = 1
 panic = "abort"

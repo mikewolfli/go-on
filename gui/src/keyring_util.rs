@@ -240,8 +240,6 @@ pub fn delete_api_key(provider: &str) -> Result<()> {
 
 /// Delete a provider secret key from the system keyring AND `.env` file (silent if missing).
 /// F-GAP-48: Wired — called from providers/mod.rs when removing dual-auth providers.
-/// The platform::delete_secret_key call handles the actual keyring deletion.
-#[allow(dead_code)] // F-GAP-48 — reserved keyring features
 pub fn delete_secret_key(provider: &str) -> Result<()> {
     platform::delete_secret_key(provider)?;
     let env_name = provider_to_env_name(provider, "secret_key");

@@ -43,6 +43,7 @@ STEPS=(
     "Directory structure"
     "Configuration validation"
     "Sample skills source"
+    "Agent skills integration"
 )
 
 # ---- Functions -------------------------------------------------------------
@@ -244,6 +245,89 @@ else
     echo ""
 fi
 
+# ── Step 5: Agent Skills Integration ──────────────────────────────────────────
+
+if should_run_step 5; then
+    echo "── Step 5/5: Integrating agent skills from ~/.agents/skills/ ──"
+    echo ""
+
+    AGENT_SKILLS_DIR="$HOME/.agents/skills"
+    IMPORTED_COUNT=0
+    SKIPPED_COUNT=0
+
+    if [ -d "$AGENT_SKILLS_DIR" ]; then
+        info "Scanning $AGENT_SKILLS_DIR for installed skills..."
+        echo ""
+
+        for skill_dir in "$AGENT_SKILLS_DIR"/*/; do
+            [ -d "$skill_dir" ] || continue
+            local skill_name="$(basename "$skill_dir")"
+            local skill_md="$skill_dir/SKILL.md"
+            local agent_md="$skill_dir/agent.md"
+
+            # Determine which metadata file to use: SKILL.md takes precedence
+            local source_file=""
+            if [ -f "$skill_md" ]; then
+                source_file="$skill_md"
+            elif [ -f "$agent_md" ]; then
+                source_file="$agent_md"
+            fi
+
+            if [ -z "$source_file" ]; then
+                warn "No SKILL.md or agent.md found in $skill_dir — skipping"
+                SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                continue
+            fi
+
+            # Derive a safe import name from the SKILL.md frontmatter if possible,
+            # otherwise use the directory name.
+            local import_name="$skill_name"
+            if head -20 "$source_file" 2>/dev/null | grep -q '^name:' ; then
+                import_name="$(head -20 "$source_file" | grep '^name:' | head -1 | sed 's/^name:[[:space:]]*//' | tr -d '"')"
+            fi
+
+            # Destination: skills-import/<name>/SKILL.md
+            local dest_dir="$SKILLS_IMPORT_DIR/$import_name"
+            local dest_file="$dest_dir/SKILL.md"
+
+            mkdir -p "$dest_dir"
+
+            if cp "$source_file" "$dest_file"; then
+                ok "Installed skill '$import_name' from $source_file"
+                IMPORTED_COUNT=$((IMPORTED_COUNT + 1))
+
+                # Also copy any agents/ subdirectory if present (carries agent config)
+                if [ -d "$skill_dir/agents" ]; then
+                    cp -r "$skill_dir/agents" "$dest_dir/" 2>/dev/null || true
+                fi
+                # Also copy any scripts/ subdirectory if present
+                if [ -d "$skill_dir/scripts" ]; then
+                    cp -r "$skill_dir/scripts" "$dest_dir/" 2>/dev/null || true
+                fi
+            else
+                warn "Failed to copy skill '$import_name' from $source_file"
+                SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+            fi
+        done
+    else
+        warn "Agent skills directory $AGENT_SKILLS_DIR does not exist — nothing to import"
+    fi
+
+    echo ""
+    if [ "$IMPORTED_COUNT" -gt 0 ]; then
+        ok "Imported $IMPORTED_COUNT skill(s) from $AGENT_SKILLS_DIR"
+    fi
+    if [ "$SKIPPED_COUNT" -gt 0 ]; then
+        warn "$SKIPPED_COUNT skill(s) skipped (missing SKILL.md/agent.md)"
+    fi
+    if [ "$IMPORTED_COUNT" -eq 0 ] && [ "$SKIPPED_COUNT" -eq 0 ]; then
+        info "No skills found in $AGENT_SKILLS_DIR"
+    fi
+else
+    echo "── Step 5/5: (skipped) ──"
+    echo ""
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
@@ -255,6 +339,7 @@ echo "  Config directory:   $CONFIG_DIR"
 echo "  Skills directory:   $SKILLS_DIR"
 echo "  Import directory:   $SKILLS_IMPORT_DIR"
 echo "  Cache directory:    $SKILLS_CACHE_DIR"
+echo "  Agent skills:       $HOME/.agents/skills/ (if present)"
 echo ""
 
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
@@ -288,6 +373,7 @@ echo "  Next steps:"
 echo "    1. Add remote skill URLs to: $SKILLS_DIR/"
 echo "    2. Import skills: go-on skill import <name>"
 echo "    3. List registered skills: go-on skill list"
+echo "    4. Run 'skills-setup.sh --step 5' to re-scan ~/.agents/skills/"
 echo ""
 
 # ── Final exit code ──────────────────────────────────────────────────────────

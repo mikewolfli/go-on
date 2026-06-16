@@ -270,9 +270,6 @@ impl ChatView {
                 }
                 ui.add_space(4.0);
             }
-            MarkdownSegment::LineBreak => {
-                // Newlines handled by wrapping
-            }
             MarkdownSegment::Raw(text) => {
                 ui.add(
                     egui::Label::new(egui::RichText::new(text.as_str()).color(text_color)).wrap(),

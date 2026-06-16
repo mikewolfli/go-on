@@ -19,6 +19,8 @@ pub use http::HttpRequestTool;
 pub use office::ReadExcelTool;
 #[cfg(feature = "document-ppt")]
 pub use office::ReadPptTool;
+#[cfg(feature = "document-excel-write")]
+pub use office::WriteExcelTool;
 pub use search::{FindFilesTool, GrepTool};
 pub use shell::ShellExecTool;
 

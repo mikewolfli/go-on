@@ -382,6 +382,21 @@ impl ToolRegistry {
             },
         );
 
+        #[cfg(feature = "document-excel-write")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::WriteExcelTool,
+            ToolCapabilityProfile {
+                capability: "document_excel_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         registry
     }
 

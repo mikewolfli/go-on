@@ -2,8 +2,8 @@
 //! Mirrors `agent-client-protocol-schema` v0.13.2 `src/v1/agent.rs`.
 
 use crate::schema::{
-    content::ContentBlock, Implementation, McpServerConfig, Meta, ProtocolVersion,
-    SessionConfigGroupId, SessionConfigId, SessionConfigValueId, SessionId, SessionModeId,
+    content::ContentBlock, Implementation, Meta, ProtocolVersion, SessionConfigGroupId,
+    SessionConfigId, SessionConfigValueId, SessionId, SessionModeId,
 };
 use serde::{Deserialize, Serialize};
 
