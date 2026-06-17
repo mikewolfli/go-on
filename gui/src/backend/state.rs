@@ -145,7 +145,6 @@ impl StreamProcessor {
 
         events
     }
-
 }
 
 impl Default for StreamProcessor {

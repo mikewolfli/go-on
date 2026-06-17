@@ -37,7 +37,6 @@ pub enum StateSyncEvent {
     },
 }
 
-
 /// Spawn a background task that listens to the backend's `/v1/state/events` SSE
 /// endpoint and forwards parsed events into a provided channel.
 ///

@@ -66,7 +66,6 @@ impl AutoTuneView {
         })
     }
 
-
     pub fn show(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])

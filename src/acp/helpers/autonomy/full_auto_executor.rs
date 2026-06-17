@@ -117,7 +117,10 @@ impl FullAutoExecutor {
         task_text: &str,
     ) -> FullAutoExecutionResult {
         let start = std::time::Instant::now();
-        info!("FullAutoExecutor: starting flow for task ({} chars)", task_text.len());
+        info!(
+            "FullAutoExecutor: starting flow for task ({} chars)",
+            task_text.len()
+        );
 
         let mut flow = FullAutoFlow::new(skill_registry, tool_registry);
 
@@ -159,7 +162,10 @@ impl FullAutoExecutor {
                 }
             }
             Err(_elapsed) => {
-                warn!("FullAutoExecutor: flow timed out after {}s", self.config.flow_timeout.as_secs());
+                warn!(
+                    "FullAutoExecutor: flow timed out after {}s",
+                    self.config.flow_timeout.as_secs()
+                );
                 FullAutoExecutionResult {
                     success_count: 0,
                     failure_count: 0,

@@ -21,7 +21,6 @@ impl CrashRecovery {
         }
     }
 
-
     /// Reset crash state (called on successful health check or manual reset).
     pub fn reset(&mut self) {
         self.backend_crash_time = None;

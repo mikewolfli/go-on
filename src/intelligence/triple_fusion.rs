@@ -63,7 +63,8 @@ impl TripleFusionBridge {
     /// Return the number of fusion cycles executed so far.
     #[allow(dead_code)] // Public API for test consumers
     pub fn fusion_cycles(&self) -> u64 {
-        self.fusion_cycles.load(std::sync::atomic::Ordering::Relaxed)
+        self.fusion_cycles
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Create a new triple fusion bridge.

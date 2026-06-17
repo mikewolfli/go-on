@@ -26,7 +26,6 @@ pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-
 /// Load JSON with automatic corruption recovery from backup.
 pub fn load_json_with_backup<T>(path: &Path, label: &str) -> T
 where
