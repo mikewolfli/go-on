@@ -36,8 +36,6 @@ pub mod model_router;
 // ── Autonomy loop & execution ──────────────────────────────────────────────
 #[path = "autonomy/autonomy.rs"]
 pub mod autonomy;
-#[path = "autonomy/autonomy_executor.rs"]
-pub mod autonomy_executor;
 #[path = "autonomy/autonomy_loop.rs"]
 pub mod autonomy_loop;
 #[path = "autonomy/autonomy_loop_adapter.rs"]
@@ -46,8 +44,6 @@ pub mod autonomy_loop_adapter;
 pub mod autonomy_metrics;
 #[path = "autonomy/execution_intelligence.rs"]
 pub mod execution_intelligence;
-#[path = "autonomy/full_auto_executor.rs"]
-pub mod full_auto_executor;
 #[path = "autonomy/intelligence_bridge.rs"]
 pub mod intelligence_bridge;
 
