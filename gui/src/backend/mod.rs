@@ -776,7 +776,6 @@ impl BackendClient {
     /// Returns `Ok(Some(catalog))` on success, `Ok(None)` if backend is unreachable,
     /// and `Err` on communication failure. This is the preferred async entry point
     /// for GUI startup flows; it wraps health check + remote call in one call.
-
     pub async fn provider_capabilities(
         &self,
         provider: &str,
