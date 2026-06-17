@@ -1339,21 +1339,8 @@ mod tests {
     // -----------------------------------------------------------------------
     // Test 1: New model is empty.
     // -----------------------------------------------------------------------
-    #[test]
-    fn test_new_model_empty() {
-        let wm = WorldModel::new(WorldModelConfig::default());
-        let p = wm.profile();
-
-        assert_eq!(p.total_entities, 0);
-        assert_eq!(p.total_relationships, 0);
-        assert_eq!(p.total_events, 0);
-        assert!((p.avg_entity_confidence - 0.0).abs() < 1e-9);
-        assert_eq!(p.stale_entity_count, 0);
-        assert!(p.last_update_ms > 0);
-    }
-
     // -----------------------------------------------------------------------
-    // Test 2: Register an entity and verify it's stored.
+    // Test 1: Register an entity and verify it's stored.
     // -----------------------------------------------------------------------
     #[test]
     fn test_register_entity() {

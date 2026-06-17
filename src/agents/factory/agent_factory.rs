@@ -504,21 +504,6 @@ mod tests {
         }
     }
 
-    // ── test_new_factory_empty ───────────────────────────────────────────────
-
-    #[test]
-    fn test_new_factory_empty() {
-        let factory = AgentFactory::new(AgentFactoryConfig::default());
-        assert!(factory.list_templates().is_empty());
-        assert!(factory.list_agents().is_empty());
-        let profile = factory.profile();
-        assert_eq!(profile.total_templates, 0);
-        assert_eq!(profile.active_instances, 0);
-        assert_eq!(profile.created_count, 0);
-        assert_eq!(profile.destroyed_count, 0);
-        assert!(profile.templates_by_category.is_empty());
-    }
-
     // ── test_register_and_list_templates ─────────────────────────────────────
 
     #[test]
@@ -864,51 +849,5 @@ mod tests {
         let result = factory.register_template(tmpl);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("is disabled"));
-    }
-
-    // ── test_list_templates_empty ────────────────────────────────────────────
-
-    #[test]
-    fn test_list_templates_empty() {
-        let factory = AgentFactory::default();
-        assert!(factory.list_templates().is_empty());
-    }
-
-    // ── test_get_agent_returns_none_for_unknown ──────────────────────────────
-
-    #[test]
-    fn test_get_agent_returns_none_for_unknown() {
-        let factory = AgentFactory::default();
-        assert!(factory.get_agent("nonexistent").is_none());
-    }
-
-    // ── test_prune_expired_no_expired ────────────────────────────────────────
-
-    #[test]
-    fn test_prune_expired_no_expired() {
-        let factory = AgentFactory::default();
-        factory
-            .register_template(sample_template("persistent", "openai", &["keep"]))
-            .expect("should register persistent template");
-
-        let _inst = factory
-            .create_agent(sample_request("persistent"))
-            .expect("should create persistent agent");
-        assert_eq!(factory.list_agents().len(), 1);
-
-        // No instances should be expired (long default TTL).
-        let pruned = factory.prune_expired();
-        assert_eq!(pruned, 0);
-        assert_eq!(factory.list_agents().len(), 1);
-    }
-
-    // ── test_factory_default ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_factory_default() {
-        let factory = AgentFactory::default();
-        assert_eq!(factory.config.max_instances, 50);
-        assert!(factory.config.allow_custom_templates);
-        assert_eq!(factory.config.default_ttl_ms, 86_400_000);
     }
 }

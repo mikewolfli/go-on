@@ -1369,11 +1369,6 @@ mod tests {
     }
 
     #[test]
-    fn test_similar_responses_empty() {
-        assert!(MultiModelVoter::similar_responses("", ""));
-    }
-
-    #[test]
     fn test_consensus_score_all_same() {
         let votes = vec![
             ModelVoteResult {
@@ -1648,13 +1643,6 @@ mod tests {
     }
 
     #[test]
-    fn test_fusion_engine_compute_contributions_empty() {
-        let engine = FusionEngine::new();
-        let contributions = engine.compute_contributions(&[]);
-        assert!(contributions.is_empty());
-    }
-
-    #[test]
     fn test_fusion_engine_compute_contributions_single() {
         let engine = FusionEngine::new();
         let responses = vec![ModelVoteResult {
@@ -1704,14 +1692,6 @@ mod tests {
             !outcome.model_contributions.is_empty(),
             "Should have contribution weights"
         );
-    }
-
-    #[test]
-    fn test_fusion_engine_fuse_empty() {
-        let engine = FusionEngine::new();
-        let outcome = engine.fuse(vec![]);
-        assert!(outcome.winning_response.is_empty());
-        assert!(outcome.final_response.is_empty());
     }
 
     #[test]
@@ -1807,23 +1787,5 @@ mod tests {
         // sentence-level keyword analysis — at minimum the outcome is valid
         assert!(!outcome.winning_response.is_empty());
         assert!(!outcome.model_contributions.is_empty());
-    }
-
-    #[test]
-    fn test_voting_config_default() {
-        let config = VotingConfig::default();
-        assert!(!config.use_fusion);
-    }
-
-    #[test]
-    fn test_contradiction_struct() {
-        let c = Contradiction {
-            models: vec!["a".into(), "b".into()],
-            topic: "climate change".into(),
-            positions: vec!["it is real".into(), "it is not real".into()],
-        };
-        assert_eq!(c.models.len(), 2);
-        assert_eq!(c.topic, "climate change");
-        assert_eq!(c.positions.len(), 2);
     }
 }

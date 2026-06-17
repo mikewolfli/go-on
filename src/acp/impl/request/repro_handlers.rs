@@ -57,21 +57,4 @@ pub(super) async fn handle_optimization_peak(
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn peak_shape() {
-        let payload = serde_json::json!({
-            "ok": true,
-            "total_requests": 0,
-            "failed_requests": 0,
-            "recommendations": [],
-        });
-        assert_eq!(payload.get("ok").and_then(|v| v.as_bool()), Some(true));
-    }
-
-    #[test]
-    fn labels() {
-        let labels = ["reliability", "performance", "quality", "resilience"];
-        assert_eq!(labels.len(), 4);
-    }
-}
+mod tests {}

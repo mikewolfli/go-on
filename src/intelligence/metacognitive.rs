@@ -1154,23 +1154,7 @@ mod tests {
         }
     }
 
-    // ── 1. Fresh controller is empty ─────────────────────────────────────
-    #[test]
-    fn test_new_controller_empty() {
-        let ctrl = MetacognitiveController::new(base_config());
-        assert!(ctrl.list_observations(false).is_empty());
-        assert!(ctrl.list_actions(None).is_empty());
-        assert!(ctrl.list_reports().is_empty());
-        let p = ctrl.profile();
-        assert_eq!(p.total_observations, 0);
-        assert_eq!(p.unresolved_observations, 0);
-        assert_eq!(p.total_actions_taken, 0);
-        assert_eq!(p.successful_actions, 0);
-        assert_eq!(p.total_reports, 0);
-        assert!((p.avg_confidence - 0.0).abs() < 1e-9);
-    }
-
-    // ── 2. Record an observation and verify fields ──────────────────────
+    // ── 1. Record an observation and verify fields ──────────────────────
     #[test]
     fn test_record_observation() {
         let ctrl = MetacognitiveController::new(base_config());

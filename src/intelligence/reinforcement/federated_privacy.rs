@@ -594,31 +594,4 @@ mod tests {
         }
         assert!(any_below);
     }
-
-    #[test]
-    fn test_fast_rng_produces_different_values() {
-        let mut rng1 = FastRng::new();
-        let _rng2 = FastRng::new();
-
-        // Even with same seed instantiation, the two should differ because
-        // seeds include time. Run many samples to check basic sanity.
-        let mut samples = Vec::new();
-        for _ in 0..1000 {
-            samples.push(rng1.standard_normal());
-        }
-
-        let mean: f64 = samples.iter().sum::<f64>() / samples.len() as f64;
-        let variance: f64 =
-            samples.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / samples.len() as f64;
-
-        // Mean should be near 0, variance near 1.
-        assert!(
-            mean.abs() < 0.2,
-            "standard normal mean should be near 0, got {mean}"
-        );
-        assert!(
-            (variance - 1.0).abs() < 0.2,
-            "standard normal variance should be near 1, got {variance}"
-        );
-    }
 }

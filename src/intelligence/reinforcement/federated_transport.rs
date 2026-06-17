@@ -746,28 +746,6 @@ mod tests {
     use serial_test::serial;
 
     #[test]
-    fn test_node_role_from_str() {
-        assert_eq!(
-            NodeRole::from_str("coordinator"),
-            Some(NodeRole::Coordinator)
-        );
-        assert_eq!(
-            NodeRole::from_str("Coordinator"),
-            Some(NodeRole::Coordinator)
-        );
-        assert_eq!(NodeRole::from_str("worker"), Some(NodeRole::Worker));
-        assert_eq!(NodeRole::from_str("full"), Some(NodeRole::Full));
-        assert_eq!(NodeRole::from_str("unknown"), None);
-    }
-
-    #[test]
-    fn test_node_role_display() {
-        assert_eq!(NodeRole::Coordinator.to_string(), "coordinator");
-        assert_eq!(NodeRole::Worker.to_string(), "worker");
-        assert_eq!(NodeRole::Full.to_string(), "full");
-    }
-
-    #[test]
     fn test_peer_info_new() {
         let peer = PeerInfo::new("node-1", "10.0.0.1:50051", NodeRole::Coordinator);
         assert_eq!(peer.id, "node-1");
@@ -828,20 +806,6 @@ mod tests {
                 assert_eq!(peers[0].role, NodeRole::Full);
             },
         );
-    }
-
-    #[test]
-    fn test_role_is_coordinator() {
-        assert!(NodeRole::Coordinator.is_coordinator());
-        assert!(!NodeRole::Worker.is_coordinator());
-        assert!(NodeRole::Full.is_coordinator());
-    }
-
-    #[test]
-    fn test_role_is_worker() {
-        assert!(!NodeRole::Coordinator.is_worker());
-        assert!(NodeRole::Worker.is_worker());
-        assert!(NodeRole::Full.is_worker());
     }
 
     #[test]

@@ -632,13 +632,6 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_reloader_empty() {
-        let reloader = PolicyReloader::new();
-        assert!(reloader.is_empty());
-        assert_eq!(reloader.len(), 0);
-    }
-
-    #[test]
     fn test_register_and_reload() {
         let mut reloader = PolicyReloader::new();
         reloader.register(Box::new(TestPolicy {
@@ -689,8 +682,4 @@ mod tests {
         assert!(reloader.watcher.is_none());
     }
 
-    #[test]
-    fn test_now_ms_nonzero() {
-        assert!(now_ms() > 1_700_000_000_000u64); // Should be well past this
-    }
 }

@@ -761,13 +761,4 @@ mod tests {
         let metrics = monitor.get_metrics();
         assert!((metrics.cache_hit_rate - 0.75).abs() < 0.01);
     }
-
-    #[test]
-    fn performance_monitor_empty_state_returns_defaults() {
-        let monitor = PerformanceMonitor::new(100);
-        let metrics = monitor.get_metrics();
-        assert_eq!(metrics.total_ops, 0);
-        assert_eq!(metrics.avg_latency_ms, 0.0);
-        assert_eq!(metrics.cache_hit_rate, 0.0);
-    }
 }

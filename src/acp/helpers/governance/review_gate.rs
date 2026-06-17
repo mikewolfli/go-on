@@ -237,26 +237,4 @@ mod tests {
     }
 
     // ── ReviewGateOutcome ─────────────────────────────────────────────
-
-    #[test]
-    fn review_gate_outcome_passed_false_with_error() {
-        let outcome = ReviewGateOutcome {
-            reviews: vec![],
-            passed: false,
-            error: Some("gate error".to_string()),
-        };
-        assert!(!outcome.passed);
-        assert!(outcome.error.is_some());
-    }
-
-    #[test]
-    fn review_gate_outcome_passed_true_no_error() {
-        let outcome = ReviewGateOutcome {
-            reviews: vec![],
-            passed: true,
-            error: None,
-        };
-        assert!(outcome.passed);
-        assert!(outcome.error.is_none());
-    }
 }

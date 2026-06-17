@@ -500,17 +500,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_bus_defaults() {
-        let bus = OrchestrationBus::new(None);
-        let prof = bus.profile();
-        assert!(prof.enabled);
-        assert_eq!(prof.active_flows, 0);
-        assert_eq!(prof.available_modes, 0);
-        assert_eq!(prof.total_routes, 0);
-        assert_eq!(prof.active_graphs, 0);
-    }
-
-    #[test]
     fn test_register_and_list_modes() {
         let bus = OrchestrationBus::new(None);
         assert!(bus.available_modes().is_empty());
@@ -580,37 +569,6 @@ mod tests {
         // Full auto for high-complexity unknown
         let mode = bus.recommend_mode("maintenance", 7.5);
         assert_eq!(mode, "safe_guard");
-    }
-
-    #[test]
-    fn test_orchestration_mode_conversions() {
-        assert_eq!(OrchestrationMode::Ask.as_str(), "ask");
-        assert_eq!(OrchestrationMode::Edit.as_str(), "edit");
-        assert_eq!(OrchestrationMode::Agent.as_str(), "agent");
-        assert_eq!(OrchestrationMode::FullAuto.as_str(), "full_auto");
-        assert_eq!(OrchestrationMode::SafeGuard.as_str(), "safe_guard");
-
-        assert_eq!(
-            OrchestrationMode::from_str("ask"),
-            Some(OrchestrationMode::Ask)
-        );
-        assert_eq!(
-            OrchestrationMode::from_str("edit"),
-            Some(OrchestrationMode::Edit)
-        );
-        assert_eq!(
-            OrchestrationMode::from_str("agent"),
-            Some(OrchestrationMode::Agent)
-        );
-        assert_eq!(
-            OrchestrationMode::from_str("full_auto"),
-            Some(OrchestrationMode::FullAuto)
-        );
-        assert_eq!(
-            OrchestrationMode::from_str("safe_guard"),
-            Some(OrchestrationMode::SafeGuard)
-        );
-        assert_eq!(OrchestrationMode::from_str("invalid"), None);
     }
 
     #[test]

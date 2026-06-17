@@ -1199,14 +1199,6 @@ mod federated_rl_tests {
     use super::*;
 
     #[test]
-    fn test_frl_new_empty() {
-        let frl = FederatedRL::new(FederatedRLConfig::default());
-        let profile = frl.profile();
-        assert_eq!(profile.total_policies, 0);
-        assert_eq!(profile.total_rounds, 0);
-    }
-
-    #[test]
     fn test_frl_submit_policy() {
         let frl = FederatedRL::new(FederatedRLConfig::default());
         let id = frl.submit_policy("node1".into(), "test".into(), "data".into(), 0.8, 10);
@@ -1309,15 +1301,6 @@ mod tests {
     // Helper: extract a single value from a flattened policy map.
     fn get_val(map: &HashMap<String, f64>, key: &str) -> f64 {
         map.get(key).copied().unwrap_or(f64::NAN)
-    }
-
-    #[test]
-    fn test_new_federated_empty() {
-        let config = FederatedConfig::default();
-        let fl = FederatedLearning::new(config);
-        assert_eq!(fl.clients.len(), 0);
-        assert!(fl.global_weights.is_none());
-        assert_eq!(fl.round_counter, 0);
     }
 
     #[test]

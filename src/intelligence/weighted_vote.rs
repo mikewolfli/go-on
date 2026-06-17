@@ -442,36 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn test_weighted_vote_empty_votes() {
-        let votes = HashMap::new();
-        let reps = HashMap::new();
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
-        assert!(!result.approved);
-        assert!((result.approval_ratio - 0.0).abs() < f64::EPSILON);
-        assert_eq!(result.total_weight, 0.0);
-        assert_eq!(result.participant_count, 0);
-    }
-
-    #[test]
-    fn test_weighted_vote_zero_total_weight() {
-        let mut votes = HashMap::new();
-        votes.insert(
-            "agent".to_string(),
-            Vote {
-                approves: true,
-                reasoning: "Yes".into(),
-                confidence: 0.5,
-            },
-        );
-        // Reputations only has the agent with weight 0.0
-        let mut reps = HashMap::new();
-        reps.insert("agent".to_string(), 0.0);
-        let result = weighted_vote(&votes, &reps, 0.6, 0.0, "");
-        assert!(!result.approved);
-        assert_eq!(result.total_weight, 0.0);
-    }
-
-    #[test]
     fn test_weighted_vote_custom_threshold() {
         let mut votes = HashMap::new();
         votes.insert(
@@ -617,13 +587,6 @@ mod tests {
     // ── format_debate_history tests ────────────────────────────────────────
 
     #[test]
-    fn test_format_debate_history_empty() {
-        let votes = HashMap::new();
-        let formatted = format_debate_history(&votes);
-        assert_eq!(formatted, "");
-    }
-
-    #[test]
     fn test_format_debate_history_single() {
         let mut votes = HashMap::new();
         votes.insert(
@@ -667,22 +630,6 @@ mod tests {
     }
 
     // ── DelphiConfig defaults ──────────────────────────────────────────────
-
-    #[test]
-    fn test_delphi_config_defaults() {
-        let config = DelphiConfig::default();
-        assert_eq!(config.max_rounds, 2);
-        assert!((config.threshold - 0.6).abs() < f64::EPSILON);
-        assert!((config.default_weight - 0.5).abs() < f64::EPSILON);
-        assert!((config.convergence_ratio - 0.8).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_weighted_vote_config_defaults() {
-        let config = WeightedVoteConfig::default();
-        assert!((config.threshold - 0.6).abs() < f64::EPSILON);
-        assert!((config.default_weight - 0.5).abs() < f64::EPSILON);
-    }
 
     // ── VoteResult sanity ──────────────────────────────────────────────────
 

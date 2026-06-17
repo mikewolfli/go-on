@@ -772,15 +772,6 @@ mod tests {
     }
 
     #[test]
-    fn test_new_center_is_empty() {
-        let c = DiscoveryCenter::new();
-        let p = c.profile();
-        assert!(p.enabled);
-        assert_eq!(p.total_entries, 0);
-        assert_eq!(p.total_patterns, 0);
-    }
-
-    #[test]
     fn test_record_and_search() {
         let c = DiscoveryCenter::new();
         let id = c.record_solution(sample_entry(1)).expect("should record");

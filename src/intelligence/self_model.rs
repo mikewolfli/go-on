@@ -670,19 +670,8 @@ mod tests {
     // -----------------------------------------------------------------------
     // Test 1: Newly created self-model has no identity.
     // -----------------------------------------------------------------------
-    #[test]
-    fn test_new_self_model_no_identity() {
-        let core = SelfModelCore::new(test_config());
-        assert!(core.get_identity().is_none());
-        let p = core.profile();
-        assert!(!p.identity_set);
-        assert_eq!(p.capabilities_count, 0);
-        assert_eq!(p.limitations_count, 0);
-        assert_eq!(p.performance_snapshots, 0);
-    }
-
     // -----------------------------------------------------------------------
-    // Test 2: Setting and getting identity.
+    // Test 1: Setting and getting identity.
     // -----------------------------------------------------------------------
     #[test]
     fn test_set_and_get_identity() {

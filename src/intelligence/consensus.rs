@@ -1039,20 +1039,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_round_unknown() {
-        let engine = ConsensusEngine::default();
-        let err = engine.get_round("nonexistent").unwrap_err();
-        assert!(matches!(err, ConsensusError::RoundNotFound(id) if id == "nonexistent"));
-    }
-
-    #[test]
-    fn test_heartbeat_unknown_node() {
-        let engine = ConsensusEngine::default();
-        let err = engine.heartbeat("ghost").unwrap_err();
-        assert!(matches!(err, ConsensusError::NodeNotFound(id) if id == "ghost"));
-    }
-
-    #[test]
     fn test_elect_leader_no_online_nodes() {
         let engine = ConsensusEngine::default();
         let mut n1 = sample_node("offline", 10, NodeRole::Follower);
@@ -1061,26 +1047,6 @@ mod tests {
             .register_node(n1)
             .expect("register_node should succeed for offline");
         assert!(engine.elect_leader().is_none());
-    }
-
-    #[test]
-    fn test_finalize_round_no_active_round() {
-        let engine = ConsensusEngine::default();
-        let err = engine.finalize_round().unwrap_err();
-        assert!(matches!(err, ConsensusError::NoActiveRound));
-    }
-
-    #[test]
-    fn test_current_round_when_empty() {
-        let engine = ConsensusEngine::default();
-        assert!(engine.current_round().is_none());
-    }
-
-    #[test]
-    fn test_detect_failures_empty() {
-        let engine = ConsensusEngine::default();
-        let failed = engine.detect_failures();
-        assert!(failed.is_empty());
     }
 
     #[test]

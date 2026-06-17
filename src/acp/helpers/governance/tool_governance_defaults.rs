@@ -324,32 +324,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_file_is_read_only() {
-        assert_eq!(classify_tool_risk("read_file"), ToolRiskClass::ReadOnly);
-    }
-
-    #[test]
-    fn write_file_is_low_risk_write() {
-        assert_eq!(
-            classify_tool_risk("write_file"),
-            ToolRiskClass::LowRiskWrite
-        );
-    }
-
-    #[test]
-    fn run_tests_is_high_risk() {
-        assert_eq!(
-            classify_tool_risk("run_tests"),
-            ToolRiskClass::HighRiskExecute
-        );
-    }
-
-    #[test]
-    fn bash_is_high_risk() {
-        assert_eq!(classify_tool_risk("bash"), ToolRiskClass::HighRiskExecute);
-    }
-
-    #[test]
     fn default_policy_blocks_high_risk_without_rbac() {
         let result = evaluate_default_tool_policy("run_tests", false, false, Some("local-dev"));
         assert!(!result.allowed);

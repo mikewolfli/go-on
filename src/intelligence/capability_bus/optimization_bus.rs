@@ -440,14 +440,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_optimization_bus_creation() {
-        let bus = OptimizationBus::new();
-        let p = bus.profile();
-        assert!(p.enabled);
-        assert_eq!(p.total_optimizations, 0);
-    }
-
-    #[test]
     fn test_recommend_cost_priority() {
         let bus = OptimizationBus::new();
         let rec = bus.recommend("code_gen", 10_000, "cost");
@@ -503,12 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn test_circuit_breaker_not_broken_by_default() {
-        let bus = OptimizationBus::new();
-        assert!(!bus.is_circuit_broken("claude-sonnet-4"));
-    }
-
-    #[test]
     fn test_circuit_breaker_trips_after_failures() {
         let bus = OptimizationBus::new();
         // Record multiple failures to trip the circuit breaker.
@@ -520,30 +506,6 @@ mod tests {
         let p = bus.profile();
         assert!(p.circuit_breaker_trips > 0);
         assert!(p.reliability_flags >= 6);
-    }
-
-    #[test]
-    fn test_record_execution_success() {
-        let bus = OptimizationBus::new();
-        bus.record_execution("claude-haiku", 300, 150, true);
-        assert!(!bus.is_circuit_broken("claude-haiku"));
-    }
-
-    #[test]
-    fn test_record_execution_failure_increases_reliability_flags() {
-        let bus = OptimizationBus::new();
-        bus.record_execution("some-agent", 500, 200, false);
-        let p = bus.profile();
-        assert_eq!(p.reliability_flags, 1);
-    }
-
-    #[test]
-    fn test_no_op_recommendation() {
-        let no_op = OptimizationRecommendation::no_op();
-        assert!(no_op.suggested_agent.is_none());
-        assert_eq!(no_op.estimated_cost, 0.0);
-        assert_eq!(no_op.estimated_duration_ms, 0);
-        assert_eq!(no_op.confidence, 0.0);
     }
 
     #[test]

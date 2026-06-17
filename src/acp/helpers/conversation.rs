@@ -36,9 +36,4 @@ mod tests {
         assert!(stream_would_exceed_limits(0, MAX_STREAM_CHARS, 1));
         assert!(!stream_would_exceed_limits(0, MAX_STREAM_CHARS - 100, 50));
     }
-
-    #[test]
-    fn stream_would_exceed_limits_zero_chars_ok() {
-        assert!(!stream_would_exceed_limits(0, 0, 0));
-    }
 }

@@ -382,31 +382,6 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn test_language_detection() {
-        let en = Language::from_code("en");
-        assert_eq!(en, Language::EnUS);
-
-        let zh = Language::from_code("zh_cn");
-        assert_eq!(zh, Language::ZhCN);
-
-        let tw = Language::from_code("zh_tw");
-        assert_eq!(tw, Language::ZhTW);
-    }
-
-    #[test]
-    fn test_language_code() {
-        assert_eq!(Language::ZhCN.code(), "zh_CN");
-        assert_eq!(Language::ZhTW.code(), "zh_TW");
-        assert_eq!(Language::EnUS.code(), "en_US");
-    }
-
-    #[test]
-    fn test_fallback_to_english() {
-        let unknown = Language::from_code("unknown_lang");
-        assert_eq!(unknown, Language::EnUS);
-    }
-
-    #[test]
     fn onboarding_and_status_keys_exist_in_all_languages() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let required = [

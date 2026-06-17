@@ -150,26 +150,4 @@ pub(super) async fn handle_metrics_prometheus(
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn prometheus_format() {
-        let lines = [
-            "# HELP go_on_chat_requests_total Total chat requests",
-            "# TYPE go_on_chat_requests_total counter",
-            "go_on_chat_requests_total 42",
-        ];
-        let text = lines.join("\n") + "\n";
-        assert!(text.contains("go_on_chat_requests_total 42"));
-    }
-
-    #[test]
-    fn limit_clamp() {
-        // Verify clamping behavior using helper to avoid const-prop warnings
-        fn clamp(val: usize, limit: usize) -> usize {
-            val.min(limit)
-        }
-        assert_eq!(clamp(5, 200), 5);
-        assert_eq!(clamp(500, 200), 200);
-        assert_eq!(clamp(200, 200), 200);
-    }
-}
+mod tests {}

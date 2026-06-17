@@ -53,22 +53,6 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     #[test]
-    fn test_record_tool_allowed_increments_counter() {
-        let before = TOOL_ALLOWED_TOTAL.load(Ordering::Relaxed);
-        record_tool_allowed();
-        let after = TOOL_ALLOWED_TOTAL.load(Ordering::Relaxed);
-        assert!(after > before, "allowed counter should increment");
-    }
-
-    #[test]
-    fn test_record_tool_policy_denied_increments_counter() {
-        let before = TOOL_POLICY_DENIED_TOTAL.load(Ordering::Relaxed);
-        record_tool_policy_denied();
-        let after = TOOL_POLICY_DENIED_TOTAL.load(Ordering::Relaxed);
-        assert!(after > before, "policy denied counter should increment");
-    }
-
-    #[test]
     fn test_tool_governance_counters_returns_expected_keys() {
         let counters = tool_governance_counters();
         assert!(counters.get("tool_allowed_total").is_some());

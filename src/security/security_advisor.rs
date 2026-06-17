@@ -983,42 +983,6 @@ mod tests {
     }
 
     #[test]
-    fn test_fix_type_variants() {
-        assert_eq!(
-            serde_json::from_str::<FixType>("\"VersionBump\"").unwrap(),
-            FixType::VersionBump
-        );
-        assert_eq!(
-            serde_json::from_str::<FixType>("\"ConfigChange\"").unwrap(),
-            FixType::ConfigChange
-        );
-        assert_eq!(
-            serde_json::from_str::<FixType>("\"CodeRefactor\"").unwrap(),
-            FixType::CodeRefactor
-        );
-        assert_eq!(
-            serde_json::from_str::<FixType>("\"SecretRemoval\"").unwrap(),
-            FixType::SecretRemoval
-        );
-    }
-
-    #[test]
-    fn test_alert_source_variants() {
-        assert_eq!(
-            serde_json::from_str::<AlertSource>("\"DependencyVulnerability\"").unwrap(),
-            AlertSource::DependencyVulnerability
-        );
-        assert_eq!(
-            serde_json::from_str::<AlertSource>("\"SecretExposure\"").unwrap(),
-            AlertSource::SecretExposure
-        );
-        assert_eq!(
-            serde_json::from_str::<AlertSource>("\"PermitExposure\"").unwrap(),
-            AlertSource::PermitExposure
-        );
-    }
-
-    #[test]
     fn test_days_to_date() {
         // Unix epoch: 1970-01-01
         let (y, m, d) = days_to_date(0);

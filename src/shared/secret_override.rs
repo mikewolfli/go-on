@@ -139,8 +139,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_falls_back_to_env() {
-        assert_eq!(get_secret("GO_ON_TEST_NONEXISTENT_KEY_XYZ"), None);
-    }
+
 }

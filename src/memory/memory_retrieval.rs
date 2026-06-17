@@ -661,23 +661,6 @@ mod tests {
     }
 
     #[test]
-    fn test_link_type_label() {
-        assert_eq!(LinkType::Similar.label(), "similar");
-        assert_eq!(LinkType::Continuation.label(), "continuation");
-        assert_eq!(LinkType::Custom("my_type".into()).label(), "my_type");
-    }
-
-    #[test]
-    fn test_memory_link_creation() {
-        let link = MemoryLink::new("m1", "m2", LinkType::DerivedFrom, 0.85);
-        assert_eq!(link.m1, "m1");
-        assert_eq!(link.m2, "m2");
-        assert_eq!(link.link_type, LinkType::DerivedFrom);
-        assert_eq!(link.strength, 0.85);
-        assert!(link.created_at > 0);
-    }
-
-    #[test]
     fn test_get_links_reverse() {
         let (_dir, engine) = setup_engine();
         seed_entry(&engine, "a", "alpha", 0.5);

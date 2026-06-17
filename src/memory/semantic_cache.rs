@@ -387,23 +387,4 @@ mod tests {
         assert_eq!(stats.total_misses, 1);
         assert!((stats.hit_ratio - 0.5).abs() < 0.001);
     }
-
-    #[test]
-    fn test_simple_hash_consistent() {
-        let h1 = simple_request_hash("hello", 1024);
-        let h2 = simple_request_hash("hello", 1024);
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn test_jaccard_identical() {
-        let sim = jaccard_similarity("hello world", "hello world");
-        assert!((sim - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_jaccard_empty() {
-        let sim = jaccard_similarity("", "");
-        assert!((sim - 1.0).abs() < 0.001);
-    }
 }

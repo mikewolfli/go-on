@@ -758,12 +758,6 @@ mod qlearning_tests {
     use super::*;
 
     #[test]
-    fn test_new_agent_empty() {
-        let agent = QLearningAgent::default();
-        assert!(agent.q_table.is_empty());
-    }
-
-    #[test]
     fn test_choose_action_returns_valid_action() {
         let mut agent = QLearningAgent::default();
         // Add a Q-value for a known state-action pair

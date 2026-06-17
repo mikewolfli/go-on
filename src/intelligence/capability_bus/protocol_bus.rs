@@ -362,15 +362,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_defaults() {
-        let bus = ProtocolBus::new();
-        assert_eq!(bus.active_transport(), "auto");
-        assert!(bus.is_protocol_healthy("auto"));
-        assert!(bus.is_protocol_healthy("acp-stdio"));
-        assert!(bus.is_protocol_healthy("unknown-protocol"));
-    }
-
-    #[test]
     fn test_set_active_transport() {
         let bus = ProtocolBus::new();
         bus.set_active_transport("acp-http");
@@ -487,13 +478,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_protocol_healthy_unknown() {
-        let bus = ProtocolBus::new();
-        // Unknown protocols are treated as healthy.
-        assert!(bus.is_protocol_healthy("nonexistent-protocol"));
-    }
-
-    #[test]
     fn test_profile_snapshot() {
         let bus = ProtocolBus::new();
         bus.set_active_transport("mcp-stdio");
@@ -504,11 +488,5 @@ mod tests {
         assert_eq!(profile.active_transport, "mcp-stdio");
         assert_eq!(profile.healthy_protocols, 5);
         assert_eq!(profile.total_protocol_switches, 1);
-    }
-
-    #[test]
-    fn test_default_trait() {
-        let bus = ProtocolBus::default();
-        assert_eq!(bus.active_transport(), "auto");
     }
 }

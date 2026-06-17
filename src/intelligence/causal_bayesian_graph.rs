@@ -803,14 +803,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_empty_graph() {
-        let graph = CausalBayesianGraph::new();
-        assert_eq!(graph.node_count(), 0);
-        assert_eq!(graph.edge_count(), 0);
-        assert_eq!(graph.total_observations(), 0);
-    }
-
-    #[test]
     fn test_record_observation_creates_edge() {
         let mut graph = CausalBayesianGraph::new();
         let cause = CausalNode::new("server", "status", "error");

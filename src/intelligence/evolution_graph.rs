@@ -445,14 +445,7 @@ mod tests {
 
     // ── 1 ────────────────────────────────────────────────────────────────────
 
-    #[test]
-    fn test_new_graph_empty() {
-        let graph = EvolutionGraph::new();
-        assert_eq!(graph.records.len(), 0);
-        assert_eq!(graph.version_counter, 0);
-    }
-
-    // ── 2 ────────────────────────────────────────────────────────────────────
+    // ── 1 ────────────────────────────────────────────────────────────────────
 
     #[test]
     fn test_register_capability() {

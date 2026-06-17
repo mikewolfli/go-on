@@ -181,16 +181,6 @@ mod tests {
     }
 
     #[test]
-    fn cache_store_result_shape_is_constructible() {
-        let stored = CacheStoreResult {
-            stored: true,
-            level: "L2".to_string(),
-        };
-        assert!(stored.stored);
-        assert_eq!(stored.level, "L2");
-    }
-
-    #[test]
     fn handle_hit_returns_correct_decision() {
         let hit = CacheStrategy::handle_hit("L1", 1.0, false);
         assert!(matches!(hit, CacheDecision::Hit { .. }));

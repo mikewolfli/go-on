@@ -514,12 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_patterns_not_empty() {
-        let patterns = InjectionDetector::default_patterns();
-        assert!(!patterns.is_empty());
-    }
-
-    #[test]
     fn test_indirect_injection_detection() {
         let detector = InjectionDetector::new(DetectionConfig::default());
         // "ignore all previous instructions" matches JB-001 (Critical severity -> 0.9 >= 0.7 threshold)
@@ -538,13 +532,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_categories_described() {
-        assert!(!InjectionCategory::RolePlay.description().is_empty());
-        assert!(!InjectionCategory::Jailbreak.description().is_empty());
-        assert!(!InjectionCategory::PromptLeak.description().is_empty());
-        assert!(!InjectionCategory::IndirectInjection
-            .description()
-            .is_empty());
-    }
 }

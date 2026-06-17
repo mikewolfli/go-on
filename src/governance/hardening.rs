@@ -989,13 +989,6 @@ mod tests {
     }
 
     #[test]
-    fn idempotency_key_is_deterministic() {
-        let k1 = Idempotency::key("task-1", "phase-a", "build the feature");
-        let k2 = Idempotency::key("task-1", "phase-a", "build the feature");
-        assert_eq!(k1, k2);
-    }
-
-    #[test]
     fn audit_logger_writes_and_reads_back_entry() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)

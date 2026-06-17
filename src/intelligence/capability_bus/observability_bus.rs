@@ -455,16 +455,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_bus_is_empty() {
-        let bus = ObservabilityBus::new();
-        let health = bus.system_health();
-        assert!(health.enabled);
-        assert_eq!(health.total_traces, 0);
-        assert_eq!(health.tracked_agents, 0);
-        assert!(bus.recent_traces(10).is_empty());
-    }
-
-    #[test]
     fn test_record_trace_basic() {
         let bus = ObservabilityBus::new();
         bus.record_trace("agent-a", "chat", 100, true, None, 50);

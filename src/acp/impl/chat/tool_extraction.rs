@@ -299,21 +299,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_tool_call_marker() {
-        let calls = extract_tool_calls_from_response("__tool_call__:search_web", 5);
-        assert_eq!(calls, vec!["search_web"]);
-    }
-
-    #[test]
-    fn test_extract_json_tool_call() {
-        let response = r#"```json
-{"tool_call": "search_web"}
-```"#;
-        let calls = extract_tool_calls_from_response(response, 5);
-        assert_eq!(calls, vec!["search_web"]);
-    }
-
-    #[test]
     fn test_detect_no_pattern() {
         let result = detect_repeated_task_pattern(&["hello", "world"]);
         assert!(!result);

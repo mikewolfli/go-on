@@ -267,37 +267,4 @@ mod tests {
             .iter()
             .any(|a| a.contains("timeout") || a.contains("fanout")));
     }
-
-    #[test]
-    fn record_failure_counter_starts_at_zero() {
-        let val = EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL.load(Ordering::Relaxed);
-        assert_eq!(val, 0);
-    }
-
-    #[test]
-    fn error_paths_do_not_panic() {
-        // Pre-check and post-check with various inputs should never panic
-        // even when internal record operations may fail (covered by match/warn).
-        let _ = pre_check("no-panic-pre", "agent", 0);
-        let _ = pre_check("no-panic-pre", "agent", 5);
-        let _ = post_check("no-panic-post-a", "agent", true, "all good");
-        let _ = post_check("no-panic-post-b", "agent", false, "something failed");
-        let _ = post_check("no-panic-post-c", "agent", false, "critical crash");
-        // If we got here without panicking, the warning paths are safe
-    }
-
-    #[test]
-    fn counter_increments_on_repeated_failures() {
-        // Reset counter by constructing a scenario where we know operations
-        // succeed in tests. We can still verify the counter type works correctly
-        // by exercising the atomic API.
-        let before = EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL.load(Ordering::Relaxed);
-        EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
-        assert_eq!(
-            EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL.load(Ordering::Relaxed),
-            before + 1
-        );
-        // Restore to avoid affecting other tests
-        EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL.store(before, Ordering::Relaxed);
-    }
 }

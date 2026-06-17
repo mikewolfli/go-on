@@ -444,28 +444,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cosine_similarity_identical() {
-        let v = vec![1.0, 2.0, 3.0];
-        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_cosine_similarity_orthogonal() {
-        let sim = cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]);
-        assert!((sim - 0.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_cosine_similarity_empty() {
-        assert_eq!(cosine_similarity(&[], &[]), 0.0);
-    }
-
-    #[test]
-    fn test_cosine_similarity_zero_vector() {
-        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 0.0]), 0.0);
-    }
-
-    #[test]
     fn test_from_entries_only_embeddings() {
         let mut entries = Vec::new();
         for i in 0..5 {

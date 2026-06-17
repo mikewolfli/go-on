@@ -355,13 +355,6 @@ mod tests {
     use serde_json;
 
     #[test]
-    fn test_hot_reload_config_default() {
-        let config = HotReloadConfig::default();
-        assert!(config.enabled);
-        assert_eq!(config.debounce_ms, DEFAULT_DEBOUNCE_MS);
-    }
-
-    #[test]
     fn test_config_round_trip() {
         // Validate that default config can be serialized
         let config = HotReloadConfig::default();

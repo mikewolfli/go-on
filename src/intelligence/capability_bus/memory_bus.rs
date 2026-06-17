@@ -511,13 +511,4 @@ mod tests {
         // Just verify that calling clear_expired on a minimal bus doesn't panic.
         bus.clear_expired();
     }
-
-    #[test]
-    fn profile_returns_defaults_on_empty_bus() {
-        let bus = MemoryBus::new(None, None, None, None);
-        let p = bus.profile();
-        assert!(p.enabled);
-        assert_eq!(p.total_cache_hits, 0);
-        assert_eq!(p.total_cache_misses, 0);
-    }
 }

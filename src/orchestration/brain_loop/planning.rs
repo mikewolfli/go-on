@@ -840,6 +840,16 @@ impl BrainLoop {
                         let new_steps =
                             engine.replan_with_reasoning(latest_reflection, &plan).await;
                         if !new_steps.is_empty() {
+                            // Bump iteration counter BEFORE continue to prevent
+                            // infinite re-planning when current_iteration never
+                            // advances (the deep-reasoning branch skips the normal
+                            // execute_step path that normally increments it).
+                            {
+                                let mut inner = write_guard(&self.inner).await;
+                                if let Some(p) = inner.plans.get_mut(&plan_id) {
+                                    p.current_iteration = p.current_iteration.saturating_add(1);
+                                }
+                            }
                             let _ = self.replan(&plan_id, new_steps).await;
                             continue;
                         }

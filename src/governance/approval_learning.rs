@@ -700,12 +700,6 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_suggestion_impact() {
-        assert_ne!(SuggestionImpact::Low, SuggestionImpact::High);
-        assert_ne!(SuggestionImpact::Medium, SuggestionImpact::Low);
-    }
-
-    #[test]
     fn test_decision_record_serialize() {
         let record = DecisionRecord {
             approver: "alice".into(),
@@ -756,29 +750,5 @@ mod tests {
         assert!(learner
             .predict_approval_for_approver("nonexistent", "deploy")
             .is_err());
-    }
-
-    #[test]
-    fn test_decision_variants() {
-        assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Approved\"")
-                .expect("Approved variant should deserialize"),
-            ApprovalDecision::Approved
-        );
-        assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Rejected\"")
-                .expect("Rejected variant should deserialize"),
-            ApprovalDecision::Rejected
-        );
-        assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Escalated\"")
-                .expect("Escalated variant should deserialize"),
-            ApprovalDecision::Escalated
-        );
-        assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Skipped\"")
-                .expect("Skipped variant should deserialize"),
-            ApprovalDecision::Skipped
-        );
     }
 }

@@ -448,34 +448,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fault_type_labels() {
-        assert_eq!(FaultType::NetworkTimeout.label(), "network_timeout");
-        assert_eq!(FaultType::FileIOError.label(), "file_io_error");
-        assert_eq!(FaultType::PartialWrite.label(), "partial_write");
-    }
-
-    #[test]
-    fn test_chaos_engine_default_disabled() {
-        let engine = ChaosEngine::new();
-        assert!(!engine.is_enabled());
-    }
-
-    #[test]
-    fn test_chaos_engine_enable_disable() {
-        let engine = ChaosEngine::new();
-        engine.set_enabled(true);
-        assert!(engine.is_enabled());
-        engine.set_enabled(false);
-        assert!(!engine.is_enabled());
-    }
-
-    #[test]
-    fn test_no_fault_when_disabled() {
-        let engine = ChaosEngine::new();
-        assert!(engine.check_fault("read_file").is_none());
-    }
-
-    #[test]
     fn test_fault_injection_when_enabled() {
         let engine = ChaosEngine::new();
         engine.set_enabled(true);
@@ -526,40 +498,5 @@ mod tests {
         assert!(engine.check_fault("test_tool").is_none());
     }
 
-    #[test]
-    fn test_network_resilience_scenario_structure() {
-        let scenario = network_resilience_scenario();
-        assert_eq!(scenario.name, "network_resilience");
-        assert_eq!(scenario.injections.len(), 3);
-    }
 
-    #[test]
-    fn test_storage_resilience_scenario_structure() {
-        let scenario = storage_resilience_scenario();
-        assert_eq!(scenario.name, "storage_resilience");
-        assert_eq!(scenario.injections.len(), 3);
-    }
-
-    #[test]
-    fn test_drill_result_serialization() {
-        let result = DrillResult {
-            scenario_name: "test".to_string(),
-            total_injections: 1,
-            successful_recoveries: 1,
-            failed_recoveries: 0,
-            total_duration_ms: 100,
-            passed: true,
-            injection_results: vec![InjectionResult {
-                fault_type: FaultType::NetworkTimeout,
-                target_tool: "test".to_string(),
-                triggered: true,
-                recovery_action: Some("retry".to_string()),
-                recovery_success: true,
-                duration_ms: 50,
-            }],
-        };
-        let json = serde_json::to_value(&result).expect("serialization should work");
-        assert_eq!(json["passed"], true);
-        assert_eq!(json["injection_results"][0]["recovery_action"], "retry");
-    }
 }

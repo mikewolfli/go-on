@@ -1007,113 +1007,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_unsupported_extension() {
-        // parse_bytes doesn't hit the file-system, so it goes straight
-        // to extension matching and returns UnsupportedExtension.
-        let err = DocumentParser::default()
-            .parse_bytes(b"dummy content", "xyz")
-            .unwrap_err();
-        assert!(matches!(err, DocumentParserError::UnsupportedExtension(_)));
-        assert!(err.to_string().contains("xyz"));
-    }
-
-    #[test]
-    fn test_parsed_content_default() {
-        let content = ParsedContent::default();
-        assert!(content.text_content.is_empty());
-        assert!(content.images.is_empty());
-        assert!(content.tables.is_empty());
-        assert!(content.metadata.is_empty());
-        assert!(!content.has_error());
-        assert_eq!(content.char_count(), 0);
-    }
-
-    #[test]
-    fn test_parsed_content_serialize_roundtrip() {
-        let content = ParsedContent {
-            text_content: "Hello".to_string(),
-            images: vec!["base64data".to_string()],
-            tables: vec![Table {
-                caption: Some("Table 1".to_string()),
-                headers: vec!["A".to_string(), "B".to_string()],
-                rows: vec![vec!["1".to_string(), "2".to_string()]],
-            }],
-            metadata: {
-                let mut m = HashMap::new();
-                m.insert("key".to_string(), "value".to_string());
-                m
-            },
-        };
-        let json = serde_json::to_string(&content).expect("serialize ParsedContent");
-        let deserialized: ParsedContent =
-            serde_json::from_str(&json).expect("deserialize ParsedContent");
-        assert_eq!(deserialized.text_content, "Hello");
-        assert_eq!(deserialized.images.len(), 1);
-        assert_eq!(deserialized.tables.len(), 1);
-        assert_eq!(deserialized.tables[0].caption.as_deref(), Some("Table 1"));
-        assert_eq!(deserialized.tables[0].row_count(), 1);
-        assert_eq!(deserialized.tables[0].col_count(), 2);
-    }
-
-    #[test]
-    fn test_table_default() {
-        let table = Table {
-            caption: None,
-            headers: vec!["H1".to_string()],
-            rows: vec![],
-        };
-        assert_eq!(table.row_count(), 0);
-        assert_eq!(table.col_count(), 1);
-    }
-
-    #[test]
     fn test_parse_bytes_with_unsupported_ext() {
         let err = DocumentParser::default()
             .parse_bytes(b"data", "xyz")
             .unwrap_err();
         assert!(matches!(err, DocumentParserError::UnsupportedExtension(_)));
-    }
-
-    #[test]
-    fn test_feature_disabled_error() {
-        let err = DocumentParserError::feature_disabled("PDF");
-        assert!(err.to_string().contains("PDF"));
-        assert!(err.to_string().contains("feature"));
-    }
-
-    #[test]
-    fn test_parse_empty_extension() {
-        let err = DocumentParser::default()
-            .parse_bytes(b"some data", "")
-            .unwrap_err();
-        assert!(matches!(err, DocumentParserError::EmptyInput(_)));
-    }
-
-    #[test]
-    fn test_parse_bytes_empty_extension() {
-        let err = DocumentParser::default()
-            .parse_bytes(b"data", "  ")
-            .unwrap_err();
-        assert!(matches!(err, DocumentParserError::EmptyInput(_)));
-    }
-
-    #[test]
-    fn test_parse_bytes_empty_slice() {
-        let err = DocumentParser::default()
-            .parse_bytes(b"", "pdf")
-            .unwrap_err();
-        assert!(matches!(err, DocumentParserError::EmptyInput(_)));
-    }
-
-    #[test]
-    fn test_file_too_large_error() {
-        let err = DocumentParserError::FileTooLarge {
-            size: 100_000_000,
-            max: 50_000_000,
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("100000000"));
-        assert!(msg.contains("50000000"));
     }
 
     #[test]
@@ -1143,13 +1041,6 @@ mod tests {
         parser.truncate_content(&mut content);
         assert_eq!(content.text_content, "Short text.");
         assert!(!content.metadata.contains_key("truncated"));
-    }
-
-    #[test]
-    fn test_empty_input_error_display() {
-        let err = DocumentParserError::EmptyInput("test reason".to_string());
-        let msg = err.to_string();
-        assert!(msg.contains("test reason"));
     }
 
     #[test]

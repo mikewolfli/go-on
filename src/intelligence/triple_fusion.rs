@@ -226,14 +226,6 @@ mod tests {
     use crate::intelligence::metacognitive::MetacognitiveConfig;
 
     #[test]
-    fn test_triple_fusion_default_config() {
-        let config = TripleFusionConfig::default();
-        assert!((config.min_awareness_for_evolution - 0.3).abs() < 1e-6);
-        assert_eq!(config.metacognitive_sync_interval_ms, 10_000);
-        assert!(config.auto_evolve_from_reflexion);
-    }
-
-    #[test]
     fn test_fusion_cycle_increments_counter() {
         let config = TripleFusionConfig::default();
         let bridge = TripleFusionBridge::new(config);

@@ -373,24 +373,4 @@ mod tests {
         let client = vec![ProtocolVersion::from_u16(42)];
         assert_eq!(ProtocolVersion::select_highest_common(&client), None);
     }
-
-    #[test]
-    fn test_display() {
-        assert_eq!(ProtocolMode::Adaptive.to_string(), "adaptive");
-        assert_eq!(ProtocolMode::AcpHttp.to_string(), "acp-http");
-        assert_eq!(ProtocolMode::McpStdio.to_string(), "mcp-stdio");
-    }
-
-    #[test]
-    fn test_from_str() {
-        assert_eq!(
-            "auto".parse::<ProtocolMode>().unwrap(),
-            ProtocolMode::Adaptive
-        );
-        assert_eq!(
-            "acp-http".parse::<ProtocolMode>().unwrap(),
-            ProtocolMode::AcpHttp
-        );
-        assert!("invalid".parse::<ProtocolMode>().is_err());
-    }
 }

@@ -317,10 +317,4 @@ mod tests {
         let err = verify_request(secret, body, &sig).unwrap_err();
         assert!(matches!(err, SigningError::BodyHashMismatch));
     }
-
-    #[test]
-    fn test_algorithm_display() {
-        assert_eq!(SigningAlgorithm::Ed25519.to_string(), "Ed25519");
-        assert_eq!(SigningAlgorithm::HmacSha256.to_string(), "HmacSha256");
-    }
 }

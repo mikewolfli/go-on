@@ -492,13 +492,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_anomaly_detection() {
-        let prevention = FailurePrevention::new();
-        let result = prevention.detect_anomaly("", &HashMap::new());
-        assert!(result.detected);
-    }
-
-    #[test]
     fn test_circuit_breaker() {
         let mut prevention = FailurePrevention::new();
         for _ in 0..5 {

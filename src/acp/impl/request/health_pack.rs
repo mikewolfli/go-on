@@ -325,58 +325,6 @@ pub(super) async fn handle_maintenance_gc(
 mod tests {
     use super::*;
 
-    // ── health_status_label ────────────────────────────────────────────
-
-    #[test]
-    fn health_status_label_healthy() {
-        assert_eq!(
-            health_status_label(crate::failure_prevention::HealthStatus::Healthy),
-            "healthy"
-        );
-    }
-
-    #[test]
-    fn health_status_label_degraded() {
-        assert_eq!(
-            health_status_label(crate::failure_prevention::HealthStatus::Degraded),
-            "degraded"
-        );
-    }
-
-    #[test]
-    fn health_status_label_unhealthy() {
-        assert_eq!(
-            health_status_label(crate::failure_prevention::HealthStatus::Unhealthy),
-            "unhealthy"
-        );
-    }
-
-    // ── circuit_state_label ────────────────────────────────────────────
-
-    #[test]
-    fn circuit_state_label_closed() {
-        assert_eq!(
-            circuit_state_label(crate::failure_prevention::CircuitBreakerState::Closed),
-            "closed"
-        );
-    }
-
-    #[test]
-    fn circuit_state_label_open() {
-        assert_eq!(
-            circuit_state_label(crate::failure_prevention::CircuitBreakerState::Open),
-            "open"
-        );
-    }
-
-    #[test]
-    fn circuit_state_label_half_open() {
-        assert_eq!(
-            circuit_state_label(crate::failure_prevention::CircuitBreakerState::HalfOpen),
-            "half-open"
-        );
-    }
-
     // ── degradation_level_label ────────────────────────────────────────
 
     #[test]

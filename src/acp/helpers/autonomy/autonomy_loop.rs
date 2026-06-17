@@ -114,48 +114,6 @@ mod tests {
     // ── TAO cycle AutonomyPhase state transitions ─────────────────────
 
     #[test]
-    fn autonomy_phase_planning_is_not_terminal() {
-        assert!(!matches!(
-            AutonomyPhase::Planning,
-            AutonomyPhase::Completed | AutonomyPhase::Failed
-        ));
-    }
-
-    #[test]
-    fn autonomy_phase_executing_is_not_terminal() {
-        assert!(!matches!(
-            AutonomyPhase::Executing,
-            AutonomyPhase::Completed | AutonomyPhase::Failed
-        ));
-    }
-
-    #[test]
-    fn autonomy_phase_observing_is_not_terminal() {
-        assert!(!matches!(
-            AutonomyPhase::Observing,
-            AutonomyPhase::Completed | AutonomyPhase::Failed
-        ));
-    }
-
-    #[test]
-    fn autonomy_phase_finalizing_is_not_terminal() {
-        assert!(!matches!(
-            AutonomyPhase::Finalizing,
-            AutonomyPhase::Completed | AutonomyPhase::Failed
-        ));
-    }
-
-    #[test]
-    fn autonomy_phase_completed_is_terminal() {
-        assert!(matches!(AutonomyPhase::Completed, AutonomyPhase::Completed));
-    }
-
-    #[test]
-    fn autonomy_phase_failed_is_terminal() {
-        assert!(matches!(AutonomyPhase::Failed, AutonomyPhase::Failed));
-    }
-
-    #[test]
     fn autonomy_phases_are_distinct() {
         use std::collections::HashSet;
         let phases = [

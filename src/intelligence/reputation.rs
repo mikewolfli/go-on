@@ -243,12 +243,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_store_empty() {
-        let store = ReputationStore::new(ReputationConfig::default());
-        assert_eq!(store.tracked_agent_count(), 0);
-    }
-
-    #[test]
     fn test_record_outcome_creates_entry() {
         let mut store = ReputationStore::new(ReputationConfig::default());
         store.record_outcome("agent_a", true);

@@ -1477,11 +1477,5 @@ mod tests {
         assert_eq!(three, "gamma-key");
     }
 
-    #[test]
-    fn agent_error_can_be_classified() {
-        let err = AppError::Network(NetworkError::RequestTimeout(
-            "service unavailable".to_string(),
-        ));
-        assert!(matches!(err, AppError::Network(_)));
-    }
+
 }

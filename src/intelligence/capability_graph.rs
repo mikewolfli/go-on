@@ -669,12 +669,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_graph_empty() {
-        let g = CapabilityGraph::new();
-        assert_eq!(g.total_agents(), 0);
-    }
-
-    #[test]
     fn test_register_agent() {
         let mut g = CapabilityGraph::new();
         g.register_agent(
@@ -722,12 +716,6 @@ mod tests {
             weight: 0.9,
         });
         assert_eq!(g.best_handoff("a", "code"), Some("c"));
-    }
-
-    #[test]
-    fn test_best_handoff_none_when_no_edge() {
-        let g = CapabilityGraph::new();
-        assert_eq!(g.best_handoff("a", "missing"), None);
     }
 
     #[test]

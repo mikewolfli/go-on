@@ -57,7 +57,21 @@ pub(crate) async fn run_agent_collecting(
         let mut chunk_index = 0usize;
         let mut total_chars = 0usize;
         let mut selected_model: Option<String> = None;
-        while let Some(token) = receiver.recv().await {
+        // Wrap recv() in a per-chunk timeout so a stuck agent cannot
+        // hang the pipeline indefinitely even when no outer timeout is set.
+        let recv_timeout = std::time::Duration::from_secs(120);
+        loop {
+            let token = match tokio::time::timeout(recv_timeout, receiver.recv()).await {
+                Ok(Some(t)) => t,
+                Ok(None) => break, // channel closed cleanly
+                Err(_) => {
+                    tracing::warn!(
+                        "agent streaming recv() timed out after {}s — aborting collect",
+                        recv_timeout.as_secs()
+                    );
+                    break;
+                }
+            };
             // Check for model-used token (prefixed with __model_used__)
             // This is sent by CopilotAgent after a successful auto-select.
             if let Some(model_id) = token.strip_prefix("__model_used__:") {

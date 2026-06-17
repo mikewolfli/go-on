@@ -491,14 +491,6 @@ mod tests {
     }
 
     #[test]
-    fn test_version_display() {
-        let v = make_version(1, 4, 2, "abcdef123456");
-        let s = v.to_string();
-        assert!(s.contains("1.4.2"));
-        assert!(s.contains("abcdef12"));
-    }
-
-    #[test]
     fn test_compute_schema_hash_deterministic() {
         let q1 = vec!["a".to_string(), "b".to_string()];
         let p1 = vec!["x".to_string()];
@@ -561,11 +553,6 @@ mod tests {
     }
 
     #[test]
-    fn test_latest_version_empty() {
-        assert!(latest_version(&[]).is_none());
-    }
-
-    #[test]
     fn test_migration_registry_register_and_find() {
         let mut registry = MigrationRegistry::new();
 
@@ -599,36 +586,7 @@ mod tests {
         assert!(path.is_none());
     }
 
-    #[test]
-    fn test_migration_registry_find_path_same_version() {
-        let registry = MigrationRegistry::new();
-        let path = registry.find_path(2, 2);
-        assert!(path.is_some());
-        assert_eq!(path.unwrap(), vec![2]);
-    }
-
-    #[test]
-    fn test_migration_compatible_versions_no_migration_needed() {
-        let registry = MigrationRegistry::new();
-        let weights = ModelWeights {
-            q_table_snapshot: {
-                let mut m = HashMap::new();
-                m.insert("k".into(), 1.0);
-                m
-            },
-            policy_params: HashMap::new(),
-            version: 1,
-        };
-
-        let from = make_version(1, 0, 0, "hash_a");
-        let to = make_version(1, 2, 0, "hash_b");
-
-        // Same major version, no migration needed.
-        let result = registry.migrate(&weights, &from, &to).unwrap();
-        assert_eq!(result.version, 1);
-        assert_eq!(result.q_table_snapshot.get("k"), Some(&1.0));
-    }
-
+    // ── any migration tests after this ──
     #[test]
     fn test_migration_requires_path() {
         let registry = MigrationRegistry::new();

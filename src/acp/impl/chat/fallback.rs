@@ -158,9 +158,20 @@ pub(crate) async fn execute_fallback_agents(
         let _tenant_id_owned = tenant_id.to_string();
 
         let fut = async move {
-            let _permit = sem_clone.acquire().await.map_err(|_| {
-                tracing::warn!("semaphore closed during agent execution — task skipped");
-            });
+            let permit_timeout = std::time::Duration::from_secs(30);
+            let _permit = tokio::time::timeout(permit_timeout, sem_clone.acquire())
+                .await
+                .map_err(|_| {
+                    tracing::warn!(
+                        "semaphore acquire timed out after {}s",
+                        permit_timeout.as_secs()
+                    );
+                })
+                .and_then(|r| {
+                    r.map_err(|_| {
+                        tracing::warn!("semaphore closed during agent execution — task skipped");
+                    })
+                });
             let _permit = match _permit {
                 Ok(p) => p,
                 Err(()) => {

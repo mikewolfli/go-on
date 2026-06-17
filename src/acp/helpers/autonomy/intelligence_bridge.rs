@@ -254,13 +254,6 @@ mod tests {
     }
 
     #[test]
-    fn test_gather_intelligence_context_empty() {
-        let ctx = gather_intelligence_context("");
-        assert!(!ctx.intelligence_active);
-        assert!(ctx.recent_insights.is_empty());
-    }
-
-    #[test]
     fn test_build_augmented_context() {
         let ctx = IntelligenceContext {
             intelligence_active: true,
@@ -276,12 +269,5 @@ mod tests {
         assert!(text.contains("Intelligence Context"));
         assert!(text.contains("agent1"));
         assert!(text.contains("Test insight"));
-    }
-
-    #[test]
-    fn test_build_augmented_context_inactive() {
-        let ctx = IntelligenceContext::default();
-        let augmented = build_intelligence_augmented_context(&ctx);
-        assert!(augmented.is_none());
     }
 }

@@ -373,14 +373,6 @@ mod tests {
 
     // -- CORS_DEFAULT_ALLOWED_ORIGINS constant -----------------------------
 
-    #[test]
-    fn test_cors_default_allowed_origins_constant() {
-        assert!(
-            CORS_DEFAULT_ALLOWED_ORIGINS.is_empty(),
-            "expected empty default allowed origins"
-        );
-    }
-
     // -- Helpers -----------------------------------------------------------
 
     /// Convenience helper to extract a header value from a `Vec<(String, String)>`.

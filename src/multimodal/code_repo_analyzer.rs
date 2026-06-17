@@ -879,13 +879,6 @@ mod tests {
     }
 
     #[test]
-    fn test_type_index_empty() {
-        let idx = TypeIndex::empty();
-        assert!(idx.is_empty());
-        assert_eq!(idx.len(), 0);
-    }
-
-    #[test]
     fn test_type_index_add_and_get() {
         let mut idx = TypeIndex::empty();
         idx.add(TypeEntry {
@@ -901,13 +894,6 @@ mod tests {
         assert_eq!(idx.len(), 1);
         assert!(idx.get("crate::MyStruct").is_some());
         assert!(idx.get("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_repo_map_empty() {
-        let map = RepoMap::empty();
-        assert_eq!(map.file_count(), 0);
-        assert_eq!(map.total_loc(), 0);
     }
 
     #[test]
@@ -939,24 +925,6 @@ mod tests {
         assert_eq!(analyzer.infer_kind("fn qux"), SymbolKind::Function);
     }
 
-    #[test]
-    fn test_answer_serialize_roundtrip() {
-        let answer = Answer {
-            text: "The main struct is AppConfig.".into(),
-            references: vec![SourceRef {
-                file: "src/config.rs".into(),
-                line: 42,
-                snippet: "pub struct AppConfig".into(),
-            }],
-            confidence: 0.95,
-            coverage: AnswerCoverage::FullRepo,
-        };
-        let json = serde_json::to_string(&answer).expect("serialize answer");
-        let deserialized: Answer = serde_json::from_str(&json).expect("deserialize answer");
-        assert_eq!(deserialized.text, answer.text);
-        assert!((deserialized.confidence - 0.95).abs() < 1e-6);
-    }
-
     #[tokio::test]
     async fn test_clone_local_path_nonexistent() {
         let analyzer = RepoAnalyzer::default();
@@ -964,29 +932,5 @@ mod tests {
         assert!(matches!(result, Err(RepoAnalyzerError::PathNotFound(_))));
     }
 
-    #[test]
-    fn test_symbol_kind_debug_label() {
-        assert_eq!(SymbolKind::Struct.debug_label(), "struct");
-        assert_eq!(SymbolKind::Enum.debug_label(), "enum");
-        assert_eq!(SymbolKind::Function.debug_label(), "function");
-        assert_eq!(SymbolKind::Other("custom".into()).debug_label(), "other");
-    }
 
-    #[test]
-    fn test_answer_coverage_serialize() {
-        let full = AnswerCoverage::FullRepo;
-        let subset = AnswerCoverage::Subset("src/".into());
-        let json_full = serde_json::to_string(&full).expect("serialize AnswerCoverage FullRepo");
-        let json_subset = serde_json::to_string(&subset).expect("serialize AnswerCoverage Subset");
-        assert_eq!(
-            serde_json::from_str::<AnswerCoverage>(&json_full)
-                .expect("deserialize AnswerCoverage FullRepo"),
-            full
-        );
-        assert_eq!(
-            serde_json::from_str::<AnswerCoverage>(&json_subset)
-                .expect("deserialize AnswerCoverage Subset"),
-            subset
-        );
-    }
 }

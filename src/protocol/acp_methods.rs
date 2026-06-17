@@ -84,10 +84,4 @@ mod tests {
         assert!(AcpMethodNames::is_known("terminal/create"));
         assert!(!AcpMethodNames::is_known("unknown/method"));
     }
-
-    #[test]
-    fn test_all_methods_non_empty() {
-        assert!(!AcpMethodNames::ALL.is_empty());
-        assert!(AcpMethodNames::ALL.len() >= 19);
-    }
 }

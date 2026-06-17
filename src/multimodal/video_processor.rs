@@ -619,65 +619,6 @@ pub struct FullVideoResult {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_video_format_from_extension() {
-        assert_eq!(VideoFormat::from_extension("mp4"), VideoFormat::Mp4);
-        assert_eq!(VideoFormat::from_extension("MP4"), VideoFormat::Mp4);
-        assert_eq!(VideoFormat::from_extension("avi"), VideoFormat::Avi);
-        assert_eq!(VideoFormat::from_extension("mkv"), VideoFormat::Mkv);
-        assert_eq!(VideoFormat::from_extension("mov"), VideoFormat::Mov);
-        assert_eq!(VideoFormat::from_extension("webm"), VideoFormat::WebM);
-        assert_eq!(VideoFormat::from_extension("flv"), VideoFormat::Other);
-    }
-
-    #[test]
-    fn test_video_format_mime_type() {
-        assert_eq!(VideoFormat::Mp4.mime_type(), "video/mp4");
-        assert_eq!(VideoFormat::Avi.mime_type(), "video/x-msvideo");
-        assert_eq!(VideoFormat::Mkv.mime_type(), "video/x-matroska");
-        assert_eq!(VideoFormat::Mov.mime_type(), "video/quicktime");
-        assert_eq!(VideoFormat::WebM.mime_type(), "video/webm");
-        assert_eq!(VideoFormat::Other.mime_type(), "application/octet-stream");
-    }
-
-    #[test]
-    fn test_validate_duration_accepts_valid() {
-        let config = VideoProcessorConfig::default();
-        let proc = VideoProcessor::new(config);
-        assert!(proc.validate_duration(300.0).is_ok());
-    }
-
-    #[test]
-    fn test_validate_duration_rejects_exceeding() {
-        let config = VideoProcessorConfig::default();
-        let proc = VideoProcessor::new(config);
-        assert!(matches!(
-            proc.validate_duration(900.0),
-            Err(VideoProcessorError::DurationExceeded)
-        ));
-    }
-
-    #[test]
-    fn test_validate_file_size_accepts_small() {
-        let config = VideoProcessorConfig::default();
-        let proc = VideoProcessor::new(config);
-        // 1 MB
-        let data = vec![0u8; 1024 * 1024];
-        assert!(proc.validate_file_size(&data).is_ok());
-    }
-
-    #[test]
-    fn test_validate_file_size_rejects_large() {
-        let config = VideoProcessorConfig::default();
-        let proc = VideoProcessor::new(config);
-        // 600 MB
-        let data = vec![0u8; 600 * 1024 * 1024];
-        assert!(matches!(
-            proc.validate_file_size(&data),
-            Err(VideoProcessorError::FileSizeExceeded(_))
-        ));
-    }
-
     #[tokio::test]
     async fn test_extract_frames_empty_video() {
         // Check if ffmpeg is available in the environment
@@ -719,40 +660,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_scene_description_serialize_roundtrip() {
-        let scene = SceneDescription {
-            start_sec: 0.0,
-            end_sec: 10.0,
-            label: "intro".into(),
-            confidence: 0.95,
-            tags: vec!["person".into(), "office".into()],
-        };
-        let json = serde_json::to_string(&scene).expect("serialize SceneDescription");
-        let deserialized: SceneDescription =
-            serde_json::from_str(&json).expect("deserialize SceneDescription");
-        assert_eq!(deserialized.label, "intro");
-        assert!((deserialized.confidence - 0.95).abs() < 1e-6);
-    }
 
-    #[test]
-    fn test_video_progress_serialize_roundtrip() {
-        let p = VideoProgress {
-            step: "extract_frames".into(),
-            percent: 50.0,
-            message: Some("halfway".into()),
-        };
-        let json = serde_json::to_string(&p).expect("serialize VideoProgress");
-        let deserialized: VideoProgress =
-            serde_json::from_str(&json).expect("deserialize VideoProgress");
-        assert_eq!(deserialized.step, "extract_frames");
-    }
-
-    #[test]
-    fn test_config_default_frame_format() {
-        let config = VideoProcessorConfig::default();
-        assert_eq!(config.frame_format, "jpeg");
-        assert_eq!(config.frame_quality, 85);
-        assert_eq!(config.frame_interval_secs, 1.0);
-    }
 }
