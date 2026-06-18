@@ -238,38 +238,15 @@ impl std::fmt::Debug for HyperResilienceEngine {
 
 impl Clone for HyperResilienceEngine {
     fn clone(&self) -> Self {
-        // Use try_lock in a loop with small sleeps to avoid blocking
-        // a tokio worker thread (tokio::sync::Mutex).
-        let config = loop {
-            match self.config.try_read() {
-                Ok(guard) => break RwLock::new(guard.clone()),
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-            }
-        };
-        let circuit_breakers = loop {
-            match self.circuit_breakers.try_lock() {
-                Ok(guard) => break Mutex::new(guard.clone()),
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-            }
-        };
-        let failover_groups = loop {
-            match self.failover_groups.try_lock() {
-                Ok(guard) => break Mutex::new(guard.clone()),
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-            }
-        };
-        let test_avg_latency_ms = loop {
-            match self.test_avg_latency_ms.try_lock() {
-                Ok(guard) => break Mutex::new(*guard),
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-            }
-        };
-        let test_error_rate = loop {
-            match self.test_error_rate.try_lock() {
-                Ok(guard) => break Mutex::new(*guard),
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-            }
-        };
+        // Use blocking_lock()/blocking_read() since Clone is synchronous
+        // and the locks are tokio::sync types (lock() returns a Future).
+        // The original try_lock()+sleep(1ms) spin pattern was worse:
+        // it blocked the calling thread for at least 1ms per attempt.
+        let config = RwLock::new(self.config.blocking_read().clone());
+        let circuit_breakers = Mutex::new(self.circuit_breakers.blocking_lock().clone());
+        let failover_groups = Mutex::new(self.failover_groups.blocking_lock().clone());
+        let test_avg_latency_ms = Mutex::new(*self.test_avg_latency_ms.blocking_lock());
+        let test_error_rate = Mutex::new(*self.test_error_rate.blocking_lock());
         Self {
             config,
             circuit_breakers,
@@ -285,21 +262,10 @@ impl Clone for HyperResilienceEngine {
             #[cfg(feature = "chaos-testing")]
             chaos_engine: self.chaos_engine.clone(),
             persist_path: self.persist_path.clone(),
-            fault_consensus: match self.fault_consensus.as_ref() {
-                Some(m) => match m.try_lock() {
-                    Ok(guard) => Some(Mutex::new(guard.clone())),
-                    Err(_) => {
-                        // Fallback: spin-lock with short sleeps (same pattern as other fields)
-                        loop {
-                            match m.try_lock() {
-                                Ok(guard) => break Some(Mutex::new(guard.clone())),
-                                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-                            }
-                        }
-                    }
-                },
-                None => None,
-            },
+            fault_consensus: self
+                .fault_consensus
+                .as_ref()
+                .map(|m| Mutex::new(m.blocking_lock().clone())),
             plan_store: self.plan_store.clone(),
         }
     }

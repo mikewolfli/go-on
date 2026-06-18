@@ -620,6 +620,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "requires ffmpeg on PATH; run manually when ffmpeg is available"]
     async fn test_extract_frames_empty_video() {
         // Check if ffmpeg is available in the environment
         let ffmpeg_available = std::process::Command::new("ffmpeg")
@@ -659,6 +660,4 @@ mod tests {
             }
         }
     }
-
-
 }

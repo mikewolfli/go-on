@@ -149,5 +149,5 @@ pub fn pre_patch_quality_gate() -> CodeQualityReport {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Empty test module — tests will be added here
 }

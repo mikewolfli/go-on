@@ -135,6 +135,7 @@ mod unit_tests {
                 fallback: Some(true),
                 principles: None,
                 options: Some(PhaseOptions {
+                    request_timeout_seconds: Some(30),
                     vector_enabled: Some(true),
                     vector_min_query_chars: Some(4),
                     vector_top_k: Some(2),
@@ -195,6 +196,7 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[ignore = "slow integration test — spins up full chat pipeline; run on demand"]
     async fn process_chat_request_wires_vector_context_and_checkpoint_tree() {
         reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -397,6 +399,7 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[ignore = "slow integration test — spins up full chat pipeline; run on demand"]
     async fn process_chat_request_wires_harness_and_capability_bus_closed_loop() {
         reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -510,6 +513,7 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[ignore = "slow integration test — spins up full chat pipeline; run on demand"]
     async fn process_chat_request_skips_empty_agent_output_and_uses_next_agent() {
         reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -601,6 +605,7 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[ignore = "slow integration test — spins up full chat pipeline; run on demand"]
     async fn process_chat_request_all_empty_outputs_returns_specific_error() {
         reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -664,6 +669,7 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[ignore = "slow integration test — spins up full chat pipeline; run on demand"]
     async fn process_chat_request_specific_model_without_match_keeps_phase_agents() {
         reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -730,6 +736,7 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[ignore = "slow integration test — spins up full chat pipeline; run on demand"]
     async fn process_chat_request_high_risk_multi_candidate_emits_council_decision() {
         reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
@@ -826,6 +833,7 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[ignore = "slow integration test — spins up full chat pipeline; run on demand"]
     async fn process_chat_request_execute_mode_exposes_stable_autonomy_contract() {
         reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");

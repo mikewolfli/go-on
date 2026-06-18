@@ -59,9 +59,23 @@ pub(crate) async fn run_agent_collecting(
         let mut selected_model: Option<String> = None;
         // Wrap recv() in a per-chunk timeout so a stuck agent cannot
         // hang the pipeline indefinitely even when no outer timeout is set.
+        let overall_timeout = std::time::Duration::from_secs(600); // 10 min hard cap
         let recv_timeout = std::time::Duration::from_secs(120);
         loop {
-            let token = match tokio::time::timeout(recv_timeout, receiver.recv()).await {
+            // Check overall timeout before each recv attempt.
+            if stream_started.elapsed() > overall_timeout {
+                tracing::warn!(
+                    "agent streaming overall timeout after {}s — aborting collect",
+                    overall_timeout.as_secs()
+                );
+                break;
+            }
+            // Use min of per-chunk timeout and remaining overall timeout.
+            let remaining = overall_timeout
+                .checked_sub(stream_started.elapsed())
+                .unwrap_or(std::time::Duration::from_secs(1));
+            let chunk_timeout = recv_timeout.min(remaining);
+            let token = match tokio::time::timeout(chunk_timeout, receiver.recv()).await {
                 Ok(Some(t)) => t,
                 Ok(None) => break, // channel closed cleanly
                 Err(_) => {

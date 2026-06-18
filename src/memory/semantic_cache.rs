@@ -147,8 +147,11 @@ impl SemanticResponseCache {
                 })
                 .or_else(|| {
                     bucket.iter().position(|entry| {
-                        let similarity = jaccard_similarity(request, &entry.request_text);
-                        similarity >= self.config.similarity_threshold
+                        // Both exact and similarity lookups must respect TTL.
+                        now.duration_since(entry.created_at) < entry.ttl && {
+                            let similarity = jaccard_similarity(request, &entry.request_text);
+                            similarity >= self.config.similarity_threshold
+                        }
                     })
                 });
 

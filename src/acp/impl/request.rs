@@ -1651,8 +1651,8 @@ mod tests {
     use super::collect_vector_context_snippets;
     use super::{
         attach_request_dispatch_context, classify_request_error_kind, infer_workflow_parallelism,
-        is_acp_request, is_mcp_request, normalize_mcp_method, rebalance_execution_order,
-        session_id_for_task, summarize_lock_health, with_error_contract_data, AcpErrorCode,
+        is_acp_request, rebalance_execution_order, session_id_for_task, summarize_lock_health,
+        with_error_contract_data, AcpErrorCode,
     };
     use crate::acp::prelude::AcpLockSnapshot;
     #[cfg(not(feature = "backend-postgres"))]

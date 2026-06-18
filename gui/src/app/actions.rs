@@ -340,7 +340,13 @@ impl GoOnApp {
                 "backend: detected existing listener at {}; waiting for release...",
                 bind_addr
             );
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            // Short sleep; called from UI thread so keep it minimal.
+            for _ in 0..5 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if !is_addr_listening(&bind_addr) {
+                    break;
+                }
+            }
             if is_addr_listening(&bind_addr) {
                 // Force-kill the process holding the port
                 #[cfg(target_os = "macos")]
@@ -367,7 +373,7 @@ impl GoOnApp {
                         .args(["-k", "8090/tcp"])
                         .output();
                 }
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
 

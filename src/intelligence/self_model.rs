@@ -205,6 +205,7 @@ impl SelfModelCore {
     ///
     /// Errors are silently ignored so that persistence does not disrupt normal
     /// operation. Logging is performed at debug level for observability.
+    #[allow(dead_code)]
     fn persist(&self) {
         let inner = lock_guard(&self.inner);
         Self::persist_inner(&inner);
@@ -284,7 +285,7 @@ impl SelfModelCore {
 
         inner.capabilities.push(capability);
         inner.last_update_ms = now_ms();
-        self.persist();
+        Self::persist_inner(&inner);
         Ok(())
     }
 
@@ -307,7 +308,7 @@ impl SelfModelCore {
         cap.last_verified_ms = now_ms();
 
         inner.last_update_ms = now_ms();
-        self.persist();
+        Self::persist_inner(&inner);
         Ok(())
     }
 
@@ -351,7 +352,7 @@ impl SelfModelCore {
         }
 
         inner.last_update_ms = now_ms();
-        self.persist();
+        Self::persist_inner(&inner);
     }
 
     /// Mark an existing limitation as acknowledged.
@@ -371,7 +372,7 @@ impl SelfModelCore {
             })?;
         lim.is_acknowledged = true;
         inner.last_update_ms = now_ms();
-        self.persist();
+        Self::persist_inner(&inner);
         Ok(())
     }
 
@@ -420,7 +421,7 @@ impl SelfModelCore {
         }
 
         inner.last_update_ms = now_ms();
-        self.persist();
+        Self::persist_inner(&inner);
     }
 
     /// Get the most recent `count` performance snapshots (newest first).
@@ -519,7 +520,7 @@ impl SelfModelCore {
             samples = stats.sample_count,
             "SelfModel: updated capability stats"
         );
-        self.persist();
+        Self::persist_inner(&inner);
     }
 
     /// Get the dynamic EMA stats for a specific capability, if any.
@@ -1148,6 +1149,9 @@ mod tests {
                 .as_nanos()
         ));
         let path = dir.join("self_model.json");
+
+        // Ensure the parent directory exists for file I/O.
+        let _ = std::fs::create_dir_all(&dir);
 
         // --- Save phase ---
         let core = SelfModelCore::new(test_config()).with_persistence_path(path.clone());

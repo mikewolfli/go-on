@@ -377,7 +377,7 @@ pub fn current_language() -> Language {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use serde_json::Value;
     use std::path::PathBuf;
 

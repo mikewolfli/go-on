@@ -1361,7 +1361,6 @@ fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::{AgentConfig, AppConfig, FlowConfig, PhaseConfig, RuntimeConfig};
-    use crate::core::error::{AppError, NetworkError};
     use crate::intelligence::capability_graph::CapabilityGraph;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -1476,6 +1475,4 @@ mod tests {
         assert_eq!(two, "beta-key");
         assert_eq!(three, "gamma-key");
     }
-
-
 }

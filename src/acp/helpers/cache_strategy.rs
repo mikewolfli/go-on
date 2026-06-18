@@ -19,14 +19,6 @@ pub enum CacheDecision {
     Miss,
 }
 
-/// Result of a cache store operation
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub struct CacheStoreResult {
-    pub stored: bool,
-    pub level: String,
-}
-
 /// Independent cache strategy that encapsulates all cache-related decisions.
 pub struct CacheStrategy;
 

@@ -50,7 +50,6 @@ pub(crate) fn tool_governance_counters() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
 
     #[test]
     fn test_tool_governance_counters_returns_expected_keys() {

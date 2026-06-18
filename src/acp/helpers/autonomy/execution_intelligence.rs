@@ -166,11 +166,7 @@ pub(crate) fn post_check(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        corrective_actions_for_summary, post_check, pre_check, should_degrade,
-        EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL,
-    };
-    use std::sync::atomic::Ordering;
+    use super::{corrective_actions_for_summary, post_check, pre_check, should_degrade};
 
     #[test]
     fn degrade_threshold_checks_limits_and_failures() {
