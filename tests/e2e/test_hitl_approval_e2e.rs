@@ -27,6 +27,7 @@ use go_on::governance::pua::{PuaEnforcementPlan, PuaRuleEngine};
 struct HitlE2eContext {
     action_id: Option<String>,
     request_id: Option<String>,
+    #[allow(dead_code)]
     final_status: Option<String>,
 }
 

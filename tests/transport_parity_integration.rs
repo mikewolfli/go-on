@@ -475,16 +475,17 @@ async fn acp_http_error_payloads_keep_platform_context() {
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
     let _guard = lock_suite_guard();
-    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+    let runtime_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/openai_compat.rs");
     let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
     // The 502 branch lives in handle_response_create which is called by handle_responses_api.
     let handler_start = source
         .find("async fn handle_response_create(")
         .expect("handle_response_create marker must exist");
     let handler_end = source[handler_start..]
-        .find("fn artifact_ledger(")
+        .find("async fn handle_response_stream(")
         .map(|offset| handler_start + offset)
-        .expect("artifact_ledger marker must exist");
+        .expect("handle_response_stream marker must exist");
     let section = &source[handler_start..handler_end];
 
     assert!(
@@ -500,23 +501,28 @@ async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
 }
 
 /// ACP HTTP Responses API stream failed event must inject platform_context before SSE write.
+/// ACP HTTP /v1/responses/stream failed branch must inject platform_context.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_responses_api_stream_failed_branch_keeps_platform_context() {
     let _guard = lock_suite_guard();
-    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+    let runtime_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/openai_compat.rs");
     let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
-    let handler_start = source
-        .find("async fn handle_response_create(")
-        .expect("handle_response_create marker must exist");
-    let handler_end = source[handler_start..]
-        .find("fn artifact_ledger(")
-        .map(|offset| handler_start + offset)
-        .expect("artifact_ledger marker must exist");
-    let section = &source[handler_start..handler_end];
+    // Check inside handle_response_stream for platform_context injection
+    let stream_start = source
+        .find("async fn handle_response_stream(")
+        .expect("handle_response_stream marker must exist");
+    let stream_end = source[stream_start..]
+        .find("// Tests")
+        .map(|offset| stream_start + offset)
+        .expect("Tests section marker must exist");
+    let section = &source[stream_start..stream_end];
 
     assert!(
-        section.contains("let failed = inject_platform_profiles_if_absent(failed, \"responses.api\");"),
-        "responses.api stream failed branch must inject platform_context before SSE emission; section={section}"
+        section.contains("inject_platform_profiles_if_absent(")
+            && section.contains("\"responses.api\"")
+            && section.contains("inject_platform_profiles_if_absent(failed, \"responses.api\")"),
+        "responses.api stream failed branch must inject platform_context before SSE emission"
     );
 }
 
@@ -524,16 +530,16 @@ async fn acp_http_responses_api_stream_failed_branch_keeps_platform_context() {
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_chat_stream_error_branches_keep_platform_context() {
     let _guard = lock_suite_guard();
-    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+    let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/http.rs");
     let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
     // /chat/stream error handling is in route_http_post, after the chat/stream match arm.
     let handler_start = source
         .find("async fn route_http_post(")
         .expect("route_http_post marker must exist");
     let handler_end = source[handler_start..]
-        .find("fn artifact_ledger(")
+        .find("pub(crate) fn compute_cors_response_headers(")
         .map(|offset| handler_start + offset)
-        .expect("artifact_ledger marker must exist");
+        .expect("compute_cors_response_headers marker must exist");
     let section = &source[handler_start..handler_end];
 
     assert!(
@@ -865,23 +871,24 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
         let _guard = lock_suite_guard();
         use std::collections::BTreeSet;
 
-        let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime.rs");
+        let runtime_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/http.rs");
         let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
         // Routes are split between route_http_get (GET) and route_http_post (POST).
         let get_start = source
             .find("async fn route_http_get(")
             .expect("route_http_get marker must exist");
         let get_end = source[get_start..]
-            .find("/// Route a POST request")
+            .find("async fn route_http_post(")
             .map(|offset| get_start + offset)
             .expect("route_http_post marker must exist");
         let post_start = source
             .find("async fn route_http_post(")
             .expect("route_http_post marker must exist");
         let post_end = source[post_start..]
-            .find("fn artifact_ledger(")
+            .find("pub(crate) fn compute_cors_response_headers(")
             .map(|offset| post_start + offset)
-            .expect("artifact_ledger marker must exist");
+            .expect("compute_cors_response_headers marker must exist");
         let combined = format!(
             "{}\n{}",
             &source[get_start..get_end],
@@ -919,12 +926,16 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
             "/chat/completions".to_string(),
             "/chat/stream".to_string(),
             "/health".to_string(),
+            "/health/ready".to_string(),
+            "/metrics".to_string(),
             "/models".to_string(),
+            "/protocol/version".to_string(),
             "/rpc".to_string(),
             "/v1/chat/completions".to_string(),
             "/v1/model".to_string(),
             "/v1/models".to_string(),
             "/v1/responses".to_string(),
+            "/v1/state/events".to_string(),
         ]);
 
         assert_eq!(

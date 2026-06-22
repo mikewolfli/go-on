@@ -264,6 +264,7 @@ fn init_otel_provider(_exporter: &str, endpoint: Option<String>, service_name: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::sync::atomic::Ordering;
 
     /// Helper to build a minimal RuntimeConfig with OTEL enabled.
@@ -315,6 +316,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_reset_otel_repeat_reset_behavior() {
         // Verify that calling reset_otel multiple times in sequence
         // does not panic and correctly allows re-initialization each time.

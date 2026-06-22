@@ -59,14 +59,14 @@ fn test_governance_status_has_defaults() {
     let status = GovernanceStatus::default();
     // Default governance should not be healthy (no subsystems wired)
     assert!(!status.healthy, "default governance must not be healthy");
-    // All subsystems should default to false
+    // These subsystems are enabled by default
     assert!(
-        !status.subsystems.rationalization,
-        "rationalization must be disabled by default"
+        status.subsystems.rationalization,
+        "rationalization must be enabled by default"
     );
     assert!(
-        !status.subsystems.security_governor,
-        "security_governor must be disabled by default"
+        status.subsystems.security_governor,
+        "security_governor must be enabled by default"
     );
-    assert!(!status.subsystems.rbac, "rbac must be disabled by default");
+    assert!(status.subsystems.rbac, "rbac must be enabled by default");
 }

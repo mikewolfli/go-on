@@ -17,6 +17,7 @@ use crate::acp::prelude::functions::now_ts;
 
 /// Circuit breaker snapshot
 #[derive(Debug, Clone, Serialize, Default)]
+#[allow(dead_code)]
 pub struct CircuitBreakerSnapshot {
     /// Circuit breaker name
     pub name: String,
@@ -76,8 +77,8 @@ impl Default for CircuitBreakerState {
 /// Circuit breaker admission result
 ///
 /// Public API type — re-exported for ACP consumers.
-#[expect(dead_code, reason = "public API for ACP consumers")]
 #[non_exhaustive]
+#[allow(dead_code)]
 pub enum CircuitBreakerAdmission {
     Closed,
     Rejected {
@@ -92,6 +93,7 @@ pub enum CircuitBreakerAdmission {
 
 /// Circuit breaker registry for managing circuit breakers
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 pub struct CircuitBreakerRegistry {
     inner: StdMutex<HashMap<String, CircuitBreakerState>>,
 }

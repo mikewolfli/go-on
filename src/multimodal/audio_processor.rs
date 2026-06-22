@@ -922,6 +922,4 @@ mod tests {
         // Will fail with missing key; just check it returns an error.
         assert!(result.is_err());
     }
-
-
 }

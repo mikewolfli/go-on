@@ -20,6 +20,7 @@ use crate::roles::AgentRole;
 
 /// Conversation checkpoint structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ConversationCheckpoint {
     /// Unique checkpoint ID
     pub checkpoint_id: String,
@@ -42,6 +43,7 @@ pub struct ConversationCheckpoint {
 
 /// Conversation state structure
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct ConversationState {
     /// Checkpoints in this conversation
     pub checkpoints: Vec<ConversationCheckpoint>,
@@ -54,8 +56,8 @@ pub struct ConversationState {
 /// Conversation prune result
 ///
 /// Public API type for ACP consumers.
-#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize, Default)]
+#[allow(dead_code)]
 pub struct ConversationPruneResult {
     /// Number of conversations removed
     pub removed: usize,
@@ -68,6 +70,7 @@ pub struct ConversationPruneResult {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Default)]
+#[allow(dead_code)]
 pub struct AcpLockSnapshot {
     pub name: String,
     pub acquisitions: u64,
@@ -85,8 +88,8 @@ pub struct AcpLockSnapshot {
 /// Review decision
 ///
 /// Public API type for ACP consumers.
-#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct ReviewDecision {
     /// Reviewer name
     pub reviewer: String,
@@ -101,9 +104,9 @@ pub struct ReviewDecision {
 /// This public enum uses `Pass`/`Fail`/`Invalid` semantics.
 /// There is a separate governance-internal `ReviewVerdict` in
 /// `crate::governance::review_controls` that uses `Approve`/`Reject`/`Invalid`.
-#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[allow(dead_code)]
 pub enum ReviewVerdict {
     /// Review passed
     Pass,
@@ -113,7 +116,7 @@ pub enum ReviewVerdict {
     Invalid,
 }
 
-#[expect(dead_code, reason = "public API surface for ACP consumers")]
+#[allow(dead_code)]
 impl ReviewVerdict {
     /// Convert to string
     pub fn as_str(&self) -> &'static str {
@@ -132,8 +135,8 @@ impl ReviewVerdict {
 /// Chat parameters structure
 ///
 /// Public API type for ACP consumers.
-#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[allow(dead_code)]
 pub struct ChatParams {
     /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto")
     pub mode: String,
@@ -152,8 +155,8 @@ pub struct ChatParams {
 /// Task characteristics
 ///
 /// Public API type for ACP consumers.
-#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TaskCharacteristics {
     /// Task complexity (simple, medium, complex)
     pub complexity: String,
@@ -172,8 +175,8 @@ pub struct TaskCharacteristics {
 /// Routing decision
 ///
 /// Public API type for ACP consumers.
-#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RoutingDecision {
     /// Selected roles in execution order
     pub roles: Vec<AgentRole>,
@@ -204,6 +207,7 @@ use crate::acp::prelude::runtime_metrics::MetricsSnapshot;
 
 /// Server status structure
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct ServerStatus {
     /// Metrics snapshot
     pub metrics: MetricsSnapshot,

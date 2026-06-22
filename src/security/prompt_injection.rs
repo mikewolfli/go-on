@@ -531,5 +531,4 @@ mod tests {
             "Expected jailbreak violation from 'ignore all previous instructions'"
         );
     }
-
 }

@@ -817,20 +817,32 @@ fn fast_path_route_template_bypasses_heavy_planning() {
     };
 
     // Known task descriptions — each should match a template keyword.
-    assert!(is_fast_path("fix the critical bug in main.rs"),
-            "bug-fix task must be fast-path");
-    assert!(is_fast_path("implement the new login flow"),
-            "feature task must be fast-path");
-    assert!(is_fast_path("bug: NullPointerException in UserService"),
-            "bug report must be fast-path");
+    assert!(
+        is_fast_path("fix the critical bug in main.rs"),
+        "bug-fix task must be fast-path"
+    );
+    assert!(
+        is_fast_path("implement the new login flow"),
+        "feature task must be fast-path"
+    );
+    assert!(
+        is_fast_path("bug: NullPointerException in UserService"),
+        "bug report must be fast-path"
+    );
 
     // Unknown / unrelated tasks — should NOT match any template.
-    assert!(!is_fast_path("water the plants and feed the cat"),
-            "unrelated task must not match template");
-    assert!(!is_fast_path("schedule backup for database"),
-            "ops task must not match template");
-    assert!(!is_fast_path("review the quarterly report"),
-            "review task must not match template");
+    assert!(
+        !is_fast_path("water the plants and feed the cat"),
+        "unrelated task must not match template"
+    );
+    assert!(
+        !is_fast_path("schedule backup for database"),
+        "ops task must not match template"
+    );
+    assert!(
+        !is_fast_path("review the quarterly report"),
+        "review task must not match template"
+    );
 }
 
 // ── BLUE44 §2.1: Recovery smoothness benchmarks ─────────────────────────────
@@ -854,23 +866,30 @@ fn recovery_orchestrator_reduces_friction_on_failure() {
     ];
 
     // A failure type is recoverable if it's in the known set.
-    let is_recoverable = |ft: &str| -> bool {
-        known_failure_types.contains(&ft)
-    };
+    let is_recoverable = |ft: &str| -> bool { known_failure_types.contains(&ft) };
 
     // Every known failure type must be recognized as recoverable.
     for ft in &known_failure_types {
-        assert!(is_recoverable(ft),
-                "known failure type '{}' must be recoverable", ft);
+        assert!(
+            is_recoverable(ft),
+            "known failure type '{}' must be recoverable",
+            ft
+        );
     }
 
     // Unknown failure types must NOT be considered recoverable.
-    assert!(!is_recoverable("disk_full"),
-            "unknown failure type must not be recoverable");
-    assert!(!is_recoverable("network_partition"),
-            "unknown failure type must not be recoverable");
-    assert!(!is_recoverable("oom_kill"),
-            "unknown failure type must not be recoverable");
+    assert!(
+        !is_recoverable("disk_full"),
+        "unknown failure type must not be recoverable"
+    );
+    assert!(
+        !is_recoverable("network_partition"),
+        "unknown failure type must not be recoverable"
+    );
+    assert!(
+        !is_recoverable("oom_kill"),
+        "unknown failure type must not be recoverable"
+    );
 
     // Recovery actions: each recoverable type should map to at least one action.
     let recovery_action = |ft: &str| -> &'static str {
@@ -887,10 +906,16 @@ fn recovery_orchestrator_reduces_friction_on_failure() {
     // Each known type must have a concrete recovery action (not the fallback).
     for ft in &known_failure_types {
         let action = recovery_action(ft);
-        assert_ne!(action, "no recovery available",
-                   "'{}' must have a concrete recovery action", ft);
-        assert!(!action.is_empty(),
-                "recovery action for '{}' must not be empty", ft);
+        assert_ne!(
+            action, "no recovery available",
+            "'{}' must have a concrete recovery action",
+            ft
+        );
+        assert!(
+            !action.is_empty(),
+            "recovery action for '{}' must not be empty",
+            ft
+        );
     }
 }
 
@@ -906,26 +931,38 @@ fn predictive_reroute_prevents_unnecessary_rounds() {
     };
 
     // Boundary: exactly at threshold (health=0.2, failures=3) — should NOT break.
-    assert!(!should_early_break(0.2, 3),
-            "at threshold health should not break early");
+    assert!(
+        !should_early_break(0.2, 3),
+        "at threshold health should not break early"
+    );
 
     // Just below health threshold, exactly at failure threshold — SHOULD break.
-    assert!(should_early_break(0.19, 3),
-            "below health threshold with 3 failures should break");
+    assert!(
+        should_early_break(0.19, 3),
+        "below health threshold with 3 failures should break"
+    );
 
     // Very low health with high failures — SHOULD break.
-    assert!(should_early_break(0.15, 5),
-            "very low health with high failures should break");
+    assert!(
+        should_early_break(0.15, 5),
+        "very low health with high failures should break"
+    );
 
     // Good health prevents early break even with failures.
-    assert!(!should_early_break(0.8, 5),
-            "good health must prevent early break even with failures");
+    assert!(
+        !should_early_break(0.8, 5),
+        "good health must prevent early break even with failures"
+    );
 
     // Low health but few failures — should NOT break (need both conditions).
-    assert!(!should_early_break(0.1, 1),
-            "low health alone must not trigger early break");
-    assert!(!should_early_break(0.1, 2),
-            "low health with <3 failures must not trigger early break");
+    assert!(
+        !should_early_break(0.1, 1),
+        "low health alone must not trigger early break"
+    );
+    assert!(
+        !should_early_break(0.1, 2),
+        "low health with <3 failures must not trigger early break"
+    );
 
     // Without early break: rounds are wasted on a failing agent.
     let wasted_without_break = 5u32 - 1; // max_iterations - rounds_already_done
@@ -935,8 +972,10 @@ fn predictive_reroute_prevents_unnecessary_rounds() {
     );
     // With early break: 0 wasted rounds beyond the current failure.
     let wasted_with_break = 0u32;
-    assert!(wasted_with_break < wasted_without_break,
-            "early break should reduce wasted rounds");
+    assert!(
+        wasted_with_break < wasted_without_break,
+        "early break should reduce wasted rounds"
+    );
 }
 
 // ── BLUE44 §2.1: End-to-end acceptance gates ───────────────────────────────

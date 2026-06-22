@@ -497,6 +497,4 @@ mod tests {
         // Third time should be capped
         assert!(engine.check_fault("test_tool").is_none());
     }
-
-
 }

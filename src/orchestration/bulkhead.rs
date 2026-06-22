@@ -38,6 +38,7 @@ impl Bulkhead {
     /// If a semaphore already exists for this provider it is replaced,
     /// so in-flight permits obtained from the previous semaphore are
     /// **not** affected.
+    #[allow(dead_code)]
     pub fn set_limit(&self, provider: &str, limit: usize) {
         if let Ok(mut map) = self.semaphores.write() {
             map.insert(provider.to_string(), Arc::new(Semaphore::new(limit)));
@@ -51,6 +52,7 @@ impl Bulkhead {
     ///
     /// Returns `None` if the semaphore has been closed (should not happen
     /// under normal operation).
+    #[allow(dead_code)]
     pub async fn acquire(&self, provider: &str) -> Option<OwnedSemaphorePermit> {
         let semaphore = {
             let map = self.semaphores.read().ok()?;

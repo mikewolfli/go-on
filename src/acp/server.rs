@@ -58,6 +58,7 @@ use super::prelude::{
 ///
 /// When draining is active, new requests are rejected with 503 + Retry-After.
 /// In-flight requests are given `drain_timeout` to complete before force-shutdown.
+#[allow(dead_code)]
 pub struct DrainGuard {
     /// Whether the server is currently draining.
     pub draining: AtomicBool,
@@ -77,6 +78,7 @@ pub struct DrainGuard {
 ///
 /// Wraps `OwnedSemaphorePermit` so that releasing the permit triggers
 /// a notification to `DrainGuard::wait_for_drain()` instead of polling.
+#[allow(dead_code)]
 pub struct DrainPermit {
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
     notify: Arc<tokio::sync::Notify>,
@@ -93,7 +95,6 @@ impl Drop for DrainPermit {
 impl DrainPermit {
     /// Consume the permit and return the inner semaphore permit.
     /// The caller is responsible for ensuring the inner permit is eventually dropped.
-    #[expect(dead_code, reason = "F-GAP-49: reserved")]
     pub fn into_inner(mut self) -> tokio::sync::OwnedSemaphorePermit {
         self.permit.take().expect("DrainPermit already consumed")
     }
@@ -193,6 +194,7 @@ impl Default for DrainGuard {
 }
 
 /// Cache-related subsystems grouped together
+#[allow(dead_code)]
 pub struct CacheLayer {
     /// Response cache (SQLite-based)
     pub response_cache: Option<Arc<ResponseCache>>,
@@ -207,6 +209,7 @@ pub struct CacheLayer {
 }
 
 /// Cache + vector + autotune subsystems grouped together
+#[allow(dead_code)]
 pub struct CacheServerDeps {
     /// Cache-layer subsystems (response cache, vector store, token cache)
     pub cache: CacheLayer,
@@ -221,6 +224,7 @@ pub struct CacheServerDeps {
 }
 
 /// Flow + agent + model selection subsystems grouped together
+#[allow(dead_code)]
 pub struct ModelServerDeps {
     /// Flow manager for handling request routing through phases
     pub flow_manager: Option<Arc<FlowManager>>,
@@ -233,6 +237,7 @@ pub struct ModelServerDeps {
 }
 
 /// Governance subsystems grouped together (harness + capability + audit + pua + rbac)
+#[allow(dead_code)]
 pub struct GovernanceServerDeps {
     /// HarnessBus strategy engine (BLUE38 ARCH-13)
     pub harness_bus: Option<Arc<HarnessBus>>,
@@ -285,6 +290,7 @@ pub struct GovernanceServerDeps {
 }
 
 /// Orchestration subsystems grouped together (scheduler + planner + executor + skill)
+#[allow(dead_code)]
 pub struct OrchestrationServerDeps {
     /// Dual-level task scheduler for priority queue and worker pool
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
@@ -299,6 +305,7 @@ pub struct OrchestrationServerDeps {
 }
 
 /// Observability-related subsystems grouped together
+#[allow(dead_code)]
 pub struct ObservabilityLayer {
     /// Runtime metrics collection
     pub metrics: Arc<RuntimeMetrics>,
@@ -336,6 +343,7 @@ pub struct ObservabilityLayer {
 /// All StdMutex fields here are safe because they are never held across `.await` boundaries:
 /// locks are acquired, used in short synchronous operations, and released within the same scope.
 /// None of these fields have an `.await` point inside their critical sections.
+#[allow(dead_code)]
 pub struct ResilienceContext {
     /// Online controller for adaptive strategy from live outcomes
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
@@ -379,6 +387,7 @@ pub struct ResilienceContext {
 /// `conversation_state` uses `tokio::sync::Mutex` because its lock is held across `.await` boundaries
 /// (e.g. checkpoint operations that involve async I/O). The other fields are either lock-free
 /// (`audit_log` is thread-safe internally) or use StdMutex for short synchronous operations.
+#[allow(dead_code)]
 pub struct SessionContext {
     /// Conversation state management (uses tokio::sync::Mutex — held across .await points)
     pub conversation_state: Arc<Mutex<ConversationState>>,
@@ -399,6 +408,7 @@ pub struct SessionContext {
 /// Both fields use StdMutex for short synchronous critical sections:
 /// `rate_limit_middleware.check()` and `tenant_budget.check_can_start()`/`start_task()`
 /// are fast non-async operations with no `.await` inside the locked scope.
+#[allow(dead_code)]
 pub struct RateLimitContext {
     /// Tenant-level rate limit middleware (F-GAP-49)
     pub rate_limit_middleware: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
@@ -412,6 +422,7 @@ pub struct RateLimitContext {
 ///
 /// All fields use StdMutex — each is accessed in short synchronous critical sections
 /// (locking, reading/writing, releasing). No `.await` points inside any locked scope.
+#[allow(dead_code)]
 pub struct RegistryContext {
     /// SchemaRegistry — task envelope validation (F-GAP-07)
     // SAFETY: StdMutex is never held across `.await` — schema lookups are synchronous
@@ -441,6 +452,7 @@ pub struct RegistryContext {
 ///
 /// All fields use StdMutex — locks are acquired, used synchronously, and released.
 /// No `.await` points inside any locked scope.
+#[allow(dead_code)]
 pub struct PersistenceContext {
     /// Cross-request memory policy store
     // SAFETY: StdMutex is never held across `.await` — memory store lookups are synchronous
@@ -458,6 +470,7 @@ pub struct PersistenceContext {
 ///
 /// This struct represents the core ACP server that handles incoming requests,
 /// manages agents, and coordinates the overall system flow.
+#[allow(dead_code)]
 pub struct AcpServer {
     /// Cache-related deps (cache + vector + autotune)
     pub cache_deps: CacheServerDeps,
@@ -788,6 +801,7 @@ impl AcpServer {
 }
 
 /// Server builder for constructing AcpServer instances
+#[allow(dead_code)]
 pub struct ServerBuilder {
     flow_manager: Option<Arc<FlowManager>>,
     agent_registry: Option<Arc<AgentRegistry>>,

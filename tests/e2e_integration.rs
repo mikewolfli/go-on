@@ -150,9 +150,22 @@ impl E2eHarness {
             "method": method,
         });
 
-        if let Some(params) = params {
-            payload["params"] = params;
-        }
+        // Inject admin role into params so RBAC doesn't reject requests.
+        // The test harness needs full access to all methods.
+        let merged_params = match params {
+            Some(mut p) => {
+                if !p.as_object().is_some_and(|o| o.contains_key("roles")) {
+                    p["roles"] = json!(["admin"]);
+                    p["user_id"] = json!("test-admin");
+                }
+                p
+            }
+            None => json!({
+                "roles": ["admin"],
+                "user_id": "test-admin"
+            }),
+        };
+        payload["params"] = merged_params;
 
         let body = serde_json::to_string(&payload).expect("failed to encode request");
         let stdin = self.stdin.as_mut().expect("stdin already closed");

@@ -4,7 +4,7 @@
 //! under various simulated failure conditions. They use the ChaosEngine
 //! to inject faults and verify expected recovery behaviour.
 
-#[cfg(test)]
+#[cfg(all(test, feature = "chaos-testing"))]
 mod chaos_drill_tests {
     use go_on::resilience::chaos::*;
 

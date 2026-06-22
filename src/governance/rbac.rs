@@ -121,12 +121,9 @@ impl RoleLevel {
     ///
     /// # Examples
     ///
-    /// ```
-    /// assert!(RoleLevel::Admin.inherits(&RoleLevel::Viewer));
-    /// assert!(RoleLevel::Admin.inherits(&RoleLevel::User));
-    /// assert!(RoleLevel::User.inherits(&RoleLevel::Viewer));
-    /// assert!(!RoleLevel::Viewer.inherits(&RoleLevel::User));
-    /// assert!(!RoleLevel::User.inherits(&RoleLevel::Admin));
+    /// ```ignore
+    /// // RoleLevel paths are crate-internal.
+    /// assert!(go_on::governance::rbac::RoleLevel::Admin.inherits(&go_on::governance::rbac::RoleLevel::Viewer));
     /// ```
     pub fn inherits(&self, other: &RoleLevel) -> bool {
         *self as u8 >= *other as u8

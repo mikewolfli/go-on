@@ -681,5 +681,4 @@ mod tests {
         assert!(reloader.watch_path().is_none());
         assert!(reloader.watcher.is_none());
     }
-
 }

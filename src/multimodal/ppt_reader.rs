@@ -298,7 +298,8 @@ mod tests {
             .unwrap();
 
             // ppt/presentation.xml
-            zip.start_file("ppt/presentation.xml", opts.clone()).unwrap();
+            zip.start_file("ppt/presentation.xml", opts.clone())
+                .unwrap();
             zip.write_all(
                 br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
@@ -389,14 +390,16 @@ mod tests {
             zip.start_file("[Content_Types].xml", opts.clone()).unwrap();
             zip.write_all(b"").unwrap();
 
-            zip.start_file("ppt/presentation.xml", opts.clone()).unwrap();
+            zip.start_file("ppt/presentation.xml", opts.clone())
+                .unwrap();
             zip.write_all(b"").unwrap();
 
             zip.start_file("ppt/_rels/presentation.xml.rels", opts.clone())
                 .unwrap();
             zip.write_all(b"").unwrap();
 
-            zip.start_file("ppt/slides/slide1.xml", opts.clone()).unwrap();
+            zip.start_file("ppt/slides/slide1.xml", opts.clone())
+                .unwrap();
             zip.write_all(slide_xml.as_bytes()).unwrap();
 
             zip.start_file("ppt/notesSlides/notesSlide1.xml", opts)
@@ -473,14 +476,16 @@ mod tests {
             zip.start_file("[Content_Types].xml", opts.clone()).unwrap();
             zip.write_all(b"").unwrap();
 
-            zip.start_file("ppt/presentation.xml", opts.clone()).unwrap();
+            zip.start_file("ppt/presentation.xml", opts.clone())
+                .unwrap();
             zip.write_all(b"").unwrap();
 
             zip.start_file("ppt/_rels/presentation.xml.rels", opts.clone())
                 .unwrap();
             zip.write_all(b"").unwrap();
 
-            zip.start_file("ppt/slides/slide1.xml", opts.clone()).unwrap();
+            zip.start_file("ppt/slides/slide1.xml", opts.clone())
+                .unwrap();
             zip.write_all(slide1_xml.as_bytes()).unwrap();
 
             zip.start_file("ppt/slides/slide2.xml", opts).unwrap();

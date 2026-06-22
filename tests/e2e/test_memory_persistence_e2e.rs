@@ -52,7 +52,7 @@ async fn test_memory_persistence_three_tier_lifecycle() {
     // ── 1. Setup tiering policy ─────────────────────────────────────────
     let policy = MemoryTieringPolicy::default();
     assert_eq!(policy.hot_max_entries, 2048);
-    assert_eq!(policy.hot_ttl_secs, 300);
+    assert_eq!(policy.hot_ttl_secs, 1800);
 
     // ── 2. Write L1 (Hot) entries ──────────────────────────────────────
     let entry_a = MemoryEntry::new_hot(

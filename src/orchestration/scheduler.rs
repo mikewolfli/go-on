@@ -113,7 +113,6 @@ pub struct TaskScheduler {
     /// Statistics
     stats: RwLock<SchedulerProfile>,
     /// Last aging update timestamp
-    #[expect(dead_code, reason = "F-GAP-12 reserved")]
     last_aging: Mutex<Instant>,
     /// Global concurrency limiter using a semaphore.
     concurrency_limiter: Arc<Semaphore>,

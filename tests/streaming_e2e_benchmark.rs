@@ -9,6 +9,11 @@
 /// Tested modes: GUI mode, VSCode mode, pure HTTP mode
 /// Records 3 server profiles differences.
 /// Regression detection: TTFT p50 > baseline × 1.5
+///
+/// NOTE: This test requires a live LLM server with streaming capabilities.
+/// It is ignored by default because it takes ~9 minutes and requires
+/// external infrastructure. Run with `cargo test -- --include-ignored`
+/// when a streaming backend is available.
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -394,6 +399,9 @@ fn run_benchmarks() -> BTreeMap<String, Vec<StreamBenchResult>> {
 // Tests
 // ---------------------------------------------------------------------------
 
+// Ignored by default — requires live LLM streaming server.
+// Run with: cargo test --test streaming_e2e_benchmark -- --include-ignored
+#[ignore = "requires live LLM streaming server; takes ~9 minutes"]
 #[test]
 fn streaming_e2e_benchmark() {
     eprintln!("╔═══════════════════════════════════════════════════════════╗");
