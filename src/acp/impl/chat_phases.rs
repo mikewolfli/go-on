@@ -1700,7 +1700,7 @@ fn capability_bus_feedback(
             let phase_complete = format!("{}_complete", &phase_owned);
             let _child = child_trace_context(trace, "evolve");
             tokio::spawn(async move {
-                c.evolve(
+                cb.evolve(
                     &(agent_owned, phase_owned),
                     "chat_complete",
                     &(agent_owned2, phase_complete),

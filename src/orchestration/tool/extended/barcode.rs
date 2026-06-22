@@ -86,7 +86,6 @@ fn qr_module_count(version: usize) -> usize {
 #[cfg(feature = "barcode-tools")]
 fn generate_qr_code_svg(text: &str, module_size: u32, quiet_zone: u32) -> Result<String> {
     let bytes = text.as_bytes();
-    let total_bits = bytes.len() * 8;
 
     // Select version based on data length (ECC level M, byte mode)
     let version = select_version(bytes.len())?;
@@ -308,7 +307,7 @@ fn codewords_to_bits(codewords: &[u8]) -> Vec<bool> {
 /// Place finder patterns (7x7) in three corners plus separators.
 #[cfg(feature = "barcode-tools")]
 fn place_finder_patterns(modules: &mut [Vec<bool>], size: usize) {
-    let positions = [(0, 0), (0, size - 7), (size - 7, 0)];
+    let positions = [(0usize, 0usize), (0, size - 7), (size - 7, 0)];
     for &(row, col) in &positions {
         place_finder_at(modules, row, col, size);
     }
@@ -429,11 +428,9 @@ fn place_data(modules: &mut [Vec<bool>], bits: &[bool], version: usize) {
         }
 
         let mut row: isize;
-        let mut dir: isize;
-
         // Determine direction: odd-numbered column pair (from bottom), even (from top)
-        // Column pairs: (col, col-1)
         let pair_index = (size as isize - 1 - col) / 2;
+        let dir: isize;
         if pair_index % 2 == 0 {
             // Upward: bottom to top
             row = size as isize - 1;
@@ -525,7 +522,7 @@ fn apply_mask(modules: &mut [Vec<bool>], version: usize, mask: u8) {
 /// Place format info bits (15 bits) around the finder patterns.
 /// Format: 5 data bits | 10 BCH error correction bits, XOR'd with mask 0x5412.
 #[cfg(feature = "barcode-tools")]
-fn place_format_info(modules: &mut [Vec<bool>], version: usize, mask: u8) {
+fn place_format_info(modules: &mut [Vec<bool>], version: usize, _mask: u8) {
     let size = qr_module_count(version);
 
     // ECC level M = 0b00, mask pattern 0 = 0b000

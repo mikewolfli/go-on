@@ -32,10 +32,10 @@ impl Tool for EmailParseTool {
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
 
-        let content =
-            fs::read_to_string(&validated).with_context(|| format!("failed to read EML: {validated}"))?;
+        let content = fs::read_to_string(&validated)
+            .with_context(|| format!("failed to read EML: {}", validated.display()))?;
 
-        info!(path = %validated, bytes = content.len(), "parsing EML file");
+        info!(path = %validated.display(), bytes = content.len(), "parsing EML file");
 
         let (headers, body) = parse_eml(&content);
 
@@ -107,7 +107,7 @@ fn parse_eml(raw: &str) -> (std::collections::HashMap<String, String>, String) {
     let body_section = &raw[separator_idx..];
 
     // Parse headers
-    let mut current_header_name: Option<String> = String::new();
+    let mut current_header_name: Option<String> = None;
     let mut current_header_value = String::new();
 
     for line in header_section.lines() {
@@ -249,12 +249,14 @@ fn extract_plain_text_body(body_section: &str) -> String {
         let parts: Vec<&str> = body_section.split(&format!("--{}", boundary)).collect();
         for part in parts {
             let part_lower = part.to_lowercase();
-            if part_lower.contains("content-type: text/plain") || part_lower.contains("content-type:text/plain") {
+            if part_lower.contains("content-type: text/plain")
+                || part_lower.contains("content-type:text/plain")
+            {
                 // Extract body of this part (skip its sub-headers)
                 if let Some(body_start) = part.find("\r\n\r\n") {
-                    return strip_trailing_boundary(part[body_start + 4..].trim(), boundary);
+                    return strip_trailing_boundary(part[body_start + 4..].trim(), &boundary);
                 } else if let Some(body_start) = part.find("\n\n") {
-                    return strip_trailing_boundary(part[body_start + 2..].trim(), boundary);
+                    return strip_trailing_boundary(part[body_start + 2..].trim(), &boundary);
                 }
             }
         }
@@ -293,7 +295,9 @@ fn detect_boundary(body_section: &str) -> Option<String> {
         if let Some(start) = lower.find("boundary=") {
             let after = &lower[start + 9..];
             // Boundary may be unquoted
-            let end = after.find(|c: char| c.is_whitespace() || c == ';').unwrap_or(after.len());
+            let end = after
+                .find(|c: char| c.is_whitespace() || c == ';')
+                .unwrap_or(after.len());
             let b = after[..end].trim_matches('"').to_string();
             if !b.is_empty() {
                 return Some(b);

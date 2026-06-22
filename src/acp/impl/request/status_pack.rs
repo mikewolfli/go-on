@@ -935,15 +935,9 @@ pub(super) async fn handle_harness_status(
         .and_then(Value::as_u64)
         .unwrap_or(20260415);
 
-    let mut smoke = Vec::new();
-    let mut regression = Vec::new();
-    let mut adversarial = Vec::new();
-    let mut long_chain = Vec::new();
-    let mut warnings = Vec::new();
-
     let requests_root = std::path::Path::new("requests").to_path_buf();
     // Use spawn_blocking to avoid blocking the tokio runtime with synchronous fs I/O.
-    let (smoke, regression, adversarial, long_chain, mut warnings) = tokio::task::spawn_blocking(move || {
+    let result: Result<_, _> = tokio::task::spawn_blocking(move || -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
         let mut smoke = Vec::new();
         let mut regression = Vec::new();
         let mut adversarial = Vec::new();
@@ -986,8 +980,15 @@ pub(super) async fn handle_harness_status(
         }
         (smoke, regression, adversarial, long_chain, warnings)
     })
-    .await
-    .unwrap_or_default();
+    .await;
+
+    let (smoke, regression, adversarial, long_chain, warnings) = match result {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("harness status spawn_blocking failed: {e}");
+            Default::default()
+        }
+    };
 
     let scenario_total = smoke.len() + regression.len() + adversarial.len() + long_chain.len();
     let metrics = server.observability.metrics.snapshot();
