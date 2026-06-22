@@ -28,34 +28,36 @@ impl Tool for ReadDocxTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
         let validated = sanitize_path(input, path)?;
-        let content =
-            fs::read(&validated).with_context(|| format!("failed to read DOCX: {validated}"))?;
+        let content = fs::read(&validated)
+            .with_context(|| format!("failed to read DOCX: {}", validated.display()))?;
 
-        let doc = docx_rs::DocxFile::from_memory(content.clone())
+        let docx = docx_rs::read_docx(&content)
             .map_err(|e| anyhow::anyhow!("failed to parse DOCX: {e}"))?;
 
         let mut text = String::new();
         let mut paragraph_count = 0u32;
 
-        // docx-rs API: read document structure
-        if let Ok(document) = doc.parse() {
-            for child in document.document.body.children {
-                if let docx_rs::DocumentChild::Paragraph(p) = child {
-                    paragraph_count += 1;
-                    for run in p.runs {
-                        if let Some(t) = run.text {
-                            text.push_str(&t);
-                            text.push(' ');
+        // docx-rs 0.4 API: read document structure
+        for child in &docx.document.children {
+            if let docx_rs::DocumentChild::Paragraph(p) = child {
+                paragraph_count += 1;
+                for run_child in &p.children {
+                    if let docx_rs::ParagraphChild::Run(r) = run_child {
+                        for rc in &r.children {
+                            if let docx_rs::RunChild::Text(t) = rc {
+                                text.push_str(&t.text);
+                                text.push(' ');
+                            }
                         }
                     }
-                    text.push('\n');
                 }
+                text.push('\n');
             }
         }
 
         let byte_size = content.len();
 
-        info!(path = %validated, paragraphs = paragraph_count, "DOCX text extracted");
+        info!(path = %validated.display(), paragraphs = paragraph_count, "DOCX text extracted");
 
         let report = tool_execution_report("read_docx", Some("read"));
 

@@ -20,7 +20,10 @@
 #   ./scripts/skills-setup.sh --list-steps # List available steps
 # =============================================================================
 
-set -euo pipefail
+set -uo pipefail
+# Soft-fail mode: set -e is NOT used globally because SDK steps (Node.js,
+# Python, Rust) may fail when the corresponding toolchain is absent.
+# Instead, individual steps opt into strict mode via run_step_strict().
 
 # ---- Constants -------------------------------------------------------------
 
@@ -33,7 +36,7 @@ CONFIG_DIR="${GOON_CONFIG_DIR:-$HOME/.config/go-on}"
 SKILLS_DIR="$CONFIG_DIR/skills"
 SKILLS_IMPORT_DIR="$CONFIG_DIR/skills-import"
 SKILLS_CACHE_DIR="$CONFIG_DIR/skills-cache"
-CONFIG_FILE="$CONFIG_DIR/go-on.yaml"
+CONFIG_FILE="$CONFIG_DIR/config.toml"
 
 # Colors
 RED='\033[0;31m'
@@ -79,6 +82,22 @@ check_cmd() {
         error "$1 is not installed"
         return 1
     fi
+}
+
+# Run a command with soft-fail: if it exits non-zero, log a warning and
+# record a failure but do NOT abort the entire setup script.
+# This is used for optional SDK setup steps where missing tooling should
+# not block the rest of the setup.
+soft_fail() {
+    local step="$1"
+    local label="$2"
+    shift 2
+    if ! "$@"; then
+        warn "$label encountered issues (exit code $?) — continuing"
+        record_failure "$step" "$label failed (non-fatal)"
+        return 1
+    fi
+    return 0
 }
 
 # ---- Argument parsing ------------------------------------------------------
@@ -259,27 +278,244 @@ if should_run_step 3; then
 
     if [ -f "$CONFIG_FILE" ]; then
         ok "Configuration file found: $CONFIG_FILE"
+
+        # Validate the config has required sections
+        if grep -q '^default_phase' "$CONFIG_FILE" 2>/dev/null; then
+            ok "Config has default_phase set"
+        else
+            warn "Config is missing default_phase — skills may not work correctly"
+        fi
+
+        # Check for AI provider configuration
+        HAS_PROVIDER=false
+        if grep -q '\[agents\.' "$CONFIG_FILE" 2>/dev/null; then
+            HAS_PROVIDER=true
+            ok "Config has at least one [agents.*] section"
+        fi
+
+        # Also check for provider environment variables referenced in config
+        if grep -qE 'api_key_env\s*=' "$CONFIG_FILE" 2>/dev/null; then
+            while IFS='=' read -r _ env_var; do
+                env_var="$(echo "$env_var" | tr -d ' "')"
+                if [ -n "$env_var" ] && [ -n "${!env_var:-}" ]; then
+                    ok "Environment variable $env_var is set (referenced in config)"
+                    HAS_PROVIDER=true
+                fi
+            done < <(grep 'api_key_env' "$CONFIG_FILE" 2>/dev/null || true)
+        fi
+
+        if [ "$HAS_PROVIDER" = false ]; then
+            warn "No AI providers found in config — prompt-based skills will not execute"
+            warn "  Add an [agents.<name>] section to $CONFIG_FILE"
+            warn "  Example: see the minimal config below"
+
+            # Offer to auto-create provider config from env vars
+            echo ""
+            echo "  -- AI Provider Detection --"
+            AUTO_CREATED=false
+
+            if [ -n "${OPENAI_API_KEY:-}" ]; then
+                info "OPENAI_API_KEY is set in environment"
+                echo "    Would you like to write it into config.toml? [y/N] "
+                read -r answer
+                if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+                    cat >> "$CONFIG_FILE" <<-PROXYEOF
+
+[agents.openai]
+type = "openai"
+model = "gpt-4o"
+api_key_env = "OPENAI_API_KEY"
+PROXYEOF
+                    ok "OpenAI provider added to $CONFIG_FILE"
+                    AUTO_CREATED=true
+                fi
+            fi
+
+            if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+                info "ANTHROPIC_API_KEY is set in environment"
+                echo "    Would you like to write it into config.toml? [y/N] "
+                read -r answer
+                if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+                    cat >> "$CONFIG_FILE" <<-PROXYEOF
+
+[agents.anthropic]
+type = "anthropic"
+model = "claude-sonnet-4-20250514"
+api_key_env = "ANTHROPIC_API_KEY"
+PROXYEOF
+                    ok "Anthropic provider added to $CONFIG_FILE"
+                    AUTO_CREATED=true
+                fi
+            fi
+
+            if [ "$AUTO_CREATED" = false ] && { [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${ANTHROPIC_API_KEY:-}" ]; }; then
+                warn "API keys are set but were not written to config"
+                warn "  You can manually add an [agents.*] section to $CONFIG_FILE"
+            fi
+        fi
     else
-        record_failure "3" "Configuration file not found: $CONFIG_FILE"
-        warn "Create one at $CONFIG_FILE or set GOON_CONFIG_DIR"
+        info "Config file not found at $CONFIG_FILE — creating minimal config..."
+
+        # Create a minimal config.toml with skills enabled
+        cat > "$CONFIG_FILE" <<-EOF
+# Auto-generated by skills-setup.sh
+
+default_phase = "coding"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "auto"
+
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+max_snippet_chars = 800
+max_entries = 10000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+[runtime]
+skills_enabled = true
+skills_import_enabled = true
+skills_allowed_sources = ["github.com/*", "https://*"]
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+
+[autotune]
+enabled = false
+evaluate_interval = 20
+
+[agents]
+
+[flow]
+name = "Default"
+workflow_type = "auto"
+phases = ["planning", "coding", "review", "delivery"]
+
+[phases.planning]
+description = "Planning phase"
+agents = []
+fallback = true
+
+[phases.planning.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+
+[phases.coding]
+description = "Coding phase"
+agents = []
+fallback = true
+
+[phases.coding.options]
+request_timeout_seconds = 300
+review_timeout_seconds = 120
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 24
+global_max_inflight = 128
+
+[phases.review]
+description = "Review phase"
+agents = []
+fallback = false
+
+[phases.review.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 16
+global_max_inflight = 128
+
+[phases.delivery]
+description = "Delivery phase"
+agents = []
+fallback = false
+
+[phases.delivery.options]
+request_timeout_seconds = 90
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 64
+EOF
+        ok "Minimal config.toml created at $CONFIG_FILE"
+
+        # Detect API keys from environment and offer to add provider
         echo ""
-        echo "  Minimal skill config example (TOML):"
-        echo ""
-        echo "  [feature]"
-        echo "  skills_enabled = true"
-        echo "  skills_import_enabled = true"
-        echo "  skills_allowed_sources = [\"github.com/my-org/*\"]"
-        echo "  skills_require_sha256 = false"
-        echo "  skills_allow_floating_ref = true"
-        echo ""
-        echo "  # Or under [runtime] for runtime-level config:"
-        echo "  [runtime]"
-        echo "  skills_enabled = true"
-        echo "  skills_import_enabled = true"
-        echo "  skills_allowed_sources = [\"github.com/my-org/*\"]"
-        echo "  skills_require_sha256 = false"
-        echo "  skills_allow_floating_ref = true"
-        echo ""
+        echo "  -- AI Provider Detection --"
+        PROVIDER_ADDED=false
+
+        if [ -n "${OPENAI_API_KEY:-}" ]; then
+            info "OPENAI_API_KEY is set in environment"
+            echo "    Add OpenAI provider to config? [Y/n] "
+            read -r answer
+            if [ "$answer" != "n" ] && [ "$answer" != "N" ]; then
+                cat >> "$CONFIG_FILE" <<-PROXYEOF
+
+[agents.openai]
+type = "openai"
+model = "gpt-4o"
+api_key_env = "OPENAI_API_KEY"
+PROXYEOF
+                ok "OpenAI provider added to $CONFIG_FILE"
+                PROVIDER_ADDED=true
+            fi
+        fi
+
+        if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            info "ANTHROPIC_API_KEY is set in environment"
+            if [ "$PROVIDER_ADDED" = true ]; then
+                echo "    Add Anthropic provider to config? [y/N] "
+            else
+                echo "    Add Anthropic provider to config? [Y/n] "
+            fi
+            read -r answer
+            if [ "$answer" != "n" ] && [ "$answer" != "N" ] && [ "$PROVIDER_ADDED" = false ]; then
+                cat >> "$CONFIG_FILE" <<-PROXYEOF
+
+[agents.anthropic]
+type = "anthropic"
+model = "claude-sonnet-4-20250514"
+api_key_env = "ANTHROPIC_API_KEY"
+PROXYEOF
+                ok "Anthropic provider added to $CONFIG_FILE"
+                PROVIDER_ADDED=true
+            elif [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+                cat >> "$CONFIG_FILE" <<-PROXYEOF
+
+[agents.anthropic]
+type = "anthropic"
+model = "claude-sonnet-4-20250514"
+api_key_env = "ANTHROPIC_API_KEY"
+PROXYEOF
+                ok "Anthropic provider added to $CONFIG_FILE"
+            fi
+        fi
+
+        if [ "$PROVIDER_ADDED" = false ]; then
+            warn "No AI provider configured — prompt-based skills will not execute"
+            warn "  Set OPENAI_API_KEY or ANTHROPIC_API_KEY and re-run this script"
+            warn "  Or manually add an [agents.<name>] section to $CONFIG_FILE"
+        fi
     fi
 else
     echo "── Step 3/${#STEPS[@]}: (skipped) ──"
@@ -492,14 +728,16 @@ if should_run_step 6; then
         return 0
     }
 
-    setup_ts_sdk "Node.js" "$PROJECT_DIR/sdk/nodejs" || TS_SDK_MISSING=1
-    setup_ts_sdk "TypeScript" "$PROJECT_DIR/sdk/typescript" || TS_SDK_MISSING=1
-
-    if [ "$TS_SDK_MISSING" -ne 0 ]; then
-        echo ""
-        warn "One or more Node.js/TypeScript SDK setup steps had issues."
+    if ! setup_ts_sdk "Node.js" "$PROJECT_DIR/sdk/nodejs"; then
+        warn "Node.js SDK setup non-fatal — continuing"
+    fi
+    if ! setup_ts_sdk "TypeScript" "$PROJECT_DIR/sdk/typescript"; then
+        warn "TypeScript SDK setup non-fatal — continuing"
     fi
     echo ""
+    echo "  Node.js/TypeScript SDK: if setup had issues, install Node.js from https://nodejs.org/"
+    echo ""
+    echo "  Setup status recorded above (individual SDK warnings are non-fatal)."
 else
     echo "── Step 6/${#STEPS[@]}: (skipped) ──"
     echo ""
@@ -583,9 +821,10 @@ if should_run_step 7; then
         fi
     fi
 
+    echo ""
     if [ "$PY_SDK_MISSING" -ne 0 ]; then
-        echo ""
-        warn "One or more Python SDK setup steps had issues."
+        warn "Python SDK setup had issues (non-fatal)."
+        echo "  Install Python 3 from https://python.org/ to enable Python skills."
     fi
     echo ""
 else
@@ -640,6 +879,11 @@ if should_run_step 8; then
         fi
     fi
 
+    echo ""
+    if [ "$RS_SDK_MISSING" -ne 0 ]; then
+        warn "Rust SDK setup had issues (non-fatal)."
+        echo "  Ensure Rust toolchain is installed: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    fi
     echo ""
 else
     echo "── Step 8/${#STEPS[@]}: (skipped) ──"

@@ -69,7 +69,7 @@ impl Default for PolicyReloader {
         Self::new()
     }
 }
-#[allow(dead_code)] // All methods reserved for production governance wiring
+#[allow(dead_code, reason = "All methods reserved for production governance wiring")]
 impl PolicyReloader {
     /// Create a new empty `PolicyReloader` without a watcher.
     pub fn new() -> Self {

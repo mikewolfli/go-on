@@ -70,7 +70,7 @@ pub struct MtlsAcceptor {
 
 /// Configuration for mTLS, holding certificate paths and settings.
 /// This is a plain-data config struct distinct from the runtime `MtlsAcceptor`.
-#[allow(dead_code)] // Public API for mTLS consumers
+#[allow(dead_code, reason = "Public API surface for mTLS consumers")]
 #[derive(Debug, Clone)]
 pub struct MtlsConfig {
     /// Path to the CA certificate file (PEM).
@@ -87,7 +87,7 @@ pub struct MtlsConfig {
 
 impl MtlsConfig {
     /// Create a new `MtlsConfig` from certificate paths.
-    #[allow(dead_code)] // Public API for mTLS consumers
+    #[allow(dead_code, reason = "Public API surface for mTLS consumers")]
     pub fn new(
         ca_cert_path: impl Into<PathBuf>,
         server_cert_path: impl Into<PathBuf>,
@@ -288,7 +288,7 @@ impl MtlsAcceptor {
     }
 
     /// Builder-pattern: enable or disable client certificate verification.
-    #[allow(dead_code)] // Builder method — wired from ACP HTTP server under multi-users-server feature
+    #[allow(dead_code, reason = "Builder method — wired from ACP HTTP server under multi-users-server feature")]
     pub fn with_client_cert(mut self, enabled: bool) -> Self {
         self.require_client_cert = enabled;
         self
@@ -296,7 +296,7 @@ impl MtlsAcceptor {
 
     /// Builder-pattern: restrict mTLS to client certificates whose Common Name
     /// appears in the given list. An empty list disables CN filtering.
-    #[allow(dead_code)] // Builder method — wired from ACP HTTP server under multi-users-server feature
+    #[allow(dead_code, reason = "Builder method — wired from ACP HTTP server under multi-users-server feature")]
     pub fn with_allowed_cns(mut self, allowed: Vec<String>) -> Self {
         self.allowed_cn_list = allowed;
         self

@@ -9,6 +9,7 @@ pub mod execution;
 pub mod registry;
 
 // Re-exports for backward compatibility
+// NOTE: registry::spawn_skill_refresh_task is available via the wildcard re-export below.
 pub use execution::*;
 pub use registry::*;
 

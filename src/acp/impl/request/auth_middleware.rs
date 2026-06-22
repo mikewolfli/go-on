@@ -131,8 +131,8 @@ mod tests {
         server
     }
 
-    #[test]
-    fn test_json_rpc_auth_disabled() {
+    #[tokio::test]
+    async fn test_json_rpc_auth_disabled() {
         let server = test_server_with_auth(false);
         let provider = JsonRpcAuthProvider { params: &None };
         let result = AuthMiddleware::authenticate(&provider, &server);
@@ -140,8 +140,8 @@ mod tests {
         assert!(result.expect("auth should succeed").is_none());
     }
 
-    #[test]
-    fn test_json_rpc_auth_missing_token() {
+    #[tokio::test]
+    async fn test_json_rpc_auth_missing_token() {
         let server = test_server_with_auth(true);
         let params = Some(serde_json::json!({}));
         let provider = JsonRpcAuthProvider { params: &params };

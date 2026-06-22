@@ -431,7 +431,7 @@ pub(crate) fn generate_adaptive_config_toml(
     }
 
     content.push_str(
-        "[runtime]\nmaintenance_interval_seconds = 60\nhealth_interval_seconds = 120\nshutdown_drain_seconds = 30\nsqlite_vacuum_interval_cycles = 60\n\n",
+        "[runtime]\nmaintenance_interval_seconds = 60\nhealth_interval_seconds = 120\nshutdown_drain_seconds = 30\n\n",
     );
 
     for provider in &providers {

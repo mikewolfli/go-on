@@ -229,7 +229,6 @@ mod tests {
             entry_rate_limit_rpm: 240,
             entry_rate_limit_burst: 60,
             production_strict: false,
-            sqlite_vacuum_interval_cycles: 60,
             otel_enabled: false,
             otel_exporter: "otlp".to_string(),
             otel_endpoint: None,
@@ -267,10 +266,9 @@ mod tests {
             mtls_require_client_cert: false,
             mtls_allowed_cns: String::new(),
         });
-
         let err = cfg
             .validate()
-            .expect_err("zero maintenance interval must fail");
+            .expect_err("0 maintenance interval must fail");
         assert!(
             err.to_string().contains("error.runtime_must_be_positive"),
             "unexpected error: {err}"
@@ -789,7 +787,6 @@ mod tests {
             entry_rate_limit_rpm: 240,
             entry_rate_limit_burst: 60,
             production_strict: false,
-            sqlite_vacuum_interval_cycles: 60,
             otel_enabled: true,
             otel_exporter: "otlp".to_string(),
             otel_endpoint: None,

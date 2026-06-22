@@ -7,7 +7,10 @@
 use super::*;
 
 /// Build an escalation action with the given reason and context.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Public API surface for escalation strategy consumers"
+)]
 pub fn build_escalation(reason: String, context: Value) -> RecoveryAction {
     RecoveryAction::Escalate { reason, context }
 }

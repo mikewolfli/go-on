@@ -369,9 +369,6 @@ pub struct RuntimeConfig {
     /// Enforce production strict fail-fast checks on unsafe runtime configuration
     #[serde(default)]
     pub production_strict: bool,
-    /// How often background maintenance performs SQLite VACUUM cycles
-    #[serde(default = "super::defaults::default_runtime_sqlite_vacuum_interval_cycles")]
-    pub sqlite_vacuum_interval_cycles: u64,
     /// Enable OpenTelemetry exporter for distributed traces
     #[serde(default)]
     pub otel_enabled: bool,

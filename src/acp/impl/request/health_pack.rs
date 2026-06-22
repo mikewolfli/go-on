@@ -312,9 +312,6 @@ pub(super) async fn handle_maintenance_gc(
         json!({
             "ok": true,
             "memory_expired_removed": cycle.memory_expired_removed,
-            "sqlite_expired_removed": cycle.sqlite_expired_removed,
-            "cache_vacuumed": cycle.cache_vacuumed,
-            "vector_vacuumed": cycle.vector_vacuumed,
             "maintenance": maintenance,
         }),
     )

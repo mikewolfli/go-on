@@ -81,7 +81,7 @@ impl Tool for WebScrapeTool {
 
         info!(url = %url, status, elements = extracted.len(), "web_scrape completed");
 
-        let report = tool_execution_report("web_scrape", "read", url, true);
+        let report = tool_execution_report("web_scrape", Some("read"));
 
         Ok(ToolOutput {
             success: true,

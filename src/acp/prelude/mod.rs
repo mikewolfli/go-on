@@ -51,10 +51,7 @@ pub use types::*;
 mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
-    use super::{
-        with_acp_lock, AcpLockMonitor, PhaseRateLimiter, RuntimeMetrics,
-        ACP_LOCK_PHASE_RATE_LIMITER,
-    };
+    use super::{with_acp_lock, PhaseRateLimiter, RuntimeMetrics};
 
     #[test]
     fn runtime_metrics_records_request_latency_and_outcomes() {
@@ -116,8 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn acp_lock_monitor_recovers_poisoned_mutex_and_records_stats() {
-        let monitor = AcpLockMonitor::default();
+    fn with_acp_lock_recovers_poisoned_mutex() {
         let shared: Arc<StdMutex<PhaseRateLimiter>> =
             Arc::new(StdMutex::new(PhaseRateLimiter::default()));
 
@@ -130,8 +126,7 @@ mod tests {
         assert!(join.is_err(), "poisoning thread should panic");
 
         let tracked_before = with_acp_lock(
-            &monitor,
-            ACP_LOCK_PHASE_RATE_LIMITER,
+            "test_lock",
             shared.as_ref(),
             |guard: &mut PhaseRateLimiter| {
                 let _ = guard.allow("entry:test", 60, Some(5));
@@ -139,15 +134,5 @@ mod tests {
             },
         );
         assert_eq!(tracked_before, 1);
-
-        let snapshot = monitor
-            .snapshot()
-            .into_iter()
-            .find(|item| item.name == ACP_LOCK_PHASE_RATE_LIMITER)
-            .expect("phase rate limiter snapshot should exist");
-
-        assert_eq!(snapshot.poisoned_total, 1);
-        assert_eq!(snapshot.recovered_total, 1);
-        assert_eq!(snapshot.acquisitions, 1);
     }
 }

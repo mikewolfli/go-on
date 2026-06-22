@@ -542,10 +542,10 @@ pub async fn run_autonomy_loop(
 ) -> Result<AutonomyLoopResult> {
     #[allow(unused_variables)]
     let start = Instant::now();
-    let mut all_rounds: Vec<AutonomyRound> = Vec::new();
+    let mut all_rounds: Vec<AutonomyRound> = Vec::with_capacity(config.max_iterations + 1);
     let mut audit_trail = AuditTrail::new("autonomy-loop", 100);
     let mut planner_guidance_used = false;
-    let tool_execution_traces: Vec<Value> = Vec::new();
+    let tool_execution_traces: Vec<Value> = Vec::with_capacity(config.max_iterations);
 
     // ── Phase 1: Planning ──
     // BLUE48 Step 3: Gather intelligence context before planning
@@ -640,7 +640,7 @@ pub async fn run_autonomy_loop(
 
     while iteration < config.max_iterations {
         let round_start = Instant::now();
-        let mut round_tools: Vec<String> = Vec::new();
+        let mut round_tools: Vec<String> = Vec::with_capacity(config.max_tools_per_round);
         let mut planner_guided = false;
         let mut agent_switched = false;
         let mut agent_switch_reason: Option<String> = None;
@@ -738,7 +738,7 @@ pub async fn run_autonomy_loop(
 
         let mut response = String::new();
         let mut reasoning = String::new();
-        let mut tool_calls: Vec<(String, String)> = Vec::new();
+        let mut tool_calls: Vec<(String, String)> = Vec::with_capacity(config.max_tools_per_round);
         let mut model_id: Option<String> = None;
         let mut round_tool_error_rate: f64 = 0.0;
 

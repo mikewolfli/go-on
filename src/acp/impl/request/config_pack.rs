@@ -459,7 +459,6 @@ pub(super) async fn handle_config_baseline(
                     "entry_rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
                     "entry_rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
                     "production_strict": server.runtime_config.production_strict,
-                    "sqlite_vacuum_interval_cycles": server.runtime_config.sqlite_vacuum_interval_cycles,
                     "trace_slow_top_n": server.runtime_config.trace_slow_top_n,
                 },
                 "sources": {
@@ -474,7 +473,6 @@ pub(super) async fn handle_config_baseline(
                     "entry_rate_limit_rpm": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_rpm"),
                     "entry_rate_limit_burst": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_burst"),
                     "production_strict": runtime_field_source(&explicit_runtime_keys, "production_strict"),
-                    "sqlite_vacuum_interval_cycles": runtime_field_source(&explicit_runtime_keys, "sqlite_vacuum_interval_cycles"),
                     "trace_slow_top_n": runtime_field_source(&explicit_runtime_keys, "trace_slow_top_n"),
                 },
                 "config": config_summary,

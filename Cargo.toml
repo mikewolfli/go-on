@@ -83,7 +83,7 @@ document-docx = ["dep:docx-rs"]
 document-html = ["dep:scraper"]
 document-markdown = ["dep:comrak"]
 document-excel = ["dep:calamine"]
-document-ppt = ["dep:quick-xml", "dep:zip"]
+document-ppt = ["dep:quick-xml"]
 document-excel-write = ["dep:rust_xlsxwriter"]
 sub-bus-multimodal = [
     "document-pdf",
@@ -98,6 +98,9 @@ sub-bus-multimodal = [
 data-export = ["dep:csv", "dep:serde_yaml"]
 string-similarity = ["dep:strsim"]
 
+# Barcode / 2D code generation tools (optional, feature-gated)
+barcode-tools = []
+
 # Audio processing backends (optional, feature-gated)
 audio-whisper-openai = []
 audio-vosk = []
@@ -107,6 +110,14 @@ image-processing = ["dep:image", "dep:serde_yaml"]
 
 # CAD and drawing tools (optional, feature-gated)
 cad-dxf = ["dep:dxf"]
+cad-stl = []
+cad-utils = []
+cad-obj = []
+cad-step = []
+cad-geo = []
+cad-gltf = []
+cad-iges = []
+cad-ply = []
 drawing-svg = ["dep:svg"]
 
 # Profile definitions (mutually exclusive via compile-time assertions)
@@ -157,7 +168,6 @@ full = [
     "sub-bus-voter-future",
     "sub-bus-observability",
     "sub-bus-optimization",
-    "sub-bus-memory",
     "sub-bus-protocol",
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
@@ -169,7 +179,18 @@ full = [
     "string-similarity",
     "image-processing",
     "cad-dxf",
+    "cad-stl",
+    "cad-utils",
+    "cad-obj",
+    "cad-step",
+    "cad-geo",
+    "cad-gltf",
+    "cad-iges",
+    "cad-ply",
     "drawing-svg",
+    "document-email",
+    "document-invoice",
+    "barcode-tools",
     "vault",
 ]
 
@@ -183,6 +204,8 @@ server-mcp-postgres = ["multi-users-server"]
 
 # Feature gates for conditional compilation (used by source code)
 vault = []
+document-email = []
+document-invoice = []
 temp_env = ["dep:temp-env"]
 # Chaos engineering fault injection (opt-in, not in any profile by default)
 chaos-testing = []
@@ -259,7 +282,8 @@ calamine = { version = "0.26", optional = true }
 rust_xlsxwriter = { version = "0.82", optional = true }
 quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 temp-env = { version = "0.3", optional = true }
-zip = { version = "2", optional = true }
+zip = "2"
+tar = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { version = "8", features = ["macos_kqueue"] }

@@ -206,15 +206,6 @@ impl AppConfig {
             if runtime.entry_rate_limit_burst == 0 {
                 anyhow::bail!("{}", tf("error.entry_rate_limit_burst_positive", &[]));
             }
-            if runtime.sqlite_vacuum_interval_cycles == 0 {
-                anyhow::bail!(
-                    "{}",
-                    tf(
-                        "error.runtime_must_be_positive",
-                        &[("field", "sqlite_vacuum_interval_cycles")]
-                    )
-                );
-            }
             if !(0.0..=1.0).contains(&runtime.otel_sample_ratio) {
                 anyhow::bail!("{}", tf("error.otel_sample_ratio_range", &[]));
             }

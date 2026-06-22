@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::warn;
+use tokio::time::interval;
+use tracing::{info, warn};
 
 use crate::i18n::runtime::tf;
 use crate::orchestration::skill_import::parse_skill_md;
@@ -52,6 +53,9 @@ pub struct SkillRegistry {
     /// Original data for prompt-based skills, keyed by name.
     /// Used to serialize skills back to disk without downcasting.
     prompt_skill_data: HashMap<String, SavedPromptSkill>,
+    /// Tracks file modification timestamps for local SKILL.md files.
+    /// Used by hot-reload to skip re-parsing unchanged files.
+    skill_file_mtimes: HashMap<PathBuf, SystemTime>,
 }
 
 impl std::fmt::Debug for SkillRegistry {
@@ -219,8 +223,27 @@ impl SkillRegistry {
         stats.record(success, latency);
     }
 
+    /// Get the score (0.0–1.0) for a skill by name.
     pub fn score_of(&self, name: &str) -> Option<f64> {
         self.stats.get(name).map(SkillRuntimeStats::score)
+    }
+
+    /// Return a full `SkillDescriptor` for the named skill, combining the
+    /// skill's metadata with its runtime statistics. Returns `None` if the
+    /// skill is not registered.
+    pub fn descriptor(&self, name: &str) -> Option<SkillDescriptor> {
+        let skill = self.skills.get(name)?;
+        let stats = self.stats.get(name).cloned().unwrap_or_default();
+        Some(SkillDescriptor {
+            name: skill.name().to_string(),
+            description: skill.description().to_string(),
+            input_schema: skill.input_schema(),
+            score: stats.score(),
+            total_calls: stats.total_calls,
+            success_calls: stats.success_calls,
+            failure_calls: stats.failure_calls,
+            average_latency_ms: stats.average_latency_ms(),
+        })
     }
 
     pub fn best_match(&self, requested: &str) -> Option<String> {
@@ -511,7 +534,16 @@ impl SkillRegistry {
             .unwrap_or_else(default_agents_skills_dir);
 
         if !dir.exists() {
-            return Ok(LocalSkillDiscoverySummary::default());
+            warn!(
+                "Skills directory '{}' does not exist — no local skills discovered. \
+                 Create ~/.agents/skills/ with SKILL.md files to register agent skills.",
+                dir.display()
+            );
+            return Ok(LocalSkillDiscoverySummary {
+                registered: 0,
+                skipped: 0,
+                errors: Vec::new(),
+            });
         }
 
         let mut registered = 0usize;
@@ -547,6 +579,30 @@ impl SkillRegistry {
                 continue;
             };
 
+            // ── Hot-reload: skip if the file hasn't been modified ──
+            let current_mtime = match fs::metadata(&md_path).and_then(|meta| meta.modified()) {
+                Ok(mtime) => mtime,
+                Err(e) => {
+                    warn!(
+                        "Failed to read metadata for {}: {} — will re-parse",
+                        md_path.display(),
+                        e
+                    );
+                    // Proceed with parsing anyway; don't skip on metadata error
+                    // Use UNIX_EPOCH so the file is always re-processed.
+                    SystemTime::UNIX_EPOCH
+                }
+            };
+
+            // If we already know this exact path and its mtime hasn't changed,
+            // skip the expensive re-parse and re-registration entirely.
+            if let Some(prev_mtime) = self.skill_file_mtimes.get(&md_path) {
+                if *prev_mtime == current_mtime {
+                    skipped += 1;
+                    continue;
+                }
+            }
+
             let content = match fs::read(&md_path) {
                 Ok(c) => c,
                 Err(e) => {
@@ -560,15 +616,37 @@ impl SkillRegistry {
             let manifest = match parse_skill_md(&content) {
                 Ok(m) => m,
                 Err(e) => {
-                    warn!("Failed to parse {}: {}", md_path.display(), e);
-                    errors.push(format!("{}: parse error: {}", md_path.display(), e));
+                    let err_msg = format!(
+                        "{}: invalid SKILL.md frontmatter — {}. \
+                         Ensure the file starts with '---' followed by valid YAML \
+                         with 'name:' and 'description:' fields.",
+                        md_path.display(),
+                        e
+                    );
+                    warn!("{}", err_msg);
+                    errors.push(err_msg);
                     skipped += 1;
                     continue;
                 }
             };
 
-            // Skip if already registered
+            // ── Hot-reload: if skill already registered with same name AND the
+            // file is unchanged, skip. But if the file IS modified, we re-register
+            // (which replaces the old skill). We detect this by checking mtime
+            // above. If we get here, the file has changed (or is new).
+
+            // Skip if already registered — produce a clear warning about name conflicts
             if self.skills.contains_key(&manifest.name) {
+                let conflict_msg = format!(
+                    "Skill '{}' from '{}' conflicts with an already-registered skill. \
+                     Built-in skills and previously imported skills take precedence. \
+                     Rename the skill in '{}' to avoid the conflict.",
+                    manifest.name,
+                    md_path.display(),
+                    md_path.display()
+                );
+                warn!("{}", conflict_msg);
+                errors.push(conflict_msg);
                 skipped += 1;
                 continue;
             }
@@ -584,13 +662,15 @@ impl SkillRegistry {
                 description: manifest.description.clone(),
                 prompt_template: prompt_text,
                 input_schema: HashMap::new(),
-                timeout_secs: 120,
+                timeout_secs: 30,
                 max_retries: 2,
             };
 
             match self.register(Arc::new(skill)) {
                 Ok(()) => {
                     registered += 1;
+                    // Record the mtime so subsequent refresh ticks skip this file
+                    self.skill_file_mtimes.insert(md_path, current_mtime);
                     // Track the imported skill data for persistence
                     self.prompt_skill_data.insert(
                         manifest.name.clone(),
@@ -645,4 +725,75 @@ pub struct LocalSkillDiscoverySummary {
     pub skipped: usize,
     /// Any error messages encountered during discovery.
     pub errors: Vec<String>,
+}
+
+/// Spawn a background tokio task that periodically rescans `~/.agents/skills/`
+/// for new SKILL.md files and registers them in the given registry.
+///
+/// The rescan interval is 60 seconds. This allows new agent skills to be picked
+/// up without restarting the server. The task runs until the returned
+/// `JoinHandle` is dropped or the tokio runtime shuts down.
+///
+/// # Errors
+///
+/// Errors during rescan are logged via `tracing::warn!` but do not terminate
+/// the background task.
+///
+/// Returns a no-op handle if no Tokio runtime is active (e.g., during sync tests).
+pub fn spawn_skill_refresh_task(
+    registry: std::sync::Arc<std::sync::Mutex<SkillRegistry>>,
+    agents_skills_dir: Option<std::path::PathBuf>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let dir = agents_skills_dir.unwrap_or_else(default_agents_skills_dir);
+    // Check if a Tokio runtime is active before trying to spawn.
+    // Without this check, calling `tokio::spawn` from a `#[test]` (non-async) context
+    // panics with "there is no reactor running".
+    if tokio::runtime::Handle::try_current().is_err() {
+        warn!(
+            "No Tokio runtime active — background skill refresh disabled for '{}'",
+            dir.display()
+        );
+        return None;
+    }
+    info!(
+        "Spawning background skill refresh task (scanning '{}' every 60s)",
+        dir.display()
+    );
+    Some(tokio::spawn(async move {
+        let mut ticker = interval(std::time::Duration::from_secs(60));
+        // Skip the first tick — the initial scan already happens during bootstrap.
+        // This avoids redundant work and duplicate log messages at startup.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            match registry.lock() {
+                Ok(mut reg) => match reg.discover_and_register_local_skills(Some(&dir)) {
+                    Ok(summary) => {
+                        if summary.registered > 0 {
+                            info!(
+                                "Background skill refresh: registered {} new skill(s) from {}",
+                                summary.registered,
+                                dir.display()
+                            );
+                        }
+                        if !summary.errors.is_empty() {
+                            for err in &summary.errors {
+                                warn!("Background skill refresh warning: {}", err);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Background skill refresh failed for '{}': {}",
+                            dir.display(),
+                            e
+                        );
+                    }
+                },
+                Err(e) => {
+                    warn!("Background skill refresh: failed to lock registry: {}", e);
+                }
+            }
+        }
+    }))
 }

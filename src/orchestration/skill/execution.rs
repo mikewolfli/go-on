@@ -6,6 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::agent::{Agent, Message, StreamingSender};
 
@@ -123,36 +124,60 @@ impl Skill for PromptBasedSkill {
                         }));
                     }
                     Ok(Err(e)) => {
-                        last_error = Some(anyhow::anyhow!(
-                            "Prompt skill '{}' LLM execution failed: {}",
-                            self.name,
-                            e
-                        ));
-                        if attempt < max_attempts {
-                            let backoff = std::time::Duration::from_millis(500 * attempt as u64);
-                            tracing::warn!(
-                                "Prompt skill '{}' attempt {}/{} failed, retrying in {:?}: {}",
-                                self.name,
-                                attempt,
-                                max_attempts,
-                                backoff,
-                                e
+                        let err_str = e.to_string();
+                        // Detect rate limiting (HTTP 429, "rate limit", "too many requests")
+                        let is_rate_limit = err_str.to_lowercase().contains("429")
+                            || err_str.to_lowercase().contains("rate limit")
+                            || err_str.to_lowercase().contains("too many requests")
+                            || err_str.to_lowercase().contains("retry after");
+
+                        if is_rate_limit {
+                            // Exponential backoff for rate limits: 1s, 2s, 4s, ...
+                            let backoff_secs = 1u64 << (attempt - 1); // 1, 2, 4, 8...
+                            let backoff = std::time::Duration::from_secs(
+                                backoff_secs.min(30), // Cap at 30 seconds
+                            );
+                            warn!(
+                                "Prompt skill '{}' rate limited on attempt {}/{}, \
+                                 backing off {}s: {}",
+                                self.name, attempt, max_attempts, backoff_secs, err_str
                             );
                             tokio::time::sleep(backoff).await;
+                            last_error = Some(anyhow::anyhow!(
+                                "Prompt skill '{}' rate limited after {} attempt(s): {}",
+                                self.name,
+                                attempt,
+                                err_str
+                            ));
+                        } else {
+                            last_error = Some(anyhow::anyhow!(
+                                "Prompt skill '{}' LLM execution failed: {}",
+                                self.name,
+                                err_str
+                            ));
+                            if attempt < max_attempts {
+                                let backoff =
+                                    std::time::Duration::from_millis(500 * attempt as u64);
+                                warn!(
+                                    "Prompt skill '{}' attempt {}/{} failed, retrying in {:?}: {}",
+                                    self.name, attempt, max_attempts, backoff, err_str
+                                );
+                                tokio::time::sleep(backoff).await;
+                            }
                         }
                     }
                     Err(_elapsed) => {
                         last_error = Some(anyhow::anyhow!(
-                            "Prompt skill '{}' timed out after {}s",
+                            "Prompt skill '{}' timed out after {}s (timeout_secs={}). \
+                             Consider increasing timeout_secs or reducing prompt complexity.",
                             self.name,
+                            self.timeout_secs,
                             self.timeout_secs
                         ));
                         if attempt < max_attempts {
-                            tracing::warn!(
-                                "Prompt skill '{}' attempt {}/{} timed out, retrying",
-                                self.name,
-                                attempt,
-                                max_attempts
+                            warn!(
+                                "Prompt skill '{}' attempt {}/{} timed out after {}s, retrying",
+                                self.name, attempt, max_attempts, self.timeout_secs
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
@@ -169,15 +194,21 @@ impl Skill for PromptBasedSkill {
             }));
         }
 
-        // No global LLM agent configured — return a proper error instead of
-        // silently returning synthetic data. Prompt-based skills cannot execute
-        // without an LLM provider. Call set_prompt_skill_agent() with a valid
-        // PromptSkillAgent during server startup to enable real LLM execution.
+        // No global LLM agent configured — return a clear actionable error.
+        // Prompt-based skills cannot execute without an LLM provider (API key).
+        // Check for common causes:
+        //   - OPENAI_API_KEY / ANTHROPIC_API_KEY not set in environment
+        //   - set_prompt_skill_agent() not called during server startup
+        //   - LLM provider configuration missing from config file
         anyhow::bail!(
             "Prompt skill '{}' cannot execute: no LLM agent configured. \
-             Call set_prompt_skill_agent() with a valid PromptSkillAgent \
-             during startup to enable real LLM execution. \
-             Prompt template: {}..",
+             This usually means one of the following:\n\
+             1. No API key is set — check that OPENAI_API_KEY, ANTHROPIC_API_KEY, \
+                or your provider's key is set in the environment or config.\n\
+             2. set_prompt_skill_agent() was not called during server startup — \
+                ensure the server wired a PromptSkillAgent.\n\
+             3. The LLM provider configuration is missing from the config file.\n\
+             Prompt template (first 120 chars): {}..",
             self.name,
             &prompt.chars().take(120).collect::<String>()
         )
@@ -187,8 +218,7 @@ impl Skill for PromptBasedSkill {
 impl PromptBasedSkill {
     /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
     /// Not called internally but kept as a public utility for consumers.
-    #[allow(dead_code)] // public API — reserved for external registry wiring
-                        // F-GAP-49 — reserved for future use
+    #[allow(dead_code, reason = "Public API — reserved for external registry wiring (F-GAP-49)")]
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }

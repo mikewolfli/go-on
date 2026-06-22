@@ -491,9 +491,9 @@ pub async fn new_acp_server(
     // CapabilityBus does not implement Clone, so Arc::make_mut cannot be used.
     // Arc::get_mut warns if the Arc is already shared (GAP-B58-C08).
     if let Some(ref mut cb_arc) = server.governance_deps.capability_bus {
-        if let Some(cb_mut) = Arc::get_mut(cb_arc) {
+        if let Some(_cb_mut) = Arc::get_mut(cb_arc) {
             #[cfg(feature = "sub-bus-memory")]
-            cb_mut.memory_bus.set_backends(
+            _cb_mut.memory_bus.set_backends(
                 Some(server.cache_deps.cache.response_cache.clone()),
                 Some(server.cache_deps.cache.vector_store.clone()),
                 None,
@@ -549,12 +549,7 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // targets.  The scheduler tracks queue depth and active-worker counts that
     // are surfaced in governance.status.
     {
-        let db_path = server
-            .runtime_config
-            .sqlite_vacuum_interval_cycles
-            .checked_add(1)
-            .map(|_| std::path::PathBuf::from("scheduler_queue.db"));
-        let _persistent = crate::orchestration::scheduler::create_persistent_scheduler(db_path);
+        let _persistent = crate::orchestration::scheduler::create_persistent_scheduler(None);
         let config = crate::orchestration::scheduler::SchedulerConfig::default();
         let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
             config,
@@ -704,10 +699,7 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // system memory, logs warnings on low/critical conditions, and
     // evaluates AlertManager rules for threshold-based alerting.
     crate::observability::memory_health::start_memory_monitor();
-    info!(
-        "memory health monitor started (interval: {}s)",
-        crate::observability::memory_health::MEMORY_MONITOR_INTERVAL_SECS
-    );
+    info!("memory health check completed (one-shot at startup)");
 
     // ── Wire security subsystems (GAP-B52, S-FIX3) ────────────────────
     crate::security::wire_content_safety(&server.runtime_config);

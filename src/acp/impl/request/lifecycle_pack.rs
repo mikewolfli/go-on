@@ -242,9 +242,6 @@ pub(super) async fn handle_data_lifecycle(
                     "execute_gc": execute_gc,
                     "cycle": gc_cycle.as_ref().map(|cycle| json!({
                         "memory_expired_removed": cycle.memory_expired_removed,
-                        "sqlite_expired_removed": cycle.sqlite_expired_removed,
-                        "cache_vacuumed": cycle.cache_vacuumed,
-                        "vector_vacuumed": cycle.vector_vacuumed,
                     })),
                 },
                 "audit": {

@@ -201,16 +201,6 @@ impl SelfModelCore {
         self
     }
 
-    /// Write the current inner state to the configured persistence path, if any.
-    ///
-    /// Errors are silently ignored so that persistence does not disrupt normal
-    /// operation. Logging is performed at debug level for observability.
-    #[allow(dead_code)]
-    fn persist(&self) {
-        let inner = lock_guard(&self.inner);
-        Self::persist_inner(&inner);
-    }
-
     /// Persist without locking (caller must hold the lock).
     /// Used to avoid re-entrant lock deadlocks when persist is called
     /// from methods that already hold the lock.

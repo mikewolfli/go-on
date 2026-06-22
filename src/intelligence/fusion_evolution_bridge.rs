@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 // ── Global channel ─────────────────────────────────────────────────────────
 
 /// Global sender for forwarding evolution triggers to the EvolutionLoop.
-static TRIGGER_SENDER: OnceLock<mpsc::Sender<EvolutionTrigger>> = OnceLock::new();
+static TRIGGER_SENDER: OnceLock<mpsc::UnboundedSender<EvolutionTrigger>> = OnceLock::new();
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -28,14 +28,13 @@ static TRIGGER_SENDER: OnceLock<mpsc::Sender<EvolutionTrigger>> = OnceLock::new(
 /// Must be called **once** before the EvolutionLoop starts so the receiver
 /// can be wrapped into a `PubsubTriggerSource` and registered.
 ///
-/// # Panics
-/// Panics if called more than once (enforced by `OnceLock`).
-pub fn init_fusion_evolution_bridge() -> mpsc::Receiver<EvolutionTrigger> {
-    let (tx, rx) = mpsc::channel(256);
+/// Returns an error if called more than once (enforced by `OnceLock`).
+pub fn init_fusion_evolution_bridge() -> Result<mpsc::UnboundedReceiver<EvolutionTrigger>, &'static str> {
+    let (tx, rx) = mpsc::unbounded_channel();
     TRIGGER_SENDER
         .set(tx)
-        .unwrap_or_else(|_| panic!("fusion_evolution_bridge already initialised"));
-    rx
+        .map_err(|_| "fusion_evolution_bridge already initialised")?;
+    Ok(rx)
 }
 
 /// Send a batch of evolution triggers to the EvolutionLoop.
@@ -56,10 +55,10 @@ pub fn send_triggers_to_evolution(triggers: Vec<EvolutionTrigger>) {
     };
 
     for trigger in triggers {
-        if let Err(e) = sender.try_send(trigger) {
+        if sender.send(trigger).is_err() {
             tracing::warn!(
                 target: "fusion_evolution_bridge",
-                "failed to send trigger to evolution loop: {e}"
+                "failed to send trigger to evolution loop"
             );
         }
     }

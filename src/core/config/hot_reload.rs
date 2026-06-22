@@ -101,11 +101,15 @@ impl WatchDog {
     /// Falls back to polling on failure.
     /// Returns a `JoinHandle` that can be cancelled to stop watching.
     pub async fn start(self) -> Result<tokio::task::JoinHandle<()>> {
-        // If disabled, return immediately without spawning the notify watcher.
+        // If disabled, return immediately without spawning any task.
         if !self.config.enabled {
             info!("Hot-reload watchdog disabled by config");
-            let handle = tokio::spawn(async move {});
-            return Ok(handle);
+            // Use a completed oneshot as a no-op handle so the caller can still .await it.
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let _ = tx.send(());
+            return Ok(tokio::spawn(async move {
+                let _ = rx.await;
+            }));
         }
 
         let handle = tokio::spawn(async move {

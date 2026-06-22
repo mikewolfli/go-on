@@ -159,7 +159,7 @@ pub struct HttpHeader {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Public API surface for HttpHeader consumers")]
 impl HttpHeader {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {

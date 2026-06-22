@@ -205,6 +205,18 @@ pub enum SkillCommand {
     },
     /// List imported/registered skills
     ListImported,
+    /// Show detailed info about a specific installed skill
+    Info {
+        /// Name of the skill to inspect
+        name: String,
+    },
+    /// Trigger an immediate rescan of ~/.agents/skills/ for new or modified skills
+    Refresh,
+    /// Remove a skill from the registry
+    Remove {
+        /// Name of the skill to remove
+        name: String,
+    },
 }
 
 /// Handle the `skill` CLI subcommand by creating in-process registries
@@ -288,6 +300,51 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
             if descriptors.is_empty() {
                 eprintln!("  (no skills registered)");
+            }
+        }
+        SkillCommand::Info { name } => {
+            let registry = skill_registry.read().await;
+            match registry.descriptor(&name) {
+                Some(desc) => {
+                    eprintln!("Skill: {}", desc.name);
+                    eprintln!("  Description: {}", desc.description);
+                    eprintln!("  Score: {:.2}", desc.score);
+                    eprintln!("  Total calls: {}", desc.total_calls);
+                    eprintln!("  Successful calls: {}", desc.success_calls);
+                    eprintln!("  Failed calls: {}", desc.failure_calls);
+                    eprintln!("  Avg latency: {:.1} ms", desc.average_latency_ms);
+                    eprintln!("  Input schema: {}", desc.input_schema);
+                }
+                None => {
+                    anyhow::bail!("skill '{}' not found in registry", name);
+                }
+            }
+        }
+        SkillCommand::Refresh => {
+            let mut registry = skill_registry.write().await;
+            match registry.discover_and_register_local_skills(None) {
+                Ok(summary) => {
+                    eprintln!(
+                        "Skill refresh complete: {} registered, {} skipped, {} errors",
+                        summary.registered,
+                        summary.skipped,
+                        summary.errors.len()
+                    );
+                    for err in &summary.errors {
+                        eprintln!("  Error: {}", err);
+                    }
+                }
+                Err(e) => {
+                    anyhow::bail!("Failed to refresh skills: {}", e);
+                }
+            }
+        }
+        SkillCommand::Remove { name } => {
+            let mut registry = skill_registry.write().await;
+            if registry.unregister(&name) {
+                eprintln!("Skill '{}' removed from registry", name);
+            } else {
+                anyhow::bail!("skill '{}' not found in registry", name);
             }
         }
     }

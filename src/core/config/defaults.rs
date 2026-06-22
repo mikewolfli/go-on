@@ -124,9 +124,6 @@ mod default_functions {
     pub fn default_runtime_entry_rate_limit_burst() -> u64 {
         60
     }
-    pub fn default_runtime_sqlite_vacuum_interval_cycles() -> u64 {
-        60
-    }
     pub fn default_runtime_otel_exporter() -> String {
         "otlp".to_string()
     }
@@ -189,7 +186,6 @@ impl Default for RuntimeConfig {
             entry_rate_limit_rpm: default_runtime_entry_rate_limit_rpm(),
             entry_rate_limit_burst: default_runtime_entry_rate_limit_burst(),
             production_strict: false,
-            sqlite_vacuum_interval_cycles: default_runtime_sqlite_vacuum_interval_cycles(),
             otel_enabled: true,
             otel_exporter: default_runtime_otel_exporter(),
             otel_endpoint: Some("http://localhost:4317".to_string()),
@@ -636,40 +632,6 @@ mod adaptive {
         })
     }
 
-    /// Legacy helper for manual config compat, not used by modern Path B routing.
-    #[allow(dead_code)]
-    fn preferred_review_agents(providers: &[String]) -> Vec<String> {
-        let mut reviewers: Vec<String> = providers
-            .iter()
-            .filter(|provider| provider.as_str() != "copilot")
-            .cloned()
-            .collect();
-
-        if reviewers.is_empty() {
-            reviewers = providers.to_vec();
-        }
-
-        if reviewers.is_empty() {
-            vec!["copilot".to_string()]
-        } else {
-            reviewers
-        }
-    }
-
-    /// Legacy helper for manual config compat, not used by modern Path B routing.
-    #[allow(dead_code)]
-    fn preferred_delivery_agents(providers: &[String]) -> Vec<String> {
-        if providers.iter().any(|provider| provider == "copilot") {
-            return vec!["copilot".to_string()];
-        }
-
-        providers
-            .first()
-            .cloned()
-            .map(|provider| vec![provider])
-            .unwrap_or_else(|| vec!["copilot".to_string()])
-    }
-
     pub(crate) fn adaptive_principles(
         preferences: &LearningPreferences,
         phase: &str,
@@ -924,7 +886,6 @@ pub fn default_non_ai_config_toml() -> String {
         "maintenance_interval_seconds = 60",
         "health_interval_seconds = 120",
         "shutdown_drain_seconds = 30",
-        "sqlite_vacuum_interval_cycles = 60",
         "",
         "[autotune]",
         "enabled = false",

@@ -411,17 +411,7 @@ impl SecurityAdvisorAgent {
         }
 
         let mut senders = self.ws_senders.lock().await;
-        senders.retain(|sender| match sender.try_send(alert.clone()) {
-            Ok(()) => true,
-            Err(e) if e.is_disconnected() => {
-                warn!("SecurityAdvisorAgent: WS sender disconnected: {}", e);
-                false
-            }
-            Err(e) => {
-                warn!("SecurityAdvisorAgent: WS sender full, skipping: {}", e);
-                true
-            }
-        });
+        senders.retain(|sender| sender.try_send(alert.clone()).is_ok());
 
         // Also store the alert for the digest.
         {

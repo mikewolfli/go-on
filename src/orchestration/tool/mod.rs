@@ -21,7 +21,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::orchestration::skill::SkillRegistry;
 
 /// Global tool lock manager for file access synchronization.
 static TOOL_LOCK_MANAGER: OnceLock<crate::orchestration::tool_lock::ToolLockManager> =
@@ -30,6 +32,17 @@ static TOOL_LOCK_MANAGER: OnceLock<crate::orchestration::tool_lock::ToolLockMana
 fn tool_lock_manager() -> &'static crate::orchestration::tool_lock::ToolLockManager {
     TOOL_LOCK_MANAGER.get_or_init(crate::orchestration::tool_lock::ToolLockManager::new)
 }
+
+/// Global skill registry reference for tools that need access to registered skills.
+static SKILL_REGISTRY: OnceLock<Arc<Mutex<SkillRegistry>>> = OnceLock::new();
+
+/// Set the global skill registry reference used by `SkillListTool` and other
+/// registry-aware tools. Call this once during server startup after the skill
+/// registry has been initialized.
+pub fn set_skill_registry(registry: Arc<Mutex<SkillRegistry>>) {
+    let _ = SKILL_REGISTRY.set(registry);
+}
+
 use std::process::Command;
 use std::time::Instant;
 use tempfile::NamedTempFile;
@@ -397,6 +410,34 @@ impl ToolRegistry {
             },
         );
 
+        // ── Archive tools (no feature gate) ──────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ArchiveInspectTool,
+            ToolCapabilityProfile {
+                capability: "archive_inspect".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ArchiveExtractTool,
+            ToolCapabilityProfile {
+                capability: "archive_extract".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         // ── PDF document tools (feature-gated) ────────────────
         #[cfg(feature = "document-pdf")]
         registry.register_with_profile(
@@ -405,6 +446,50 @@ impl ToolRegistry {
                 capability: "document_pdf_read".to_string(),
                 risk_level: ToolRiskLevel::Low,
                 timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        #[cfg(feature = "document-pdf")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::PdfMergeTool,
+            ToolCapabilityProfile {
+                capability: "document_pdf_merge".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "document-pdf")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::PdfSplitTool,
+            ToolCapabilityProfile {
+                capability: "document_pdf_split".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        #[cfg(feature = "document-email")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::EmailParseTool,
+            ToolCapabilityProfile {
+                capability: "document_email_parse".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 15_000,
                 retry_policy: RetryPolicy {
                     max_retries: 1,
                     retry_on_failure: true,
@@ -481,6 +566,34 @@ impl ToolRegistry {
             crate::orchestration::tool_extended::CsvWriteTool,
             ToolCapabilityProfile {
                 capability: "csv_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CsvAnalyzeTool,
+            ToolCapabilityProfile {
+                capability: "csv_analyze".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CsvTransformTool,
+            ToolCapabilityProfile {
+                capability: "csv_transform".to_string(),
                 risk_level: ToolRiskLevel::Medium,
                 timeout_budget_ms: 30_000,
                 retry_policy: RetryPolicy {
@@ -660,6 +773,227 @@ impl ToolRegistry {
                 retry_policy: RetryPolicy {
                     max_retries: 1,
                     retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "drawing-svg")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::SvgGenerateTool,
+            ToolCapabilityProfile {
+                capability: "svg_generate".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── CAD/STL tools (feature-gated) ────────────────────
+        #[cfg(feature = "cad-stl")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::StlReadTool,
+            ToolCapabilityProfile {
+                capability: "stl_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── CAD/OBJ tools (feature-gated) ────────────────────
+        #[cfg(feature = "cad-obj")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ObjReadTool,
+            ToolCapabilityProfile {
+                capability: "obj_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── CAD/STEP tools (feature-gated) ────────────────────
+        #[cfg(feature = "cad-step")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::StepReadTool,
+            ToolCapabilityProfile {
+                capability: "step_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── CAD/Geo utilities (feature-gated) ────────────────────
+        #[cfg(feature = "cad-geo")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::GeoUtilTool,
+            ToolCapabilityProfile {
+                capability: "geo_util".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 5_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── CAD utilities (feature-gated) ────────────────────
+        #[cfg(feature = "cad-utils")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CadConvertTool,
+            ToolCapabilityProfile {
+                capability: "cad_convert".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 5_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── SVG export (feature-gated) ───────────────────────
+        #[cfg(feature = "drawing-svg")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::SvgExportTool,
+            ToolCapabilityProfile {
+                capability: "svg_export".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── glTF 3D model tools (feature-gated) ────────────────
+        #[cfg(feature = "cad-gltf")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::GltfReadTool,
+            ToolCapabilityProfile {
+                capability: "gltf_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── IGES CAD tools (feature-gated) ──────────────────────
+        #[cfg(feature = "cad-iges")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::IgesReadTool,
+            ToolCapabilityProfile {
+                capability: "iges_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── PLY 3D mesh tools (feature-gated) ───────────────────
+        #[cfg(feature = "cad-ply")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::PlyReadTool,
+            ToolCapabilityProfile {
+                capability: "ply_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── STL generate tool (feature-gated) ───────────────────
+        #[cfg(feature = "cad-stl")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::StlGenerateTool,
+            ToolCapabilityProfile {
+                capability: "stl_generate".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Invoice parsing tool (feature-gated) ────────────
+        #[cfg(feature = "document-invoice")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::InvoiceParseTool,
+            ToolCapabilityProfile {
+                capability: "document_invoice_parse".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── QR Code generation tool (feature-gated) ──────────
+        #[cfg(feature = "barcode-tools")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::QrCodeTool,
+            ToolCapabilityProfile {
+                capability: "barcode_qrcode_generate".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Skill listing tool (always compiled, no feature gate) ────
+        registry.register_with_profile(
+            SkillListTool,
+            ToolCapabilityProfile {
+                capability: "skill_list".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 5_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
                 },
                 fallback_chain: Vec::new(),
             },
@@ -1347,6 +1681,67 @@ impl Tool for InspectGitDiffTool {
                 "inspect_git_diff",
                 Some("diff_inspected"),
             )),
+        })
+    }
+}
+
+// ── SkillListTool ────────────────────────────────────────────────────────────
+
+/// Tool that lists all registered skills with their name, description, and score.
+///
+/// Requires a `SkillRegistry` to have been set via `set_skill_registry()`
+/// before calling `run()`. Returns an empty list if no registry is configured.
+///
+/// Input payload: ignored (no arguments required).
+/// Output: `{ "skills": [{ "name": "...", "description": "...", "score": 0.0 }, ...] }`
+pub struct SkillListTool;
+
+impl Tool for SkillListTool {
+    fn name(&self) -> &'static str {
+        "skill_list"
+    }
+
+    fn run(&self, _input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = 0u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
+        let skills = match SKILL_REGISTRY.get() {
+            Some(registry) => match registry.lock() {
+                Ok(guard) => {
+                    let descriptors = guard.list();
+                    descriptors
+                        .into_iter()
+                        .map(|d| {
+                            serde_json::json!({
+                                "name": d.name,
+                                "description": d.description,
+                                "score": d.score,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                }
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+        span.record("success", true);
+        Ok(ToolOutput {
+            success: true,
+            result: Some(serde_json::json!({"skills": skills})),
+            error: None,
+            verification: Some("skills_listed".to_string()),
+            audit_log: Some(format!("Listed {} skill(s)", skills.len())),
+            pua_report: Some(tool_execution_report("skill_list", Some("skills_listed"))),
         })
     }
 }

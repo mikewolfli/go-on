@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 /// MCP server configuration. Tagged by `"type"` in JSON.
 /// Stdio variant is untagged (legacy format without explicit type field).
 /// Public schema type — mirrors `agent-client-protocol-schema` v0.13.2.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Public API surface — mirrors agent-client-protocol-schema v0.13.2"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpServerConfig {
@@ -22,7 +25,10 @@ pub enum McpServerConfig {
 
 /// HTTP MCP server transport configuration.
 /// Public schema type — part of the ACP MCP server config enum.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Public API surface — part of ACP MCP server config enum"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerHttp {
@@ -36,7 +42,10 @@ pub struct McpServerHttp {
 
 /// SSE MCP server transport configuration.
 /// Public schema type — part of the ACP MCP server config enum.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "Public API surface — part of ACP MCP server config enum"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerSse {
@@ -62,7 +71,7 @@ pub struct McpServerStdio {
 }
 
 impl McpServerStdio {
-    #[allow(dead_code)] // Public API for MCP server consumers
+    #[allow(dead_code, reason = "Public API surface for MCP server consumers")]
     pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
         Self {
             name: name.into(),

@@ -135,8 +135,7 @@ pub(super) async fn handle_release_readiness(
     let reproducibility =
         super::repro_pack::reproducible_build_summary(server.config_path.as_deref());
 
-    let lock_components = server.observability.lock_monitor.snapshot();
-    let lock_summary = super::diagnostic_pack::summarize_lock_health(&lock_components);
+    let lock_summary = super::diagnostic_pack::summarize_lock_health(&[]);
     let degraded_services = super::health_pack::collect_degraded_services(server);
     let open_breakers = status
         .circuit_breakers
@@ -942,43 +941,53 @@ pub(super) async fn handle_harness_status(
     let mut long_chain = Vec::new();
     let mut warnings = Vec::new();
 
-    let requests_root = std::path::Path::new("requests");
-    match std::fs::read_dir(requests_root) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_ndjson = path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext.eq_ignore_ascii_case("ndjson"))
-                    .unwrap_or(false);
-                if !is_ndjson {
-                    continue;
+    let requests_root = std::path::Path::new("requests").to_path_buf();
+    // Use spawn_blocking to avoid blocking the tokio runtime with synchronous fs I/O.
+    let (smoke, regression, adversarial, long_chain, mut warnings) = tokio::task::spawn_blocking(move || {
+        let mut smoke = Vec::new();
+        let mut regression = Vec::new();
+        let mut adversarial = Vec::new();
+        let mut long_chain = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+        match std::fs::read_dir(&requests_root) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let is_ndjson = path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext.eq_ignore_ascii_case("ndjson"))
+                        .unwrap_or(false);
+                    if !is_ndjson {
+                        continue;
+                    }
+                    let Some(name) = path
+                        .file_name()
+                        .and_then(|item| item.to_str())
+                        .map(|item| item.to_string())
+                    else {
+                        continue;
+                    };
+                    match classify_harness_suite(&name) {
+                        "smoke" => smoke.push(name),
+                        "adversarial" => adversarial.push(name),
+                        "long_chain" => long_chain.push(name),
+                        _ => regression.push(name),
+                    }
                 }
-                let Some(name) = path
-                    .file_name()
-                    .and_then(|item| item.to_str())
-                    .map(|item| item.to_string())
-                else {
-                    continue;
-                };
-
-                match classify_harness_suite(&name) {
-                    "smoke" => smoke.push(name),
-                    "adversarial" => adversarial.push(name),
-                    "long_chain" => long_chain.push(name),
-                    _ => regression.push(name),
-                }
+                smoke.sort();
+                regression.sort();
+                adversarial.sort();
+                long_chain.sort();
             }
-            smoke.sort();
-            regression.sort();
-            adversarial.sort();
-            long_chain.sort();
+            Err(err) => {
+                warnings.push(format!("failed to read requests directory: {err}"));
+            }
         }
-        Err(err) => {
-            warnings.push(format!("failed to read requests directory: {err}"));
-        }
-    }
+        (smoke, regression, adversarial, long_chain, warnings)
+    })
+    .await
+    .unwrap_or_default();
 
     let scenario_total = smoke.len() + regression.len() + adversarial.len() + long_chain.len();
     let metrics = server.observability.metrics.snapshot();

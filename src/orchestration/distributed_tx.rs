@@ -152,8 +152,7 @@ impl DistributedTransaction {
 
     /// Count participants by their acknowledge status.
     #[cfg(test)]
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
+    #[allow(dead_code, reason = "F-GAP-49 — reserved for future use")]
     pub fn count_acknowledgements(&self) -> (usize, usize) {
         let acked = self.participants.iter().filter(|p| p.acknowledged).count();
         let total = self.participants.len();

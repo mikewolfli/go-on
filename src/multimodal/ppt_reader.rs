@@ -34,6 +34,7 @@ use thiserror::Error;
 
 /// Error type for PPT reading operations.
 #[derive(Debug, Error)]
+#[allow(dead_code, reason = "F-GAP reserved: PPT reader API")]
 pub enum PptReaderError {
     /// I/O error when reading the file.
     #[error("PPTX I/O error: {0}")]
@@ -54,6 +55,7 @@ pub enum PptReaderError {
 
 /// The text content extracted from a PowerPoint presentation.
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "F-GAP reserved: PPT reader API")]
 pub struct PptxContent {
     /// The combined text of all slides, separated by slide boundaries.
     pub full_text: String,
@@ -80,6 +82,7 @@ pub struct PptxContent {
 /// - Slide XML is not valid UTF-8.
 /// - No slides are found in the archive.
 #[cfg(feature = "document-ppt")]
+#[allow(dead_code, reason = "F-GAP reserved: PPT reader API")]
 pub fn read_pptx_file<P: AsRef<Path>>(path: P) -> Result<PptxContent, PptReaderError> {
     let file = std::fs::File::open(path.as_ref())?;
     let mut reader = std::io::BufReader::new(file);
@@ -97,6 +100,7 @@ pub fn read_pptx_file<P: AsRef<Path>>(path: P) -> Result<PptxContent, PptReaderE
 ///
 /// Same as [`read_pptx_file`].
 #[cfg(feature = "document-ppt")]
+#[allow(dead_code, reason = "F-GAP reserved: PPT reader API")]
 pub fn read_pptx_bytes(bytes: &[u8]) -> Result<PptxContent, PptReaderError> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| PptReaderError::Zip(format!("failed to open ZIP archive: {e}")))?;
@@ -212,6 +216,7 @@ pub fn read_pptx_bytes(_bytes: &[u8]) -> Result<PptxContent, PptReaderError> {
 /// Finds `<a:t>` / `<t>` text-run elements and joins them by paragraph
 /// (delimited by `<a:p>` / `<p>`).
 #[cfg(feature = "document-ppt")]
+#[allow(dead_code, reason = "F-GAP reserved: PPT reader API")]
 fn extract_text_from_slide(xml: &str) -> String {
     use quick_xml::events::Event;
     use quick_xml::Reader;

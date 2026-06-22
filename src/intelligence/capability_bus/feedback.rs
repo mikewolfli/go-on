@@ -113,7 +113,7 @@ impl CapabilityBus {
         // 4c. Persist execution summary to MemoryBus L1/L2.
         #[cfg(any(feature = "sub-bus-memory", feature = "sub-bus-distributed-memory"))]
         let memory_key = format!("{}::{}", task_type, task_id);
-        #[cfg(any(feature = "sub-bus-memory", feature = "sub-bus-distributed-memory"))]
+        #[cfg(feature = "sub-bus-memory")]
         let memory_value = serde_json::json!({
             "agent": agent,
             "success": success,

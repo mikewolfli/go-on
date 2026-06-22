@@ -25,8 +25,6 @@ mod queue;
 
 pub use concurrency::TaskPermitGuard;
 pub use persistence::create_persistent_scheduler;
-#[cfg(feature = "backend-sqlite")]
-pub use persistence::SchedulerPersistence;
 pub use priority::{Priority, ScheduledTask};
 
 // ──────────────────────────────────────────────
@@ -125,9 +123,6 @@ pub struct TaskScheduler {
     bulkhead: Bulkhead,
     /// Cancellation token for the fault tolerance background task.
     ft_cancel: Mutex<Option<CancellationToken>>,
-    /// Optional persistence for surviving restarts (SQLite-backed)
-    #[cfg(feature = "backend-sqlite")]
-    persistence: Option<Arc<SchedulerPersistence>>,
 }
 
 impl TaskScheduler {
@@ -155,75 +150,8 @@ impl TaskScheduler {
             aging_cancel: Mutex::new(None),
             bulkhead: Bulkhead::new(config.max_workers_per_role * 3),
             ft_cancel: Mutex::new(None),
-            #[cfg(feature = "backend-sqlite")]
-            persistence: None,
             config,
         }
-    }
-
-    /// Create a scheduler with SQLite-backed persistence.
-    ///
-    /// On creation, attempts to restore any tasks that were persisted
-    /// in a previous session and re-enqueues them.
-    #[cfg(feature = "backend-sqlite")]
-    pub fn new_with_persistence(
-        config: SchedulerConfig,
-        persistence: SchedulerPersistence,
-    ) -> Self {
-        let global_permits = config.global_max_concurrent_tasks;
-        let persistence = if persistence.is_enabled() {
-            Some(Arc::new(persistence))
-        } else {
-            None
-        };
-
-        let scheduler = Self {
-            state: RwLock::new(SchedulerState {
-                queues: HashMap::new(),
-                task_map: HashMap::new(),
-            }),
-            active: Mutex::new(HashMap::new()),
-            stats: RwLock::new(SchedulerProfile {
-                l1_queue_depth: 0,
-                l2_active_workers: 0,
-                l2_fan_out_count: 0,
-                total_submitted: 0,
-                total_completed: 0,
-                total_failed: 0,
-                starvation_events_prevented: 0,
-                backpressure_rejections: 0,
-            }),
-            last_aging: Mutex::new(Instant::now()),
-            concurrency_limiter: Arc::new(Semaphore::new(global_permits)),
-            role_limiters: Mutex::new(HashMap::new()),
-            aging_cancel: Mutex::new(None),
-            bulkhead: Bulkhead::new(config.max_workers_per_role * 3),
-            ft_cancel: Mutex::new(None),
-            persistence,
-            config,
-        };
-
-        // Restore previously persisted tasks
-        if let Some(ref p) = scheduler.persistence {
-            match p.restore_queue() {
-                Ok(tasks) => {
-                    let count = tasks.len();
-                    for task in tasks {
-                        if let Err(e) = scheduler.submit(task) {
-                            warn!("Failed to restore persisted task: {}", e);
-                        }
-                    }
-                    if count > 0 {
-                        info!("Restored {} tasks from persistence", count);
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to restore scheduler queue: {}", e);
-                }
-            }
-        }
-
-        scheduler
     }
 
     /// Submit a task to the queue. Pushes into the role-specific BinaryHeap,
@@ -288,20 +216,6 @@ impl TaskScheduler {
             stats.total_submitted += 1;
         }
         debug!("Submitted task {}", task_id);
-
-        // Persist the task if persistence is enabled
-        #[cfg(feature = "backend-sqlite")]
-        if let Some(ref p) = self.persistence {
-            let state = self.state.read().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            if let Some(saved) = state.task_map.get(&task_id) {
-                if let Err(e) = p.save_task(saved) {
-                    warn!("Failed to persist task {}: {}", task_id, e);
-                }
-            }
-        }
 
         Ok(())
     }
@@ -501,14 +415,6 @@ impl TaskScheduler {
 
         info!("Task {} completed", task_id);
 
-        // Remove from persistence on completion
-        #[cfg(feature = "backend-sqlite")]
-        if let Some(ref p) = self.persistence {
-            if let Err(e) = p.remove_task(task_id) {
-                warn!("Failed to remove task {} from persistence: {}", task_id, e);
-            }
-        }
-
         Ok(())
     }
 
@@ -653,7 +559,10 @@ impl TaskScheduler {
     /// Note: This method is called from `start_aging_timer()` which also
     /// starts the fault tolerance loop.  The `pub` visibility is reserved
     /// for external callers who want independent lifecycle control.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "Public API surface — reserved for external callers who want independent lifecycle control"
+    )]
     pub fn start_fault_tolerance_timer(self: &Arc<Self>) -> Option<JoinHandle<()>> {
         if !self.config.fault_tolerance_enabled {
             return None;
@@ -700,7 +609,7 @@ impl TaskScheduler {
     /// `start_aging_timer()` and `start_fault_tolerance_timer()`.  The
     /// background tasks will exit on their next tick after cancellation.
     /// This is safe to call multiple times; subsequent calls are no-ops.
-    #[allow(dead_code)] // Reserved for graceful server shutdown
+    #[allow(dead_code, reason = "Reserved for graceful server shutdown")]
     pub fn shutdown(&self) {
         if let Ok(mut stored) = self.aging_cancel.lock() {
             if let Some(token) = stored.take() {
@@ -882,24 +791,6 @@ impl TaskScheduler {
             .entry(role.to_string())
             .or_insert_with(|| Arc::new(Semaphore::new(self.config.max_workers_per_role)));
         Ok(Arc::clone(limiter))
-    }
-
-    /// Persist the entire queue to storage (for graceful shutdown).
-    ///
-    /// This is a no-op unless a `SchedulerPersistence` was provided
-    /// via `new_with_persistence`.
-    #[cfg(feature = "backend-sqlite")]
-    pub fn persist_all(&self) -> Result<()> {
-        if let Some(ref p) = self.persistence {
-            let state = self
-                .state
-                .read()
-                .map_err(|e| anyhow!("Lock error: {}", e))?;
-            let tasks: Vec<ScheduledTask> = state.task_map.values().cloned().collect();
-            p.snapshot_queue(&tasks)?;
-            info!("Persisted {} tasks to storage", tasks.len());
-        }
-        Ok(())
     }
 }
 
@@ -1664,7 +1555,5 @@ mod tests {
             .submit(make_task("p-task", "worker", 3, 20.0))
             .unwrap();
         let arc_scheduler = Arc::new(scheduler);
-        // Verify persist_all does not panic.
-        arc_scheduler.persist_all().unwrap();
     }
 }

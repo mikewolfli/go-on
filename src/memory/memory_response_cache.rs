@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use crate::acp::prelude::now_ts;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "F-GAP reserved: cache layer")]
 pub(crate) struct MemoryCachedResponse {
     pub(crate) response_text: String,
     expires_at: i64,
@@ -16,6 +17,7 @@ pub struct MemoryResponseCache {
 }
 
 impl MemoryResponseCache {
+    #[allow(dead_code, reason = "F-GAP reserved: cache read path")]
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -49,6 +51,7 @@ impl MemoryResponseCache {
         removed
     }
 
+    #[allow(dead_code, reason = "reserved for diagnostics")]
     pub(crate) fn active_entries(&self) -> usize {
         // Single lock scope: purge expired entries and count in one atomic
         // operation, avoiding a TOCTOU race where a concurrent put() adds a
@@ -59,6 +62,7 @@ impl MemoryResponseCache {
         guard.len()
     }
 
+    #[allow(dead_code, reason = "F-GAP reserved: cache write path")]
     pub(crate) fn put(&self, key: String, response_text: String, ttl_seconds: u64) {
         if ttl_seconds == 0 {
             return;

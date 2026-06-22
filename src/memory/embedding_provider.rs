@@ -18,7 +18,7 @@ pub trait EmbeddingProvider: Send + Sync {
     fn embed(&self, text: &str) -> Vec<f32>;
 
     /// Return the expected dimensionality of this provider's output vectors.
-    #[allow(dead_code)] // trait method — reserved for callers who need to validate output dimensionality
+    #[allow(dead_code, reason = "Public API — trait method reserved for callers who need to validate output dimensionality")]
     fn expected_dimension(&self) -> usize;
 }
 

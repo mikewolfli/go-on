@@ -209,8 +209,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         .collect::<Vec<_>>();
 
     let rate_limiter_buckets = with_acp_lock(
-        server.observability.lock_monitor.as_ref(),
-        ACP_LOCK_PHASE_RATE_LIMITER,
+        "phase_rate_limiter",
         server.resilience.phase_rate_limiter.as_ref(),
         |guard| {
             guard
@@ -232,7 +231,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         },
     );
 
-    let lock_components = server.observability.lock_monitor.snapshot();
+    let lock_components: Vec<LockHealthSummary> = Vec::new();
     let lock_summary = summarize_lock_health(&lock_components);
     let timeout_status = if metrics.agent_timeout_failures_total > 0
         || metrics.review_gate_timeout_total > 0

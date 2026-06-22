@@ -109,7 +109,7 @@ pub struct VotingOutcome {
 
 /// Configuration for the voting system.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[allow(dead_code)] // Reserved for future voting configuration
+#[allow(dead_code, reason = "Reserved for future voting configuration")]
 pub struct VotingConfig {
     /// Whether to use response fusion (contradiction detection + merging).
     /// When `true`, the Fusion strategy is preferred if available;
@@ -693,27 +693,27 @@ impl MultiModelVoter {
     }
 
     /// Set the minimum number of voters required.
-    #[allow(dead_code)] // Builder method — reserved for future config use
+    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
     pub fn with_min_voters(mut self, min: usize) -> Self {
         self.min_voters = min;
         self
     }
 
-    #[allow(dead_code)] // Builder method — reserved for future config use
+    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
     /// Set the voting strategy.
     pub fn with_strategy(mut self, strategy: VotingStrategy) -> Self {
         self.strategy = strategy;
         self
     }
 
-    #[allow(dead_code)] // Builder method — reserved for future config use
+    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
     /// Set the per-model timeout in milliseconds.
     pub fn with_timeout_ms(mut self, ms: u64) -> Self {
         self.per_model_timeout_ms = ms;
         self
     }
 
-    #[allow(dead_code)] // Builder method — reserved for future config use
+    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
     /// Add or update a weight for a specific model.
     pub fn with_weight(mut self, model_name: &str, weight: f64) -> Self {
         // Evict the oldest entry when at capacity (model not already tracked).
@@ -847,7 +847,7 @@ impl MultiModelVoter {
         }
     }
 
-    #[allow(dead_code)] // Reserved for future fusion-based voting
+    #[allow(dead_code, reason = "Reserved for future fusion-based voting")]
     /// Vote with fusion and return detected contradictions separately.
     ///
     /// Returns a tuple of `(VotingOutcome, Vec<Contradiction>)` where the
@@ -862,7 +862,7 @@ impl MultiModelVoter {
         Ok((outcome, contradictions))
     }
 
-    #[allow(dead_code)] // Reserved: set optional fusion agent
+    #[allow(dead_code, reason = "Reserved: set optional fusion agent")]
     /// Set the optional fusion agent for LLM-level synthesis.
     /// When configured, `vote_with_fusion` will call the LLM to synthesize
     /// responses when no clear majority exists.
@@ -871,7 +871,7 @@ impl MultiModelVoter {
         self
     }
 
-    #[allow(dead_code)] // Reserved: internal vote collection
+    #[allow(dead_code, reason = "Reserved: internal vote collection")]
     /// Internal helper: collect votes from all agents (same core as `vote`).
     async fn collect_votes(
         &self,

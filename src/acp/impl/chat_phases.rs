@@ -1692,17 +1692,18 @@ fn capability_bus_feedback(
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if count > 0 && count.is_multiple_of(cb.config.evolve_interval) {
-            let (c, a, p) = (
-                cb.clone(),
-                selected_agent.to_string(),
-                phase_name.to_string(),
-            );
+            let cb = cb.clone();
+            let agent_owned = selected_agent.to_string();
+            let phase_owned = phase_name.to_string();
+            // Pre-allocate the second copy to avoid a clone inside the tuple constructor.
+            let agent_owned2 = agent_owned.clone();
+            let phase_complete = format!("{}_complete", &phase_owned);
             let _child = child_trace_context(trace, "evolve");
             tokio::spawn(async move {
                 c.evolve(
-                    &(a.clone(), p.clone()),
+                    &(agent_owned, phase_owned),
                     "chat_complete",
-                    &(a, format!("{}_complete", p)),
+                    &(agent_owned2, phase_complete),
                     token_cost_est,
                     success,
                     if success { 0.8 } else { 0.2 },

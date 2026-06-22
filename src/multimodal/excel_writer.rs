@@ -35,9 +35,11 @@ pub enum ExcelWriterError {
     InvalidSheetName(String),
     /// Column/row index out of bounds.
     #[error("cell index out of bounds: {0}")]
+    #[allow(dead_code, reason = "F-GAP reserved: boundary validation")]
     CellIndexOutOfBounds(String),
     /// Feature is not enabled.
     #[error("feature document-excel-write is not enabled")]
+    #[allow(dead_code, reason = "F-GAP reserved: stub path")]
     FeatureDisabled,
 }
 
@@ -165,6 +167,7 @@ pub fn write_excel_bytes(config: &WriteExcelConfig) -> Result<Vec<u8>, ExcelWrit
 /// Returns `ExcelWriterError` if the workbook cannot be created, if a sheet
 /// name is invalid, or if the file cannot be written.
 #[cfg(feature = "document-excel-write")]
+#[allow(dead_code, reason = "F-GAP reserved: file-based API")]
 pub fn write_excel_file<P: AsRef<std::path::Path>>(
     config: &WriteExcelConfig,
     path: P,

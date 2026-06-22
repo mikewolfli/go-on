@@ -293,7 +293,7 @@ impl OnlineControllerState {
     pub(crate) fn rank_agent_names_for_phase(
         &self,
         phase_name: &str,
-        agent_names: &[String],
+        agent_names: &[&str],
     ) -> Vec<(String, f64)> {
         // Use task-type-aware ranking to incorporate the additional
         // task-type scoring dimension alongside phase+agent and global.
@@ -306,7 +306,7 @@ impl OnlineControllerState {
             .map(|(idx, name)| {
                 (
                     idx,
-                    name.clone(),
+                    name.to_string(),
                     self.agent_reliability_score_with_task_type(phase_name, task_type, name),
                 )
             })

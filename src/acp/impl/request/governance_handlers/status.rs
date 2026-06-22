@@ -170,8 +170,7 @@ pub(crate) async fn handle_governance_status(
     });
 
     let entry_rate_snapshot = crate::acp::prelude::with_acp_lock(
-        server.observability.lock_monitor.as_ref(),
-        crate::acp::prelude::ACP_LOCK_PHASE_RATE_LIMITER,
+        "phase_rate_limiter",
         server.resilience.phase_rate_limiter.as_ref(),
         |guard| guard.snapshot(),
     );

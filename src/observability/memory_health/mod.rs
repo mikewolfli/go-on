@@ -26,7 +26,6 @@
 // anyhow not needed here — no fallible functions
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::Duration;
 use tracing::{error, info, warn};
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
@@ -40,9 +39,6 @@ pub const MEMORY_CRITICAL_MB: u64 = 256;
 /// Free memory threshold (MB) below which we abort immediately.
 pub const MEMORY_JETSAM_RISK_MB: u64 = 128;
 
-/// How often the runtime monitor checks memory pressure (seconds).
-pub const MEMORY_MONITOR_INTERVAL_SECS: u64 = 30;
-
 // ── System Memory Info ──────────────────────────────────────────────────────
 
 /// Snapshot of system memory state.
@@ -54,15 +50,15 @@ pub struct SystemMemoryInfo {
     pub free_bytes: u64,
     /// Active memory in bytes.
     // populated by query_system_memory; reserved for future pressure analysis
-    #[allow(dead_code)] // reserved for future pressure analysis
+    #[allow(dead_code, reason = "Reserved for future pressure analysis")]
     pub active_bytes: u64,
     /// Wired (unpageable) memory in bytes.
     // populated by query_system_memory; reserved for future pressure analysis
-    #[allow(dead_code)] // reserved for future pressure analysis
+    #[allow(dead_code, reason = "Reserved for future pressure analysis")]
     pub wired_bytes: u64,
     /// Swap usage in bytes (0 if swap is disabled).
     // populated by query_system_memory; reserved for future pressure analysis
-    #[allow(dead_code)] // reserved for future pressure analysis
+    #[allow(dead_code, reason = "Reserved for future pressure analysis")]
     pub swap_used_bytes: u64,
     /// Swap total capacity in bytes.
     pub swap_total_bytes: u64,
@@ -92,7 +88,7 @@ impl SystemMemoryInfo {
     }
 
     /// Whether the system has no swap available.
-    #[allow(dead_code)] // reserved for future swap-awareness features
+    #[allow(dead_code, reason = "Reserved for future swap-awareness features")]
     pub fn swap_disabled(&self) -> bool {
         self.swap_total_bytes == 0
     }
@@ -413,13 +409,13 @@ pub fn runtime_free_mb() -> u64 {
 }
 
 /// Get the last known total memory in MB.
-#[allow(dead_code)] // reserved for memory pressure awareness features
+#[allow(dead_code, reason = "Reserved for memory pressure awareness features")]
 pub fn runtime_total_mb() -> u64 {
     RUNTIME_MEMORY_TOTAL_MB.load(Ordering::Relaxed)
 }
 
 /// Get the last known macOS memory pressure level.
-#[allow(dead_code)] // reserved for memory pressure awareness features
+#[allow(dead_code, reason = "Reserved for memory pressure awareness features")]
 pub fn runtime_pressure_level() -> u8 {
     RUNTIME_PRESSURE_LEVEL.load(Ordering::Relaxed) as u8
 }
@@ -427,64 +423,59 @@ pub fn runtime_pressure_level() -> u8 {
 /// Start a background task that periodically checks system memory.
 ///
 /// Spawns a tokio task that queries `query_system_memory()` every
-/// `MEMORY_MONITOR_INTERVAL_SECS` seconds, logs warnings if
+/// Runs a one-shot memory check at startup, logs warnings if
 /// memory is critically low, and evaluates AlertManager rules.
+///
+/// Previously ran a continuous polling loop every 30s; that
+/// overhead was unnecessary since memory pressure is already
+/// visible through OS-level monitoring and periodic diagnostics.
 pub fn start_memory_monitor() {
     MEMORY_MONITOR_INITIALIZED.set(true).unwrap_or(());
 
-    tokio::spawn(async {
-        let mut interval = tokio::time::interval(Duration::from_secs(MEMORY_MONITOR_INTERVAL_SECS));
-        // Get the global AlertManager for threshold-based alerting
-        let alert_manager = crate::observability::alert_manager::alert_manager();
+    let info = query_system_memory();
+    let free_mb = info.free_mb();
+    RUNTIME_MEMORY_FREE_MB.store(free_mb, Ordering::Relaxed);
+    RUNTIME_MEMORY_TOTAL_MB.store(info.total_mb(), Ordering::Relaxed);
+    RUNTIME_PRESSURE_LEVEL.store(info.pressure_level as u64, Ordering::Relaxed);
 
-        loop {
-            interval.tick().await;
-            let info = query_system_memory();
-            let free_mb = info.free_mb();
-            RUNTIME_MEMORY_FREE_MB.store(free_mb, Ordering::Relaxed);
-            RUNTIME_MEMORY_TOTAL_MB.store(info.total_mb(), Ordering::Relaxed);
-            RUNTIME_PRESSURE_LEVEL.store(info.pressure_level as u64, Ordering::Relaxed);
-
-            // Evaluate memory thresholds against AlertManager rules
-            if let Ok(mut am) = alert_manager.lock() {
-                let _jetsam_threshold = (MEMORY_JETSAM_RISK_MB as f64).max(50.0);
-                let alerts = am.evaluate("memory_free_mb", free_mb as f64);
-                if !alerts.is_empty() {
-                    for alert in &alerts {
-                        tracing::warn!(
-                            alert_rule = %alert.rule,
-                            severity = %alert.severity,
-                            "Memory health alert: {}",
-                            alert.message
-                        );
-                    }
-                }
-
-                // Also check jetsam risk specifically
-                if free_mb < MEMORY_JETSAM_RISK_MB && info.total_bytes > 0 {
-                    let _jetsam_alerts = am.evaluate("memory_jetsam_risk", free_mb as f64);
-                }
-            }
-
-            if info.is_critical() {
-                error!(
-                    free_mb = %free_mb,
-                    total_mb = %info.total_mb(),
-                    pressure_level = %info.pressure_level,
-                    trace_id = %uuid::Uuid::new_v4(),
-                    "CRITICAL MEMORY PRESSURE — system may OOM kill this process",
-                );
-            } else if info.is_warning() {
-                warn!(
-                    free_mb = %free_mb,
-                    total_mb = %info.total_mb(),
-                    pressure_level = %info.pressure_level,
-                    trace_id = %uuid::Uuid::new_v4(),
-                    "Low memory — consider reducing load",
+    // Evaluate memory thresholds against AlertManager rules
+    let alert_manager = crate::observability::alert_manager::alert_manager();
+    if let Ok(mut am) = alert_manager.lock() {
+        let alerts = am.evaluate("memory_free_mb", free_mb as f64);
+        if !alerts.is_empty() {
+            for alert in &alerts {
+                tracing::warn!(
+                    alert_rule = %alert.rule,
+                    severity = %alert.severity,
+                    "Memory health alert: {}",
+                    alert.message
                 );
             }
         }
-    });
+
+        // Also check jetsam risk specifically
+        if free_mb < MEMORY_JETSAM_RISK_MB && info.total_bytes > 0 {
+            let _jetsam_alerts = am.evaluate("memory_jetsam_risk", free_mb as f64);
+        }
+    }
+
+    if info.is_critical() {
+        error!(
+            free_mb = %free_mb,
+            total_mb = %info.total_mb(),
+            pressure_level = %info.pressure_level,
+            trace_id = %uuid::Uuid::new_v4(),
+            "CRITICAL MEMORY PRESSURE — system may OOM kill this process",
+        );
+    } else if info.is_warning() {
+        warn!(
+            free_mb = %free_mb,
+            total_mb = %info.total_mb(),
+            pressure_level = %info.pressure_level,
+            trace_id = %uuid::Uuid::new_v4(),
+            "Low memory — consider reducing load",
+        );
+    }
 }
 
 // ── Memory Health Check ───────────────────────────────────────────────────

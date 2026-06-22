@@ -770,7 +770,10 @@ pub(super) async fn handle_knowledge_distill(
 
     let (conflicts, new_tombstones) = detect_knowledge_conflicts(&summary_events, apply_tombstone);
     if apply_tombstone {
-        append_knowledge_tombstones(&new_tombstones)?;
+        let entries = new_tombstones.clone();
+        tokio::task::spawn_blocking(move || append_knowledge_tombstones(&entries))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking panicked: {e}"))??;
     }
     let tombstones = load_knowledge_tombstones(tombstone_limit);
     let task_ref = params.get("task").and_then(Value::as_str).unwrap_or("");

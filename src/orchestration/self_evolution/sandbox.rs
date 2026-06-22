@@ -36,8 +36,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(600);
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Hosts file entry to block network access from the sandbox.
-#[allow(dead_code)]
-// F-GAP-49 — reserved for sandbox network blocking
+#[allow(dead_code, reason = "F-GAP-49 — reserved for sandbox network blocking")]
 const BLOCKED_HOSTS_ENTRY: &str = "127.0.0.1 localhost\n::1 localhost\n0.0.0.0 0.0.0.0\n";
 
 // ---------------------------------------------------------------------------

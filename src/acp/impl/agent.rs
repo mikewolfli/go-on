@@ -190,7 +190,13 @@ fn build_review_context(
                 );
                 poisoned.into_inner()
             });
-        state.rank_agent_names_for_phase(&review_phase_name, &reviewer_names)
+        state.rank_agent_names_for_phase(
+            &review_phase_name,
+            &reviewer_names
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+        )
     };
 
     // Sort reviewers by score (highest first)

@@ -6,8 +6,6 @@ use crate::acp::prelude::constants::MAX_CHECKPOINTS_PER_CONVERSATION;
 use crate::acp::prelude::types::ConversationState;
 
 #[cfg(test)]
-use crate::acp::prelude::constants::MAX_CONVERSATIONS_TRACKED;
-#[cfg(test)]
 use crate::agent::Message;
 #[cfg(test)]
 use std::collections::HashMap;
@@ -71,6 +69,7 @@ pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: 
     // Add to front (most recent)
     guard.insert(0, conversation_id.to_string());
     // Trim if too long
+    const MAX_CONVERSATIONS_TRACKED: usize = 512;
     if guard.len() > MAX_CONVERSATIONS_TRACKED {
         guard.truncate(MAX_CONVERSATIONS_TRACKED);
     }

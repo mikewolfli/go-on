@@ -225,7 +225,6 @@ pub fn sign_request(
 }
 
 /// Build a `RequestSignature` from raw fields for test use.
-#[allow(dead_code)]
 #[cfg(test)]
 fn make_signature_for_test(
     algorithm: SigningAlgorithm,

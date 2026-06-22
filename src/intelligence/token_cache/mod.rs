@@ -475,11 +475,17 @@ pub fn estimate_messages_token_count(messages: &[crate::agent::Message]) -> usiz
 
 /// Convert messages to a single canonical text string for caching.
 pub fn messages_to_text(messages: &[crate::agent::Message]) -> String {
-    messages
-        .iter()
-        .map(|m| format!("{}: {}", m.role, m.content))
-        .collect::<Vec<_>>()
-        .join("\n")
+    // Avoid intermediate Vec<String> allocation — build directly into a String.
+    let mut result = String::new();
+    for (i, m) in messages.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        result.push_str(m.role.as_str());
+        result.push_str(": ");
+        result.push_str(m.content.as_str());
+    }
+    result
 }
 
 // L1: Exact-Match Cache

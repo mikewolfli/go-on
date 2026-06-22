@@ -17,7 +17,6 @@ use crate::acp::prelude::functions::now_ts;
 
 /// Circuit breaker snapshot
 #[derive(Debug, Clone, Serialize, Default)]
-#[allow(dead_code)]
 pub struct CircuitBreakerSnapshot {
     /// Circuit breaker name
     pub name: String,
@@ -93,7 +92,6 @@ pub enum CircuitBreakerAdmission {
 
 /// Circuit breaker registry for managing circuit breakers
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub struct CircuitBreakerRegistry {
     inner: StdMutex<HashMap<String, CircuitBreakerState>>,
 }

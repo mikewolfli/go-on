@@ -27,12 +27,6 @@ pub struct MaintenanceSnapshot {
     pub last_completed_at: Option<i64>,
     /// Last memory expired entries removed
     pub last_memory_expired_removed: u64,
-    /// Last SQLite expired entries removed
-    pub last_sqlite_expired_removed: u64,
-    /// Whether last cycle vacuumed cache
-    pub last_cache_vacuumed: bool,
-    /// Whether last cycle vacuumed vector store
-    pub last_vector_vacuumed: bool,
     /// Last error message if any
     pub last_error: Option<String>,
     /// Last maintenance timestamp (legacy)
@@ -76,9 +70,6 @@ impl MaintenanceTracker {
                 last_started_at: None,
                 last_completed_at: None,
                 last_memory_expired_removed: 0,
-                last_sqlite_expired_removed: 0,
-                last_cache_vacuumed: false,
-                last_vector_vacuumed: false,
                 last_error: None,
                 last_maintenance: now,
                 maintenance_interval: 3600, // 1 hour default
@@ -139,13 +130,7 @@ impl MaintenanceTracker {
     }
 
     /// Record maintenance cycle completion
-    pub fn note_completed(
-        &self,
-        memory_removed: usize,
-        sqlite_removed: usize,
-        cache_vacuumed: bool,
-        vector_vacuumed: bool,
-    ) {
+    pub fn note_completed(&self, memory_removed: usize) {
         let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
             warn!("lock poisoned, recovering");
             poisoned.into_inner()
@@ -153,9 +138,6 @@ impl MaintenanceTracker {
         guard.running = false;
         guard.last_completed_at = Some(now_ts());
         guard.last_memory_expired_removed = memory_removed as u64;
-        guard.last_sqlite_expired_removed = sqlite_removed as u64;
-        guard.last_cache_vacuumed = cache_vacuumed;
-        guard.last_vector_vacuumed = vector_vacuumed;
         guard.last_error = None;
         guard.cycles_total += 1;
     }

@@ -696,7 +696,6 @@ summary_max_chars = 1200
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
-sqlite_vacuum_interval_cycles = 60
 skills_import_enabled = true
 skills_allowed_sources = ["github.com/*", "raw.githubusercontent.com/*", "https://*"]
 skills_require_sha256 = false

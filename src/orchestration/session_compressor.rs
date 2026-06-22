@@ -84,7 +84,10 @@ pub struct IncrementalState {
 }
 
 /// Configuration for the session compressor.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "F-GAP reserved — session compression not yet wired into pipeline"
+)]
 #[derive(Debug, Clone)]
 pub struct SessionCompressor {
     /// Maximum number of messages before compression is mandatory (default 1000).
@@ -118,7 +121,10 @@ impl Default for SessionCompressor {
     }
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "F-GAP reserved — session compression not yet wired into pipeline"
+)]
 impl SessionCompressor {
     /// Create a new compressor with default configuration.
     pub fn new() -> Self {

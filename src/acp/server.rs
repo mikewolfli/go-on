@@ -49,9 +49,8 @@ use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
 
 use super::prelude::{
-    with_acp_lock, AcpLockMonitor, CircuitBreakerRegistry, ConversationState, InflightLimiter,
-    LifecycleState, MaintenanceTracker, OnlineControllerState, PhaseRateLimiter,
-    ReviewTimeoutPolicy, ACP_LOCK_CIRCUIT_BREAKERS, ACP_LOCK_LIFECYCLE, ACP_LOCK_MAINTENANCE,
+    with_acp_lock, CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState,
+    MaintenanceTracker, OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
 };
 
 /// DrainGuard — graceful shutdown state tracking.
@@ -169,7 +168,7 @@ impl DrainGuard {
         if self.is_draining() {
             return None;
         }
-        let permit = Arc::clone(&self.inflight).acquire_owned().await.ok()?;
+        let permit = self.inflight.clone().acquire_owned().await.ok()?;
         if self.is_draining() {
             // Race: drain started between our check and acquire.
             drop(permit);
@@ -309,8 +308,6 @@ pub struct OrchestrationServerDeps {
 pub struct ObservabilityLayer {
     /// Runtime metrics collection
     pub metrics: Arc<RuntimeMetrics>,
-    /// ACP lock monitoring and poison recovery telemetry
-    pub lock_monitor: Arc<AcpLockMonitor>,
     /// Telemetry runtime
     // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
     // critical sections (read/write metrics counters) that complete and drop the guard
@@ -574,8 +571,7 @@ impl AcpServer {
             active_requests: self.observability.metrics.active_requests(),
             cache_hit_rate: 0.0,
             circuit_breaker_open_count: with_acp_lock(
-                self.observability.lock_monitor.as_ref(),
-                ACP_LOCK_CIRCUIT_BREAKERS,
+                "circuit_breakers",
                 self.resilience.circuit_breakers.as_ref(),
                 |guard| guard.open_count(),
             ),
@@ -600,22 +596,19 @@ impl AcpServer {
             runtime_snapshot.review_gate_invalid_response_total;
 
         let lifecycle = with_acp_lock(
-            self.observability.lock_monitor.as_ref(),
-            ACP_LOCK_LIFECYCLE,
+            "lifecycle_state",
             self.resilience.lifecycle_state.as_ref(),
             |guard| guard.snapshot(),
         );
 
         let circuit_breakers = with_acp_lock(
-            self.observability.lock_monitor.as_ref(),
-            ACP_LOCK_CIRCUIT_BREAKERS,
+            "circuit_breakers",
             self.resilience.circuit_breakers.as_ref(),
             |guard| guard.snapshots(),
         );
 
         let maintenance = with_acp_lock(
-            self.observability.lock_monitor.as_ref(),
-            ACP_LOCK_MAINTENANCE,
+            "maintenance_tracker",
             self.resilience.maintenance_tracker.as_ref(),
             |guard| guard.snapshot(),
         );
@@ -639,8 +632,7 @@ impl AcpServer {
     /// Check if server is healthy
     pub fn is_healthy(&self) -> bool {
         with_acp_lock(
-            self.observability.lock_monitor.as_ref(),
-            ACP_LOCK_LIFECYCLE,
+            "lifecycle_state",
             self.resilience.lifecycle_state.as_ref(),
             |guard| guard.is_healthy(),
         )
@@ -649,8 +641,7 @@ impl AcpServer {
     /// Check if shutdown has been requested
     pub fn shutdown_requested(&self) -> bool {
         with_acp_lock(
-            self.observability.lock_monitor.as_ref(),
-            ACP_LOCK_LIFECYCLE,
+            "lifecycle_state",
             self.resilience.lifecycle_state.as_ref(),
             |guard| guard.shutdown_requested(),
         )
@@ -659,8 +650,7 @@ impl AcpServer {
     /// Begin shutdown process
     pub fn begin_shutdown(&self) {
         with_acp_lock(
-            self.observability.lock_monitor.as_ref(),
-            ACP_LOCK_LIFECYCLE,
+            "lifecycle_state",
             self.resilience.lifecycle_state.as_ref(),
             |guard| guard.begin_shutdown(),
         );
@@ -726,8 +716,8 @@ impl AcpServer {
     /// Create a `FullAutoFlow` using this server's real skill and tool registries.
     pub fn full_auto_flow(&self) -> crate::orchestration::full_auto::FullAutoFlow {
         crate::orchestration::full_auto::FullAutoFlow::new_with_registries(
-            Arc::clone(&self.orchestration_deps.skill_registry) as Arc<std::sync::Mutex<_>>,
-            Arc::clone(&self.tool_registry),
+            self.orchestration_deps.skill_registry.clone() as Arc<std::sync::Mutex<_>>,
+            self.tool_registry.clone(),
         )
     }
 
@@ -1049,7 +1039,6 @@ impl ServerBuilder {
         };
 
         let metrics = Arc::new(RuntimeMetrics::default());
-        let lock_monitor = Arc::new(AcpLockMonitor::default());
         let online_controller = Arc::new(StdMutex::new(OnlineControllerState::default()));
         let circuit_breakers = Arc::new(StdMutex::new(CircuitBreakerRegistry::default()));
         let hyper_resilience = Arc::new(
@@ -1115,6 +1104,16 @@ impl ServerBuilder {
         // Wire the skill registry into the global discovery engine
         crate::acp::r#impl::request::tools_pack::init_skill_discovery(skill_registry.clone());
 
+        // Spawn background task to periodically rescan ~/.agents/skills/ for new skills.
+        // New SKILL.md files placed in the directory will be registered automatically
+        // without requiring a server restart.
+        // `spawn_skill_refresh_task` returns `None` when no tokio runtime is active
+        // (e.g. during synchronous tests). We silently accept that case.
+        let _ = crate::orchestration::skill::registry::spawn_skill_refresh_task(
+            skill_registry.clone(),
+            None,
+        );
+
         // Resolve runtime config: use provided one or default.
         let runtime_config = self.runtime_config.unwrap_or_default();
 
@@ -1138,7 +1137,7 @@ impl ServerBuilder {
 
         // ── B54-016: Wire continuous learning review cycle (background task) ──
         if let Some(ref capability_bus) = self.capability_bus {
-            let cl_bus = Arc::clone(capability_bus);
+            let cl_bus = capability_bus.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(600)); // 10 min
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1312,7 +1311,6 @@ impl ServerBuilder {
             config_path: self.config_path,
             observability: ObservabilityLayer {
                 metrics,
-                lock_monitor,
                 telemetry_runtime,
                 alert_manager: {
                     let am = Arc::new(StdMutex::new(

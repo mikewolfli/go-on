@@ -38,8 +38,7 @@ pub struct EmbeddingTaskClassifier {
 impl EmbeddingTaskClassifier {
     /// Create a new classifier with an optional per-instance vector store reference.
     /// When `None`, the global vector store (if set via `init_global_task_vector_store`) is used.
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
+    #[allow(dead_code, reason = "F-GAP-49 — reserved for future use")]
     pub fn new(vector_store: Option<Arc<crate::memory::vector::VectorStore>>) -> Self {
         Self { vector_store }
     }

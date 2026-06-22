@@ -232,13 +232,13 @@ impl SkillIndex {
     }
 
     /// Number of entries in the index.
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "Public API surface for SkillIndex consumers")]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the index is empty.
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "Public API surface for SkillIndex consumers")]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -352,8 +352,7 @@ impl SkillDiscovery {
     }
 
     /// Invalidate all cached results (e.g., after skill registry changes).
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
+    #[allow(dead_code, reason = "F-GAP-49 — reserved for future use")]
     pub fn invalidate_cache(&mut self) {
         self.cache.clear();
         self.insertion_order.clear();

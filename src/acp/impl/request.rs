@@ -29,9 +29,7 @@ tokio::task_local! {
 
 use crate::acp::background::{run_health_check, run_maintenance_cycle};
 
-use crate::acp::prelude::{
-    enforce_checkpoint_capacity, with_acp_lock, ACP_LOCK_PHASE_RATE_LIMITER,
-};
+use crate::acp::prelude::{enforce_checkpoint_capacity, with_acp_lock};
 use crate::acp::server::AcpServer;
 use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
 use crate::config::{
@@ -1652,9 +1650,8 @@ mod tests {
     use super::{
         attach_request_dispatch_context, classify_request_error_kind, infer_workflow_parallelism,
         is_acp_request, rebalance_execution_order, session_id_for_task, summarize_lock_health,
-        with_error_contract_data, AcpErrorCode,
+        with_error_contract_data, AcpErrorCode, LockHealthSummary,
     };
-    use crate::acp::prelude::AcpLockSnapshot;
     #[cfg(not(feature = "backend-postgres"))]
     use crate::vector::VectorStore;
 
@@ -1832,23 +1829,21 @@ mod tests {
     #[test]
     fn summarize_lock_health_marks_poisoned_components_warn() {
         let summary = summarize_lock_health(&[
-            AcpLockSnapshot {
-                name: "phase_rate_limiter".to_string(),
-                acquisitions: 4,
+            LockHealthSummary {
+                status: "warn",
                 poisoned_total: 1,
                 recovered_total: 1,
                 slow_wait_total: 0,
-                avg_wait_ms: 0.4,
                 max_wait_ms: 1.2,
+                components_tracked: 1,
             },
-            AcpLockSnapshot {
-                name: "lifecycle_state".to_string(),
-                acquisitions: 8,
+            LockHealthSummary {
+                status: "healthy",
                 poisoned_total: 0,
                 recovered_total: 0,
                 slow_wait_total: 0,
-                avg_wait_ms: 0.2,
                 max_wait_ms: 0.5,
+                components_tracked: 1,
             },
         ]);
 
@@ -1886,14 +1881,13 @@ mod tests {
 
     #[test]
     fn lock_health_summary_no_poisoned_healthy() {
-        let summary = summarize_lock_health(&[AcpLockSnapshot {
-            name: "test".to_string(),
-            acquisitions: 5,
+        let summary = summarize_lock_health(&[LockHealthSummary {
+            status: "healthy",
             poisoned_total: 0,
             recovered_total: 0,
             slow_wait_total: 0,
-            avg_wait_ms: 0.1,
             max_wait_ms: 0.5,
+            components_tracked: 1,
         }]);
         assert_eq!(summary.status, "healthy");
         assert_eq!(summary.poisoned_total, 0);

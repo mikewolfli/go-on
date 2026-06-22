@@ -1514,7 +1514,7 @@ pub(crate) fn reorder_chat_agents_by_runtime_score(
 
     let names = agents
         .iter()
-        .map(|(name, _)| name.clone())
+        .map(|(name, _)| name.as_str())
         .collect::<Vec<_>>();
     let ranked = server
         .resilience
