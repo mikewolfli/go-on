@@ -637,7 +637,7 @@ mod adaptive {
     }
 
     /// Legacy helper for manual config compat, not used by modern Path B routing.
-    #[allow(dead_code)] // F-GAP-49 — kept for manual config compatibility, not used in Path B
+    #[expect(dead_code, reason = "F-GAP-49 — manual config compat")]
     fn preferred_review_agents(providers: &[String]) -> Vec<String> {
         let mut reviewers: Vec<String> = providers
             .iter()
@@ -657,7 +657,7 @@ mod adaptive {
     }
 
     /// Legacy helper for manual config compat, not used by modern Path B routing.
-    #[allow(dead_code)] // F-GAP-49 — kept for manual config compatibility, not used in Path B
+    #[expect(dead_code, reason = "F-GAP-49 — manual config compat")]
     fn preferred_delivery_agents(providers: &[String]) -> Vec<String> {
         if providers.iter().any(|provider| provider == "copilot") {
             return vec!["copilot".to_string()];

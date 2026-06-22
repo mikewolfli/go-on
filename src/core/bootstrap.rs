@@ -73,6 +73,29 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<()> {
         tracing::warn!(target: "go_on::core::bootstrap", "ObservabilityStack init skipped (already initialized or failed)");
     }
 
+    // 5. Initialize agent skills system — discover local SKILL.md files
+    //    and set up the default prompt skill agent.
+    {
+        let mut skill_registry = crate::orchestration::skill::SkillRegistry::default();
+        match skill_registry.discover_and_register_local_skills(None) {
+            Ok(summary) => {
+                tracing::debug!(
+                    target: "go_on::core::bootstrap",
+                    registered = summary.registered,
+                    skipped = summary.skipped,
+                    errors = summary.errors.len(),
+                    "Local skills discovered"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "go_on::core::bootstrap",
+                    "SKILL discovery skipped: {e}"
+                );
+            }
+        }
+    }
+
     info!("System bootstrap completed");
     Ok(())
 }

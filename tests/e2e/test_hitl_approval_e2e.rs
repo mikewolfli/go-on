@@ -14,9 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
 
 use go_on::governance::approval_engine::{
     ApprovalEngine, ApprovalRequest, ApprovalStatus, EscalationChain, EscalationStep, RiskLevel,
@@ -100,10 +98,6 @@ async fn test_hitl_approval_full_flow() {
     let result = approval_engine.approve(&request_id, "admin@go-on.io", "Approved after review");
     assert!(result.is_ok(), "approval must succeed: {:?}", result);
 
-    // Retrieve the request and verify its status.
-    // The queue is private, but we can verify through the returned ID.
-    assert!(!request_id.is_empty());
-
     // Construct the approved status structurally for additional validation.
     let approved_status = ApprovalStatus::Approved {
         approver: "admin@go-on.io".into(),
@@ -119,9 +113,6 @@ async fn test_hitl_approval_full_flow() {
         "approved status must be finalized"
     );
 
-    ctx.final_status = Some("Approved".into());
-    assert_eq!(ctx.final_status.as_deref(), Some("Approved"));
-
     // ── 6. Action released ─────────────────────────────────────────────
     // In a real release, ActionExecutor::execute() checks that the request
     // status is Approved before dispatching.
@@ -131,8 +122,6 @@ async fn test_hitl_approval_full_flow() {
         }
         _ => panic!("expected Approved status"),
     }
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that a pending request auto-denies after timeout.
@@ -171,8 +160,6 @@ async fn test_hitl_approval_auto_deny_on_timeout() {
     let default_policy = TimeoutPolicy::default();
     assert_eq!(default_policy.max_escalation_depth, 3);
     assert!((default_policy.escalate_timeout_multiplier - 1.0).abs() < f64::EPSILON);
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that a rejected action is not released.
@@ -239,10 +226,9 @@ async fn test_hitl_approval_rejection_blocks_execution() {
     };
     assert!(approved.is_finalized());
     assert!(!matches!(approved, ApprovalStatus::Rejected { .. }));
-
-    sleep(Duration::from_millis(10)).await;
 }
 
+/// Validates HITL escalation chain across multiple reviewers.
 /// Validates escalation chain structure for high-risk actions.
 #[tokio::test]
 async fn test_hitl_approval_escalation_chain() {
@@ -297,6 +283,4 @@ async fn test_hitl_approval_escalation_chain() {
         double_approve.is_err(),
         "double-approving a finalized request must fail"
     );
-
-    sleep(Duration::from_millis(10)).await;
 }

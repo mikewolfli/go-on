@@ -382,7 +382,7 @@ impl SandboxExecutor {
         }
 
         // Pre-patch code quality gate: run clippy before applying to establish baseline
-        let pre_quality = crate::intelligence::code_quality::pre_patch_quality_gate();
+        let pre_quality = crate::intelligence::code_quality::run_code_quality_scan();
         tracing::info!(
             sandbox = %self.instance_id,
             health_score = pre_quality.health_score,

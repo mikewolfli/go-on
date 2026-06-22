@@ -153,15 +153,21 @@ pub fn start_secret_rotation_if_configured(
     Some(handle)
 }
 
-/// Log that mTLS certificate monitoring is not wired.
+/// Log that mTLS certificate monitoring is not yet implemented.
 ///
-/// The original certificate monitor implementation was removed because it
-/// was dead code. The function is kept as a lightweight no-op that logs
-/// when mTLS is enabled, so callers in the startup path remain intact.
+/// This is a placeholder — the original certificate monitor was removed
+/// as dead code. When mTLS is enabled in the config, we log a clear
+/// warning so operators know that automatic certificate expiry monitoring
+/// is absent. A future implementation should watch certificate expiration
+/// and trigger rotation or alerting before expiry.
+///
+/// Callers in the startup path remain intact; this is a no-op otherwise.
 pub fn wire_cert_monitor(config: &crate::config::types::RuntimeConfig) {
     if config.mtls_enabled {
-        tracing::info!(
-            "mTLS enabled in runtime config — cert monitoring not wired (dead code removed)"
+        tracing::warn!(
+            "mTLS is enabled but certificate expiry monitoring is NOT wired — \
+             certificates will not be automatically checked for expiration. \
+             This is a placeholder; implement cert monitoring for production use."
         );
     }
 }

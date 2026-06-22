@@ -9,7 +9,6 @@ pub const MAX_CHECKPOINTS_PER_CONVERSATION: usize = 256;
 /// Maximum conversations tracked
 ///
 /// Public API constant — re-exported for ACP consumers.
-#[allow(dead_code)]
 pub const MAX_CONVERSATIONS_TRACKED: usize = 512;
 
 pub const ACP_LOCK_RUNTIME_CONFIG: &str = "runtime_config";

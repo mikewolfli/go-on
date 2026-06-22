@@ -19,6 +19,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -118,14 +119,14 @@ pub struct TokenMultiLevelCache {
     pub l3: RwLock<L3TemplateCache>,
     /// Aggregate statistics across all levels
     pub stats: RwLock<TokenCacheStats>,
-    /// Whether the cache is enabled
-    pub enabled: RwLock<bool>,
-    /// Optional per-request token budget (0 = unlimited).
-    max_token_budget: RwLock<usize>,
-    /// Remaining budget for the current period.
-    remaining_budget: RwLock<usize>,
-    /// TTL in milliseconds for cached entries (0 = no expiration).
-    ttl_ms: RwLock<u64>,
+    /// Whether the cache is enabled (lock-free atomic flag)
+    pub enabled: AtomicBool,
+    /// Optional per-request token budget (0 = unlimited, lock-free atomic).
+    max_token_budget: AtomicUsize,
+    /// Remaining budget for the current period (lock-free atomic).
+    remaining_budget: AtomicUsize,
+    /// TTL in milliseconds for cached entries (0 = no expiration, lock-free atomic).
+    ttl_ms: AtomicU64,
 }
 
 impl TokenMultiLevelCache {
@@ -140,40 +141,40 @@ impl TokenMultiLevelCache {
             l2: RwLock::new(L2SemanticCache::new(l2_capacity)),
             l3: RwLock::new(L3TemplateCache::new(l3_store_path)),
             stats: RwLock::new(TokenCacheStats::default()),
-            enabled: RwLock::new(true),
-            max_token_budget: RwLock::new(0),
-            remaining_budget: RwLock::new(0),
-            ttl_ms: RwLock::new(0),
+            enabled: AtomicBool::new(true),
+            max_token_budget: AtomicUsize::new(0),
+            remaining_budget: AtomicUsize::new(0),
+            ttl_ms: AtomicU64::new(0),
         }
     }
 
     /// Set the maximum token budget for a period.  Pass `0` to disable
     /// budget enforcement (unlimited).
     pub async fn set_token_budget(&self, max: usize) {
-        *self.max_token_budget.write().await = max;
-        *self.remaining_budget.write().await = max;
+        self.max_token_budget.store(max, Ordering::Release);
+        self.remaining_budget.store(max, Ordering::Release);
     }
 
     /// Returns the remaining token budget.  `0` means either unlimited
     /// (when `max_budget` is also 0) or exhausted.
     pub async fn remaining_budget(&self) -> usize {
-        *self.remaining_budget.read().await
+        self.remaining_budget.load(Ordering::Acquire)
     }
 
     /// Returns the configured maximum token budget (`0` = unlimited).
     pub async fn max_token_budget(&self) -> usize {
-        *self.max_token_budget.read().await
+        self.max_token_budget.load(Ordering::Acquire)
     }
 
     /// Check whether the requested token count fits within the remaining
     /// budget.  Returns `Ok(())` if the budget is unlimited or sufficient,
     /// or `Err(remaining)` if the request exceeds the available budget.
     pub async fn check_budget(&self, requested: usize) -> Result<(), usize> {
-        let max = *self.max_token_budget.read().await;
+        let max = self.max_token_budget.load(Ordering::Acquire);
         if max == 0 {
             return Ok(()); // unlimited
         }
-        let remaining = *self.remaining_budget.read().await;
+        let remaining = self.remaining_budget.load(Ordering::Acquire);
         if requested <= remaining {
             Ok(())
         } else {
@@ -185,28 +186,31 @@ impl TokenMultiLevelCache {
     /// a positive budget is configured).  If the budget would go below
     /// zero, it is clamped to zero.
     pub async fn deduct_budget(&self, consumed: usize) {
-        let max = *self.max_token_budget.read().await;
+        let max = self.max_token_budget.load(Ordering::Acquire);
         if max == 0 {
             return;
         }
-        let mut remaining = self.remaining_budget.write().await;
-        *remaining = remaining.saturating_sub(consumed);
+        self.remaining_budget
+            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |r| {
+                Some(r.saturating_sub(consumed))
+            })
+            .ok();
     }
 
     /// Set the TTL for cached entries.  Pass `0` to disable expiration.
     pub async fn set_ttl_ms(&self, ttl: u64) {
-        *self.ttl_ms.write().await = ttl;
+        self.ttl_ms.store(ttl, Ordering::Release);
     }
 
     /// Returns the configured TTL in milliseconds (`0` = no expiration).
     pub async fn ttl_ms(&self) -> u64 {
-        *self.ttl_ms.read().await
+        self.ttl_ms.load(Ordering::Acquire)
     }
 
     /// Reset the remaining budget to the configured maximum.
     pub async fn reset_budget(&self) {
-        let max = *self.max_token_budget.read().await;
-        *self.remaining_budget.write().await = max;
+        let max = self.max_token_budget.load(Ordering::Acquire);
+        self.remaining_budget.store(max, Ordering::Release);
     }
 
     /// Look up a cache entry by input text.
@@ -219,7 +223,7 @@ impl TokenMultiLevelCache {
         input: &str,
         context_class: ContextLengthClass,
     ) -> Option<(CacheLevel, CacheEntry)> {
-        if !*self.enabled.read().await {
+        if !self.enabled.load(Ordering::Acquire) {
             return None;
         }
 
@@ -227,7 +231,7 @@ impl TokenMultiLevelCache {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let ttl = *self.ttl_ms.read().await;
+        let ttl = self.ttl_ms.load(Ordering::Acquire);
 
         // L1: Exact match (fastest path) — read-only peek
         let l1_key = hash_input(input);
@@ -292,7 +296,7 @@ impl TokenMultiLevelCache {
         agent_name: Option<String>,
         model: Option<String>,
     ) {
-        if !*self.enabled.read().await {
+        if !self.enabled.load(Ordering::Acquire) {
             return;
         }
 
@@ -381,7 +385,7 @@ impl TokenMultiLevelCache {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let ttl_ms = *self.ttl_ms.read().await;
+                        let ttl_ms = self.ttl_ms.load(Ordering::Acquire);
                         if ttl_ms == 0 {
                             continue;
                         }

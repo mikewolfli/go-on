@@ -54,7 +54,7 @@ pub struct ConversationState {
 /// Conversation prune result
 ///
 /// Public API type for ACP consumers.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ConversationPruneResult {
     /// Number of conversations removed
@@ -85,7 +85,7 @@ pub struct AcpLockSnapshot {
 /// Review decision
 ///
 /// Public API type for ACP consumers.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize)]
 pub struct ReviewDecision {
     /// Reviewer name
@@ -101,7 +101,7 @@ pub struct ReviewDecision {
 /// This public enum uses `Pass`/`Fail`/`Invalid` semantics.
 /// There is a separate governance-internal `ReviewVerdict` in
 /// `crate::governance::review_controls` that uses `Approve`/`Reject`/`Invalid`.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ReviewVerdict {
@@ -113,7 +113,7 @@ pub enum ReviewVerdict {
     Invalid,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "public API surface for ACP consumers")]
 impl ReviewVerdict {
     /// Convert to string
     pub fn as_str(&self) -> &'static str {
@@ -132,7 +132,7 @@ impl ReviewVerdict {
 /// Chat parameters structure
 ///
 /// Public API type for ACP consumers.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatParams {
     /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto")
@@ -152,7 +152,7 @@ pub struct ChatParams {
 /// Task characteristics
 ///
 /// Public API type for ACP consumers.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCharacteristics {
     /// Task complexity (simple, medium, complex)
@@ -172,7 +172,7 @@ pub struct TaskCharacteristics {
 /// Routing decision
 ///
 /// Public API type for ACP consumers.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "public API surface for ACP consumers")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingDecision {
     /// Selected roles in execution order

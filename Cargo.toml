@@ -26,6 +26,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
 fastrand = "2"
 toml = "1.1.0"
+deadpool-postgres = { version = "0.14" }
+tokio-postgres = { version = "0.7" }
 
 [package]
 name = "go-on"
@@ -92,6 +94,10 @@ sub-bus-multimodal = [
     "document-ppt",
 ]
 
+# Data utilities (optional, feature-gated)
+data-export = ["dep:csv"]
+string-similarity = ["dep:strsim"]
+
 # Audio processing backends (optional, feature-gated)
 audio-whisper-openai = []
 audio-vosk = []
@@ -152,12 +158,14 @@ full = [
     "document-excel-write",
     "audio-whisper-openai",
     "audio-vosk",
+    "data-export",
+    "string-similarity",
     "vault",
 ]
 
 # Backend implementations
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
-backend-postgres = ["dep:postgres", "dep:pgvector"]
+backend-postgres = ["dep:postgres", "dep:tokio-postgres", "dep:pgvector", "dep:deadpool-postgres"]
 
 # Legacy aliases (kept for backward compatibility)
 local-acp-sqlite = ["local"]
@@ -203,6 +211,8 @@ base64.workspace = true
 ordered-float = "5"
 postgres = { version = "0.19", optional = true }
 pgvector = { version = "0.4", features = ["postgres"], optional = true }
+tokio-postgres = { version = "0.7", optional = true }
+deadpool-postgres = { version = "0.14", optional = true }
 sqlite-vec = { version = "0.1.9", optional = true }
 flate2 = "1"
 fastrand = "2"
@@ -219,6 +229,10 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
 tokio-rustls = "0.26"
 x509-parser = { version = "0.18", default-features = false, features = ["verify"] }
+
+# ── Data export / string similarity ─────────────────────────────────────────
+csv = { version = "1.3", optional = true }
+strsim = { version = "0.11", optional = true }
 
 # ── Multimodal document parsing (optional) ──────────────────────────────────
 lopdf = { version = "0.41", optional = true }
@@ -256,6 +270,7 @@ opt-level = 0
 debug = true
 
 [profile.test]
-# No LTO — avoids linker errors with LLVM hidden symbols under opt-level=1
-opt-level = 1
+# Fast compilation — no LTO, opt-level=0 for minimum compile time.
+# Tests are relatively short-lived so optimization overhead doesn't pay off.
+opt-level = 0
 lto = "off"

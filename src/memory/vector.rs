@@ -634,18 +634,12 @@ impl VectorStore {
             params![self.max_entries as i64, SENTINEL_LIMIT],
         )?;
 
-        // Also remove evicted entries from HNSW index if it exists
+        // Update HNSW index if it exists (single lock acquisition)
         if let Ok(mut hnsw_guard) = self.hnsw.lock() {
             if let Some(ref mut hnsw) = *hnsw_guard {
                 for key in &evicted_keys {
                     hnsw.remove(key);
                 }
-            }
-        }
-
-        // Update HNSW index if it exists
-        if let Ok(mut hnsw_guard) = self.hnsw.lock() {
-            if let Some(ref mut hnsw) = *hnsw_guard {
                 hnsw.insert(
                     embedding,
                     HnswNodeMeta {
@@ -704,10 +698,15 @@ impl VectorStore {
         let now = now_ts();
         let limit = self.max_entries.max(top_k);
 
-        // Try HNSW fast path first — if index exists, use it for O(log N) search
-        {
-            let hnsw_exists = self.hnsw.lock().map(|g| g.is_some()).unwrap_or(false);
-            if hnsw_exists {
+        // Try HNSW fast path — build index lazily if needed, then use it
+        if self.ensure_hnsw_index().is_ok() {
+            let hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector hnsw mutex poisoned in 'search', recovering");
+                poisoned.into_inner()
+            });
+            if hnsw_guard.is_some() {
+                // Drop lock before calling hnsw_search which will re-acquire it
+                drop(hnsw_guard);
                 return self.hnsw_search(
                     &query_embedding,
                     phase,
@@ -953,7 +952,6 @@ impl VectorStore {
     /// Reads all vectors from the database and constructs the HNSW graph.
     /// Called lazily on first search when no HNSW index exists yet.
     /// Returns true if the index was built, false if it already existed.
-    #[allow(dead_code)] // F-GAP-49 — reserved for HNSW index ensure
     fn ensure_hnsw_index(&self) -> Result<bool> {
         let mut hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("vector hnsw mutex poisoned in 'ensure_hnsw_index', recovering");

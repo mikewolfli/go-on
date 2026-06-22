@@ -40,11 +40,11 @@ pub(crate) struct Inner {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Acquire a write lock on the RwLock.
+/// Acquire a write lock on the tokio::sync::RwLock.
 ///
-/// Uses `block_in_place` to safely call `blocking_write()` from any context
-/// (including within a tokio runtime), so callers (CLI + server) can remain
-/// synchronous while the runtime drives background tasks.
+/// Directly awaits the write lock. No need for `block_in_place` because
+/// tokio::sync::RwLock::write() is an async operation that yields
+/// appropriately when contended.
 pub(crate) async fn write_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
     lock.write().await
 }

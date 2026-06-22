@@ -604,7 +604,9 @@ impl SelfModelCore {
 
 impl ExecutionRecorder for SelfModelCore {
     fn record_execution_result(&self, capability_name: &str, success: bool, latency: u64) {
-        self.record_execution_result(capability_name, success, latency);
+        // Delegate to the inherent method to avoid infinite recursion
+        // (the trait method would otherwise call itself).
+        SelfModelCore::record_execution_result(self, capability_name, success, latency);
     }
 }
 

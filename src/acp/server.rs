@@ -93,7 +93,7 @@ impl Drop for DrainPermit {
 impl DrainPermit {
     /// Consume the permit and return the inner semaphore permit.
     /// The caller is responsible for ensuring the inner permit is eventually dropped.
-    #[allow(dead_code)] // F-GAP-49: reserved for future drain coordination patterns
+    #[expect(dead_code, reason = "F-GAP-49: reserved")]
     pub fn into_inner(mut self) -> tokio::sync::OwnedSemaphorePermit {
         self.permit.take().expect("DrainPermit already consumed")
     }

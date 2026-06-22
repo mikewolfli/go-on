@@ -16,15 +16,14 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use go_on::orchestration::self_evolution::evolution_loop::{
-    Analysis, Approval, ApprovalMode, EvolutionLoop, EvolutionTrigger, ManualTriggerSource,
-    RegressionDirection, TriggerSource,
+    Analysis, Approval, ApprovalMode, EvolutionLoop, EvolutionTrigger, RegressionDirection,
 };
 use go_on::orchestration::self_evolution::sandbox::{BuildResult, SandboxExecutor};
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 struct EvolutionE2eContext {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "stored for semantic context in tests")]
     session_id: String,
     workdir: PathBuf,
 }
@@ -65,7 +64,6 @@ fn make_analysis(trigger: EvolutionTrigger) -> Analysis {
 #[tokio::test]
 async fn test_self_evolution_full_lifecycle() {
     let ctx = EvolutionE2eContext::new("livecycle-001");
-    let _source = new_source();
     let sandbox =
         SandboxExecutor::new(ctx.workdir.clone(), 10).with_allowed_targets(vec!["**/*.rs".into()]);
 
@@ -75,7 +73,18 @@ async fn test_self_evolution_full_lifecycle() {
         .with_approval_mode(ApprovalMode::RequireHuman)
         .with_poll_interval(Duration::from_secs(1));
 
-    let _ = &mut loop_instance;
+    // Without trigger sources, run() should immediately return an error.
+    let run_result = loop_instance.run().await;
+    assert!(
+        run_result.is_err(),
+        "run() must error without trigger sources"
+    );
+    let err_msg = format!("{}", run_result.unwrap_err());
+    assert!(
+        err_msg.contains("no trigger sources"),
+        "error must mention missing trigger sources, got: {}",
+        err_msg
+    );
 
     // Verify EvolutionTrigger can be created for all known types.
     let triggers = vec![
@@ -202,7 +211,18 @@ async fn test_self_evolution_auto_rollback_on_health_check_failure() {
         .with_sandbox(sandbox)
         .with_approval_mode(ApprovalMode::AutoApproval);
 
-    let _ = &mut loop_instance;
+    // Same as above: no trigger sources → run() returns an error.
+    let run_result = loop_instance.run().await;
+    assert!(
+        run_result.is_err(),
+        "run() must error without trigger sources"
+    );
+    let err_msg = format!("{}", run_result.unwrap_err());
+    assert!(
+        err_msg.contains("no trigger sources"),
+        "error must mention missing trigger sources, got: {}",
+        err_msg
+    );
 
     // In auto-rollback, health check failure triggers automatic rollback.
     // Validate the approval structure for automated rollback decisions.
@@ -216,18 +236,5 @@ async fn test_self_evolution_auto_rollback_on_health_check_failure() {
     // (saved before sandbox was moved into EvolutionLoop above)
     // iteration budget checked statically — always positive
 
-    // Verify that the EvolutionLoop can be created with different approval modes.
-    let mut auto_loop =
-        EvolutionLoop::new(ctx.workdir.clone()).with_approval_mode(ApprovalMode::AutoApproval);
-    let _ = &mut auto_loop;
-
-    let mut manual_loop =
-        EvolutionLoop::new(ctx.workdir.clone()).with_approval_mode(ApprovalMode::RequireHuman);
-    let _ = &mut manual_loop;
-
     sleep(Duration::from_millis(10)).await;
-}
-
-fn new_source() -> Box<dyn TriggerSource> {
-    Box::new(ManualTriggerSource::new("e2e-test".into()))
 }

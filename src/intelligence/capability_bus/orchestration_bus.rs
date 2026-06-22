@@ -8,7 +8,10 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::orchestration::execution_graph::{ExCondition, ExNode, ExNodeKind, ExecutionGraph};
@@ -159,7 +162,7 @@ pub struct OrchestrationBus {
     /// Active flow tracking (flow_name -> FlowEntry)
     active_flow_map: Arc<Mutex<HashMap<String, FlowEntry>>>,
     /// Total routes counter (persisted across resets)
-    total_routes: Arc<Mutex<u64>>,
+    total_routes: Arc<AtomicU64>,
     /// Maximum number of tracked flows before FIFO eviction
     max_flows: usize,
 }
@@ -188,7 +191,7 @@ impl OrchestrationBus {
                 active_graphs: 0,
             })),
             active_flow_map: Arc::new(Mutex::new(HashMap::new())),
-            total_routes: Arc::new(Mutex::new(0)),
+            total_routes: Arc::new(AtomicU64::new(0)),
             max_flows: 500,
         }
     }
@@ -362,9 +365,8 @@ impl OrchestrationBus {
         let mut prof = lock_mutex_recover(self.profile.as_ref(), "profile");
         prof.active_flows = flow_map.len() as u32;
 
-        // Increment total routes
-        let mut total = lock_mutex_recover(self.total_routes.as_ref(), "total_routes");
-        *total += 1;
+        // Increment total routes (lock-free atomic counter)
+        self.total_routes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// List all active flows with their status.
@@ -392,8 +394,7 @@ impl OrchestrationBus {
     /// * `OrchestrationBusProfile` - A copy of the current profile metrics
     pub fn profile(&self) -> OrchestrationBusProfile {
         let mut prof = lock_mutex_recover(self.profile.as_ref(), "profile");
-        let total = *lock_mutex_recover(self.total_routes.as_ref(), "total_routes");
-        prof.total_routes = total;
+        prof.total_routes = self.total_routes.load(Ordering::Relaxed);
         prof.clone()
     }
 

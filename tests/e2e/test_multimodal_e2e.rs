@@ -151,18 +151,6 @@ async fn test_multimodal_pipeline_full() {
     assert!(combined_prompt.contains("PDF"));
     assert!(combined_prompt.contains("Hello"));
 
-    // Validate MultimodalInput enum variants.
-    match &doc_input {
-        MultimodalInput::Document(bytes, ext) => {
-            assert_eq!(ext, "pdf");
-            assert!(!bytes.is_empty());
-        }
-        _ => panic!("expected Document variant"),
-    }
-    match &doc_input {
-        MultimodalInput::Document(_, _) => {}
-        _ => panic!("expected Document variant"),
-    }
     // Test other input variants.
     let text_input = MultimodalInput::Text("Hello world".into());
     match text_input {

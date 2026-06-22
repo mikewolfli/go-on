@@ -668,15 +668,22 @@ fn measure_audit_replay() -> DimensionScore {
 /// Uses `Instant` to record real elapsed time, normalised so lower is better.
 fn measure_chat_latency() -> DimensionScore {
     let start = std::time::Instant::now();
-    // Perform a simple operation to establish a measurable baseline:
-    // sleeping 10ms simulates a lightweight chat processing step.
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    // Perform a lightweight computation baseline (no I/O or sleep):
+    // compute a Fibonacci number to simulate processing work.
+    let mut a: u64 = 0;
+    let mut b: u64 = 1;
+    for _ in 0..100_000 {
+        let c = a.wrapping_add(b);
+        a = b;
+        b = c;
+    }
+    std::hint::black_box(b);
     let elapsed = start.elapsed();
     // Normalise: lower is better, 1.0 = instant (<1ms), 0.0 = >=1s.
     let score = (1.0 - (elapsed.as_secs_f64() / 1.0).min(1.0)).max(0.0);
     DimensionScore {
         score: score * 100.0,
-        evidence: "Chat latency measured via Instant timing baseline (10ms sleep)",
+        evidence: "Chat latency measured via Fibonacci computation baseline (no sleep)",
         measurability: Measurability::Measured,
     }
 }

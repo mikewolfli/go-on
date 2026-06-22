@@ -101,17 +101,14 @@ pub struct SkillsFolderIndex {
     skills_dir: PathBuf,
     /// Last folder scan time.
     last_scan: Instant,
-    /// Last fetch time.
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
+    /// Reserved for future periodic remote-fetch scheduling.
+    #[expect(dead_code, reason = "F-GAP-49 reserved")]
     last_fetch: Instant,
 }
 
 /// Async helper: fetch and parse skills from a URL.
-/// Extracted so `fetch_url` can run it via either `Handle::block_on` or
-/// a temporary `Runtime::block_on`, avoiding creating a new Runtime each time.
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+/// Reserved for future periodic remote-fetch scheduling (F-GAP-49).
+#[expect(dead_code, reason = "F-GAP-49 reserved")]
 async fn fetch_skills_from_url(url: &str) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::builder()
         .timeout(FETCH_TIMEOUT)

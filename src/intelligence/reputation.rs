@@ -328,19 +328,37 @@ mod tests {
         let restored = ReputationStore::load_from_file(path.clone()).expect("load");
 
         assert_eq!(restored.tracked_agent_count(), count_before);
-        assert_eq!(restored.score("alice"), alice_score_before);
-        assert_eq!(restored.score("bob"), bob_score_before);
+        // Floating-point comparison with tolerance to handle serialization precision loss
+        fn approx_eq(a: f64, b: f64) -> bool {
+            (a - b).abs() < 1e-12
+        }
+        assert!(
+            approx_eq(restored.score("alice"), alice_score_before),
+            "alice score mismatch: {}",
+            restored.score("alice")
+        );
+        assert!(
+            approx_eq(restored.score("bob"), bob_score_before),
+            "bob score mismatch: {}",
+            restored.score("bob")
+        );
 
         let snap_restored = restored.snapshot();
         assert_eq!(snap_restored.len(), snapshot_before.len());
 
-        // Verify individual record fields match.
+        // Verify individual record fields match (with float tolerance for score).
         for rec in &snap_restored {
             let original = snapshot_before
                 .iter()
                 .find(|r| r.agent == rec.agent)
                 .unwrap();
-            assert_eq!(rec.score, original.score);
+            assert!(
+                approx_eq(rec.score, original.score),
+                "score mismatch for '{}': {} vs {}",
+                rec.agent,
+                rec.score,
+                original.score
+            );
             assert_eq!(rec.total_tasks, original.total_tasks);
             assert_eq!(rec.success_count, original.success_count);
             assert_eq!(rec.failure_count, original.failure_count);

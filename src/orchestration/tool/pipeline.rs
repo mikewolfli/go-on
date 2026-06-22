@@ -378,54 +378,8 @@ fn evaluate_field(value: &Value, field_path: &str, expected: &Value) -> bool {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Test helpers (only compiled during tests)
+// Tests
 // ---------------------------------------------------------------------------
-
-/// Create a pipeline that executes a single tool.
-#[cfg(test)]
-#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-                    // F-GAP-49 — reserved for future use
-pub(crate) fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline {
-    let name: String = tool_name.into();
-    ToolPipeline {
-        _name: format!("single-{}", name),
-        steps: vec![PipelineStep::Single {
-            tool_name: name,
-            input: serde_json::Value::Null,
-        }],
-        on_error: PipelineErrorStrategy::Stop,
-    }
-}
-
-/// Construct a result for a successfully executed pipeline step.
-#[cfg(test)]
-#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-                    // F-GAP-49 — reserved for future use
-pub(crate) fn make_step_result(
-    tool_name: impl Into<String>,
-    output: serde_json::Value,
-    duration_ms: u64,
-) -> PipelineStepResult {
-    PipelineStepResult {
-        tool_name: tool_name.into(),
-        output: Some(output),
-        error: None,
-        duration_ms,
-    }
-}
-
-/// Format a pipeline result into a summary string.
-#[cfg(test)]
-#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-                    // F-GAP-49 — reserved for future use
-pub(crate) fn format_pipeline_summary(result: &PipelineResult) -> String {
-    format!(
-        "Pipeline: {} steps, {}ms, success={}",
-        result.step_results.len(),
-        result.total_duration_ms,
-        result.success,
-    )
-}
 
 #[cfg(test)]
 mod tests {

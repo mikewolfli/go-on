@@ -322,7 +322,7 @@ pub struct ProviderSpec {
 
 impl ProviderSpec {
     /// Returns whether this provider supports vision/image inputs.
-    #[allow(dead_code)] // F-GAP-49 — reserved for multi-modal capability checks
+    #[expect(dead_code, reason = "F-GAP-49 — reserved for multi-modal")]
     pub fn supports_vision(&self) -> bool {
         self.supports_vision.unwrap_or(false)
     }

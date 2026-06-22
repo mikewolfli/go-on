@@ -1483,7 +1483,9 @@ impl MemoryPersistence {
         Ok(TierCounts {
             hot: hot_count,
             warm: warm_count,
-            cold: 0, // Cold count would require scanning all shards; omitted for perf.
+            cold: 0, // TODO: track cold count from ColdStorage metadata; currently requires a linear
+                     //       scan of all shards which is too expensive for this hot path. After the next
+                     //       cold storage compaction / scan, persist the count and load it here.
         })
     }
 

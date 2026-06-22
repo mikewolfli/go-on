@@ -141,13 +141,37 @@ pub fn run_code_quality_scan() -> CodeQualityReport {
     }
 }
 
-/// Hook: call this before an EvolutionLoop patch is applied to ensure
-/// the change does not degrade code quality.
-pub fn pre_patch_quality_gate() -> CodeQualityReport {
-    run_code_quality_scan()
-}
-
 #[cfg(test)]
 mod tests {
-    // Empty test module — tests will be added here
+    use super::*;
+
+    #[test]
+    fn test_run_code_quality_scan_returns_valid_report() {
+        let report = run_code_quality_scan();
+
+        // Verify the report has the expected structure.
+        // Issues may or may not be present depending on the project state,
+        // but the metadata fields should always be populated.
+        assert!(
+            report.health_score >= 0.0 && report.health_score <= 1.0,
+            "health_score {} out of range [0.0, 1.0]",
+            report.health_score
+        );
+        assert!(
+            report.scanned_at_ms > 0,
+            "scanned_at_ms should be a positive timestamp"
+        );
+        // Every issue variant should have a non-empty module string
+        for issue in &report.issues {
+            let module = match issue {
+                CodeQualityIssue::DeadCode { module, .. } => module,
+                CodeQualityIssue::HighComplexity { module, .. } => module,
+                CodeQualityIssue::MissingDocs { module, .. } => module,
+                CodeQualityIssue::UnsafePattern { module, .. } => module,
+            };
+            assert!(!module.is_empty(), "issue module should not be empty");
+        }
+        // is_clean is consistent with issues being empty
+        assert_eq!(report.is_clean(), report.issues.is_empty());
+    }
 }

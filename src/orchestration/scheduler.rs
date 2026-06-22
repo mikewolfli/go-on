@@ -113,7 +113,7 @@ pub struct TaskScheduler {
     /// Statistics
     stats: RwLock<SchedulerProfile>,
     /// Last aging update timestamp
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
+    #[expect(dead_code, reason = "F-GAP-12 reserved")]
     last_aging: Mutex<Instant>,
     /// Global concurrency limiter using a semaphore.
     concurrency_limiter: Arc<Semaphore>,
@@ -121,10 +121,7 @@ pub struct TaskScheduler {
     role_limiters: Mutex<HashMap<String, Arc<Semaphore>>>,
     /// Cancellation token for the aging background task.
     aging_cancel: Mutex<Option<CancellationToken>>,
-    /// Per-provider semaphores for bulkhead isolation.
-    provider_semaphores: Mutex<HashMap<String, Arc<Semaphore>>>,
-    /// Default per-provider concurrency limit.
-    provider_limit: usize,
+
     /// Bulkhead instance for per-provider concurrency isolation.
     bulkhead: Bulkhead,
     /// Cancellation token for the fault tolerance background task.
@@ -157,8 +154,6 @@ impl TaskScheduler {
             concurrency_limiter: Arc::new(Semaphore::new(global_permits)),
             role_limiters: Mutex::new(HashMap::new()),
             aging_cancel: Mutex::new(None),
-            provider_semaphores: Mutex::new(HashMap::new()),
-            provider_limit: config.max_workers_per_role * 3,
             bulkhead: Bulkhead::new(config.max_workers_per_role * 3),
             ft_cancel: Mutex::new(None),
             #[cfg(feature = "backend-sqlite")]
@@ -203,8 +198,6 @@ impl TaskScheduler {
             concurrency_limiter: Arc::new(Semaphore::new(global_permits)),
             role_limiters: Mutex::new(HashMap::new()),
             aging_cancel: Mutex::new(None),
-            provider_semaphores: Mutex::new(HashMap::new()),
-            provider_limit: config.max_workers_per_role * 3,
             bulkhead: Bulkhead::new(config.max_workers_per_role * 3),
             ft_cancel: Mutex::new(None),
             persistence,
@@ -866,15 +859,6 @@ impl TaskScheduler {
         false
     }
 
-    /// Check if global concurrency cap is reached.
-    ///
-    /// Delegates to the global semaphore: if no permits are available, the
-    /// system is at capacity.
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
-    pub fn is_global_at_capacity(&self) -> bool {
-        self.available_concurrency() == 0
-    }
-
     /// Returns the number of permits currently available in the global semaphore.
     pub fn available_concurrency(&self) -> usize {
         self.concurrency_limiter.available_permits()
@@ -899,53 +883,6 @@ impl TaskScheduler {
             .entry(role.to_string())
             .or_insert_with(|| Arc::new(Semaphore::new(self.config.max_workers_per_role)));
         Ok(Arc::clone(limiter))
-    }
-
-    /// Set the maximum number of concurrent operations for a specific LLM
-    /// provider or tool executor.  Creates or replaces the per-provider
-    /// semaphore so that no single provider can consume all worker threads.
-    ///
-    /// This is a public API surface for external configuration (e.g. from
-    /// server startup code).  It is not called internally because the
-    /// bulkhead defaults are configured via `SchedulerConfig`.
-    #[allow(dead_code)]
-    pub fn set_provider_limit(&self, provider: &str, max_concurrent: usize) {
-        if let Ok(mut map) = self.provider_semaphores.lock() {
-            map.insert(
-                provider.to_string(),
-                Arc::new(Semaphore::new(max_concurrent)),
-            );
-        }
-        self.bulkhead.set_limit(provider, max_concurrent);
-    }
-
-    /// Return the default per-provider concurrency limit.
-    ///
-    /// This is a public API surface for external inspection (e.g. from
-    /// monitoring/health endpoints).  It is not called internally because
-    /// the limit is read from `self.provider_limit` directly.
-    #[allow(dead_code)]
-    pub fn provider_limit(&self) -> usize {
-        self.provider_limit
-    }
-
-    /// Acquire a per-provider concurrency permit (async).
-    ///
-    /// Delegates to the internal [`Bulkhead`] which creates a new semaphore
-    /// with the default limit if none exists for this provider yet.
-    ///
-    /// The returned permit must be held for the duration of the provider
-    /// call and dropped (or explicitly released) when the call completes.
-    ///
-    /// Note: The `dequeue()` method internally acquires provider permits
-    /// via `bulkhead.try_acquire()`. This async variant is a public API
-    /// surface for external callers who bypass the queue.
-    #[allow(dead_code)]
-    pub async fn acquire_provider_permit(
-        &self,
-        provider: &str,
-    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        self.bulkhead.acquire(provider).await
     }
 
     /// Persist the entire queue to storage (for graceful shutdown).

@@ -22,7 +22,6 @@ use thiserror::Error;
 /// wraps a [`rust_xlsxwriter::XlsxError`]. When disabled, only the `FeatureDisabled`
 /// variant is reachable.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum ExcelWriterError {
     /// Wrapper for rust_xlsxwriter errors (only when feature is enabled).
     #[cfg(feature = "document-excel-write")]
@@ -157,9 +156,41 @@ pub fn write_excel_bytes(config: &WriteExcelConfig) -> Result<Vec<u8>, ExcelWrit
     Ok(bytes)
 }
 
+/// Create a new Excel workbook from a configuration and write it to a file.
+///
+/// Returns the file path on success.
+///
+/// # Errors
+///
+/// Returns `ExcelWriterError` if the workbook cannot be created, if a sheet
+/// name is invalid, or if the file cannot be written.
+#[cfg(feature = "document-excel-write")]
+pub fn write_excel_file<P: AsRef<std::path::Path>>(
+    config: &WriteExcelConfig,
+    path: P,
+) -> Result<std::path::PathBuf, ExcelWriterError> {
+    let bytes = write_excel_bytes(config)?;
+    let path = path.as_ref().to_path_buf();
+    std::fs::write(&path, &bytes).map_err(|e| {
+        ExcelWriterError::XlsxWriter(rust_xlsxwriter::XlsxError::from(
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        ))
+    })?;
+    Ok(path)
+}
+
 /// Placeholder for when the feature is disabled.
 #[cfg(not(feature = "document-excel-write"))]
 pub fn write_excel_bytes(_config: &WriteExcelConfig) -> Result<Vec<u8>, ExcelWriterError> {
+    Err(ExcelWriterError::FeatureDisabled)
+}
+
+/// Placeholder for when the feature is disabled.
+#[cfg(not(feature = "document-excel-write"))]
+pub fn write_excel_file<P: AsRef<std::path::Path>>(
+    _config: &WriteExcelConfig,
+    _path: P,
+) -> Result<std::path::PathBuf, ExcelWriterError> {
     Err(ExcelWriterError::FeatureDisabled)
 }
 
@@ -305,5 +336,29 @@ mod tests {
 
         let result = write_excel_bytes(&config);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_write_excel_file() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_output.xlsx");
+
+        let config = WriteExcelConfig {
+            sheets: vec![SheetData {
+                name: "Test".to_string(),
+                headers: vec!["A".to_string(), "B".to_string()],
+                rows: vec![Row {
+                    cells: vec![CellValue::String("x".to_string()), CellValue::Number(42.0)],
+                }],
+            }],
+        };
+
+        let result = write_excel_file(&config, &file_path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), file_path);
+        assert!(file_path.exists());
+        assert!(file_path.metadata().unwrap().len() > 0);
     }
 }

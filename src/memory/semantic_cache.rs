@@ -274,13 +274,20 @@ impl SemanticResponseCache {
             loop {
                 tokio::select! {
                     _ = interval_timer.tick() => {
-                        let now = Instant::now();
-                        if let Ok(mut guard) = entries.write() {
-                            for bucket in guard.values_mut() {
-                                bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
+                        let cache = entries.clone();
+                        // Use spawn_blocking to avoid blocking the async runtime
+                        // with the std::sync::RwLock write lock.
+                        tokio::task::spawn_blocking(move || {
+                            let now = Instant::now();
+                            if let Ok(mut guard) = cache.write() {
+                                for bucket in guard.values_mut() {
+                                    bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
+                                }
+                                guard.retain(|_, bucket| !bucket.is_empty());
                             }
-                            guard.retain(|_, bucket| !bucket.is_empty());
-                        }
+                        })
+                        .await
+                        .ok();
                     }
                     _ = token_clone.cancelled() => {
                         break;

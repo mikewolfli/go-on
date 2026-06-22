@@ -13,8 +13,6 @@
 //! worker calls promote() / demote() based on access patterns and TTL.
 
 use std::path::PathBuf;
-use std::time::Duration;
-use tokio::time::sleep;
 
 use go_on::memory::memory_persistence::{MemoryEntry, MemoryTier, MemoryTieringPolicy};
 
@@ -127,10 +125,6 @@ async fn test_memory_persistence_three_tier_lifecycle() {
 
     assert_eq!(cold_a.tier, MemoryTier::Cold);
     assert_eq!(cold_b.tier, MemoryTier::Cold);
-
-    // Validate cold tier invariants.
-    assert_eq!(cold_a.tier, MemoryTier::Cold);
-    assert_eq!(cold_b.tier, MemoryTier::Cold);
     assert_eq!(cold_a.id, "mem-e2e-l1-001");
     assert_eq!(cold_b.id, "mem-e2e-l1-002");
     assert!(!cold_a.content.is_empty());
@@ -143,11 +137,6 @@ async fn test_memory_persistence_three_tier_lifecycle() {
     assert_eq!(restored.tier, MemoryTier::Warm);
     assert_eq!(restored.content, "User mentioned preference for dark mode");
     assert_eq!(restored.id, "mem-e2e-l1-001");
-
-    // Verify restored entry retains original content and ID.
-    assert_eq!(restored.content, "User mentioned preference for dark mode");
-    assert_eq!(restored.id, "mem-e2e-l1-001");
-    assert_eq!(restored.tier, MemoryTier::Warm);
     assert_eq!(restored.class, "episodic");
 
     // ── 6. Cross-session retrieval ─────────────────────────────────────
@@ -174,8 +163,7 @@ async fn test_memory_persistence_three_tier_lifecycle() {
         "archive directory must exist for L3 storage"
     );
 
-    // ── 7. Teardown via Drop ───────────────────────────────────────────
-    sleep(Duration::from_millis(10)).await;
+    // Context dropped here, triggering cleanup.
 }
 
 /// Tests automatic demotion from L1 → L2 when hot cache exceeds capacity.
@@ -234,8 +222,6 @@ async fn test_memory_persistence_automatic_demotion_on_capacity() {
     };
     assert_eq!(ttl_policy.hot_ttl_secs, 1);
     assert_eq!(ttl_policy.warm_ttl_secs, 10);
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Tests the metadata index retrieval.
@@ -276,6 +262,4 @@ async fn test_memory_persistence_metadata_index() {
 
     // Validate tear-down of temp directory.
     let _ = std::fs::remove_dir_all(&cold_path);
-
-    sleep(Duration::from_millis(10)).await;
 }

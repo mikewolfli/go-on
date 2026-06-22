@@ -1155,6 +1155,11 @@ fn rpc_initialize_health_phase_and_shutdown() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+// #[serial] is required here because cargo schedules tests from this
+// module to run in parallel with tests outside the module (e.g.
+// rpc_initialize_health_phase_and_shutdown), and the per-process
+// suite_guard in RpcHarness is insufficient to prevent interaction
+// between child processes spawned across module boundaries.
 #[serial]
 mod advanced {
     use super::*;

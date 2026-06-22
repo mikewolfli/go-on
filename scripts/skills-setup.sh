@@ -159,8 +159,32 @@ if should_run_step 1; then
     check_cmd "git"      || DEP_MISSING=1
 
     # curl is used for remote fetch tests (optional)
-    if ! check_cmd "curl" &>/dev/null; then
+    if ! command -v curl &>/dev/null; then
         warn "curl not found — remote fetch tests will be skipped (optional)"
+    else
+        ok "Found curl: $(command -v curl)"
+    fi
+
+    # Check Rust toolchain components (clippy, rustfmt)
+    if command -v rustup &>/dev/null; then
+        local missing_components=""
+        if ! rustup component list --installed 2>/dev/null | grep -q clippy; then
+            missing_components="clippy"
+            warn "clippy not installed — run: rustup component add clippy"
+        fi
+        if ! rustup component list --installed 2>/dev/null | grep -q rustfmt; then
+            if [ -n "$missing_components" ]; then
+                missing_components="$missing_components, rustfmt"
+            else
+                missing_components="rustfmt"
+            fi
+            warn "rustfmt not installed — run: rustup component add rustfmt"
+        fi
+        if [ -z "$missing_components" ]; then
+            ok "Rust toolchain complete: $(rustc --version)"
+        fi
+    else
+        warn "rustup not found — cannot validate toolchain components"
     fi
 
     echo ""

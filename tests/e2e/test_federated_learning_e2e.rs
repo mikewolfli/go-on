@@ -150,10 +150,6 @@ async fn test_federated_learning_full_round() {
 }
 
 /// Validates that a node with exhausted privacy budget is excluded.
-///
-/// # Real-infra
-/// This test uses in-memory type construction. Ignored by default.
-#[ignore = "requires real go-on FL nodes with shared rendezvous endpoint"]
 #[tokio::test]
 async fn test_federated_learning_privacy_budget_exhaustion() {
     let mut node = FlNodeIdentity::new("node-alpha", "127.0.0.1", 9201);
@@ -196,10 +192,6 @@ async fn test_federated_learning_privacy_budget_exhaustion() {
 }
 
 /// Verifies that differential privacy noise is structurally represented.
-///
-/// # Real-infra
-/// This test uses in-memory type construction. Ignored by default.
-#[ignore = "requires real go-on FL nodes with shared rendezvous endpoint"]
 #[tokio::test]
 async fn test_federated_learning_dp_noise_application() {
     // Validate DP noise parameter invariants: the Gaussian mechanism uses

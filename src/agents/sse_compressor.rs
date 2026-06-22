@@ -117,7 +117,7 @@ impl SseDecompressor {
 // ---------------------------------------------------------------------------
 
 /// activated, formerly F-GAP-51 — deprecated alias kept for backward compat
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
+#[expect(dead_code, reason = "public API deprecated alias")]
 #[deprecated(since = "0.1.0", note = "renamed to SseDecompressor")]
 pub type SseCompressor = SseDecompressor;
 
