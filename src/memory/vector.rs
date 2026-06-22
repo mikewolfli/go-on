@@ -609,11 +609,9 @@ impl VectorStore {
         const SENTINEL_LIMIT: i64 = i64::MAX; // portable replacement for SQLite's LIMIT -1
 
         // Collect evicted memory keys before deleting from SQLite.
+        // NOTE: `conn` is already locked above — reuse it to avoid deadlock
+        // on std::sync::Mutex (non-reentrant).
         let evicted_keys: Vec<String> = {
-            let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'upsert', recovering");
-                poisoned.into_inner()
-            });
             let mut stmt = conn.prepare(
                 "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT ?2 OFFSET ?1",
             )?;
