@@ -568,70 +568,6 @@ impl TriggerSource for TickTriggerSource {
 }
 
 // ---------------------------------------------------------------------------
-// ManualTriggerSource
-// ---------------------------------------------------------------------------
-
-/// A trigger source that accepts manual evolution requests via a channel.
-#[derive(Debug)]
-pub struct ManualTriggerSource {
-    /// Name of this source.
-    name: String,
-    /// Receiver for manual trigger requests.
-    rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>,
-    /// Sender (cloned for external use).
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for manual trigger sender
-    tx: mpsc::UnboundedSender<String>,
-}
-
-#[allow(dead_code)]
-// F-GAP-49 — reserved for manual trigger source impl
-impl ManualTriggerSource {
-    /// Create a new manual trigger source.
-    pub fn new(name: String) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
-        Self {
-            name,
-            rx: tokio::sync::Mutex::new(rx),
-            tx,
-        }
-    }
-
-    /// Send a manual evolution request. This is the public API for
-    /// submitting manual evolution instructions.
-    #[allow(dead_code)]
-    pub fn request_evolution(&self, instruction: String) -> Result<(), String> {
-        self.tx
-            .send(instruction)
-            .map_err(|e| format!("Failed to send manual request: {}", e))
-    }
-}
-
-#[async_trait]
-impl TriggerSource for ManualTriggerSource {
-    async fn poll(&self) -> Vec<EvolutionTrigger> {
-        let mut triggers = Vec::new();
-        let mut rx = self.rx.lock().await;
-
-        loop {
-            match rx.try_recv() {
-                Ok(instruction) => {
-                    triggers.push(EvolutionTrigger::ManualRequest { instruction });
-                }
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    warn!("ManualTriggerSource channel disconnected");
-                    break;
-                }
-            }
-        }
-
-        let _ = &self.name;
-        triggers
-    }
-}
-
-// ---------------------------------------------------------------------------
 // PubsubTriggerSource
 // ---------------------------------------------------------------------------
 
@@ -720,13 +656,6 @@ mod tests {
         let after = MetricsSnapshot::new(90.0, 1100.0, 0.005, 900_000, 0.4, 9);
         let ratio = after.degradation_ratio(&before);
         assert!(ratio < 0.0);
-    }
-
-    #[test]
-    fn test_manual_trigger_source() {
-        let source = ManualTriggerSource::new("test".to_string());
-        let result = source.request_evolution("fix lint warnings".to_string());
-        assert!(result.is_ok());
     }
 
     #[tokio::test]

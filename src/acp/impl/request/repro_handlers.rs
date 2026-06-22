@@ -55,6 +55,3 @@ pub(super) async fn handle_optimization_peak(
     )
     .await
 }
-
-#[cfg(test)]
-mod tests {}

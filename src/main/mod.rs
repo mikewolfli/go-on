@@ -213,11 +213,13 @@ async fn run() -> Result<()> {
     };
 
     // Perform system bootstrap (telemetry, i18n, memory health, etc.)
+    // Returns a SkillRegistry with local skills discovered from ~/.agents/skills/.
     let bootstrap_cfg = crate::core::bootstrap::BootstrapConfig {
         config_path: config_path.clone(),
         ..Default::default()
     };
-    crate::core::bootstrap::perform_bootstrap(&bootstrap_cfg).await?;
+    let _bootstrap_skill_registry =
+        crate::core::bootstrap::perform_bootstrap(&bootstrap_cfg).await?;
 
     // GAP-B50-33: Check startup memory and start background memory monitor
     let memory_health = crate::observability::memory_health::check_startup_memory();

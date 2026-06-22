@@ -37,7 +37,7 @@ describe("GoOnClient", () => {
   let client: GoOnClient;
 
   beforeEach(() => {
-    client = new GoOnClient(MOCK_BASE_URL);
+    client = new GoOnClient({ baseUrl: MOCK_BASE_URL });
     vi.clearAllMocks();
   });
 

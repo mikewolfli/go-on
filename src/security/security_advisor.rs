@@ -226,7 +226,7 @@ pub struct SecurityAdvisorAgent {
     /// Count of auto-applied patches.
     patches_applied: Arc<Mutex<usize>>,
     /// Registered WebSocket senders for push alerts.
-    ws_senders: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<SecurityAlert>>>>,
+    ws_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<SecurityAlert>>>>,
     /// Timestamp of the last digest.
     last_digest_time: Arc<Mutex<Option<SystemTime>>>,
 }
@@ -395,10 +395,7 @@ impl SecurityAdvisorAgent {
     // ── WebSocket alert push ────────────────────────────────────────────
 
     /// Register a WebSocket sender for push alerts.
-    pub async fn register_ws_sender(
-        &self,
-        sender: tokio::sync::mpsc::UnboundedSender<SecurityAlert>,
-    ) {
+    pub async fn register_ws_sender(&self, sender: tokio::sync::mpsc::Sender<SecurityAlert>) {
         let mut senders = self.ws_senders.lock().await;
         senders.push(sender);
         info!(
@@ -414,11 +411,14 @@ impl SecurityAdvisorAgent {
         }
 
         let mut senders = self.ws_senders.lock().await;
-        senders.retain(|sender| {
-            if let Err(e) = sender.send(alert.clone()) {
+        senders.retain(|sender| match sender.try_send(alert.clone()) {
+            Ok(()) => true,
+            Err(e) if e.is_disconnected() => {
                 warn!("SecurityAdvisorAgent: WS sender disconnected: {}", e);
                 false
-            } else {
+            }
+            Err(e) => {
+                warn!("SecurityAdvisorAgent: WS sender full, skipping: {}", e);
                 true
             }
         });
@@ -922,7 +922,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify_ws_registers_sender() {
         let advisor = SecurityAdvisorAgent::new(SecurityAdvisorConfig::default());
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
 
         advisor.register_ws_sender(tx).await;
 
@@ -973,7 +973,7 @@ mod tests {
         };
 
         // Register a discard sender so notify_ws doesn't fail.
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
         advisor.register_ws_sender(tx).await;
         advisor.notify_ws(alert).await.unwrap();
 

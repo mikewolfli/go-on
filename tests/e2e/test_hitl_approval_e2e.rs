@@ -27,8 +27,6 @@ use go_on::governance::pua::{PuaEnforcementPlan, PuaRuleEngine};
 struct HitlE2eContext {
     action_id: Option<String>,
     request_id: Option<String>,
-    #[allow(dead_code)]
-    final_status: Option<String>,
 }
 
 impl HitlE2eContext {
@@ -36,7 +34,6 @@ impl HitlE2eContext {
         Self {
             action_id: None,
             request_id: None,
-            final_status: None,
         }
     }
 }

@@ -148,6 +148,3 @@ pub(super) async fn handle_metrics_prometheus(
     )
     .await
 }
-
-#[cfg(test)]
-mod tests {}

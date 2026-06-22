@@ -42,6 +42,23 @@ export class GoOnError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// Client options
+// ---------------------------------------------------------------------------
+
+export interface GoOnClientOptions {
+  /** Base URL of the go-on ACP endpoint (trailing slash is stripped). */
+  baseUrl: string;
+  /** Request timeout in milliseconds (default: 30_000). */
+  timeout?: number;
+  /** Maximum number of retries for retryable failures (default: 3). */
+  maxRetries?: number;
+  /** Base delay between retries in milliseconds (default: 1000). */
+  retryDelayMs?: number;
+  /** Whether to use exponential backoff for retry delays (default: true). */
+  useExponentialBackoff?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // GoOnClient
 // ---------------------------------------------------------------------------
 
@@ -49,12 +66,20 @@ export class GoOnError extends Error {
 export class GoOnClient {
   private baseUrl: string;
   private nextId: number;
-  private timeoutMs: number;
+  private timeout: number;
+  private maxRetries: number;
+  private retryDelayMs: number;
+  private useExponentialBackoff: boolean;
+  private abortController: AbortController;
 
-  constructor(baseUrl: string, timeoutMs = 30_000) {
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
+  constructor(options: GoOnClientOptions) {
+    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.nextId = 1;
-    this.timeoutMs = timeoutMs;
+    this.timeout = options.timeout ?? 30_000;
+    this.maxRetries = options.maxRetries ?? 3;
+    this.retryDelayMs = options.retryDelayMs ?? 1000;
+    this.useExponentialBackoff = options.useExponentialBackoff ?? true;
+    this.abortController = new AbortController();
   }
 
   // ── Low-level JSON-RPC ─────────────────────────────────────────────
@@ -62,7 +87,6 @@ export class GoOnClient {
   private async jsonRpc<T>(
     method: string,
     params: Record<string, unknown>,
-    maxRetries = 3,
   ): Promise<T> {
     const id = this.nextId++;
     const body = {
@@ -74,31 +98,26 @@ export class GoOnClient {
 
     let lastError: GoOnError | null = null;
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       let response: Response;
       try {
         response = await fetch(`${this.baseUrl}${JSON_RPC_ENDPOINT}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.timeout(this.timeout),
         });
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") {
-          throw new GoOnError(0, `Request timed out after ${this.timeoutMs}ms`);
+          throw new GoOnError(0, `Request timed out after ${this.timeout}ms`);
         }
         // Network errors are retryable
         lastError = new GoOnError(
           0,
           (err as Error).message ?? "Unknown fetch error",
         );
-        if (attempt < maxRetries) {
-          // Exponential backoff with full jitter (AWS strategy)
-          // delay = random(0, min(30000, base * 2^attempt))
-          const baseMs = 1000;
-          const cap = Math.min(30000, baseMs * 2 ** attempt);
-          const delay = Math.floor(Math.random() * cap);
-          await new Promise((r) => setTimeout(r, delay));
+        if (attempt < this.maxRetries) {
+          await this.delay(attempt);
         }
         continue;
       }
@@ -109,13 +128,8 @@ export class GoOnClient {
           response.status,
           `HTTP ${response.status}: ${response.statusText}`,
         );
-        if (attempt < maxRetries) {
-          // Exponential backoff with full jitter (AWS strategy)
-          // delay = random(0, min(30000, base * 2^attempt))
-          const baseMs = 1000;
-          const cap = Math.min(30000, baseMs * 2 ** attempt);
-          const delay = Math.floor(Math.random() * cap);
-          await new Promise((r) => setTimeout(r, delay));
+        if (attempt < this.maxRetries) {
+          await this.delay(attempt);
         }
         continue;
       }
@@ -143,6 +157,24 @@ export class GoOnClient {
     }
 
     throw lastError ?? new GoOnError(0, "Request failed after retries");
+  }
+
+  /**
+   * Compute and await a retry delay.
+   * Uses full-jitter exponential backoff when `useExponentialBackoff` is enabled,
+   * otherwise a fixed delay.
+   */
+  private async delay(attempt: number): Promise<void> {
+    let ms: number;
+    if (this.useExponentialBackoff) {
+      // Exponential backoff with full jitter (AWS strategy)
+      // delay = random(0, min(30000, base * 2^attempt))
+      const cap = Math.min(30000, this.retryDelayMs * 2 ** attempt);
+      ms = Math.floor(Math.random() * cap);
+    } else {
+      ms = this.retryDelayMs;
+    }
+    await new Promise((r) => setTimeout(r, ms));
   }
 
   // ── Streaming chat (SSE) ───────────────────────────────────────────

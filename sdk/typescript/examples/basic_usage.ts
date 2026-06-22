@@ -1,7 +1,7 @@
 import { GoOnClient } from "../src/client";
 
 async function main() {
-  const client = new GoOnClient("http://localhost:8090");
+  const client = new GoOnClient({ baseUrl: "http://localhost:8090" });
 
   // Check runtime health
   const health = await client.health();

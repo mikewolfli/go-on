@@ -21,7 +21,7 @@ pub mod validate;
 pub use apply::EvolutionLoopError;
 #[allow(unused_imports)]
 pub use observe::{
-    AlertManagerTriggerSource, DiagnosticTriggerSource, EvolutionTrigger, ManualTriggerSource,
+    AlertManagerTriggerSource, DiagnosticTriggerSource, EvolutionTrigger,
     MetacognitiveTriggerSource, MetricsPoint, MetricsSnapshot, PubsubTriggerSource,
     RegressionDirection, TickTriggerSource, TriggerSource,
 };
@@ -140,10 +140,7 @@ impl EvolutionLoop {
             .with_trigger_source(Box::new(observe::AlertManagerTriggerSource::new(
                 "alert_manager_trigger".to_string(),
             )))
-            .with_trigger_source(Box::new(diagnostic))
-            .with_trigger_source(Box::new(ManualTriggerSource::new(
-                "manual_trigger".to_string(),
-            )));
+            .with_trigger_source(Box::new(diagnostic));
         slf.diagnostic_error_counts = Some(shared_counts);
         slf
     }

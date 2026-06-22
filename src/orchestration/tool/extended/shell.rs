@@ -4,7 +4,9 @@ use crate::governance::pua::tool_execution_report;
 use crate::i18n::runtime::t;
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::Result;
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use tracing::{debug, info, warn};
 
 pub struct ShellExecTool;
@@ -24,6 +26,19 @@ impl Tool for ShellExecTool {
 
         let current_dir = sanitize_path(input, directory)?;
 
+        // Environment variables from payload["env"] as a JSON object
+        let env_vars: Vec<(String, String)> = input.payload["env"]
+            .as_object()
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|val_str| (k.clone(), val_str.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // stdin input from payload["stdin"] as a string
+        let stdin_input = input.payload["stdin"].as_str().map(|s| s.to_string());
+
         // Prefer GNU `timeout` when available, but keep a portable fallback for
         // environments like macOS where `timeout` is not installed by default.
         let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
@@ -39,19 +54,124 @@ impl Tool for ShellExecTool {
             .unwrap_or(false);
 
         let output = if timeout_available {
-            Command::new("timeout")
-                .arg(format!("{}", max_timeout))
+            let mut cmd = Command::new("timeout");
+            cmd.arg(format!("{}", max_timeout))
                 .arg("sh")
                 .arg("-c")
                 .arg(command)
                 .current_dir(&current_dir)
-                .output()
+                .stdin(if stdin_input.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            // Apply environment variables
+            for (key, val) in &env_vars {
+                cmd.env(key, val);
+            }
+
+            let mut child = cmd.spawn()?;
+
+            // Write stdin if provided
+            if let Some(stdin_text) = &stdin_input {
+                if let Some(mut stdin_writer) = child.stdin.take() {
+                    let _ = stdin_writer.write_all(stdin_text.as_bytes());
+                }
+            }
+
+            child.wait_with_output()
         } else {
-            Command::new("sh")
-                .arg("-c")
+            // Rust-level timeout fallback: spawn the child process, then use a
+            // separate thread to enforce the timeout by killing the process.
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
                 .arg(command)
                 .current_dir(&current_dir)
-                .output()
+                .stdin(if stdin_input.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            // Apply environment variables before spawning
+            for (key, val) in &env_vars {
+                cmd.env(key, val);
+            }
+
+            let mut child = cmd.spawn()?;
+
+            // Write stdin if provided
+            if let Some(stdin_text) = &stdin_input {
+                if let Some(mut stdin_writer) = child.stdin.take() {
+                    let _ = stdin_writer.write_all(stdin_text.as_bytes());
+                }
+            }
+
+            let kill_after = Duration::from_millis(timeout_ms);
+            let pid = child.id();
+            let killed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let killed_clone = killed.clone();
+
+            let handle = std::thread::spawn(move || {
+                std::thread::sleep(kill_after);
+                killed_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                // Kill the child process tree
+                let _ = Command::new("kill").arg("--").arg(pid.to_string()).output();
+                // Also try fallback signals
+                let _ = Command::new("kill")
+                    .arg("-9")
+                    .arg("--")
+                    .arg(pid.to_string())
+                    .output();
+            });
+
+            let result = child.wait_with_output();
+
+            // Ensure the kill thread has finished
+            let _ = handle.join();
+
+            if killed.load(std::sync::atomic::Ordering::SeqCst) {
+                // Timeout was triggered
+                let (timeout_stdout, timeout_stderr) = match result {
+                    Ok(out) => (out.stdout, out.stderr),
+                    Err(_) => (Vec::new(), Vec::new()),
+                };
+                let stdout = String::from_utf8_lossy(&timeout_stdout).to_string();
+                let stderr = String::from_utf8_lossy(&timeout_stderr).to_string();
+                warn!(
+                    command = %command,
+                    timeout_ms = %timeout_ms,
+                    "tool: shell command timed out"
+                );
+                return Ok(ToolOutput {
+                    success: false,
+                    result: Some(serde_json::json!({
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "exit_code": null,
+                        "command": command,
+                        "directory": directory,
+                        "timeout": true,
+                    })),
+                    error: Some(format!("Command timed out after {}ms", timeout_ms)),
+                    verification: Some("shell_command_executed".to_string()),
+                    audit_log: Some(format!(
+                        "Shell exec '{}' in '{}' timed out after {}ms",
+                        command, directory, timeout_ms
+                    )),
+                    pua_report: Some(tool_execution_report(
+                        "shell_exec",
+                        Some("shell_command_executed"),
+                    )),
+                });
+            }
+
+            result
         };
 
         match output {

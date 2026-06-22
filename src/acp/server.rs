@@ -1100,6 +1100,18 @@ impl ServerBuilder {
             ));
         }
 
+        // Discover and register local skills from ~/.agents/skills/
+        // so user-authored SKILL.md files are available to the server.
+        {
+            let mut reg = skill_registry.lock().unwrap_or_else(|e| e.into_inner());
+            if let Err(e) = reg.discover_and_register_local_skills(None) {
+                tracing::warn!(
+                    "Failed to discover local skills in ServerBuilder::build: {}",
+                    e
+                );
+            }
+        }
+
         // Wire the skill registry into the global discovery engine
         crate::acp::r#impl::request::tools_pack::init_skill_discovery(skill_registry.clone());
 

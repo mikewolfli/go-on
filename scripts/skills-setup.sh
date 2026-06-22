@@ -3,10 +3,15 @@
 # skills-setup.sh — Go-On Skills Environment Setup
 #
 # Automates the creation and verification of the skills environment:
-#   1. Creates the required directory structure
-#   2. Validates system dependencies
+#   1. Validates system dependencies
+#   2. Creates the required directory structure
 #   3. Validates configuration presence
 #   4. Creates a sample skills source file
+#   5. Integrates agent skills from ~/.agents/skills/
+#   6. Sets up Node.js / TypeScript SDK
+#   7. Sets up Python SDK
+#   8. Validates Rust SDK compilation
+#   9. Runs end-to-end connectivity test
 #
 # Usage:
 #   ./scripts/skills-setup.sh              # Run all steps
@@ -44,6 +49,10 @@ STEPS=(
     "Configuration validation"
     "Sample skills source"
     "Agent skills integration"
+    "Node.js/TypeScript SDK setup"
+    "Python SDK setup"
+    "Rust SDK validation"
+    "End-to-end connectivity test"
 )
 
 # ---- Functions -------------------------------------------------------------
@@ -150,7 +159,7 @@ fi
 # ── Step 1: System Dependencies ─────────────────────────────────────────────
 
 if should_run_step 1; then
-    echo "── Step 1/4: Checking system dependencies ──"
+    echo "── Step 1/${#STEPS[@]}: Checking system dependencies ──"
     echo ""
 
     DEP_MISSING=0
@@ -165,9 +174,31 @@ if should_run_step 1; then
         ok "Found curl: $(command -v curl)"
     fi
 
+    # Node.js and npm are optional runtime dependencies
+    if ! command -v node &>/dev/null; then
+        warn "node not found — Node.js skill execution will be unavailable (optional)"
+    else
+        ok "Found node: $(command -v node)"
+    fi
+
+    if ! command -v npm &>/dev/null; then
+        warn "npm not found — npm package installation for skills will be unavailable (optional)"
+    else
+        ok "Found npm: $(command -v npm)"
+    fi
+
+    # Python is an optional runtime dependency
+    if command -v python3 &>/dev/null; then
+        ok "Found python3: $(command -v python3)"
+    elif command -v python &>/dev/null; then
+        ok "Found python: $(command -v python)"
+    else
+        warn "python3/python not found — Python skill execution will be unavailable (optional)"
+    fi
+
     # Check Rust toolchain components (clippy, rustfmt)
     if command -v rustup &>/dev/null; then
-        local missing_components=""
+        missing_components=""
         if ! rustup component list --installed 2>/dev/null | grep -q clippy; then
             missing_components="clippy"
             warn "clippy not installed — run: rustup component add clippy"
@@ -197,14 +228,14 @@ if should_run_step 1; then
         echo ""
     fi
 else
-    echo "── Step 1/4: (skipped) ──"
+    echo "── Step 1/${#STEPS[@]}: (skipped) ──"
     echo ""
 fi
 
 # ── Step 2: Directory Structure ──────────────────────────────────────────────
 
 if should_run_step 2; then
-    echo "── Step 2/4: Creating directory structure ──"
+    echo "── Step 2/${#STEPS[@]}: Creating directory structure ──"
     echo ""
 
     mkdir -p "$SKILLS_DIR"
@@ -215,7 +246,7 @@ if should_run_step 2; then
     ok "Skills import folder:   $SKILLS_IMPORT_DIR"
     ok "Skills cache folder:    $SKILLS_CACHE_DIR"
 else
-    echo "── Step 2/4: (skipped) ──"
+    echo "── Step 2/${#STEPS[@]}: (skipped) ──"
     echo ""
 fi
 
@@ -223,7 +254,7 @@ fi
 
 if should_run_step 3; then
     echo ""
-    echo "── Step 3/4: Validating configuration ──"
+    echo "── Step 3/${#STEPS[@]}: Validating configuration ──"
     echo ""
 
     if [ -f "$CONFIG_FILE" ]; then
@@ -232,25 +263,33 @@ if should_run_step 3; then
         record_failure "3" "Configuration file not found: $CONFIG_FILE"
         warn "Create one at $CONFIG_FILE or set GOON_CONFIG_DIR"
         echo ""
-        echo "  Minimal skill config example:"
+        echo "  Minimal skill config example (TOML):"
         echo ""
-        echo "  skill_import:"
-        echo "    enabled: true"
-        echo "    allowed_sources:"
-        echo "      - \"github.com/my-org/*\""
-        echo "    require_sha256: false"
-        echo "    allow_floating_ref: true"
+        echo "  [feature]"
+        echo "  skills_enabled = true"
+        echo "  skills_import_enabled = true"
+        echo "  skills_allowed_sources = [\"github.com/my-org/*\"]"
+        echo "  skills_require_sha256 = false"
+        echo "  skills_allow_floating_ref = true"
+        echo ""
+        echo "  # Or under [runtime] for runtime-level config:"
+        echo "  [runtime]"
+        echo "  skills_enabled = true"
+        echo "  skills_import_enabled = true"
+        echo "  skills_allowed_sources = [\"github.com/my-org/*\"]"
+        echo "  skills_require_sha256 = false"
+        echo "  skills_allow_floating_ref = true"
         echo ""
     fi
 else
-    echo "── Step 3/4: (skipped) ──"
+    echo "── Step 3/${#STEPS[@]}: (skipped) ──"
     echo ""
 fi
 
 # ── Step 4: Create Sample Source ─────────────────────────────────────────────
 
 if should_run_step 4; then
-    echo "── Step 4/4: Creating sample skills source ──"
+    echo "── Step 4/${#STEPS[@]}: Creating sample skills source ──"
     echo ""
 
     SAMPLE_FILE="$SKILLS_DIR/community.txt"
@@ -265,14 +304,14 @@ EOF
         ok "Source file already exists: $SAMPLE_FILE"
     fi
 else
-    echo "── Step 4/4: (skipped) ──"
+    echo "── Step 4/${#STEPS[@]}: (skipped) ──"
     echo ""
 fi
 
 # ── Step 5: Agent Skills Integration ──────────────────────────────────────────
 
 if should_run_step 5; then
-    echo "── Step 5/5: Integrating agent skills from ~/.agents/skills/ ──"
+    echo "── Step 5/${#STEPS[@]}: Integrating agent skills from ~/.agents/skills/ ──"
     echo ""
 
     AGENT_SKILLS_DIR="$HOME/.agents/skills"
@@ -285,12 +324,12 @@ if should_run_step 5; then
 
         for skill_dir in "$AGENT_SKILLS_DIR"/*/; do
             [ -d "$skill_dir" ] || continue
-            local skill_name="$(basename "$skill_dir")"
-            local skill_md="$skill_dir/SKILL.md"
-            local agent_md="$skill_dir/agent.md"
+            skill_name="$(basename "$skill_dir")"
+            skill_md="$skill_dir/SKILL.md"
+            agent_md="$skill_dir/agent.md"
 
             # Determine which metadata file to use: SKILL.md takes precedence
-            local source_file=""
+            source_file=""
             if [ -f "$skill_md" ]; then
                 source_file="$skill_md"
             elif [ -f "$agent_md" ]; then
@@ -305,14 +344,14 @@ if should_run_step 5; then
 
             # Derive a safe import name from the SKILL.md frontmatter if possible,
             # otherwise use the directory name.
-            local import_name="$skill_name"
+            import_name="$skill_name"
             if head -20 "$source_file" 2>/dev/null | grep -q '^name:' ; then
                 import_name="$(head -20 "$source_file" | grep '^name:' | head -1 | sed 's/^name:[[:space:]]*//' | tr -d '"')"
             fi
 
             # Destination: skills-import/<name>/SKILL.md
-            local dest_dir="$SKILLS_IMPORT_DIR/$import_name"
-            local dest_file="$dest_dir/SKILL.md"
+            dest_dir="$SKILLS_IMPORT_DIR/$import_name"
+            dest_file="$dest_dir/SKILL.md"
 
             mkdir -p "$dest_dir"
 
@@ -337,6 +376,41 @@ if should_run_step 5; then
         warn "Agent skills directory $AGENT_SKILLS_DIR does not exist — nothing to import"
     fi
 
+    # ── Reverse sync: copy skills from skills-import/ to ~/.agents/skills/ ──
+    # This ensures skills placed in $SKILLS_IMPORT_DIR are also discoverable
+    # by the Rust discovery mechanism which scans ~/.agents/skills/.
+    if [ -d "$SKILLS_IMPORT_DIR" ]; then
+        info "Syncing skills from $SKILLS_IMPORT_DIR to $AGENT_SKILLS_DIR..."
+        mkdir -p "$AGENT_SKILLS_DIR"
+        for skill_dir in "$SKILLS_IMPORT_DIR"/*/; do
+            [ -d "$skill_dir" ] || continue
+            skill_name="$(basename "$skill_dir")"
+            source_md="$skill_dir/SKILL.md"
+            dest_dir="$AGENT_SKILLS_DIR/$skill_name"
+
+            if [ ! -f "$source_md" ]; then
+                continue
+            fi
+
+            mkdir -p "$dest_dir"
+            if cp "$source_md" "$dest_dir/SKILL.md"; then
+                ok "Synced skill '$skill_name' to $dest_dir"
+                IMPORTED_COUNT=$((IMPORTED_COUNT + 1))
+
+                # Also copy any agents/ subdirectory if present
+                if [ -d "$skill_dir/agents" ]; then
+                    cp -r "$skill_dir/agents" "$dest_dir/" 2>/dev/null || true
+                fi
+                # Also copy any scripts/ subdirectory if present
+                if [ -d "$skill_dir/scripts" ]; then
+                    cp -r "$skill_dir/scripts" "$dest_dir/" 2>/dev/null || true
+                fi
+            else
+                warn "Failed to sync skill '$skill_name' to $AGENT_SKILLS_DIR"
+            fi
+        done
+    fi
+
     echo ""
     if [ "$IMPORTED_COUNT" -gt 0 ]; then
         ok "Imported $IMPORTED_COUNT skill(s) from $AGENT_SKILLS_DIR"
@@ -348,7 +422,318 @@ if should_run_step 5; then
         info "No skills found in $AGENT_SKILLS_DIR"
     fi
 else
-    echo "── Step 5/5: (skipped) ──"
+    echo "── Step 5/${#STEPS[@]}: (skipped) ──"
+    echo ""
+fi
+
+# ── Step 6: Node.js/TypeScript SDK Setup ──────────────────────────────────────
+
+if should_run_step 6; then
+    echo "── Step 6/${#STEPS[@]}: Node.js/TypeScript SDK setup ──"
+    echo ""
+    TS_SDK_MISSING=0
+
+    # Check for TypeScript compiler
+    if command -v tsc &>/dev/null; then
+        ok "Found tsc: $(command -v tsc)"
+    else
+        warn "tsc not found — will attempt via npx or project-local typescript"
+    fi
+
+    # Helper to install dependencies and build one SDK directory
+    setup_ts_sdk() {
+        local sdk_label="$1"
+        local sdk_path="$2"
+
+        if [ ! -d "$sdk_path" ]; then
+            warn "SDK directory not found: $sdk_path — skipping"
+            return 1
+        fi
+
+        if [ ! -f "$sdk_path/package.json" ]; then
+            warn "No package.json in $sdk_path — skipping"
+            return 1
+        fi
+
+        info "Setting up $sdk_label SDK at $sdk_path"
+
+        # Install dependencies
+        if [ -f "$sdk_path/package-lock.json" ]; then
+            info "Running npm ci in $sdk_label..."
+            (cd "$sdk_path" && npm ci) && ok "$sdk_label: npm ci succeeded" || {
+                warn "$sdk_label: npm ci failed — trying npm install"
+                (cd "$sdk_path" && npm install) || {
+                    record_failure "6" "$sdk_label: npm install failed"
+                    return 1
+                }
+            }
+        else
+            info "Running npm install in $sdk_label..."
+            (cd "$sdk_path" && npm install) || {
+                record_failure "6" "$sdk_label: npm install failed"
+                return 1
+            }
+        fi
+
+        # Build
+        info "Running npm run build in $sdk_label..."
+        (cd "$sdk_path" && npm run build) && ok "$sdk_label: build succeeded" || {
+            record_failure "6" "$sdk_label: build failed"
+            return 1
+        }
+
+        # Validate build output exists
+        if [ -d "$sdk_path/dist" ] && [ "$(ls -A "$sdk_path/dist" 2>/dev/null)" ]; then
+            ok "$sdk_label: build output present in dist/"
+        else
+            warn "$sdk_label: dist/ directory missing or empty after build"
+        fi
+
+        return 0
+    }
+
+    setup_ts_sdk "Node.js" "$PROJECT_DIR/sdk/nodejs" || TS_SDK_MISSING=1
+    setup_ts_sdk "TypeScript" "$PROJECT_DIR/sdk/typescript" || TS_SDK_MISSING=1
+
+    if [ "$TS_SDK_MISSING" -ne 0 ]; then
+        echo ""
+        warn "One or more Node.js/TypeScript SDK setup steps had issues."
+    fi
+    echo ""
+else
+    echo "── Step 6/${#STEPS[@]}: (skipped) ──"
+    echo ""
+fi
+
+# ── Step 7: Python SDK Setup ──────────────────────────────────────────────────
+
+if should_run_step 7; then
+    echo "── Step 7/${#STEPS[@]}: Python SDK setup ──"
+    echo ""
+    PY_SDK_MISSING=0
+
+    PYTHON_SDK_DIR="$PROJECT_DIR/sdk/python"
+
+    # Check for pip3
+    if command -v pip3 &>/dev/null; then
+        ok "Found pip3: $(command -v pip3)"
+    elif command -v pip &>/dev/null; then
+        ok "Found pip: $(command -v pip)"
+    else
+        record_failure "7" "pip3/pip not found — install python3-pip or ensure pip is in PATH"
+        PY_SDK_MISSING=1
+    fi
+
+    # Determine which python to use
+    if command -v python3 &>/dev/null; then
+        PYTHON_BIN="python3"
+    elif command -v python &>/dev/null; then
+        PYTHON_BIN="python"
+    else
+        record_failure "7" "python3/python not found"
+        PY_SDK_MISSING=1
+    fi
+
+    if [ "$PY_SDK_MISSING" -eq 0 ]; then
+        # Create virtual environment
+        VENV_DIR="$CONFIG_DIR/venv"
+        if [ ! -d "$VENV_DIR" ]; then
+            info "Creating Python virtual environment at $VENV_DIR ..."
+            "$PYTHON_BIN" -m venv "$VENV_DIR" && {
+                ok "Virtual environment created at $VENV_DIR"
+            } || {
+                record_failure "7" "Failed to create virtual environment at $VENV_DIR"
+                PY_SDK_MISSING=1
+            }
+        else
+            ok "Virtual environment already exists at $VENV_DIR"
+        fi
+    fi
+
+    if [ "$PY_SDK_MISSING" -eq 0 ]; then
+        # Activate venv and install SDK in dev mode
+        info "Installing Python SDK in dev mode from $PYTHON_SDK_DIR ..."
+
+        # Determine the correct pip in the venv
+        VENV_PIP="$VENV_DIR/bin/pip"
+        if [ ! -f "$VENV_PIP" ]; then
+            VENV_PIP="$VENV_DIR/bin/pip3"
+        fi
+
+        if "$VENV_PIP" install -e "$PYTHON_SDK_DIR" 2>&1; then
+            ok "Python SDK installed in dev mode"
+        else
+            record_failure "7" "pip install -e failed for $PYTHON_SDK_DIR"
+            PY_SDK_MISSING=1
+        fi
+    fi
+
+    if [ "$PY_SDK_MISSING" -eq 0 ]; then
+        # Verify the SDK import works
+        VENV_PYTHON="$VENV_DIR/bin/python"
+        if [ ! -f "$VENV_PYTHON" ]; then
+            VENV_PYTHON="$VENV_DIR/bin/python3"
+        fi
+
+        if "$VENV_PYTHON" -c "import go_on_sdk; print(f'go_on_sdk version: {go_on_sdk.__version__}')" 2>&1; then
+            ok "Python SDK import verified (go_on_sdk)"
+        else
+            record_failure "7" "Python SDK import failed for go_on_sdk"
+            PY_SDK_MISSING=1
+        fi
+    fi
+
+    if [ "$PY_SDK_MISSING" -ne 0 ]; then
+        echo ""
+        warn "One or more Python SDK setup steps had issues."
+    fi
+    echo ""
+else
+    echo "── Step 7/${#STEPS[@]}: (skipped) ──"
+    echo ""
+fi
+
+# ── Step 8: Rust SDK Validation ───────────────────────────────────────────────
+
+if should_run_step 8; then
+    echo "── Step 8/${#STEPS[@]}: Rust SDK validation ──"
+    echo ""
+    RS_SDK_MISSING=0
+
+    # Optional pkg-config check
+    if command -v pkg-config &>/dev/null; then
+        ok "Found pkg-config: $(command -v pkg-config)"
+    else
+        warn "pkg-config not found — some native crate builds may fail (optional, install via your package manager)"
+    fi
+
+    RUST_SDK_DIR="$PROJECT_DIR/sdk/rust"
+    if [ ! -d "$RUST_SDK_DIR" ]; then
+        record_failure "8" "Rust SDK directory not found: $RUST_SDK_DIR"
+        RS_SDK_MISSING=1
+    fi
+
+    if [ "$RS_SDK_MISSING" -eq 0 ]; then
+        info "Building go_on_sdk package (workspace default features)..."
+        if cargo build -p go_on_sdk 2>&1; then
+            ok "Rust SDK (go_on_sdk) built successfully"
+        else
+            record_failure "8" "cargo build -p go_on_sdk failed"
+            RS_SDK_MISSING=1
+        fi
+    fi
+
+    # Verify the build artifact exists
+    if [ "$RS_SDK_MISSING" -eq 0 ]; then
+        # Check for the build artifacts in the SDK target directory
+        SDK_TARGET="$RUST_SDK_DIR/target"
+        if [ -d "$SDK_TARGET/debug" ] && ls "$SDK_TARGET/debug/libgo_on_sdk"* &>/dev/null 2>&1; then
+            ok "Rust SDK build artifacts present"
+        else
+            # The workspace target might be at the project root instead
+            WS_TARGET="$PROJECT_DIR/target"
+            if [ -d "$WS_TARGET/debug" ] && ls "$WS_TARGET/debug/libgo_on_sdk"* &>/dev/null 2>&1; then
+                ok "Rust SDK build artifacts present (workspace target)"
+            else
+                warn "Rust SDK build artifacts not found (expected in target/debug/)"
+            fi
+        fi
+    fi
+
+    echo ""
+else
+    echo "── Step 8/${#STEPS[@]}: (skipped) ──"
+    echo ""
+fi
+
+# ── Step 9: End-to-End Connectivity Test ──────────────────────────────────────
+
+if should_run_step 9; then
+    echo "── Step 9/${#STEPS[@]}: End-to-end connectivity test ──"
+    echo ""
+    E2E_MISSING=0
+
+    # Determine go-on binary location
+    GO_ON_BIN=""
+    if command -v go-on &>/dev/null; then
+        GO_ON_BIN="$(command -v go-on)"
+        ok "Found go-on binary in PATH: $GO_ON_BIN"
+    elif [ -x "$PROJECT_DIR/target/debug/go-on" ]; then
+        GO_ON_BIN="$PROJECT_DIR/target/debug/go-on"
+        ok "Found go-on binary from workspace build: $GO_ON_BIN"
+    else
+        info "go-on binary not found — building with cargo..."
+        if cargo build 2>&1; then
+            GO_ON_BIN="$PROJECT_DIR/target/debug/go-on"
+            ok "go-on binary built: $GO_ON_BIN"
+        else
+            record_failure "9" "Failed to build go-on binary"
+            E2E_MISSING=1
+        fi
+    fi
+
+    if [ "$E2E_MISSING" -eq 0 ] && [ -n "$GO_ON_BIN" ]; then
+        # Start the server in the background
+        SERVER_PORT="${GO_ON_PORT:-8080}"
+        info "Starting go-on server on port $SERVER_PORT ..."
+        SERVER_LOG=$(mktemp)
+        "$GO_ON_BIN" server &>/dev/null &
+        SERVER_PID=$!
+        info "Server PID: $SERVER_PID"
+
+        # Cleanup function
+        cleanup() {
+            if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+                info "Stopping server (PID $SERVER_PID)..."
+                kill "$SERVER_PID" 2>/dev/null || true
+                wait "$SERVER_PID" 2>/dev/null || true
+                ok "Server stopped"
+            fi
+            rm -f "$SERVER_LOG"
+        }
+
+        # Wait for the /health endpoint to respond
+        HEALTH_URL="http://localhost:${SERVER_PORT}/health"
+        HEALTH_OK=false
+        info "Waiting for health endpoint at $HEALTH_URL ..."
+        for i in $(seq 1 15); do
+            if curl -sf "$HEALTH_URL" &>/dev/null; then
+                HEALTH_OK=true
+                ok "Health endpoint responding (attempt $i)"
+                break
+            fi
+            sleep 1
+        done
+
+        if [ "$HEALTH_OK" = false ]; then
+            # Check if the process is still running
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                warn "Server process exited prematurely"
+            else
+                warn "Health endpoint not responding after 15 seconds"
+            fi
+            cleanup
+            record_failure "9" "Server health check failed"
+            E2E_MISSING=1
+        fi
+
+        if [ "$E2E_MISSING" -eq 0 ]; then
+            # Test go-on skill list
+            info "Testing: go-on skill list ..."
+            if "$GO_ON_BIN" skill list 2>&1; then
+                ok "go-on skill list succeeded"
+            else
+                warn "go-on skill list returned a non-zero exit (may be expected if no skills are configured)"
+            fi
+        fi
+
+        # Stop the server
+        cleanup
+    fi
+
+    echo ""
+else
+    echo "── Step 9/${#STEPS[@]}: (skipped) ──"
     echo ""
 fi
 

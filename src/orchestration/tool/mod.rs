@@ -397,6 +397,274 @@ impl ToolRegistry {
             },
         );
 
+        // ── PDF document tools (feature-gated) ────────────────
+        #[cfg(feature = "document-pdf")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ReadPdfTool,
+            ToolCapabilityProfile {
+                capability: "document_pdf_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── DOCX document tools (feature-gated) ──────────────
+        #[cfg(feature = "document-docx")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ReadDocxTool,
+            ToolCapabilityProfile {
+                capability: "document_docx_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── SQLite query tools (feature-gated) ───────────────
+        #[cfg(feature = "backend-sqlite")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::SqliteQueryTool,
+            ToolCapabilityProfile {
+                capability: "sqlite_query".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Web scraping tools (feature-gated) ───────────────
+        #[cfg(feature = "document-html")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::WebScrapeTool,
+            ToolCapabilityProfile {
+                capability: "web_scrape".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Data serialization tools (feature-gated) ─────────
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CsvReadTool,
+            ToolCapabilityProfile {
+                capability: "csv_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CsvWriteTool,
+            ToolCapabilityProfile {
+                capability: "csv_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::TomlReadTool,
+            ToolCapabilityProfile {
+                capability: "toml_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::TomlWriteTool,
+            ToolCapabilityProfile {
+                capability: "toml_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::YamlReadTool,
+            ToolCapabilityProfile {
+                capability: "yaml_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::YamlWriteTool,
+            ToolCapabilityProfile {
+                capability: "yaml_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Image processing tools (feature-gated) ────────────
+        #[cfg(feature = "image-processing")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ImageResizeTool,
+            ToolCapabilityProfile {
+                capability: "image_resize".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "image-processing")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ImageConvertTool,
+            ToolCapabilityProfile {
+                capability: "image_convert".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "image-processing")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ImageAnalyzeTool,
+            ToolCapabilityProfile {
+                capability: "image_analyze".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "image-processing")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ImageGenerateTool,
+            ToolCapabilityProfile {
+                capability: "image_generate".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 5_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Compression tools (no feature gate) ───────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CompressTool,
+            ToolCapabilityProfile {
+                capability: "compress".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DecompressTool,
+            ToolCapabilityProfile {
+                capability: "decompress".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── CAD/DXF tools (feature-gated) ─────────────────────
+        #[cfg(feature = "cad-dxf")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DxfReadTool,
+            ToolCapabilityProfile {
+                capability: "dxf_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── SVG drawing tools (feature-gated) ─────────────────
+        #[cfg(feature = "drawing-svg")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::SvgReadTool,
+            ToolCapabilityProfile {
+                capability: "svg_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         registry
     }
 
@@ -864,6 +1132,7 @@ impl Tool for ApplyPatchTool {
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
+        let sanitized_dir = sanitize_path(input, current_dir)?;
         let mut patch_file =
             NamedTempFile::new().context("failed to create temp file for patch")?;
         let patch_path = patch_file.path().to_path_buf();
@@ -876,7 +1145,10 @@ impl Tool for ApplyPatchTool {
             command.arg("--check");
         }
         debug!(directory = %current_dir, check_only = %check_only, "tool: running git apply");
-        let output = command.arg(&patch_path).current_dir(current_dir).output()?;
+        let output = command
+            .arg(&patch_path)
+            .current_dir(&sanitized_dir)
+            .output()?;
         let success = output.status.success();
         if !success {
             warn!(
@@ -974,11 +1246,11 @@ impl Tool for RunTestsTool {
                 anyhow::bail!("Invalid flag argument: '{}'", arg);
             }
         }
-        let current_dir = input.payload["directory"].as_str().unwrap_or(".");
-        debug!(command = %command_name, args = ?args, directory = %current_dir, "tool: running shell command");
+        let current_dir = sanitize_path(input, input.payload["directory"].as_str().unwrap_or("."))?;
+        debug!(command = %command_name, args = ?args, directory = %current_dir.display(), "tool: running shell command");
         let output = Command::new(command_name)
             .args(&args)
-            .current_dir(current_dir)
+            .current_dir(&current_dir)
             .output()?;
         let success = output.status.success();
         if !success {
@@ -1004,7 +1276,11 @@ impl Tool for RunTestsTool {
             })),
             error: (!success).then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
             verification: Some("tests_passed".to_string()),
-            audit_log: Some(format!("Executed '{}' in '{}'", command_name, current_dir)),
+            audit_log: Some(format!(
+                "Executed '{}' in '{}'",
+                command_name,
+                current_dir.display()
+            )),
             pua_report: Some(tool_execution_report("run_tests", Some("tests_passed"))),
         })
     }
@@ -1029,6 +1305,7 @@ impl Tool for InspectGitDiffTool {
         let start = Instant::now();
 
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
+        let sanitized_dir = sanitize_path(input, current_dir)?;
         let staged = input.payload["staged"].as_bool().unwrap_or(false);
         let files = input.payload["files"]
             .as_array()
@@ -1041,7 +1318,7 @@ impl Tool for InspectGitDiffTool {
             .unwrap_or_default();
 
         let mut command = Command::new("git");
-        command.arg("diff").current_dir(current_dir);
+        command.arg("diff").current_dir(&sanitized_dir);
         if staged {
             command.arg("--cached");
         }

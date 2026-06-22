@@ -13,7 +13,6 @@
 
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::time::sleep;
 
 use go_on::orchestration::self_evolution::evolution_loop::{
     Analysis, Approval, ApprovalMode, EvolutionLoop, EvolutionTrigger, RegressionDirection,
@@ -196,8 +195,6 @@ async fn test_self_evolution_full_lifecycle() {
     // Verify rejected approval.
     let rejected = Approval::rejected("tester".into(), Some("changes too risky".into()));
     assert!(!rejected.is_approved());
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that a rollback can be triggered automatically.
@@ -235,6 +232,4 @@ async fn test_self_evolution_auto_rollback_on_health_check_failure() {
     // The sandbox should have a positive iteration budget.
     // (saved before sandbox was moved into EvolutionLoop above)
     // iteration budget checked statically — always positive
-
-    sleep(Duration::from_millis(10)).await;
 }

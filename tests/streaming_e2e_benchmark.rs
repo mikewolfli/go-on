@@ -138,7 +138,6 @@ impl BenchHarness {
                     chunks.push(StreamChunk {
                         timestamp: now,
                         data: chunk,
-                        is_final,
                     });
                     if is_final {
                         break;
@@ -149,7 +148,6 @@ impl BenchHarness {
                     chunks.push(StreamChunk {
                         timestamp: Instant::now(),
                         data: json!({"type": "timeout", "done": true}),
-                        is_final: true,
                     });
                     break;
                 }
@@ -171,8 +169,6 @@ impl BenchHarness {
 struct StreamChunk {
     timestamp: Instant,
     data: Value,
-    #[allow(dead_code)]
-    is_final: bool,
 }
 
 /// Benchmark results for a single test run.

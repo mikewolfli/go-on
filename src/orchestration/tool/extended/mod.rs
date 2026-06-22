@@ -1,28 +1,65 @@
 //! Extended built-in tools for go-on
 //!
 //! Additional tool implementations beyond the original 6, providing
-//! shell execution, HTTP requests, file operations, search, and cargo integration.
+//! shell execution, HTTP requests, file operations, search, cargo integration,
+//! image processing, data serialization, and compression utilities.
 
 pub mod cargo;
+pub mod compress;
+#[cfg(feature = "data-export")]
+pub mod data_serialization;
+#[cfg(feature = "document-docx")]
+pub mod docx;
+#[cfg(feature = "cad-dxf")]
+pub mod dxf_tool;
 pub mod filesystem;
 pub mod git;
 pub mod http;
+#[cfg(feature = "image-processing")]
+pub mod image;
 pub mod office;
+#[cfg(feature = "document-pdf")]
+pub mod pdf;
 pub mod search;
 pub mod shell;
+#[cfg(feature = "backend-sqlite")]
+pub mod sqlite;
+#[cfg(feature = "drawing-svg")]
+pub mod svg;
+#[cfg(feature = "document-html")]
+pub mod web;
 
 pub use cargo::{CargoCheckTool, CargoTestTool};
+pub use compress::{CompressTool, DecompressTool};
+#[cfg(feature = "data-export")]
+pub use data_serialization::{
+    CsvReadTool, CsvWriteTool, TomlReadTool, TomlWriteTool, YamlReadTool, YamlWriteTool,
+};
+#[cfg(feature = "document-docx")]
+pub use docx::ReadDocxTool;
+#[cfg(feature = "cad-dxf")]
+pub use dxf_tool::DxfReadTool;
 pub use filesystem::{FileDeleteTool, FileMoveTool, ListDirectoryTool};
 pub use git::GitTool;
 pub use http::HttpRequestTool;
+#[cfg(feature = "image-processing")]
+pub use image::{ImageAnalyzeTool, ImageConvertTool, ImageGenerateTool, ImageResizeTool};
 #[cfg(feature = "document-excel")]
 pub use office::ReadExcelTool;
 #[cfg(feature = "document-ppt")]
 pub use office::ReadPptTool;
 #[cfg(feature = "document-excel-write")]
 pub use office::WriteExcelTool;
+#[cfg(feature = "document-pdf")]
+pub use pdf::ReadPdfTool;
 pub use search::{FindFilesTool, GrepTool};
 pub use shell::ShellExecTool;
+#[cfg(feature = "backend-sqlite")]
+pub use sqlite::SqliteQueryTool;
+#[cfg(feature = "drawing-svg")]
+pub use svg::SvgReadTool;
+#[cfg(feature = "document-html")]
+pub use web::WebScrapeTool;
 
 #[cfg(test)]
 mod tests {

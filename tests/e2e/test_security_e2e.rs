@@ -13,8 +13,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 
 use go_on::security::audit_integrity::HashChainAuditor;
 use go_on::security::mtls::MtlsConfig;
@@ -243,8 +241,6 @@ async fn test_security_all_controls() {
         .expect("get_key must succeed");
     assert_eq!(retrieved.key_id, "api-key-e2e");
     assert_eq!(retrieved.algorithm, SecretAlgorithm::HmacSha256);
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that a tampered audit chain is detected.
@@ -299,8 +295,6 @@ async fn test_security_audit_tamper_detection() {
         assert!(!v.entry_id.is_empty(), "violation must reference an entry");
         assert!(!v.reason.is_empty(), "violation must have a reason");
     }
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates secret rotation with Ed25519 keys via SecretManager.
@@ -344,6 +338,4 @@ async fn test_security_secret_rotation_ed25519() {
         .expect("HMAC key registration must succeed");
     assert_eq!(hmac_key.algorithm, SecretAlgorithm::HmacSha256);
     assert_ne!(hmac_key.key_id, key.key_id);
-
-    sleep(Duration::from_millis(10)).await;
 }

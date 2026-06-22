@@ -416,7 +416,7 @@ pub async fn new_acp_server(
     // Forward security alerts to the observability pipeline.
     // Use spawn to circumvent the non-async context of new_acp_server.
     if let Some(ref advisor) = server.governance_deps.security_advisor {
-        let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (alert_tx, mut alert_rx) = tokio::sync::mpsc::channel(1024);
         let alert_tx_clone = alert_tx.clone();
         let advisor_clone = Arc::clone(advisor);
         tokio::spawn(async move {

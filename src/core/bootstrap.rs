@@ -7,6 +7,8 @@ use anyhow::Result;
 use std::path::Path;
 use tracing::info;
 
+use crate::orchestration::skill::SkillRegistry;
+
 /// Configuration for the bootstrap process.
 #[derive(Debug, Clone)]
 pub struct BootstrapConfig {
@@ -26,7 +28,10 @@ impl Default for BootstrapConfig {
 }
 
 /// Perform all initialization steps. Call once at startup.
-pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<()> {
+///
+/// Returns a `SkillRegistry` populated with locally discovered skills
+/// from `~/.agents/skills/` so the caller can pass it to the server.
+pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry> {
     // 1. Initialize telemetry (tracing subscriber, OpenTelemetry)
     if config.enable_telemetry {
         let telemetry_cfg = crate::observability::telemetry_enhanced::TelemetryConfig {
@@ -75,27 +80,26 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<()> {
 
     // 5. Initialize agent skills system — discover local SKILL.md files
     //    and set up the default prompt skill agent.
-    {
-        let mut skill_registry = crate::orchestration::skill::SkillRegistry::default();
-        match skill_registry.discover_and_register_local_skills(None) {
-            Ok(summary) => {
-                tracing::debug!(
-                    target: "go_on::core::bootstrap",
-                    registered = summary.registered,
-                    skipped = summary.skipped,
-                    errors = summary.errors.len(),
-                    "Local skills discovered"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "go_on::core::bootstrap",
-                    "SKILL discovery skipped: {e}"
-                );
-            }
+    //    The registry is returned so the server can use these discovered skills.
+    let mut skill_registry = crate::orchestration::skill::SkillRegistry::default();
+    match skill_registry.discover_and_register_local_skills(None) {
+        Ok(summary) => {
+            tracing::debug!(
+                target: "go_on::core::bootstrap",
+                registered = summary.registered,
+                skipped = summary.skipped,
+                errors = summary.errors.len(),
+                "Local skills discovered"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "go_on::core::bootstrap",
+                "SKILL discovery skipped: {e}"
+            );
         }
     }
 
     info!("System bootstrap completed");
-    Ok(())
+    Ok(skill_registry)
 }

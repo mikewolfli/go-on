@@ -284,7 +284,7 @@ mod tests {
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
 
-            let opts = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
 
             // [Content_Types].xml
@@ -384,7 +384,7 @@ mod tests {
         let mut buffer = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
-            let opts = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
 
             zip.start_file("[Content_Types].xml", opts.clone()).unwrap();
@@ -421,7 +421,7 @@ mod tests {
         let mut buffer = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
-            let opts = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             zip.start_file("[Content_Types].xml", opts).unwrap();
             zip.write_all(b"").unwrap();
@@ -470,7 +470,7 @@ mod tests {
         let mut buffer = Vec::new();
         {
             let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
-            let opts = zip::write::FileOptions::default()
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
 
             zip.start_file("[Content_Types].xml", opts.clone()).unwrap();

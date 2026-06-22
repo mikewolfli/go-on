@@ -127,7 +127,6 @@ struct ReplayStep {
     reroute: bool,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ReplayScenario {
     name: &'static str,
@@ -505,7 +504,6 @@ fn run_external_benchmarks() -> BenchmarkReport {
 
 /// Assert that all benchmark dimensions meet their regression thresholds.
 /// Panics with a detailed report if any dimension has regressed.
-#[allow(dead_code)]
 fn assert_regression_gate(report: &BenchmarkReport) {
     eprintln!("=== External Benchmark Report ===");
     eprintln!("Timestamp: {}", report.timestamp);

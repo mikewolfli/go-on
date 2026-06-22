@@ -12,8 +12,6 @@
 //! execution would need a PDF file, a WAV file, and a Whisper API key.
 
 use std::collections::HashMap;
-use std::time::Duration;
-use tokio::time::sleep;
 
 use go_on::multimodal::document_parser::ParsedContent;
 use go_on::multimodal::{
@@ -162,8 +160,6 @@ async fn test_multimodal_pipeline_full() {
         MultimodalInput::Image(ref bytes) => assert_eq!(bytes.len(), 100),
         _ => panic!("expected Image variant"),
     }
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates error handling for unsupported file formats.
@@ -202,8 +198,6 @@ async fn test_multimodal_unsupported_format() {
     // Test error types for feature-disabled scenarios.
     let _io_err = DocumentParserError::Io("file not found".into());
     let _feature_err = DocumentParserError::FeatureDisabled("document-pdf".into());
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that the AudioProcessorConfig can be constructed with different backends.
@@ -264,8 +258,6 @@ async fn test_multimodal_audio_processor_config() {
         format!("{:?}", raw).contains("RawPcm"),
         "AudioFormat::RawPcm debug representation"
     );
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates serialisation round-trip of multimodal data types.
@@ -322,6 +314,4 @@ async fn test_multimodal_serialization_round_trip() {
         serde_json::from_str(&no_alt_json).expect("deserialize without alt");
     assert!(no_alt_decoded.alt_text.is_none());
     assert_eq!(no_alt_decoded.decode().expect("base64 decode"), b"raw data");
-
-    sleep(Duration::from_millis(10)).await;
 }

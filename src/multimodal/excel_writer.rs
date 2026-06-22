@@ -172,9 +172,7 @@ pub fn write_excel_file<P: AsRef<std::path::Path>>(
     let bytes = write_excel_bytes(config)?;
     let path = path.as_ref().to_path_buf();
     std::fs::write(&path, &bytes).map_err(|e| {
-        ExcelWriterError::XlsxWriter(rust_xlsxwriter::XlsxError::from(
-            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-        ))
+        ExcelWriterError::CellIndexOutOfBounds(format!("failed to write Excel file: {}", e))
     })?;
     Ok(path)
 }
