@@ -110,19 +110,6 @@ impl DiagnosticBatch {
         }
     }
 
-    /// Whether this batch contains any errors (blocking issues).
-    pub fn has_errors(&self) -> bool {
-        self.error_count > 0
-    }
-
-    /// Generate a summary suitable for BrainLoop reflect phase.
-    pub fn summary(&self) -> String {
-        format!(
-            "Build diagnostics: {} errors, {} warnings, {} info",
-            self.error_count, self.warning_count, self.info_count
-        )
-    }
-
     /// Extract a prioritized list of files that need attention.
     #[cfg(test)]
     pub fn affected_files(&self) -> Vec<String> {
@@ -241,33 +228,7 @@ impl DiagnosticFeedbackEngine {
         self.error_trend()
     }
 
-    /// Get the most recent diagnostic batch.
-    pub fn latest_batch(&self) -> Option<&DiagnosticBatch> {
-        self.history.last()
-    }
-
-    /// Get a repair strategy recommendation based on the current diagnostics.
-    pub fn recommend_repair(&self) -> Option<(String, String)> {
-        let batch = self.latest_batch()?;
-        if !batch.has_errors() {
-            return None;
-        }
-        // Find the first error with a known pattern
-        for msg in &batch.messages {
-            if msg.severity == DiagnosticSeverity::Error {
-                if let Some(ref code) = msg.code {
-                    if let Some(pattern) = self.patterns.get(code) {
-                        return Some((
-                            pattern.repair_strategy.clone(),
-                            pattern.description.clone(),
-                        ));
-                    }
-                }
-            }
-        }
-        None
-    }
-
+    /// Estimate error trend across the last few batches.
     /// Calculate error trend: decreasing, stable, or increasing.
     pub fn error_trend(&self) -> &str {
         if self.history.len() < 2 {
@@ -322,43 +283,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diagnostic_batch_has_errors() {
-        let msgs = vec![
-            make_msg(
-                DiagnosticSeverity::Error,
-                "E0308",
-                "src/main.rs",
-                10,
-                "type mismatch",
-            ),
-            make_msg(
-                DiagnosticSeverity::Warning,
-                "unused",
-                "src/lib.rs",
-                5,
-                "unused var",
-            ),
-        ];
-        let batch = DiagnosticBatch::new(msgs);
-        assert!(batch.has_errors());
-        assert_eq!(batch.error_count, 1);
-        assert_eq!(batch.warning_count, 1);
-    }
-
-    #[test]
-    fn test_diagnostic_batch_no_errors() {
-        let msgs = vec![make_msg(
-            DiagnosticSeverity::Warning,
-            "unused",
-            "src/lib.rs",
-            5,
-            "unused",
-        )];
-        let batch = DiagnosticBatch::new(msgs);
-        assert!(!batch.has_errors());
-    }
-
-    #[test]
     fn test_affected_files() {
         let msgs = vec![
             make_msg(DiagnosticSeverity::Error, "E0308", "src/main.rs", 10, ""),
@@ -375,24 +299,6 @@ mod tests {
     fn test_feedback_engine_builtin_patterns() {
         let engine = DiagnosticFeedbackEngine::new();
         assert!(engine.pattern_count() > 10);
-    }
-
-    #[test]
-    fn test_feedback_engine_submit_and_recommend() {
-        let mut engine = DiagnosticFeedbackEngine::new();
-        let msgs = vec![make_msg(
-            DiagnosticSeverity::Error,
-            "E0308",
-            "src/main.rs",
-            10,
-            "type mismatch",
-        )];
-        let batch = DiagnosticBatch::new(msgs);
-        engine.submit_batch(batch);
-
-        let rec = engine.recommend_repair();
-        assert!(rec.is_some());
-        assert_eq!(rec.unwrap().0, "fix_type_mismatch");
     }
 
     #[test]
@@ -422,11 +328,22 @@ mod tests {
     fn test_process_diagnostics() {
         let mut engine = DiagnosticFeedbackEngine::new();
         let msgs = vec![
-            make_msg(DiagnosticSeverity::Error, "E0308", "src/main.rs", 10, "type mismatch"),
-            make_msg(DiagnosticSeverity::Warning, "unused", "src/lib.rs", 5, "unused variable"),
+            make_msg(
+                DiagnosticSeverity::Error,
+                "E0308",
+                "src/main.rs",
+                10,
+                "type mismatch",
+            ),
+            make_msg(
+                DiagnosticSeverity::Warning,
+                "unused",
+                "src/lib.rs",
+                5,
+                "unused variable",
+            ),
         ];
         let trend = engine.process_diagnostics(msgs);
         assert_eq!(trend, "stable");
-        assert!(engine.latest_batch().is_some());
     }
 }

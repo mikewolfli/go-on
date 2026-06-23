@@ -6,8 +6,8 @@
 use serde_json::{json, Value};
 
 use crate::acp::server::AcpServer;
-use crate::orchestration::roles::{AgentRole, RoleRegistry};
 use crate::orchestration::core_dag::{TaskGraph, TaskNode};
+use crate::orchestration::roles::{AgentRole, RoleRegistry};
 
 /// Bundles all parameters required to assemble a chat response payload.
 ///
@@ -298,29 +298,28 @@ pub fn build_task_graph_checkpoint(
             tracing::warn!(target: "task_graph", "failed to save graph: {e}");
         }
 
-        let subtask_records: Vec<crate::orchestration::core_dag::PlannedSubtaskRecord> =
-            task_graph
-                .nodes
-                .values()
-                .filter(|n| n.id != task_graph.root)
-                .map(|n| crate::orchestration::core_dag::PlannedSubtaskRecord {
-                    subtask_id: n.id.clone(),
-                    description: n
-                        .input
-                        .get("task")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    phase: n.kind.clone(),
-                    outcome: Some(if n.state == "done" {
-                        "completed".to_string()
-                    } else {
-                        n.state.clone()
-                    }),
-                    result_summary: n.output.as_ref().map(|o| o.to_string()),
-                    dependencies: n.dependencies.iter().cloned().collect(),
-                })
-                .collect();
+        let subtask_records: Vec<crate::orchestration::core_dag::PlannedSubtaskRecord> = task_graph
+            .nodes
+            .values()
+            .filter(|n| n.id != task_graph.root)
+            .map(|n| crate::orchestration::core_dag::PlannedSubtaskRecord {
+                subtask_id: n.id.clone(),
+                description: n
+                    .input
+                    .get("task")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                phase: n.kind.clone(),
+                outcome: Some(if n.state == "done" {
+                    "completed".to_string()
+                } else {
+                    n.state.clone()
+                }),
+                result_summary: n.output.as_ref().map(|o| o.to_string()),
+                dependencies: n.dependencies.iter().cloned().collect(),
+            })
+            .collect();
 
         let checkpoint = task_graph.snapshot(task_description, 1, subtask_records);
         if let Err(e) = store.save_checkpoint(&checkpoint, &graph_id) {

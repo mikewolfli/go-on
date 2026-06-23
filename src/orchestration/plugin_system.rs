@@ -487,16 +487,6 @@ impl PluginRegistry {
     pub fn count(&self) -> usize {
         self.plugins.lock().map(|p| p.len()).unwrap_or(0)
     }
-
-    /// Unregister a plugin by ID.
-    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
-    pub fn unregister(&self, id: &str) -> Result<(), String> {
-        let mut plugins = self.plugins.lock().map_err(|e| e.to_string())?;
-        plugins
-            .remove(id)
-            .ok_or_else(|| format!("Plugin {} not found", id))?;
-        Ok(())
-    }
 }
 
 impl Default for PluginRegistry {
@@ -571,16 +561,6 @@ mod tests {
             .unwrap();
         let result = registry.register(Box::new(TestPlugin::new("test-1")));
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_plugin_registry_unregister() {
-        let registry = PluginRegistry::new();
-        registry
-            .register(Box::new(TestPlugin::new("test-1")))
-            .unwrap();
-        registry.unregister("test-1").unwrap();
-        assert_eq!(registry.count(), 0);
     }
 
     #[test]

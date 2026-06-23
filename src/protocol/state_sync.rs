@@ -59,7 +59,10 @@ pub enum StateSyncEvent {
 
 impl StateSyncEvent {
     /// Human-readable summary for display in client status bars / notifications.
-    #[allow(dead_code, reason = "Public API surface for state sync event consumers")]
+    #[allow(
+        dead_code,
+        reason = "Public API surface for state sync event consumers"
+    )]
     pub fn summary(&self) -> String {
         match self {
             StateSyncEvent::ModelsChanged { models } => {
@@ -132,14 +135,6 @@ pub fn subscribe() -> broadcast::Receiver<StateSyncEvent> {
 }
 
 /// Number of active subscribers currently listening.
-///
-/// Gated behind `#[cfg(test)]` because this is only used in tests — the
-/// public monitoring path uses receiver_count via other observability channels.
-#[cfg(test)]
-pub fn subscriber_count() -> usize {
-    BROADCASTER.receiver_count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

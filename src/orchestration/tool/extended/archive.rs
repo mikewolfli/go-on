@@ -146,8 +146,12 @@ impl Tool for ArchiveExtractTool {
         let validated_output = sanitize_path_for_write(input, output_dir)?;
 
         // Create output directory
-        fs::create_dir_all(&validated_output)
-            .with_context(|| format!("failed to create output directory: {}", validated_output.display()))?;
+        fs::create_dir_all(&validated_output).with_context(|| {
+            format!(
+                "failed to create output directory: {}",
+                validated_output.display()
+            )
+        })?;
 
         let file_name = validated
             .file_name()
@@ -245,10 +249,7 @@ fn inspect_zip(path: &Path) -> Result<Vec<ArchiveEntry>> {
             .by_index(i)
             .with_context(|| format!("failed to read zip entry {i}"))?;
         let is_dir = entry.is_dir();
-        let entry_path = entry
-            .name()
-            .trim_end_matches('/')
-            .to_string();
+        let entry_path = entry.name().trim_end_matches('/').to_string();
         let size = entry.size();
         let compressed_size = entry.compressed_size();
 
@@ -266,15 +267,15 @@ fn inspect_zip(path: &Path) -> Result<Vec<ArchiveEntry>> {
 // ── Tar.gz / Tar inspection ─────────────────────────────────────────────────
 
 fn inspect_tar_gz(path: &Path) -> Result<Vec<ArchiveEntry>> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("failed to open file: {}", path.display()))?;
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open file: {}", path.display()))?;
     let decoder = flate2::read::GzDecoder::new(file);
     inspect_tar_impl(decoder, path)
 }
 
 fn inspect_tar(path: &Path) -> Result<Vec<ArchiveEntry>> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("failed to open file: {}", path.display()))?;
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open file: {}", path.display()))?;
     inspect_tar_impl(file, path)
 }
 
@@ -282,21 +283,18 @@ fn inspect_tar_impl<R: Read>(reader: R, path: &Path) -> Result<Vec<ArchiveEntry>
     let mut archive = tar::Archive::new(reader);
     let mut entries = Vec::new();
 
-    for entry_result in archive.entries().with_context(|| {
-        format!("failed to read tar entries from: {}", path.display())
-    })? {
-        let entry = entry_result.with_context(|| {
-            format!("failed to read tar entry in: {}", path.display())
-        })?;
+    for entry_result in archive
+        .entries()
+        .with_context(|| format!("failed to read tar entries from: {}", path.display()))?
+    {
+        let entry = entry_result
+            .with_context(|| format!("failed to read tar entry in: {}", path.display()))?;
 
         let entry_path = entry
             .path()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let is_dir = entry
-            .header()
-            .entry_type()
-            .is_dir();
+        let is_dir = entry.header().entry_type().is_dir();
         let size = entry.size();
 
         entries.push(ArchiveEntry {
@@ -312,11 +310,7 @@ fn inspect_tar_impl<R: Read>(reader: R, path: &Path) -> Result<Vec<ArchiveEntry>
 
 // ── Zip extraction ──────────────────────────────────────────────────────────
 
-fn extract_zip(
-    path: &Path,
-    output_dir: &Path,
-    filter: Option<&str>,
-) -> Result<usize> {
+fn extract_zip(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<usize> {
     let file = fs::File::open(path)
         .with_context(|| format!("failed to open zip file: {}", path.display()))?;
     let mut archive = zip::ZipArchive::new(file)
@@ -329,10 +323,7 @@ fn extract_zip(
             .by_index(i)
             .with_context(|| format!("failed to read zip entry {i}"))?;
 
-        let entry_path = entry
-            .name()
-            .trim_end_matches('/')
-            .to_string();
+        let entry_path = entry.name().trim_end_matches('/').to_string();
 
         // Apply filter if specified
         if let Some(pattern) = filter {
@@ -350,8 +341,9 @@ fn extract_zip(
                 .with_context(|| format!("failed to create directory: {}", target.display()))?;
         } else {
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create parent directory: {}", parent.display()))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create parent directory: {}", parent.display())
+                })?;
             }
             let mut outfile = fs::File::create(&target)
                 .with_context(|| format!("failed to create file: {}", target.display()))?;
@@ -366,24 +358,16 @@ fn extract_zip(
 
 // ── Tar.gz / Tar extraction ─────────────────────────────────────────────────
 
-fn extract_tar_gz(
-    path: &Path,
-    output_dir: &Path,
-    filter: Option<&str>,
-) -> Result<usize> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("failed to open file: {}", path.display()))?;
+fn extract_tar_gz(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<usize> {
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open file: {}", path.display()))?;
     let decoder = flate2::read::GzDecoder::new(file);
     extract_tar_impl(decoder, output_dir, filter, path)
 }
 
-fn extract_tar(
-    path: &Path,
-    output_dir: &Path,
-    filter: Option<&str>,
-) -> Result<usize> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("failed to open file: {}", path.display()))?;
+fn extract_tar(path: &Path, output_dir: &Path, filter: Option<&str>) -> Result<usize> {
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open file: {}", path.display()))?;
     extract_tar_impl(file, output_dir, filter, path)
 }
 
@@ -396,12 +380,12 @@ fn extract_tar_impl<R: Read>(
     let mut archive = tar::Archive::new(reader);
     let mut extracted_count = 0usize;
 
-    for entry_result in archive.entries().with_context(|| {
-        format!("failed to read tar entries from: {}", path.display())
-    })? {
-        let mut entry = entry_result.with_context(|| {
-            format!("failed to read tar entry in: {}", path.display())
-        })?;
+    for entry_result in archive
+        .entries()
+        .with_context(|| format!("failed to read tar entries from: {}", path.display()))?
+    {
+        let mut entry = entry_result
+            .with_context(|| format!("failed to read tar entry in: {}", path.display()))?;
 
         let entry_path = entry
             .path()
@@ -424,8 +408,9 @@ fn extract_tar_impl<R: Read>(
                 .with_context(|| format!("failed to create directory: {}", target.display()))?;
         } else {
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create parent directory: {}", parent.display()))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create parent directory: {}", parent.display())
+                })?;
             }
             entry
                 .unpack(&target)
@@ -439,13 +424,9 @@ fn extract_tar_impl<R: Read>(
 
 // ── Plain gzip extraction ───────────────────────────────────────────────────
 
-fn extract_gzip_single(
-    path: &Path,
-    output_dir: &Path,
-    _filter: Option<&str>,
-) -> Result<usize> {
-    let input_data = fs::read(path)
-        .with_context(|| format!("failed to read gzip file: {}", path.display()))?;
+fn extract_gzip_single(path: &Path, output_dir: &Path, _filter: Option<&str>) -> Result<usize> {
+    let input_data =
+        fs::read(path).with_context(|| format!("failed to read gzip file: {}", path.display()))?;
 
     let mut decoder = flate2::read::GzDecoder::new(&input_data[..]);
     let mut decompressed = Vec::new();

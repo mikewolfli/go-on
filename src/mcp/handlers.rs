@@ -118,9 +118,6 @@ pub struct CreateMessageRequest {
     pub stop_sequences: Vec<String>,
     #[serde(default)]
     pub model_preferences: Option<ModelPreferences>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub metadata: Option<HashMap<String, Value>>,
 }
 
 /// Result for `sampling/createMessage`.
@@ -658,7 +655,7 @@ impl McpServer {
 
         // Inject registered skills from ACP server (if available)
         if let Some(registry) = self.skill_registry() {
-            let guard = registry.lock().unwrap_or_else(|poisoned| {
+            let guard = registry.read().unwrap_or_else(|poisoned| {
                 tracing::warn!("MCP skill_registry lock poisoned – recovered");
                 poisoned.into_inner()
             });
@@ -854,7 +851,7 @@ impl McpServer {
         // Step 2: Try skill registry fallback
         if let Some(registry) = self.skill_registry() {
             // Extract skill from lock, then drop the guard before async execution
-            let skill_to_call = match registry.lock() {
+            let skill_to_call = match registry.read() {
                 Ok(guard) => {
                     // Try exact name match first
                     if let Some(skill) = guard.get(&tool_name) {
@@ -1313,6 +1310,7 @@ impl McpServer {
     /// Notify subscribers that a resource has changed.
     /// External callers invoke this to trigger real-time SSE updates
     /// for connected MCP clients.
+    #[allow(dead_code)]
     pub fn notify_resource_changed(&self, resource_uri: &str) {
         let has_subscribers = {
             let subs = self

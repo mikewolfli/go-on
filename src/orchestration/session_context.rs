@@ -41,36 +41,7 @@ pub enum ConceptCategory {
     Unknown,
 }
 
-impl ConceptCategory {
-    #[allow(dead_code)] // F-GAP-09 — reserved for context management diagnostics
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Entity => "entity",
-            Self::Decision => "decision",
-            Self::FilePath => "file_path",
-            Self::CodeSymbol => "code_symbol",
-            Self::Error => "error",
-            Self::Constraint => "constraint",
-            Self::Task => "task",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    /// Retention priority: higher = more important to keep.
-    #[allow(dead_code)] // F-GAP-09 — reserved for context management diagnostics
-    pub fn priority(&self) -> u8 {
-        match self {
-            Self::Decision => 10,
-            Self::Error => 9,
-            Self::Constraint => 8,
-            Self::Task => 7,
-            Self::FilePath => 6,
-            Self::CodeSymbol => 5,
-            Self::Entity => 4,
-            Self::Unknown => 1,
-        }
-    }
-}
+impl ConceptCategory {}
 
 // ---------------------------------------------------------------------------
 // MessageImportanceScore
@@ -156,9 +127,6 @@ pub struct ContextWindowBudget {
     pub min_retain: usize,
     /// Current task complexity (1-10), affects retention aggressiveness.
     pub task_complexity: u8,
-    /// Whether to use continuity markers when trimming.
-    #[allow(dead_code)] // F-GAP-09 — reserved for context window budget configuration
-    pub use_continuity_markers: bool,
 }
 
 impl Default for ContextWindowBudget {
@@ -167,7 +135,6 @@ impl Default for ContextWindowBudget {
             max_messages: 1000,
             min_retain: 20,
             task_complexity: 5,
-            use_continuity_markers: true,
         }
     }
 }
@@ -451,13 +418,6 @@ impl Default for SessionContextManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_concept_category_priority() {
-        assert!(ConceptCategory::Decision.priority() > ConceptCategory::Entity.priority());
-        assert!(ConceptCategory::Error.priority() > ConceptCategory::FilePath.priority());
-        assert_eq!(ConceptCategory::Decision.label(), "decision");
-    }
 
     #[test]
     fn test_importance_score_anchor() {

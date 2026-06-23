@@ -189,7 +189,7 @@ pub(crate) async fn run_agent_collecting(
                             let reg = server
                                 .orchestration_deps
                                 .skill_registry
-                                .lock()
+                                .read()
                                 .unwrap_or_else(|poisoned| {
                                     warn!(
                                         "run_agent_collecting: skill_registry poisoned, recovering"

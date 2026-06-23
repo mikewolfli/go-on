@@ -49,7 +49,7 @@ use crate::acp::r#impl::chat::{
     VectorContext,
 };
 use crate::acp::r#impl::request;
-use crate::acp::server::AcpServer;
+use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
 use crate::evaluation::TraceEvent;
 use crate::flow::FlowManager;
@@ -770,29 +770,31 @@ pub(crate) async fn act_phase(
 
         // Semantic cache populate
         if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
-            let _ = server
+            server
                 .cache_deps
                 .cache
                 .semantic_cache
-                .lock()
-                .map(|mut c| c.put(&input_text, Value::String(response_text.clone())));
+                .write()
+                .unwrap_or_else(|p| p.into_inner())
+                .put(&input_text, Value::String(response_text.clone()));
         }
 
         // Post-success cleanup
         if let Some(ref primary) = routing_out.configured_primary_agent {
             if selected_agent == *primary {
                 let _ = agent_switch_state()
-                    .lock()
+                    .write()
                     .map(|mut s| s.forced_agent_by_phase.remove(&resolve_out.phase_name));
             }
         }
-        let _ = server.resilience.online_controller.lock().map(|mut oc| {
-            oc.record_phase_outcome(
-                &resolve_out.phase_name,
-                true,
-                started.elapsed().as_millis() as u64,
-            )
-        });
+        let _ = server
+            .resilience
+            .outcome_tx
+            .send(OutcomeEvent::PhaseOutcome {
+                phase_name: resolve_out.phase_name.to_string(),
+                success: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+            });
 
         // BLUE56-GAP-C04: Record fallback/vote execution in hyper-resilience engine
         server
@@ -1063,12 +1065,10 @@ fn try_semantic_cache(server: &AcpServer, cache_key: &str) -> Option<String> {
         .cache_deps
         .cache
         .semantic_cache
-        .lock()
-        .ok()
-        .and_then(|c| {
-            c.get(cache_key)
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-        })
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(cache_key)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
 async fn stream_cache_response(
@@ -1199,9 +1199,14 @@ async fn handle_execution_errors(
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
             });
-        let _ = server.resilience.online_controller.lock().map(|mut oc| {
-            oc.record_phase_outcome(phase_name, false, started.elapsed().as_millis() as u64)
-        });
+        let _ = server
+            .resilience
+            .outcome_tx
+            .send(OutcomeEvent::PhaseOutcome {
+                phase_name: phase_name.to_string(),
+                success: false,
+                duration_ms: started.elapsed().as_millis() as u64,
+            });
         if all_quota {
             #[cfg(feature = "multi-users-server")]
             {

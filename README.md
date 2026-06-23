@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based ACP/MCP agent orchestration runtime with desktop GUI, VS Code extension, and multi-AI-provider support. v1.2.0
+  <strong>go-on</strong> — A Rust-based ACP/MCP agent orchestration runtime with desktop GUI, VS Code extension, and multi-AI-provider support. v1.3.0
 </p>
 
 <p align="center">
@@ -16,9 +16,9 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.2.0-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.3.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2252-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-1962-brightgreen)]()
 [![Providers](https://img.shields.io/badge/providers-35+-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 [![LOC](https://img.shields.io/badge/code-265K-blue)]()

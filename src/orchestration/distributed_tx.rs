@@ -17,7 +17,8 @@
 //! - Uses `crate::orchestration::tool_transaction::CompensateAction` for rollback
 //! - Stores transaction state in the existing WAL mechanism
 
-// F-GAP-51: dead_code allowed on items below when sub-bus-tool-future is disabled
+// F-GAP-51: entire module reserved for future 2PC integration
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

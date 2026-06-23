@@ -586,7 +586,7 @@ impl CapabilityBus {
             #[cfg(feature = "sub-bus-tool")]
             tool_bus: ToolBus::new(
                 Arc::new(Mutex::new(crate::orchestration::tool::ToolRegistry::new())),
-                Arc::new(Mutex::new(
+                Arc::new(RwLock::new(
                     crate::orchestration::skill::SkillRegistry::default(),
                 )),
             ),
@@ -976,7 +976,7 @@ impl CapabilityBus {
         // Skill evolution metrics
         #[cfg(feature = "sub-bus-tool")]
         {
-            let skills = lock_guard(self.tool_bus.skill_registry_ref());
+            let skills = read_guard(self.tool_bus.skill_registry_ref());
             p.skill_evolution_count = skills
                 .evolution_history
                 .values()

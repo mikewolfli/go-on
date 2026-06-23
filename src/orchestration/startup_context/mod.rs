@@ -35,7 +35,10 @@ pub use profile::startup_context_profile;
 ///
 /// Returned by `startup_context_profile()` for the `/governance/status` endpoint.
 /// Exported via all 5 protocol modes (auto/acp-stdio/acp-http/mcp-stdio/mcp-http).
-#[allow(dead_code, reason = "Public API surface for governance/status endpoint (cfg(test) re-exported)")]
+#[allow(
+    dead_code,
+    reason = "Public API surface for governance/status endpoint (cfg(test) re-exported)"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StartupContextProfile {
     /// Whether the startup context loader is enabled in config

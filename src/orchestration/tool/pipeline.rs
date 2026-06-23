@@ -17,24 +17,6 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 pub enum PipelineStep {
     /// Single tool execution.
     Single { tool_name: String, input: Value },
-    /// Parallel execution of multiple tools.
-    #[allow(dead_code)] // F-GAP-12 — reserved for pipeline extensibility
-    Parallel { steps: Vec<PipelineStep> },
-    /// Sequential execution with optional condition.
-    #[allow(dead_code)] // F-GAP-12 — reserved for pipeline extensibility
-    Sequence { steps: Vec<PipelineStep> },
-    /// Conditional branch that evaluates a field value and chooses a path.
-    #[allow(dead_code)] // F-GAP-12 — reserved for pipeline extensibility
-    Conditional {
-        /// JSON field name to evaluate (dot-notation path supported, e.g. "result.status").
-        condition_field: String,
-        /// Expected value for the condition to be true.
-        expected: Value,
-        /// Step to execute when the condition matches.
-        then_step: Box<PipelineStep>,
-        /// Optional step to execute when the condition does NOT match.
-        else_step: Option<Box<PipelineStep>>,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -44,16 +26,8 @@ pub enum PipelineStep {
 /// Determines behaviour when a pipeline step fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineErrorStrategy {
-    /// Stop execution immediately and return the partial results.
-    #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-    // F-GAP-49 — reserved for future use
-    Stop,
     /// Continue executing remaining steps despite the error.
     Continue,
-    /// Stop execution and invoke rollback (requires transactional context).
-    #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-    // F-GAP-49 — reserved for future use
-    Rollback,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +119,7 @@ impl ToolPipeline {
 async fn execute_step(
     registry: &ToolRegistry,
     step: &PipelineStep,
-    context: &Value,
+    _context: &Value,
     strategy: PipelineErrorStrategy,
 ) -> (Vec<PipelineStepResult>, bool) {
     match step {
@@ -154,32 +128,6 @@ async fn execute_step(
             let should_continue =
                 result.error.is_none() || strategy == PipelineErrorStrategy::Continue;
             (vec![result], should_continue)
-        }
-
-        PipelineStep::Sequence { steps } => {
-            Box::pin(execute_sequence(registry, steps, context, strategy)).await
-        }
-
-        PipelineStep::Parallel { steps } => {
-            Box::pin(execute_parallel(registry, steps, context, strategy)).await
-        }
-
-        PipelineStep::Conditional {
-            condition_field,
-            expected,
-            then_step,
-            else_step,
-        } => {
-            Box::pin(execute_conditional(
-                registry,
-                condition_field,
-                expected,
-                then_step,
-                else_step,
-                context,
-                strategy,
-            ))
-            .await
         }
     }
 }
@@ -257,122 +205,6 @@ async fn run_single_tool(
     }
 }
 
-/// Execute steps sequentially, stopping or continuing based on the strategy.
-async fn execute_sequence(
-    registry: &ToolRegistry,
-    steps: &[PipelineStep],
-    context: &Value,
-    strategy: PipelineErrorStrategy,
-) -> (Vec<PipelineStepResult>, bool) {
-    let mut results: Vec<PipelineStepResult> = Vec::new();
-
-    for step in steps {
-        let (step_results, should_continue) = execute_step(registry, step, context, strategy).await;
-
-        let step_ok = step_results.iter().all(|r| r.error.is_none());
-        results.extend(step_results);
-
-        if !step_ok && strategy != PipelineErrorStrategy::Continue {
-            return (results, false);
-        }
-
-        if !should_continue {
-            return (results, false);
-        }
-    }
-
-    (results, true)
-}
-
-/// Execute steps in parallel via `tokio::spawn` + `join_all`.
-async fn execute_parallel(
-    registry: &ToolRegistry,
-    steps: &[PipelineStep],
-    context: &Value,
-    strategy: PipelineErrorStrategy,
-) -> (Vec<PipelineStepResult>, bool) {
-    // Build plain futures (not tokio::spawn tasks) to avoid 'static
-    // lifetime requirements on registry references.
-    let mut futures: Vec<
-        std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PipelineStepResult>> + Send + '_>>,
-    > = Vec::with_capacity(steps.len());
-
-    for step in steps {
-        match step {
-            PipelineStep::Single { tool_name, input } => {
-                let tool_name = tool_name.clone();
-                let input = input.clone();
-                let fut = Box::pin(async move {
-                    let r = run_single_tool(registry, &tool_name, &input).await;
-                    vec![r]
-                });
-                futures.push(fut);
-            }
-            _ => {
-                // Execute complex sub-steps inline since we cannot move
-                // references into spawned tasks.
-                tracing::warn!(
-                    target: "tool_pipeline",
-                    "parallel execution of nested complex steps is not yet \
-                     supported; falling back to sequential"
-                );
-                let (sub_results, _) = execute_step(registry, step, context, strategy).await;
-                let fut = Box::pin(async move { sub_results });
-                futures.push(fut);
-            }
-        }
-    }
-
-    let join_results = futures_util::future::join_all(futures).await;
-    let mut results: Vec<PipelineStepResult> = Vec::new();
-
-    for step_results in join_results {
-        results.extend(step_results);
-    }
-
-    let all_ok = results.iter().all(|r| r.error.is_none());
-    let should_continue = all_ok || strategy == PipelineErrorStrategy::Continue;
-    (results, should_continue)
-}
-
-/// Evaluate a condition and execute the appropriate branch.
-async fn execute_conditional(
-    registry: &ToolRegistry,
-    condition_field: &str,
-    expected: &Value,
-    then_step: &PipelineStep,
-    else_step: &Option<Box<PipelineStep>>,
-    context: &Value,
-    strategy: PipelineErrorStrategy,
-) -> (Vec<PipelineStepResult>, bool) {
-    let condition_met = evaluate_field(context, condition_field, expected);
-
-    let chosen = if condition_met {
-        then_step
-    } else if let Some(ref else_s) = else_step {
-        else_s
-    } else {
-        return (Vec::new(), true);
-    };
-
-    execute_step(registry, chosen, context, strategy).await
-}
-
-/// Evaluate a dot‑notation field path against a JSON value.
-fn evaluate_field(value: &Value, field_path: &str, expected: &Value) -> bool {
-    let parts: Vec<&str> = field_path.split('.').collect();
-    let mut current = value;
-
-    for part in parts {
-        match current.get(part) {
-            Some(v) => current = v,
-            None => return false,
-        }
-    }
-
-    current == expected
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -407,6 +239,7 @@ mod tests {
     }
 
     /// A tool that always fails.
+    #[allow(dead_code)]
     struct FailTool;
 
     impl Tool for FailTool {
@@ -459,190 +292,12 @@ mod tests {
                 tool_name: "echo".to_string(),
                 input: json!({}),
             }],
-            on_error: PipelineErrorStrategy::Stop,
+            on_error: PipelineErrorStrategy::Continue,
         };
 
         let result = pipeline.execute(&registry, &json!({})).await;
         assert!(result.success);
         assert_eq!(result.step_results.len(), 1);
         assert!(result.step_results[0].error.is_none());
-    }
-
-    #[tokio::test]
-    async fn sequence_executes_in_order() {
-        let mut registry = ToolRegistry::new_empty();
-        registry.register(EchoTool);
-
-        let pipeline = ToolPipeline {
-            _name: "test-sequence".to_string(),
-            steps: vec![PipelineStep::Sequence {
-                steps: vec![
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                ],
-            }],
-            on_error: PipelineErrorStrategy::Stop,
-        };
-
-        let result = pipeline.execute(&registry, &json!({})).await;
-        assert!(result.success);
-        assert_eq!(result.step_results.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn stop_on_error_halts_execution() {
-        let mut registry = ToolRegistry::new_empty();
-        registry.register(EchoTool);
-        registry.register(FailTool);
-
-        let pipeline = ToolPipeline {
-            _name: "test-stop".to_string(),
-            steps: vec![PipelineStep::Sequence {
-                steps: vec![
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                    PipelineStep::Single {
-                        tool_name: "fail".to_string(),
-                        input: json!({}),
-                    },
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                ],
-            }],
-            on_error: PipelineErrorStrategy::Stop,
-        };
-
-        let result = pipeline.execute(&registry, &json!({})).await;
-        assert!(!result.success);
-        // Should have echo result + fail result, but NOT the third echo.
-        assert_eq!(result.step_results.len(), 2);
-        assert!(result.step_results[1].error.is_some());
-    }
-
-    #[tokio::test]
-    async fn continue_on_error_keeps_going() {
-        let mut registry = ToolRegistry::new_empty();
-        registry.register(EchoTool);
-        registry.register(FailTool);
-
-        let pipeline = ToolPipeline {
-            _name: "test-continue".to_string(),
-            steps: vec![PipelineStep::Sequence {
-                steps: vec![
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                    PipelineStep::Single {
-                        tool_name: "fail".to_string(),
-                        input: json!({}),
-                    },
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                ],
-            }],
-            on_error: PipelineErrorStrategy::Continue,
-        };
-
-        let result = pipeline.execute(&registry, &json!({})).await;
-        // Overall success is false because one step failed, but all 3 ran.
-        assert!(!result.success);
-        assert_eq!(result.step_results.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn parallel_executes_concurrently() {
-        let mut registry = ToolRegistry::new_empty();
-        registry.register(EchoTool);
-
-        let pipeline = ToolPipeline {
-            _name: "test-parallel".to_string(),
-            steps: vec![PipelineStep::Parallel {
-                steps: vec![
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                    PipelineStep::Single {
-                        tool_name: "echo".to_string(),
-                        input: json!({}),
-                    },
-                ],
-            }],
-            on_error: PipelineErrorStrategy::Stop,
-        };
-
-        let result = pipeline.execute(&registry, &json!({})).await;
-        assert!(result.success);
-        assert_eq!(result.step_results.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn conditional_branching_then_path() {
-        let mut registry = ToolRegistry::new_empty();
-        registry.register(EchoTool);
-
-        let pipeline = ToolPipeline {
-            _name: "test-conditional-then".to_string(),
-            steps: vec![PipelineStep::Conditional {
-                condition_field: "status".to_string(),
-                expected: json!("ready"),
-                then_step: Box::new(PipelineStep::Single {
-                    tool_name: "echo".to_string(),
-                    input: json!({"branch": "then"}),
-                }),
-                else_step: Some(Box::new(PipelineStep::Single {
-                    tool_name: "echo".to_string(),
-                    input: json!({"branch": "else"}),
-                })),
-            }],
-            on_error: PipelineErrorStrategy::Stop,
-        };
-
-        let ctx = json!({"status": "ready"});
-        let result = pipeline.execute(&registry, &ctx).await;
-        assert!(result.success);
-        // The tool always returns {"echoed": true} — we just verify it ran.
-        assert_eq!(result.step_results.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn conditional_branching_else_path() {
-        let mut registry = ToolRegistry::new_empty();
-        registry.register(EchoTool);
-
-        let pipeline = ToolPipeline {
-            _name: "test-conditional-else".to_string(),
-            steps: vec![PipelineStep::Conditional {
-                condition_field: "status".to_string(),
-                expected: json!("ready"),
-                then_step: Box::new(PipelineStep::Single {
-                    tool_name: "echo".to_string(),
-                    input: json!({"branch": "then"}),
-                }),
-                else_step: Some(Box::new(PipelineStep::Single {
-                    tool_name: "echo".to_string(),
-                    input: json!({"branch": "else"}),
-                })),
-            }],
-            on_error: PipelineErrorStrategy::Stop,
-        };
-
-        let ctx = json!({"status": "not-ready"});
-        let result = pipeline.execute(&registry, &ctx).await;
-        assert!(result.success);
-        assert_eq!(result.step_results.len(), 1);
     }
 }

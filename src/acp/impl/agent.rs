@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 use crate::acp::helpers::context::{review_timeout, run_with_optional_timeout};
-use crate::acp::server::AcpServer;
+use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::flow::FlowManager;
@@ -465,17 +465,15 @@ async fn run_single_review(
     // Run deterministic signals and summarize into comments (BLUE8-M6/M7)
     // M3: record reviewer outcome into online controller (learning loop)
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    let mut ctrl = server
+    let _ = server
         .resilience
-        .online_controller
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            tracing::warn!(
-                "Agent online_controller lock poisoned in run_single_review, recovering"
-            );
-            poisoned.into_inner()
+        .outcome_tx
+        .send(OutcomeEvent::AgentOutcome {
+            phase_name: "review".to_string(),
+            agent_name: reviewer.to_string(),
+            success: passed,
+            duration_ms: elapsed_ms,
         });
-    ctrl.record_agent_outcome("review", reviewer, passed, elapsed_ms);
 
     let syntax_signal = DeterministicVerifier::run_syntax_check("");
     let compass_signals = DeterministicVerifier::run_quality_compass_checks(&response);

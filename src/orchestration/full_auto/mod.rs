@@ -31,7 +31,7 @@ pub use environment::ExecutionEnvironment;
 pub use intent::TaskIntent;
 #[allow(unused_imports)]
 pub use report::{AutoExecutionReport, ExecutionStep, SkillMatch};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock as StdRwLock};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -112,7 +112,7 @@ impl Default for FullAutoConfig {
 /// Owns references to the `SkillRegistry` and `ToolRegistry` and coordinates
 /// the parse → discover → prepare → execute → report pipeline.
 pub struct FullAutoFlow {
-    pub(crate) skill_registry: Arc<Mutex<SkillRegistry>>,
+    pub(crate) skill_registry: Arc<StdRwLock<SkillRegistry>>,
     pub(crate) tool_registry: Arc<ToolRegistry>,
     pub(crate) config: FullAutoConfig,
     /// Fast-path cache for parsing, discovery, environment, and route matching.
@@ -134,7 +134,7 @@ pub struct FullAutoFlow {
 impl std::fmt::Debug for FullAutoFlow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FullAutoFlow")
-            .field("skill_registry", &"Arc<Mutex<SkillRegistry>>")
+            .field("skill_registry", &"Arc<StdRwLock<SkillRegistry>>")
             .field("tool_registry", &"Arc<ToolRegistry>")
             .field("config", &self.config)
             .field("cache", &"FastPathCache")
@@ -148,7 +148,7 @@ impl std::fmt::Debug for FullAutoFlow {
 impl FullAutoFlow {
     /// Create a new `FullAutoFlow` with default configuration and default routes.
     pub fn new(
-        skill_registry: Arc<Mutex<SkillRegistry>>,
+        skill_registry: Arc<StdRwLock<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
         let max_concurrency = FullAutoConfig::default().max_concurrency;
@@ -171,7 +171,7 @@ impl FullAutoFlow {
     /// This is an alias for `new()` with an explicit name that makes it clear
     /// real registries are being injected (as opposed to default/empty ones).
     pub fn new_with_registries(
-        skill_registry: Arc<Mutex<SkillRegistry>>,
+        skill_registry: Arc<StdRwLock<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
         Self::new(skill_registry, tool_registry)
@@ -231,7 +231,7 @@ impl FullAutoFlow {
     /// Create a new `FullAutoFlow` with a custom configuration.
     #[cfg(test)]
     pub fn with_config(
-        skill_registry: Arc<Mutex<SkillRegistry>>,
+        skill_registry: Arc<StdRwLock<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
         config: FullAutoConfig,
     ) -> Self {
@@ -254,7 +254,7 @@ impl FullAutoFlow {
     /// Only used in tests; production uses `with_default_routes()`.
     #[cfg(test)]
     pub fn with_cache(
-        skill_registry: Arc<Mutex<SkillRegistry>>,
+        skill_registry: Arc<StdRwLock<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
         cache: Arc<FastPathCache>,
     ) -> Self {
@@ -343,7 +343,7 @@ mod tests {
         }
     }
 
-    fn setup_registry() -> Arc<Mutex<SkillRegistry>> {
+    fn setup_registry() -> Arc<StdRwLock<SkillRegistry>> {
         let mut reg = SkillRegistry::default();
 
         // Register two skills: one for code fixes, one for documentation.
@@ -371,10 +371,10 @@ mod tests {
         };
         reg.register(Arc::new(failing_skill)).unwrap();
 
-        Arc::new(Mutex::new(reg))
+        Arc::new(StdRwLock::new(reg))
     }
 
-    fn make_flow(registry: Arc<Mutex<SkillRegistry>>) -> FullAutoFlow {
+    fn make_flow(registry: Arc<StdRwLock<SkillRegistry>>) -> FullAutoFlow {
         let tool_registry = Arc::new(ToolRegistry::new_empty());
         FullAutoFlow::new(registry, tool_registry)
     }

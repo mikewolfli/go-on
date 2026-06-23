@@ -1272,13 +1272,13 @@ pub(super) async fn handle_workflow_generate_from_chat(
         let exists = server
             .orchestration_deps
             .skill_registry
-            .lock()
+            .read()
             .ok()
             .map(|registry| registry.get(skill_name).is_some())
             .unwrap_or(false);
 
         if !exists {
-            let result = server.orchestration_deps.skill_registry.lock()
+            let result = server.orchestration_deps.skill_registry.write()
                 .ok()
                 .and_then(|mut registry| {
                     registry.create_skill_from_prompt(
@@ -1429,7 +1429,7 @@ pub(crate) async fn handle_workflow_ask(
             let skill_name = format!("workflow_node_{}", i);
             // Check if skill already exists (lock once, drop before next iteration)
             let exists = {
-                let registry = server.orchestration_deps.skill_registry.lock();
+                let registry = server.orchestration_deps.skill_registry.read();
                 registry
                     .ok()
                     .map(|r| r.get(&skill_name).is_some())
@@ -1438,7 +1438,7 @@ pub(crate) async fn handle_workflow_ask(
             if !exists {
                 // Create a prompt-based skill from the node description
                 let result = {
-                    let registry = server.orchestration_deps.skill_registry.lock();
+                    let registry = server.orchestration_deps.skill_registry.write();
                     registry.ok().and_then(|mut reg| {
                         reg
                             .create_skill_from_prompt(

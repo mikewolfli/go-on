@@ -1461,7 +1461,7 @@ pub(super) async fn handle_skill_import(
                         .collect::<std::collections::HashMap<String, String>>()
                 })
                 .unwrap_or_default();
-            match server.orchestration_deps.skill_registry.lock() {
+            match server.orchestration_deps.skill_registry.write() {
                 Ok(mut registry) => {
                     if let Err(e) = registry.create_skill_from_prompt(
                         &skill_name,
@@ -1631,7 +1631,7 @@ pub(super) async fn handle_skill_remove(
     let unregistered = server
         .orchestration_deps
         .skill_registry
-        .lock()
+        .write()
         .map(|mut registry| {
             let unregistered = registry.unregister(&name);
             // Persist prompt skill removal to disk
@@ -1704,8 +1704,8 @@ pub(super) async fn handle_skill_create(
         let mut registry = server
             .orchestration_deps
             .skill_registry
-            .lock()
-            .map_err(|err| anyhow::anyhow!("skill registry lock error: {}", err))?;
+            .write()
+            .map_err(|err| anyhow::anyhow!("skill registry write-lock error: {}", err))?;
         registry.create_skill_from_prompt(&name, &description, &prompt_template, input_schema)
     };
     // Lock is dropped before await
@@ -2108,7 +2108,7 @@ pub(super) async fn handle_phase(
     let inflight = server
         .resilience
         .inflight_limiter
-        .lock()
+        .read()
         .map(|guard| {
             let (global, phase) = guard.snapshot();
             let mut m = serde_json::Map::new();

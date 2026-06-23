@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -381,14 +381,18 @@ impl SkillRegistry {
 
         // Create a shared registry for ComposedSkill to reference at execution time.
         // This allows the composed skill to look up its sub-skills dynamically.
-        let composed_registry = Arc::new(Mutex::new(SkillRegistry::default()));
+        let composed_registry = Arc::new(std::sync::RwLock::new(SkillRegistry::default()));
         // Clone the looked-up skills into the composed registry so they can be
         // resolved at execution time without holding the main registry lock.
         if let Some(sa) = self.skills.get(skill_a) {
-            let _ = composed_registry.lock().map(|mut r| r.register(sa.clone()));
+            let _ = composed_registry
+                .write()
+                .map(|mut r| r.register(sa.clone()));
         }
         if let Some(sb) = self.skills.get(skill_b) {
-            let _ = composed_registry.lock().map(|mut r| r.register(sb.clone()));
+            let _ = composed_registry
+                .write()
+                .map(|mut r| r.register(sb.clone()));
         }
 
         let skill = super::execution::ComposedSkill {
@@ -741,7 +745,7 @@ pub struct LocalSkillDiscoverySummary {
 ///
 /// Returns a no-op handle if no Tokio runtime is active (e.g., during sync tests).
 pub fn spawn_skill_refresh_task(
-    registry: std::sync::Arc<std::sync::Mutex<SkillRegistry>>,
+    registry: std::sync::Arc<std::sync::RwLock<SkillRegistry>>,
     agents_skills_dir: Option<std::path::PathBuf>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     let dir = agents_skills_dir.unwrap_or_else(default_agents_skills_dir);
@@ -766,7 +770,7 @@ pub fn spawn_skill_refresh_task(
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            match registry.lock() {
+            match registry.write() {
                 Ok(mut reg) => match reg.discover_and_register_local_skills(Some(&dir)) {
                     Ok(summary) => {
                         if summary.registered > 0 {
@@ -791,7 +795,10 @@ pub fn spawn_skill_refresh_task(
                     }
                 },
                 Err(e) => {
-                    warn!("Background skill refresh: failed to lock registry: {}", e);
+                    warn!(
+                        "Background skill refresh: failed to write-lock registry: {}",
+                        e
+                    );
                 }
             }
         }

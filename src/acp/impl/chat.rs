@@ -32,7 +32,7 @@ use crate::acp::helpers::response_assembler::{
     build_chat_response, build_role_routing, build_task_graph_checkpoint, ChatResponseContext,
 };
 use crate::acp::helpers::review_gate::{run_enhanced_verification, run_review_gate};
-use crate::acp::server::AcpServer;
+use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::flow::FlowManager;
@@ -172,15 +172,15 @@ pub(crate) async fn run_high_risk_vote_attempt(
     match outcome {
         Ok((output_text, reasoning_output, _sel_m)) => {
             let success = !output_text.trim().is_empty();
-            server
+            let _ = server
                 .resilience
-                .online_controller
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("run_high_risk_vote_attempt: online_controller poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .record_agent_outcome(phase_name, &agent_name, success, elapsed_ms);
+                .outcome_tx
+                .send(OutcomeEvent::AgentOutcome {
+                    phase_name: phase_name.to_string(),
+                    agent_name: agent_name.to_string(),
+                    success,
+                    duration_ms: elapsed_ms,
+                });
 
             if success {
                 HighRiskVoteAttemptResult {
@@ -220,15 +220,15 @@ pub(crate) async fn run_high_risk_vote_attempt(
         }
         Err(err) => {
             let err_text = err.to_string();
-            server
+            let _ = server
                 .resilience
-                .online_controller
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("run_high_risk_vote_attempt: online_controller poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .record_agent_outcome(phase_name, &agent_name, false, elapsed_ms);
+                .outcome_tx
+                .send(OutcomeEvent::AgentOutcome {
+                    phase_name: phase_name.to_string(),
+                    agent_name: agent_name.to_string(),
+                    success: false,
+                    duration_ms: elapsed_ms,
+                });
 
             HighRiskVoteAttemptResult {
                 attempt_log: json!({
@@ -1553,7 +1553,7 @@ pub(crate) async fn auto_create_skills_from_conversation(
     let has_skill_creator = server
         .orchestration_deps
         .skill_registry
-        .lock()
+        .read()
         .ok()
         .map(|registry| registry.get("skill-creator").is_some())
         .unwrap_or(false);
@@ -1613,7 +1613,7 @@ pub(crate) async fn auto_create_skills_from_conversation(
             let exists = server
                 .orchestration_deps
                 .skill_registry
-                .lock()
+                .read()
                 .ok()
                 .map(|registry| registry.get(&skill_name).is_some())
                 .unwrap_or(false);
@@ -1628,7 +1628,7 @@ pub(crate) async fn auto_create_skills_from_conversation(
                     let mut registry = server
                         .orchestration_deps
                         .skill_registry
-                        .lock()
+                        .write()
                         .unwrap_or_else(|poisoned| {
                             tracing::warn!("lock poisoned, recovering");
                             poisoned.into_inner()

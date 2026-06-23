@@ -42,9 +42,7 @@ impl Tool for DateTimeTool {
         "date_time"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let operation = input.payload["operation"]
-            .as_str()
-            .unwrap_or("now");
+        let operation = input.payload["operation"].as_str().unwrap_or("now");
 
         match operation {
             "now" => self.op_now(input),
@@ -87,15 +85,18 @@ impl DateTimeTool {
             })),
             error: None,
             verification: Some("date_time_now".to_string()),
-            audit_log: Some(format!("date_time now -> {} (unix: {})", iso_8601, unix_secs)),
+            audit_log: Some(format!(
+                "date_time now -> {} (unix: {})",
+                iso_8601, unix_secs
+            )),
             pua_report: Some(tool_execution_report("date_time", Some("date_time_now"))),
         })
     }
 
     fn op_format(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let timestamp = input.payload["timestamp"]
-            .as_u64()
-            .ok_or_else(|| anyhow::anyhow!("missing required field: timestamp (u64 unix seconds)"))?;
+        let timestamp = input.payload["timestamp"].as_u64().ok_or_else(|| {
+            anyhow::anyhow!("missing required field: timestamp (u64 unix seconds)")
+        })?;
 
         let iso_8601 = iso_from_unix(timestamp);
 
@@ -111,7 +112,10 @@ impl DateTimeTool {
             error: None,
             verification: Some("date_time_formatted".to_string()),
             audit_log: Some(format!("date_time format {} -> {}", timestamp, iso_8601)),
-            pua_report: Some(tool_execution_report("date_time", Some("date_time_formatted"))),
+            pua_report: Some(tool_execution_report(
+                "date_time",
+                Some("date_time_formatted"),
+            )),
         })
     }
 
@@ -168,7 +172,11 @@ impl DateTimeTool {
         use std::num::ParseIntError;
 
         fn parse_two_digit(s: &str) -> Result<u64, ParseIntError> {
-            if s.len() >= 2 { s[..2].parse() } else { s.parse() }
+            if s.len() >= 2 {
+                s[..2].parse()
+            } else {
+                s.parse()
+            }
         }
 
         // Normalize: strip trailing Z, replace T with space for uniform parsing
@@ -179,7 +187,7 @@ impl DateTimeTool {
         let cleaned = cleaned.replace('T', " ");
 
         // Try "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM"
-        let parts: Vec<&str> = cleaned.split(|c| c == ' ' || c == 'T').collect();
+        let parts: Vec<&str> = cleaned.split([' ', 'T']).collect();
         let date_part = parts.first().copied().unwrap_or("");
         let time_part = parts.get(1).copied().unwrap_or("00:00:00");
 
@@ -187,18 +195,19 @@ impl DateTimeTool {
         let time_fields: Vec<&str> = time_part.split(':').collect();
 
         if date_fields.len() < 3 {
-            anyhow::bail!("unable to parse date string '{}': expected YYYY-MM-DD format", date_str);
+            anyhow::bail!(
+                "unable to parse date string '{}': expected YYYY-MM-DD format",
+                date_str
+            );
         }
 
-        let year: u64 = date_fields[0]
-            .parse()
-            .context("failed to parse year")?;
+        let year: u64 = date_fields[0].parse().context("failed to parse year")?;
         let month: u64 = parse_two_digit(date_fields[1])
             .map_err(|_| anyhow::anyhow!("failed to parse month"))?;
-        let day: u64 = parse_two_digit(date_fields[2])
-            .map_err(|_| anyhow::anyhow!("failed to parse day"))?;
+        let day: u64 =
+            parse_two_digit(date_fields[2]).map_err(|_| anyhow::anyhow!("failed to parse day"))?;
 
-        let hour: u64 = if time_fields.len() > 0 {
+        let hour: u64 = if !time_fields.is_empty() {
             parse_two_digit(time_fields[0]).unwrap_or(0)
         } else {
             0
@@ -217,7 +226,7 @@ impl DateTimeTool {
         // Approximate Unix timestamp using a basic days-since-epoch calculation.
         // This handles dates from 1970 to 2100 reasonably well.
         fn days_in_year(y: u64) -> u64 {
-            if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            if y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400)) {
                 366
             } else {
                 365
@@ -229,7 +238,7 @@ impl DateTimeTool {
                 1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
                 4 | 6 | 9 | 11 => 30,
                 2 => {
-                    if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+                    if y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400)) {
                         29
                     } else {
                         28
@@ -281,7 +290,10 @@ impl DateTimeTool {
             })),
             error: None,
             verification: Some("date_time_parsed".to_string()),
-            audit_log: Some(format!("date_time parse '{}' -> unix {}", date_str, total_seconds)),
+            audit_log: Some(format!(
+                "date_time parse '{}' -> unix {}",
+                date_str, total_seconds
+            )),
             pua_report: Some(tool_execution_report("date_time", Some("date_time_parsed"))),
         })
     }

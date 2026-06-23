@@ -182,7 +182,7 @@ pub(crate) async fn select_and_score_agents(
         let reg_guard = server
             .orchestration_deps
             .skill_registry
-            .lock()
+            .read()
             .unwrap_or_else(|poisoned| {
                 warn!("select_and_score_agents: skill_registry poisoned, recovering");
                 poisoned.into_inner()

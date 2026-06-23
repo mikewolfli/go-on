@@ -7,13 +7,11 @@
 //!
 //! * [`types`] — Core types: [`ToolCallResult`], [`IdempotencyStore`],
 //!   [`TransactionScope`], and related infrastructure.
-//! * [`coordinator`] — 2PC coordinator integration for distributed
-//!   transactions.
+//! * [`types`] — Core types: [`ToolCallResult`], [`IdempotencyStore`],
+//!   [`TransactionScope`], and related infrastructure.
 
-pub mod coordinator;
 pub mod types;
 
-pub use coordinator::*;
 pub use types::*;
 
 use std::time::Instant;

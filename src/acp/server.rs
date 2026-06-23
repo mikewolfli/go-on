@@ -10,7 +10,7 @@ use std::sync::{
 };
 
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify, Semaphore};
+use tokio::sync::{mpsc, Mutex, Notify, Semaphore};
 
 use crate::acp::prelude::RuntimeMetrics;
 use crate::adaptive_selector::AdaptiveModelSelector;
@@ -47,6 +47,22 @@ use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
+
+/// Fire-and-forget outcome event for online_controller.
+/// Write-only operations are sent via channel to eliminate lock contention.
+pub enum OutcomeEvent {
+    AgentOutcome {
+        phase_name: String,
+        agent_name: String,
+        success: bool,
+        duration_ms: u64,
+    },
+    PhaseOutcome {
+        phase_name: String,
+        success: bool,
+        duration_ms: u64,
+    },
+}
 
 use super::prelude::{
     with_acp_lock, CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState,
@@ -201,7 +217,7 @@ pub struct CacheLayer {
     /// Multi-level token cache for Agent output reuse (L1 exact, L2 semantic, L3 template)
     pub token_cache: Arc<TokenMultiLevelCache>,
     /// Semantic response cache for near-duplicate request detection
-    pub semantic_cache: Arc<StdMutex<SemanticResponseCache>>,
+    pub semantic_cache: Arc<std::sync::RwLock<SemanticResponseCache>>,
 }
 
 /// Cache + vector + autotune subsystems grouped together
@@ -293,7 +309,7 @@ pub struct OrchestrationServerDeps {
     /// Planner-Executor configuration (BLUE47 Step 7)
     pub planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
     /// Registry for MCP skills
-    pub skill_registry: Arc<StdMutex<SkillRegistry>>,
+    pub skill_registry: Arc<std::sync::RwLock<SkillRegistry>>,
 }
 
 /// Observability-related subsystems grouped together
@@ -337,6 +353,9 @@ pub struct ResilienceContext {
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
     // which acquires, reads/writes, and drops the guard within a single synchronous closure.
     pub online_controller: Arc<StdMutex<OnlineControllerState>>,
+    /// Channel sender for fire-and-forget outcome events.
+    /// Write operations are sent here to avoid lock contention on the hot path.
+    pub outcome_tx: mpsc::UnboundedSender<OutcomeEvent>,
     /// Circuit breaker registry for failure prevention
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
     // which acquires, reads/writes, and drops the guard within a single synchronous closure.
@@ -347,19 +366,19 @@ pub struct ResilienceContext {
     /// Maintenance tracker for system health monitoring
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
     // which acquires, reads/writes, and drops the guard within a single synchronous closure.
-    pub maintenance_tracker: Arc<StdMutex<MaintenanceTracker>>,
+    pub maintenance_tracker: Arc<std::sync::RwLock<MaintenanceTracker>>,
     /// Inflight request limiter
     // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
     // critical sections (check/adjust inflight count) with no `.await` inside.
-    pub inflight_limiter: Arc<StdMutex<InflightLimiter>>,
+    pub inflight_limiter: Arc<std::sync::RwLock<InflightLimiter>>,
     /// Lifecycle state management
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
     // which acquires, reads/writes, and drops the guard within a single synchronous closure.
-    pub lifecycle_state: Arc<StdMutex<LifecycleState>>,
+    pub lifecycle_state: Arc<std::sync::RwLock<LifecycleState>>,
     /// Review timeout policy
     // SAFETY: StdMutex is never held across `.await` — review timeout checks are
     // synchronous lookups that complete and drop the guard within the same scope.
-    pub review_timeout_policy: Arc<StdMutex<ReviewTimeoutPolicy>>,
+    pub review_timeout_policy: Arc<std::sync::RwLock<ReviewTimeoutPolicy>>,
     /// Failure prevention system
     // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
     // critical sections (evaluate failure conditions, update state) with no `.await` inside.
@@ -581,11 +600,17 @@ impl AcpServer {
         metrics.review_gate_invalid_response_total =
             runtime_snapshot.review_gate_invalid_response_total;
 
-        let lifecycle = with_acp_lock(
-            "lifecycle_state",
-            self.resilience.lifecycle_state.as_ref(),
-            |guard| guard.snapshot(),
-        );
+        let lifecycle = self
+            .resilience
+            .lifecycle_state
+            .read()
+            .map(|guard| guard.snapshot())
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    "ACP lock 'lifecycle_state' was poisoned; continuing with recovered state"
+                );
+                poisoned.into_inner().snapshot()
+            });
 
         let circuit_breakers = with_acp_lock(
             "circuit_breakers",
@@ -593,11 +618,17 @@ impl AcpServer {
             |guard| guard.snapshots(),
         );
 
-        let maintenance = with_acp_lock(
-            "maintenance_tracker",
-            self.resilience.maintenance_tracker.as_ref(),
-            |guard| guard.snapshot(),
-        );
+        let maintenance = self
+            .resilience
+            .maintenance_tracker
+            .read()
+            .map(|guard| guard.snapshot())
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    "ACP lock 'maintenance_tracker' was poisoned; continuing with recovered state"
+                );
+                poisoned.into_inner().snapshot()
+            });
 
         // Snapshot governance subsystem health from the harness bus profile
         let governance = self.governance_deps.harness_bus.as_ref().map(|hb| {
@@ -617,33 +648,48 @@ impl AcpServer {
 
     /// Check if server is healthy
     pub fn is_healthy(&self) -> bool {
-        with_acp_lock(
-            "lifecycle_state",
-            self.resilience.lifecycle_state.as_ref(),
-            |guard| guard.is_healthy(),
-        )
+        self.resilience
+            .lifecycle_state
+            .read()
+            .map(|guard| guard.is_healthy())
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    "ACP lock 'lifecycle_state' was poisoned; continuing with recovered state"
+                );
+                poisoned.into_inner().is_healthy()
+            })
     }
 
     /// Check if shutdown has been requested
     pub fn shutdown_requested(&self) -> bool {
-        with_acp_lock(
-            "lifecycle_state",
-            self.resilience.lifecycle_state.as_ref(),
-            |guard| guard.shutdown_requested(),
-        )
+        self.resilience
+            .lifecycle_state
+            .read()
+            .map(|guard| guard.shutdown_requested())
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    "ACP lock 'lifecycle_state' was poisoned; continuing with recovered state"
+                );
+                poisoned.into_inner().shutdown_requested()
+            })
     }
 
     /// Begin shutdown process
     pub fn begin_shutdown(&self) {
-        with_acp_lock(
-            "lifecycle_state",
-            self.resilience.lifecycle_state.as_ref(),
-            |guard| guard.begin_shutdown(),
-        );
+        if let Ok(mut guard) = self.resilience.lifecycle_state.write() {
+            guard.begin_shutdown();
+        } else {
+            tracing::warn!("lifecycle_state poisoned during shutdown; recovering");
+            self.resilience
+                .lifecycle_state
+                .write()
+                .unwrap_or_else(|p| p.into_inner())
+                .begin_shutdown();
+        }
     }
 
     /// Get maintenance tracker reference
-    pub fn maintenance(&self) -> &Arc<StdMutex<MaintenanceTracker>> {
+    pub fn maintenance(&self) -> &Arc<std::sync::RwLock<MaintenanceTracker>> {
         &self.resilience.maintenance_tracker
     }
 
@@ -689,7 +735,7 @@ impl AcpServer {
         let mut registry = self
             .orchestration_deps
             .skill_registry
-            .lock()
+            .write()
             .unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
@@ -702,7 +748,7 @@ impl AcpServer {
     /// Create a `FullAutoFlow` using this server's real skill and tool registries.
     pub fn full_auto_flow(&self) -> crate::orchestration::full_auto::FullAutoFlow {
         crate::orchestration::full_auto::FullAutoFlow::new_with_registries(
-            self.orchestration_deps.skill_registry.clone() as Arc<std::sync::Mutex<_>>,
+            self.orchestration_deps.skill_registry.clone() as Arc<std::sync::RwLock<_>>,
             self.tool_registry.clone(),
         )
     }
@@ -742,7 +788,7 @@ impl AcpServer {
     }
 
     /// Get lifecycle state reference
-    pub fn lifecycle_state(&self) -> &Arc<StdMutex<crate::acp::prelude::LifecycleState>> {
+    pub fn lifecycle_state(&self) -> &Arc<std::sync::RwLock<crate::acp::prelude::LifecycleState>> {
         &self.resilience.lifecycle_state
     }
 
@@ -1024,6 +1070,7 @@ impl ServerBuilder {
         };
 
         let metrics = Arc::new(RuntimeMetrics::default());
+        let (outcome_tx, mut outcome_rx) = mpsc::unbounded_channel::<OutcomeEvent>();
         let online_controller = Arc::new(StdMutex::new(OnlineControllerState::default()));
         let circuit_breakers = Arc::new(StdMutex::new(CircuitBreakerRegistry::default()));
         let hyper_resilience = Arc::new(
@@ -1031,12 +1078,12 @@ impl ServerBuilder {
                 crate::resilience::hyper_resilience::ResilienceConfig::default(),
             ),
         );
-        let maintenance_tracker = Arc::new(StdMutex::new(MaintenanceTracker::new()));
-        let inflight_limiter = Arc::new(StdMutex::new(InflightLimiter::default()));
-        let lifecycle_state = Arc::new(StdMutex::new(LifecycleState::new()));
+        let maintenance_tracker = Arc::new(std::sync::RwLock::new(MaintenanceTracker::new()));
+        let inflight_limiter = Arc::new(std::sync::RwLock::new(InflightLimiter::default()));
+        let lifecycle_state = Arc::new(std::sync::RwLock::new(LifecycleState::new()));
         let conversation_state = Arc::new(Mutex::new(ConversationState::default()));
         let phase_rate_limiter = Arc::new(StdMutex::new(PhaseRateLimiter::default()));
-        let review_timeout_policy = Arc::new(StdMutex::new(ReviewTimeoutPolicy {
+        let review_timeout_policy = Arc::new(std::sync::RwLock::new(ReviewTimeoutPolicy {
             timeout_seconds: None,
             fail_on_timeout: false,
         }));
@@ -1063,11 +1110,11 @@ impl ServerBuilder {
         if let Err(e) = registry.load_prompt_skills_from_disk() {
             tracing::warn!("Failed to load prompt skills from disk: {}", e);
         }
-        let skill_registry = Arc::new(StdMutex::new(registry));
+        let skill_registry = Arc::new(std::sync::RwLock::new(registry));
 
         // Register built-in skills
         {
-            let mut reg = skill_registry.lock().unwrap_or_else(|e| e.into_inner());
+            let mut reg = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             let _ = reg.register(Arc::new(crate::orchestration::skill::EchoSkill));
             let _ = reg.register(Arc::new(
                 crate::orchestration::skill::SkillCreatorSkill::new(skill_registry.clone()),
@@ -1077,7 +1124,7 @@ impl ServerBuilder {
         // Discover and register local skills from ~/.agents/skills/
         // so user-authored SKILL.md files are available to the server.
         {
-            let mut reg = skill_registry.lock().unwrap_or_else(|e| e.into_inner());
+            let mut reg = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             if let Err(e) = reg.discover_and_register_local_skills(None) {
                 tracing::warn!(
                     "Failed to discover local skills in ServerBuilder::build: {}",
@@ -1183,10 +1230,35 @@ impl ServerBuilder {
                 200,
                 ".goon/token_cache",
             )),
-            semantic_cache: Arc::new(StdMutex::new(
+            semantic_cache: Arc::new(std::sync::RwLock::new(
                 crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
             )),
         };
+
+        // Spawn background processor for online_controller outcome events
+        let outcome_controller = online_controller.clone();
+        tokio::spawn(async move {
+            while let Some(event) = outcome_rx.recv().await {
+                let mut guard = outcome_controller.lock().unwrap_or_else(|p| p.into_inner());
+                match event {
+                    OutcomeEvent::AgentOutcome {
+                        phase_name,
+                        agent_name,
+                        success,
+                        duration_ms,
+                    } => {
+                        guard.record_agent_outcome(&phase_name, &agent_name, success, duration_ms);
+                    }
+                    OutcomeEvent::PhaseOutcome {
+                        phase_name,
+                        success,
+                        duration_ms,
+                    } => {
+                        guard.record_phase_outcome(&phase_name, success, duration_ms);
+                    }
+                }
+            }
+        });
 
         AcpServer {
             cache_deps: CacheServerDeps {
@@ -1316,6 +1388,7 @@ impl ServerBuilder {
             },
             resilience: ResilienceContext {
                 online_controller,
+                outcome_tx,
                 circuit_breakers,
                 hyper_resilience,
                 maintenance_tracker,

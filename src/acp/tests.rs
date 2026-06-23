@@ -173,7 +173,7 @@ mod test_suite {
         // Test that maintenance tracker is accessible
         let maintenance_snapshot = server
             .maintenance()
-            .lock()
+            .read()
             .map(|guard| guard.snapshot())
             .unwrap_or_default();
         let last_maintenance = maintenance_snapshot.last_maintenance;

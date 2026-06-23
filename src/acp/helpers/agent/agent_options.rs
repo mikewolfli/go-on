@@ -84,7 +84,7 @@ pub(crate) fn assemble_agent_options(
         let registry = server
             .orchestration_deps
             .skill_registry
-            .lock()
+            .read()
             .unwrap_or_else(|poisoned| {
                 tracing::warn!("skill_registry lock poisoned during tool injection – recovered");
                 poisoned.into_inner()

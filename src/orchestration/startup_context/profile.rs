@@ -6,7 +6,10 @@
 use super::*;
 
 /// Build a `StartupContextProfile` from the cached context and configuration.
-#[allow(dead_code, reason = "Public API surface for governance/status endpoint (cfg(test) re-exported)")]
+#[allow(
+    dead_code,
+    reason = "Public API surface for governance/status endpoint (cfg(test) re-exported)"
+)]
 pub fn startup_context_profile(
     ctx: &StartupContext,
     cfg: &StartupContextConfig,

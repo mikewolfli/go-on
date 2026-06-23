@@ -455,11 +455,6 @@ impl Default for ApprovalPolicySuggester {
 
 #[cfg(test)]
 impl ApprovalPolicySuggester {
-    /// Create a new suggestor.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a new suggestor with a custom minimum data threshold.
     pub fn with_min_data(min_data_points: usize) -> Self {
         Self { min_data_points }

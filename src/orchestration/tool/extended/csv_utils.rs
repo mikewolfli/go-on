@@ -86,8 +86,7 @@ impl Tool for CsvAnalyzeTool {
         let mut total_rows = 0usize;
 
         for result in reader.records() {
-            let record = result
-                .with_context(|| format!("failed to read record {total_rows}"))?;
+            let record = result.with_context(|| format!("failed to read record {total_rows}"))?;
             total_rows += 1;
 
             for (i, field) in record.iter().enumerate() {
@@ -100,9 +99,7 @@ impl Tool for CsvAnalyzeTool {
                 if val.is_empty() {
                     col_stats[i].null_count += 1;
                 } else {
-                    col_stats[i]
-                        .non_null_values
-                        .insert(val.to_string());
+                    col_stats[i].non_null_values.insert(val.to_string());
                 }
                 col_stats[i].unique_values.insert(val.to_string());
 
@@ -135,7 +132,10 @@ impl Tool for CsvAnalyzeTool {
                     None
                 };
 
-                let col_name = headers.get(i).cloned().unwrap_or_else(|| format!("col_{i}"));
+                let col_name = headers
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("col_{i}"));
 
                 // Sample up to 10 unique non-null values
                 let sample_values: Vec<&str> = stats
@@ -220,12 +220,13 @@ impl Tool for CsvTransformTool {
         let delimiter = delimiter_str.as_bytes().first().copied().unwrap_or(b',');
 
         // Transformation parameters
-        let select_columns: Option<Vec<String>> = input.payload["select"]
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
-        let rename_map: Option<HashMap<String, String>> = input.payload["rename"]
-            .as_object()
-            .map(|obj| {
+        let select_columns: Option<Vec<String>> = input.payload["select"].as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
+        let rename_map: Option<HashMap<String, String>> =
+            input.payload["rename"].as_object().map(|obj| {
                 obj.iter()
                     .map(|(k, v)| (k.clone(), v.as_str().unwrap_or(k).to_string()))
                     .collect()
@@ -235,7 +236,8 @@ impl Tool for CsvTransformTool {
         let filter_invert = input.payload["filter_invert"].as_bool().unwrap_or(false);
 
         let validated = sanitize_path(input, path)?;
-        let validated_output = crate::orchestration::tool::sanitize_path_for_write(input, output_path)?;
+        let validated_output =
+            crate::orchestration::tool::sanitize_path_for_write(input, output_path)?;
 
         if !validated.exists() {
             anyhow::bail!("file not found: {}", validated.display());
@@ -278,11 +280,7 @@ impl Tool for CsvTransformTool {
                 })
                 .collect()
         } else {
-            original_headers
-                .iter()
-                .cloned()
-                .enumerate()
-                .collect()
+            original_headers.iter().cloned().enumerate().collect()
         };
 
         // Apply renames
@@ -300,7 +298,12 @@ impl Tool for CsvTransformTool {
         let mut writer = csv::WriterBuilder::new()
             .delimiter(delimiter)
             .from_path(&validated_output)
-            .with_context(|| format!("failed to create output CSV: {}", validated_output.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to create output CSV: {}",
+                    validated_output.display()
+                )
+            })?;
 
         // Write header row if source had headers
         if has_headers && !output_headers.is_empty() {
@@ -310,9 +313,7 @@ impl Tool for CsvTransformTool {
         }
 
         // Determine filter column index
-        let filter_idx = filter_column.and_then(|fc| {
-            original_headers.iter().position(|h| h == fc)
-        });
+        let filter_idx = filter_column.and_then(|fc| original_headers.iter().position(|h| h == fc));
 
         let mut output_row_count = 0usize;
         let mut filtered_row_count = 0usize;

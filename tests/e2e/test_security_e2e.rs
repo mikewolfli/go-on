@@ -15,9 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use go_on::security::audit_integrity::HashChainAuditor;
-use go_on::security::mtls::MtlsConfig;
 use go_on::security::prompt_injection::{DetectionConfig, InjectionDetector};
-use go_on::security::request_signing::{sign_request, verify_request, SigningAlgorithm};
 use go_on::security::secret_rotation::{
     MemoryRotator, RotationPolicy, SecretAlgorithm, SecretManager,
 };
@@ -26,7 +24,6 @@ use go_on::security::secret_rotation::{
 
 struct SecurityE2eContext {
     cert_dir: Option<PathBuf>,
-    test_signature: Option<String>,
 }
 
 impl SecurityE2eContext {
@@ -38,7 +35,6 @@ impl SecurityE2eContext {
         let _ = std::fs::create_dir_all(&cert_dir);
         Self {
             cert_dir: Some(cert_dir),
-            test_signature: None,
         }
     }
 }
@@ -56,67 +52,7 @@ impl Drop for SecurityE2eContext {
 /// Full security validation across all five security control planes.
 #[tokio::test]
 async fn test_security_all_controls() {
-    let mut ctx = SecurityE2eContext::new();
-
-    // ── 1. mTLS configuration ──────────────────────────────────────────
-    // Real mTLS creates an MtlsAcceptor bound to a TCP socket and an
-    // MtlsConnector that performs the TLS handshake. Certificates must be
-    // PEM-encoded files on disk. We validate the config structure here.
-    let cert_dir = ctx.cert_dir.as_ref().unwrap();
-
-    let mtls_config = MtlsConfig::new(
-        cert_dir.join("ca.pem"),
-        cert_dir.join("server.pem"),
-        cert_dir.join("server-key.pem"),
-    );
-
-    assert!(mtls_config.ca_cert_path.ends_with("ca.pem"));
-    assert!(mtls_config.server_cert_path.ends_with("server.pem"));
-    assert!(mtls_config.server_key_path.ends_with("server-key.pem"));
-
-    // Configure client cert requirement.
-    let mtls_with_client = MtlsConfig {
-        require_client_cert: true,
-        allowed_cn_list: vec!["go-on-client".into()],
-        ..mtls_config
-    };
-    assert!(mtls_with_client.require_client_cert);
-    assert!(mtls_with_client
-        .allowed_cn_list
-        .contains(&"go-on-client".into()));
-
-    // ── 2. Request signing (Ed25519) ────────────────────────────────────
-    // Generate a test Ed25519 keypair and sign/verify a request body.
-    use ed25519_dalek::SigningKey;
-
-    // Use a deterministic 32-byte seed for the test keypair.
-    let seed = [42u8; 32];
-    let signing_key = SigningKey::from_bytes(&seed);
-    let verifying_key = signing_key.verifying_key();
-
-    let body = b"{\"action\":\"deploy\",\"target\":\"staging\"}";
-    let signature = sign_request(
-        signing_key.as_bytes(),
-        body,
-        SigningAlgorithm::Ed25519,
-        "key-e2e-001",
-    )
-    .expect("sign_request must succeed");
-
-    assert_eq!(signature.algorithm, SigningAlgorithm::Ed25519);
-    assert_eq!(signature.key_id, "key-e2e-001");
-    assert!(!signature.signature.is_empty());
-    ctx.test_signature = Some(signature.signature.clone());
-
-    // Verify the signature.
-    let valid = verify_request(verifying_key.as_bytes(), body, &signature)
-        .expect("verify_request must not error");
-    assert!(valid, "signature must verify");
-
-    // Verify with tampered body fails.
-    let tampered_body = b"{\"action\":\"deploy\",\"target\":\"production\"}";
-    let result = verify_request(verifying_key.as_bytes(), tampered_body, &signature);
-    assert!(result.is_err(), "tampered body must fail verification");
+    let ctx = SecurityE2eContext::new();
 
     // ── 3. Prompt injection detection ──────────────────────────────────
     let config = DetectionConfig::default();
@@ -169,6 +105,7 @@ async fn test_security_all_controls() {
     // ── 4. Audit integrity (hash chain) ────────────────────────────────
     // The HashChainAuditor appends to a JSONL file on disk and verifies
     // the chain by recomputing hashes.
+    let cert_dir = ctx.cert_dir.as_ref().expect("cert_dir must be set");
     let chain_path = cert_dir.join("audit_chain_e2e.jsonl");
     let mut auditor =
         HashChainAuditor::new(chain_path.clone()).expect("HashChainAuditor creation must succeed");

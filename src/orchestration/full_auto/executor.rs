@@ -76,7 +76,7 @@ impl FullAutoFlow {
         let goal_token_set: std::collections::HashSet<&str> =
             goal_tokens.iter().map(|s| s.as_str()).collect();
 
-        let registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+        let registry = self.skill_registry.read().unwrap_or_else(|poisoned| {
             warn!("skill_registry lock poisoned – recovered data");
             poisoned.into_inner()
         });
@@ -355,7 +355,7 @@ impl FullAutoFlow {
             }
 
             let skill_opt = {
-                let registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+                let registry = self.skill_registry.read().unwrap_or_else(|poisoned| {
                     warn!("skill_registry lock poisoned – recovered data");
                     poisoned.into_inner()
                 });

@@ -16,7 +16,7 @@ use super::workflow;
 use super::*;
 use crate::acp::helpers::autonomy_metrics;
 use crate::acp::prelude::RuntimeMetrics;
-use crate::acp::server::AcpServer;
+use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::i18n::runtime::tf;
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::memory::vector::VectorStore;
@@ -39,8 +39,7 @@ pub(crate) struct RuntimeExecutionContext {
     pub(super) candidates: Vec<(String, Arc<dyn crate::agent::Agent>)>,
     pub(super) failure_strategy: String,
     pub(super) adaptive_selector: Arc<std::sync::Mutex<AdaptiveModelSelector>>,
-    pub(super) online_controller:
-        Arc<std::sync::Mutex<crate::governance::runtime_controls::OnlineControllerState>>,
+    pub(super) outcome_tx: tokio::sync::mpsc::UnboundedSender<OutcomeEvent>,
     pub(super) failure_prevention: Arc<std::sync::Mutex<FailurePrevention>>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) memory_store: Arc<std::sync::Mutex<MemoryStore>>,
@@ -243,7 +242,7 @@ pub(crate) async fn build_execution_context(
         candidates,
         failure_strategy: failure_strategy.clone(),
         adaptive_selector: server.model_deps.adaptive_model_selector.clone(),
-        online_controller: server.resilience.online_controller.clone(),
+        outcome_tx: server.resilience.outcome_tx.clone(),
         failure_prevention: server.resilience.failure_prevention.clone(),
         metrics: server.observability.metrics.clone(),
         memory_store: server.persistence.memory_store.clone(),
@@ -883,13 +882,12 @@ async fn execute_single_subtask(
             selector.record_result(&model_id, run_result.is_ok());
         }
         let duration_ms = started.elapsed().as_millis() as u64;
-        {
-            let mut ctrl = context.online_controller.lock().unwrap_or_else(|poisoned| {
-                warn!("Online controller lock poisoned in execute_single_subtask, recovering");
-                poisoned.into_inner()
-            });
-            ctrl.record_agent_outcome(&phase_name, agent_name, run_result.is_ok(), duration_ms);
-        }
+        let _ = context.outcome_tx.send(OutcomeEvent::AgentOutcome {
+            phase_name: phase_name.to_string(),
+            agent_name: agent_name.to_string(),
+            success: run_result.is_ok(),
+            duration_ms,
+        });
         {
             let mut fp = context
                 .failure_prevention

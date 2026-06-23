@@ -506,7 +506,7 @@ pub(crate) async fn handle_governance_status(
     let registered_skill_total = server
         .orchestration_deps
         .skill_registry
-        .lock()
+        .read()
         .map(|registry| registry.list().len())
         .unwrap_or(0);
     let skill_engine_core_ready =

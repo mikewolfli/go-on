@@ -48,44 +48,36 @@ use tracing::{debug, info, warn};
 #[cfg(any(feature = "game-state", feature = "game-modding"))]
 fn known_save_paths(game: &str) -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let xdg_data = std::env::var("XDG_DATA_HOME")
-        .unwrap_or_else(|_| format!("{}/.local/share", home));
-    let xdg_config = std::env::var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|_| format!("{}/.config", home));
+    let xdg_data =
+        std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home));
+    let xdg_config =
+        std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", home));
     let steam_compat = format!("{}/.steam/steam/steamapps/compatdata", home);
 
     match game.to_lowercase().as_str() {
         "factorio" => vec![
             PathBuf::from(&xdg_data).join("factorio"),
-            PathBuf::from(&home)
-                .join(".factorio"),
+            PathBuf::from(&home).join(".factorio"),
         ],
-        "minecraft" => vec![
-            PathBuf::from(&home).join(".minecraft"),
-        ],
-        "stardew valley" => vec![
-            PathBuf::from(&xdg_data).join("StardewValley"),
-        ],
-        "terraria" => vec![
-            PathBuf::from(&home).join(".local/share/Terraria"),
-        ],
+        "minecraft" => vec![PathBuf::from(&home).join(".minecraft")],
+        "stardew valley" => vec![PathBuf::from(&xdg_data).join("StardewValley")],
+        "terraria" => vec![PathBuf::from(&home).join(".local/share/Terraria")],
         "skyrim" | "skyrim special edition" => {
             let docs = format!("{}/Documents/My Games/Skyrim Special Edition", home);
             vec![
-                PathBuf::from(&steam_compat).join("489830/pfx/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition"),
+                PathBuf::from(&steam_compat).join(
+                    "489830/pfx/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition",
+                ),
                 PathBuf::from(&docs),
             ]
         }
-        "cyberpunk 2077" => vec![
-            PathBuf::from(&home).join(".local/share/Steam/steamapps/compatdata/1091500/pfx"),
-        ],
-        "elden ring" => vec![
-            PathBuf::from(&home)
-                .join(".local/share/Steam/steamapps/compatdata/1245620/pfx"),
-        ],
-        "balatro" => vec![
-            PathBuf::from(&xdg_data).join("Balatro"),
-        ],
+        "cyberpunk 2077" => {
+            vec![PathBuf::from(&home).join(".local/share/Steam/steamapps/compatdata/1091500/pfx")]
+        }
+        "elden ring" => {
+            vec![PathBuf::from(&home).join(".local/share/Steam/steamapps/compatdata/1245620/pfx")]
+        }
+        "balatro" => vec![PathBuf::from(&xdg_data).join("Balatro")],
         _ => vec![
             PathBuf::from(&xdg_data).join(game),
             PathBuf::from(&xdg_config).join(game),
@@ -101,24 +93,13 @@ fn known_mod_paths(game: &str) -> Vec<PathBuf> {
         std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home));
 
     match game.to_lowercase().as_str() {
-        "factorio" => vec![
-            PathBuf::from(&xdg_data).join("factorio/mods"),
-        ],
-        "minecraft" => vec![
-            PathBuf::from(&home).join(".minecraft/mods"),
-        ],
-        "skyrim" | "skyrim special edition" => vec![
-            PathBuf::from(&home).join(".local/share/Steam/steamapps/common/Skyrim Special Edition/Data"),
-        ],
-        "stardew valley" => vec![
-            PathBuf::from(&xdg_data).join("StardewValley/Mods"),
-        ],
-        "balatro" => vec![
-            PathBuf::from(&xdg_data).join("Balatro/Mods"),
-        ],
-        _ => vec![
-            PathBuf::from(&xdg_data).join(format!("{}/mods", game)),
-        ],
+        "factorio" => vec![PathBuf::from(&xdg_data).join("factorio/mods")],
+        "minecraft" => vec![PathBuf::from(&home).join(".minecraft/mods")],
+        "skyrim" | "skyrim special edition" => vec![PathBuf::from(&home)
+            .join(".local/share/Steam/steamapps/common/Skyrim Special Edition/Data")],
+        "stardew valley" => vec![PathBuf::from(&xdg_data).join("StardewValley/Mods")],
+        "balatro" => vec![PathBuf::from(&xdg_data).join("Balatro/Mods")],
+        _ => vec![PathBuf::from(&xdg_data).join(format!("{}/mods", game))],
     }
 }
 
@@ -132,14 +113,23 @@ fn first_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
 #[cfg(feature = "game-state")]
 fn build_known_games_map() -> serde_json::Value {
     let keys = [
-        "factorio", "minecraft", "stardew valley", "terraria",
-        "skyrim", "cyberpunk 2077", "elden ring", "balatro",
+        "factorio",
+        "minecraft",
+        "stardew valley",
+        "terraria",
+        "skyrim",
+        "cyberpunk 2077",
+        "elden ring",
+        "balatro",
     ];
     let map: HashMap<String, Vec<String>> = keys
         .iter()
         .map(|k| {
             let paths = known_save_paths(k);
-            let str_paths: Vec<String> = paths.iter().filter_map(|p| p.to_str().map(String::from)).collect();
+            let str_paths: Vec<String> = paths
+                .iter()
+                .filter_map(|p| p.to_str().map(String::from))
+                .collect();
             ((*k).to_string(), str_paths)
         })
         .collect();
@@ -151,8 +141,8 @@ fn build_known_games_map() -> serde_json::Value {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const A2S_INFO_REQUEST: &[u8] = &[
-    0xFF, 0xFF, 0xFF, 0xFF, 0x54, 0x53, 0x6F, 0x75, 0x72, 0x63, 0x65, 0x20, 0x45, 0x6E, 0x67,
-    0x69, 0x6E, 0x65, 0x20, 0x51, 0x75, 0x65, 0x72, 0x79, 0x00,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x54, 0x53, 0x6F, 0x75, 0x72, 0x63, 0x65, 0x20, 0x45, 0x6E, 0x67, 0x69,
+    0x6E, 0x65, 0x20, 0x51, 0x75, 0x65, 0x72, 0x79, 0x00,
 ];
 
 /// Performs a basic A2S_INFO query to read server name, map, players, etc.
@@ -170,7 +160,9 @@ fn a2s_query(addr: &str, timeout_secs: u64) -> Result<serde_json::Value> {
         .context("failed to send A2S_INFO query")?;
 
     let mut buf = [0u8; 4096];
-    let n = socket.recv_from(&mut buf).context("no response from server")?;
+    let n = socket
+        .recv_from(&mut buf)
+        .context("no response from server")?;
     let response = &buf[..n.0];
 
     // Skip 4-byte header (0xFF 0xFF 0xFF 0xFF) and 1-byte type (0x49 for A2S_INFO)
@@ -312,9 +304,8 @@ impl Tool for GamePriceTrackerTool {
 
                 match client.get(&search_url).send() {
                     Ok(resp) => {
-                        let body: serde_json::Value = resp
-                            .json()
-                            .unwrap_or(serde_json::Value::Null);
+                        let body: serde_json::Value =
+                            resp.json().unwrap_or(serde_json::Value::Null);
                         if let Some(items) = body["items"].as_array() {
                             if !items.is_empty() {
                                 let appid = items[0]["id"].as_i64().unwrap_or(0);
@@ -323,10 +314,7 @@ impl Tool for GamePriceTrackerTool {
                                     "https://store.steampowered.com/api/appdetails?appids={}&cc=US&l=en&filters=price_overview",
                                     appid
                                 );
-                                let detail_resp = client
-                                    .get(&detail_url)
-                                    .send()
-                                    .ok();
+                                let detail_resp = client.get(&detail_url).send().ok();
                                 let detail_body: serde_json::Value = detail_resp
                                     .and_then(|r| r.json().ok())
                                     .unwrap_or(serde_json::Value::Null);
@@ -534,14 +522,10 @@ impl Tool for GameLaunchTool {
             })
         } else {
             // Run and collect output (useful for launchers that output to stdout)
-            let output = cmd
-                .output()
-                .context("failed to run game process")?;
+            let output = cmd.output().context("failed to run game process")?;
             let pid = 0; // process already exited
-            let stdout =
-                String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let stderr =
-                String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let exit_code = output.status.code();
 
             info!(executable = %exe, exit_code = ?exit_code, "game_launch: game process exited");
@@ -559,7 +543,10 @@ impl Tool for GameLaunchTool {
                     "stderr": stderr,
                 })),
                 error: if !output.status.success() {
-                    Some(format!("process exited with code {:?}: {}", exit_code, stderr))
+                    Some(format!(
+                        "process exited with code {:?}: {}",
+                        exit_code, stderr
+                    ))
                 } else {
                     None
                 },
@@ -612,10 +599,10 @@ impl Tool for GameMonitorTool {
                     return None;
                 }
                 Some((
-                    fields[0].to_string(),              // state
-                    fields[11].parse::<u64>().ok()?,    // utime (clock ticks)
-                    fields[12].parse::<u64>().ok()?,    // stime (clock ticks)
-                    fields[21].parse::<u64>().ok()?,    // rss (pages)
+                    fields[0].to_string(),           // state
+                    fields[11].parse::<u64>().ok()?, // utime (clock ticks)
+                    fields[12].parse::<u64>().ok()?, // stime (clock ticks)
+                    fields[21].parse::<u64>().ok()?, // rss (pages)
                 ))
             })
             .unwrap_or_default();
@@ -642,7 +629,9 @@ impl Tool for GameMonitorTool {
             .and_then(|t| {
                 t.lines().find_map(|line| {
                     if line.starts_with("Threads:") {
-                        line.split_whitespace().nth(1).and_then(|v| v.parse::<u32>().ok())
+                        line.split_whitespace()
+                            .nth(1)
+                            .and_then(|v| v.parse::<u32>().ok())
                     } else {
                         None
                     }
@@ -657,7 +646,11 @@ impl Tool for GameMonitorTool {
         let page_size = 4096u64; // standard 4KB pages
         let memory_bytes = rss_pages * page_size;
         // Use VmRSS for more accurate memory reporting
-        let memory_kb = if vm_rss_kb > 0 { vm_rss_kb } else { memory_bytes / 1024 };
+        let memory_kb = if vm_rss_kb > 0 {
+            vm_rss_kb
+        } else {
+            memory_bytes / 1024
+        };
 
         // Check if process window is active (crude check via PID existence)
         let window_active = true; // Process exists, so it's "running"
@@ -755,7 +748,10 @@ impl Tool for GameScreenCaptureTool {
                 })),
                 error: None,
                 verification: Some("screen_captured".to_string()),
-                audit_log: Some(format!("game_screen_capture: no tool available for '{}'", window)),
+                audit_log: Some(format!(
+                    "game_screen_capture: no tool available for '{}'",
+                    window
+                )),
                 pua_report: Some(report),
             })
         }
@@ -864,7 +860,10 @@ impl Tool for GameReplayRecorderTool {
                 })),
                 error: None,
                 verification: Some("replay_recorded".to_string()),
-                audit_log: Some(format!("game_replay_recorder: ready to record {}s to {}", duration_secs, output_path)),
+                audit_log: Some(format!(
+                    "game_replay_recorder: ready to record {}s to {}",
+                    duration_secs, output_path
+                )),
                 pua_report: Some(report),
             })
         } else {
@@ -920,7 +919,9 @@ impl Tool for GameKeyboardInputTool {
 
         cmd.args(["--delay", &delay_ms.to_string(), "key", keys]);
 
-        let result = cmd.output().context("failed to run xdotool. Install it: sudo apt install xdotool")?;
+        let result = cmd
+            .output()
+            .context("failed to run xdotool. Install it: sudo apt install xdotool")?;
 
         let report = tool_execution_report("game_keyboard_input", Some("input_sent"));
 
@@ -969,8 +970,12 @@ impl Tool for GameMouseInputTool {
         "game_mouse_input"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let x = input.payload["x"].as_f64().ok_or_else(|| anyhow!("missing 'x' coordinate"))?;
-        let y = input.payload["y"].as_f64().ok_or_else(|| anyhow!("missing 'y' coordinate"))?;
+        let x = input.payload["x"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("missing 'x' coordinate"))?;
+        let y = input.payload["y"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("missing 'y' coordinate"))?;
         let action = input.payload["action"].as_str().unwrap_or("click");
         let window = input.payload["window_title"].as_str();
         let button = input.payload["button"].as_str().unwrap_or("1");
@@ -1008,14 +1013,21 @@ impl Tool for GameMouseInputTool {
             "scroll" => {
                 let amount = input.payload["amount"].as_i64().unwrap_or(1);
                 let direction = if amount > 0 { "4" } else { "5" }; // 4=up, 5=down
-                cmd.args(["click", "--repeat", &amount.unsigned_abs().to_string(), direction]);
+                cmd.args([
+                    "click",
+                    "--repeat",
+                    &amount.unsigned_abs().to_string(),
+                    direction,
+                ]);
             }
             other => {
                 anyhow::bail!("unsupported mouse action: '{}'. Supported: click, doubleclick, mousedown, mouseup, move, scroll", other);
             }
         }
 
-        let result = cmd.output().context("failed to run xdotool. Install it: sudo apt install xdotool")?;
+        let result = cmd
+            .output()
+            .context("failed to run xdotool. Install it: sudo apt install xdotool")?;
 
         let report = tool_execution_report("game_mouse_input", Some("input_sent"));
 
@@ -1050,7 +1062,10 @@ impl Tool for GameMouseInputTool {
                 })),
                 error: Some(stderr),
                 verification: Some("input_failed".to_string()),
-                audit_log: Some(format!("game_mouse_input: failed {} at ({}, {})", action, x, y)),
+                audit_log: Some(format!(
+                    "game_mouse_input: failed {} at ({}, {})",
+                    action, x, y
+                )),
                 pua_report: Some(report),
             })
         }
@@ -1176,9 +1191,7 @@ impl Tool for GameAutoGrindTool {
         let task = input.payload["task"]
             .as_str()
             .ok_or_else(|| anyhow!("missing 'task' — describe what to automate"))?;
-        let game = input.payload["game"]
-            .as_str()
-            .unwrap_or("unknown");
+        let game = input.payload["game"].as_str().unwrap_or("unknown");
         let max_iterations = input.payload["max_iterations"].as_u64().unwrap_or(100);
         let interval_ms = input.payload["interval_ms"].as_u64().unwrap_or(500);
 
@@ -1211,11 +1224,19 @@ impl Tool for GameAutoGrindTool {
 
 /// Generates descriptive auto-grinding instructions for known game tasks.
 #[cfg(feature = "game-agent")]
-fn generate_grind_script(game: &str, task: &str, max_iters: u64, interval_ms: u64) -> serde_json::Value {
+fn generate_grind_script(
+    game: &str,
+    task: &str,
+    max_iters: u64,
+    interval_ms: u64,
+) -> serde_json::Value {
     let task_lower = task.to_lowercase();
     let steps: Vec<serde_json::Value> = match game.to_lowercase().as_str() {
         "minecraft" => {
-            if task_lower.contains("tree") || task_lower.contains("wood") || task_lower.contains("chop") {
+            if task_lower.contains("tree")
+                || task_lower.contains("wood")
+                || task_lower.contains("chop")
+            {
                 vec![
                     json!({"step": 1, "action": "look_down", "description": "Look down at ground level"}),
                     json!({"step": 2, "action": "hold_left_click", "description": "Hold left click to break blocks"}),
@@ -1230,7 +1251,9 @@ fn generate_grind_script(game: &str, task: &str, max_iters: u64, interval_ms: u6
                     json!({"step": 4, "action": "repeat", "description": format!("Repeat {} times", max_iters)}),
                 ]
             } else {
-                vec![json!({"step": 1, "action": "describe", "description": format!("Custom grinding script for '{}' in Minecraft. Define the specific mouse/keyboard sequence.", task)})]
+                vec![
+                    json!({"step": 1, "action": "describe", "description": format!("Custom grinding script for '{}' in Minecraft. Define the specific mouse/keyboard sequence.", task)}),
+                ]
             }
         }
         "factorio" => {
@@ -1241,7 +1264,9 @@ fn generate_grind_script(game: &str, task: &str, max_iters: u64, interval_ms: u6
                     json!({"step": 3, "action": "collect_output", "description": "Pick up finished items"}),
                 ]
             } else {
-                vec![json!({"step": 1, "action": "describe", "description": format!("Custom automation for '{}' in Factorio. Define the interaction sequence.", task)})]
+                vec![
+                    json!({"step": 1, "action": "describe", "description": format!("Custom automation for '{}' in Factorio. Define the interaction sequence.", task)}),
+                ]
             }
         }
         _ => {
@@ -1322,12 +1347,17 @@ impl Tool for GameSaveManagerTool {
                     })),
                     error: None,
                     verification: Some("saves_listed".to_string()),
-                    audit_log: Some(format!("game_save_manager: listed {} saves in {}", game, save_dir.display())),
+                    audit_log: Some(format!(
+                        "game_save_manager: listed {} saves in {}",
+                        game,
+                        save_dir.display()
+                    )),
                     pua_report: Some(report),
                 })
             }
             "backup" | "backup-saves" => {
-                let backup_dir = save_dir.join("backups")
+                let backup_dir = save_dir
+                    .join("backups")
                     .join(&format!("save-backup-{}", chrono_now()));
                 std::fs::create_dir_all(&backup_dir)
                     .context("failed to create backup directory")?;
@@ -1336,9 +1366,7 @@ impl Tool for GameSaveManagerTool {
                 let mut copied = 0u64;
                 let mut total_bytes = 0u64;
                 for f in &save_files {
-                    let dest = backup_dir.join(
-                        f.strip_prefix(&save_dir).unwrap_or(f)
-                    );
+                    let dest = backup_dir.join(f.strip_prefix(&save_dir).unwrap_or(f));
                     if let Some(parent) = dest.parent() {
                         std::fs::create_dir_all(parent).ok();
                     }
@@ -1365,7 +1393,10 @@ impl Tool for GameSaveManagerTool {
                     })),
                     error: None,
                     verification: Some("saves_backed_up".to_string()),
-                    audit_log: Some(format!("game_save_manager: backed up {} files for {}", copied, game)),
+                    audit_log: Some(format!(
+                        "game_save_manager: backed up {} files for {}",
+                        copied, game
+                    )),
                     pua_report: Some(report),
                 })
             }
@@ -1381,7 +1412,8 @@ impl Tool for GameSaveManagerTool {
                 let mut restored = 0u64;
                 for entry in walkdir_simple(&backup_dir) {
                     if entry.is_file() {
-                        let relative = entry.strip_prefix(&backup_dir)
+                        let relative = entry
+                            .strip_prefix(&backup_dir)
                             .unwrap_or(std::path::Path::new(""));
                         let dest = save_dir.join(relative);
                         if let Some(parent) = dest.parent() {
@@ -1407,17 +1439,22 @@ impl Tool for GameSaveManagerTool {
                     })),
                     error: None,
                     verification: Some("saves_restored".to_string()),
-                    audit_log: Some(format!("game_save_manager: restored {} files for {}", restored, game)),
+                    audit_log: Some(format!(
+                        "game_save_manager: restored {} files for {}",
+                        restored, game
+                    )),
                     pua_report: Some(report),
                 })
             }
             "info" => {
                 let metadata = std::fs::metadata(&save_dir)?;
                 let save_files = find_save_files(&save_dir, game);
-                let total_size: u64 = save_files.iter()
+                let total_size: u64 = save_files
+                    .iter()
                     .filter_map(|f| std::fs::metadata(f).ok().map(|m| m.len()))
                     .sum();
-                let modified = metadata.modified()
+                let modified = metadata
+                    .modified()
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
@@ -1437,7 +1474,11 @@ impl Tool for GameSaveManagerTool {
                     })),
                     error: None,
                     verification: Some("save_info".to_string()),
-                    audit_log: Some(format!("game_save_manager: info for {} at {}", game, save_dir.display())),
+                    audit_log: Some(format!(
+                        "game_save_manager: info for {} at {}",
+                        game,
+                        save_dir.display()
+                    )),
                     pua_report: Some(report),
                 })
             }
@@ -1692,14 +1733,12 @@ impl Tool for GameModInstallTool {
         let game = input.payload["game"]
             .as_str()
             .ok_or_else(|| anyhow!("missing 'game'"))?;
-        let mod_name = input.payload["mod_name"]
-            .as_str()
-            .unwrap_or_else(|| {
-                std::path::Path::new(mod_source)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("mod")
-            });
+        let mod_name = input.payload["mod_name"].as_str().unwrap_or_else(|| {
+            std::path::Path::new(mod_source)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("mod")
+        });
 
         let source_path = std::path::Path::new(mod_source);
         if !source_path.exists() {
@@ -1722,8 +1761,7 @@ impl Tool for GameModInstallTool {
         };
 
         // Create target directory if needed
-        std::fs::create_dir_all(&target_dir)
-            .context("failed to create mod target directory")?;
+        std::fs::create_dir_all(&target_dir).context("failed to create mod target directory")?;
 
         let target_path = target_dir.join(mod_name);
 
@@ -1738,8 +1776,7 @@ impl Tool for GameModInstallTool {
             copy_dir_recursive(source_path, &target_path)
                 .context("failed to copy mod directory")?;
         } else {
-            std::fs::copy(source_path, &target_path)
-                .context("failed to copy mod file")?;
+            std::fs::copy(source_path, &target_path).context("failed to copy mod file")?;
         }
 
         let file_size = std::fs::metadata(&target_path)
@@ -1764,7 +1801,9 @@ impl Tool for GameModInstallTool {
             verification: Some("mod_installed".to_string()),
             audit_log: Some(format!(
                 "game_mod_install: installed '{}' for '{}' at {}",
-                mod_name, game, target_path.display()
+                mod_name,
+                game,
+                target_path.display()
             )),
             pua_report: Some(report),
         })
@@ -1848,10 +1887,7 @@ fn list_mods_in_dir(dir: &std::path::Path) -> Vec<serde_json::Value> {
                 .unwrap_or(0);
 
             // Filter out hidden files and non-mod files
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if file_name.starts_with('.') {
                 continue;
             }
@@ -1866,11 +1902,7 @@ fn list_mods_in_dir(dir: &std::path::Path) -> Vec<serde_json::Value> {
         }
     }
     // Sort by name
-    mods.sort_by(|a, b| {
-        a["name"]
-            .as_str()
-            .cmp(&b["name"].as_str())
-    });
+    mods.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     mods
 }
 

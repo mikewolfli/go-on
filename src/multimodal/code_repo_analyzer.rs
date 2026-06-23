@@ -306,7 +306,10 @@ struct SymbolMatch {
 }
 
 /// Context built for retrieval-augmented code question answering.
-#[allow(dead_code, reason = "Intent fields reserved for future LLM integration")]
+#[allow(
+    dead_code,
+    reason = "Intent fields reserved for future LLM integration"
+)]
 struct RagContext {
     found_symbols: Vec<SymbolMatch>,
     file_count: usize,

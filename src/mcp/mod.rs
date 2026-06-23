@@ -109,7 +109,7 @@ impl McpServer {
     /// Get the skill registry if connected to an ACP server.
     pub fn skill_registry(
         &self,
-    ) -> Option<&Arc<std::sync::Mutex<crate::orchestration::skill::SkillRegistry>>> {
+    ) -> Option<&Arc<std::sync::RwLock<crate::orchestration::skill::SkillRegistry>>> {
         self.acp_server
             .as_ref()
             .map(|s| &s.orchestration_deps.skill_registry)

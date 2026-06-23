@@ -5,7 +5,7 @@
 //! think → act → observe → replan → finalize cycles without bloating
 //! the large chat.rs handler.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -200,7 +200,7 @@ fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> 
 /// Returns an `AutonomyLoopResult` with the execution report embedded as a
 /// JSON response string.
 pub(crate) async fn run_full_auto_flow(
-    skill_registry: Arc<Mutex<SkillRegistry>>,
+    skill_registry: Arc<RwLock<SkillRegistry>>,
     task_text: &str,
 ) -> Result<AutonomyLoopResult> {
     let tool_registry = Arc::new(ToolRegistry::new());

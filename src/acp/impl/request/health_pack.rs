@@ -302,7 +302,7 @@ pub(super) async fn handle_maintenance_gc(
     let maintenance = server
         .resilience
         .maintenance_tracker
-        .lock()
+        .read()
         .map(|guard| guard.snapshot())
         .unwrap_or_default();
 

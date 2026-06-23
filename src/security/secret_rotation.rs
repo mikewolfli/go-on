@@ -324,7 +324,10 @@ impl KeyRotator for EnvRotator {
 /// When the `vault` feature is enabled, uses reqwest to connect
 /// to a HashiCorp Vault server for key management. Without it, all operations
 /// return `BackendError("Vault not configured")`.
-#[allow(dead_code, reason = "F-GAP reserved — wired via server startup when vault is configured")]
+#[allow(
+    dead_code,
+    reason = "F-GAP reserved — wired via server startup when vault is configured"
+)]
 pub struct VaultRotator {
     endpoint: String,
     /// Vault API token; only available when the `vault` feature is enabled.
@@ -341,7 +344,10 @@ impl VaultRotator {
     /// When the `vault` feature is enabled, uses reqwest to call the
     /// HashiCorp Vault REST API. Without it, all operations return
     /// `BackendError("Vault not configured")`.
-    #[allow(dead_code, reason = "F-GAP reserved — wired via server startup when vault is configured")]
+    #[allow(
+        dead_code,
+        reason = "F-GAP reserved — wired via server startup when vault is configured"
+    )]
     pub fn new(
         endpoint: String,
         #[cfg(feature = "vault")] token: String,
@@ -363,7 +369,10 @@ impl VaultRotator {
 
     /// Build common headers for Vault API calls.
     #[cfg(feature = "vault")]
-    #[allow(dead_code, reason = "F-GAP reserved — wired via server startup when vault is configured")]
+    #[allow(
+        dead_code,
+        reason = "F-GAP reserved — wired via server startup when vault is configured"
+    )]
     fn headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Ok(value) = reqwest::header::HeaderValue::from_str(&self.token) {

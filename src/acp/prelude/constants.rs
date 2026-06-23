@@ -2,7 +2,6 @@
 //!
 //! Shared constants used throughout the ACP system.
 
-
 /// Maximum checkpoints per conversation
 pub const MAX_CHECKPOINTS_PER_CONVERSATION: usize = 256;
 

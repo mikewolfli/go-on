@@ -240,43 +240,6 @@ impl std::fmt::Debug for HyperResilienceEngine {
     }
 }
 
-impl Clone for HyperResilienceEngine {
-    fn clone(&self) -> Self {
-        // std::sync locks are used throughout, so we can synchronously lock
-        // without deadlock risk (no lock is ever held across an .await point).
-        let config = RwLock::new(self.config.read().expect("config poisoned").clone());
-        let circuit_breakers =
-            Mutex::new(self.circuit_breakers.lock().expect("cbs poisoned").clone());
-        let failover_groups =
-            Mutex::new(self.failover_groups.lock().expect("fgs poisoned").clone());
-        let test_avg_latency_ms =
-            Mutex::new(*self.test_avg_latency_ms.lock().expect("latency poisoned"));
-        let test_error_rate =
-            Mutex::new(*self.test_error_rate.lock().expect("error rate poisoned"));
-        Self {
-            config,
-            circuit_breakers,
-            failover_groups,
-            healing_actions_taken: AtomicU64::new(
-                self.healing_actions_taken.load(Ordering::Relaxed),
-            ),
-            started_ms: self.started_ms,
-            test_avg_latency_ms,
-            test_error_rate,
-            cancel_tx: self.cancel_tx.clone(),
-            health_check_handle: Mutex::new(None),
-            #[cfg(feature = "chaos-testing")]
-            chaos_engine: self.chaos_engine.clone(),
-            persist_path: self.persist_path.clone(),
-            fault_consensus: self
-                .fault_consensus
-                .as_ref()
-                .map(|m| Mutex::new(m.lock().expect("consensus poisoned").clone())),
-            plan_store: self.plan_store.clone(),
-        }
-    }
-}
-
 /// Convert a legacy bare-bones circuit breaker (name + state) into the full
 /// unified `CircuitBreaker` with sensible defaults for threshold, recovery
 /// timeout, and other fields.
@@ -1255,7 +1218,7 @@ impl HyperResilienceEngine {
 
         // Persist state after transition (P3-2) — outside the lock scope.
         if let Some(ref path) = persist {
-            let _ = self.persist_to_db(&path).await;
+            let _ = self.persist_to_db(path).await;
         }
     }
 }

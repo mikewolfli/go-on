@@ -29,7 +29,8 @@ static TRIGGER_SENDER: OnceLock<mpsc::UnboundedSender<EvolutionTrigger>> = OnceL
 /// can be wrapped into a `PubsubTriggerSource` and registered.
 ///
 /// Returns an error if called more than once (enforced by `OnceLock`).
-pub fn init_fusion_evolution_bridge() -> Result<mpsc::UnboundedReceiver<EvolutionTrigger>, &'static str> {
+pub fn init_fusion_evolution_bridge(
+) -> Result<mpsc::UnboundedReceiver<EvolutionTrigger>, &'static str> {
     let (tx, rx) = mpsc::unbounded_channel();
     TRIGGER_SENDER
         .set(tx)

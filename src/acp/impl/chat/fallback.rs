@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::acp::helpers::cache_strategy::store_async;
 use crate::acp::helpers::context::request_timeout;
-use crate::acp::server::AcpServer;
+use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 
@@ -243,22 +243,15 @@ pub(crate) async fn execute_fallback_agents(
                         "duration_ms": attempt_started.elapsed().as_millis() as u64,
                         "error": "empty_response",
                     }));
-                    server
+                    let _ = server
                         .resilience
-                        .online_controller
-                        .lock()
-                        .unwrap_or_else(|poisoned| {
-                            warn!(
-                                "execute_fallback_agents: online_controller poisoned, recovering"
-                            );
-                            poisoned.into_inner()
-                        })
-                        .record_agent_outcome(
-                            phase_name,
-                            &agent_name,
-                            false,
-                            attempt_started.elapsed().as_millis() as u64,
-                        );
+                        .outcome_tx
+                        .send(OutcomeEvent::AgentOutcome {
+                            phase_name: phase_name.to_string(),
+                            agent_name: agent_name.to_string(),
+                            success: false,
+                            duration_ms: attempt_started.elapsed().as_millis() as u64,
+                        });
 
                     // BLUE56-GAP-B06/B07: Record consciousness metric and self-model on failure
                     if let Some(ref cb) = server.governance_deps.capability_bus {
@@ -317,20 +310,15 @@ pub(crate) async fn execute_fallback_agents(
                     continue;
                 }
 
-                server
+                let _ = server
                     .resilience
-                    .online_controller
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        warn!("execute_fallback_agents: online_controller poisoned, recovering");
-                        poisoned.into_inner()
-                    })
-                    .record_agent_outcome(
-                        phase_name,
-                        &agent_name,
-                        true,
-                        attempt_started.elapsed().as_millis() as u64,
-                    );
+                    .outcome_tx
+                    .send(OutcomeEvent::AgentOutcome {
+                        phase_name: phase_name.to_string(),
+                        agent_name: agent_name.to_string(),
+                        success: true,
+                        duration_ms: attempt_started.elapsed().as_millis() as u64,
+                    });
 
                 // BLUE56-GAP-B06/B07: Record consciousness metric and self-model on success
                 if let Some(ref cb) = server.governance_deps.capability_bus {
@@ -423,20 +411,15 @@ pub(crate) async fn execute_fallback_agents(
                     "duration_ms": attempt_started.elapsed().as_millis() as u64,
                     "error": err_text
                 }));
-                server
+                let _ = server
                     .resilience
-                    .online_controller
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        warn!("execute_fallback_agents: online_controller poisoned, recovering");
-                        poisoned.into_inner()
-                    })
-                    .record_agent_outcome(
-                        phase_name,
-                        &agent_name,
-                        false,
-                        attempt_started.elapsed().as_millis() as u64,
-                    );
+                    .outcome_tx
+                    .send(OutcomeEvent::AgentOutcome {
+                        phase_name: phase_name.to_string(),
+                        agent_name: agent_name.to_string(),
+                        success: false,
+                        duration_ms: attempt_started.elapsed().as_millis() as u64,
+                    });
                 let agent_label = agent_name.clone();
                 let enriched_err = anyhow::anyhow!(tf(
                     "error.chat.agent_error_prefix",

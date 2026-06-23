@@ -36,16 +36,10 @@ fn parse_gltf(content: &str) -> Result<GltfSummary> {
         serde_json::from_str(content).with_context(|| "failed to parse glTF JSON")?;
 
     // Scenes: array at root "scenes"
-    let scene_count = doc["scenes"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let scene_count = doc["scenes"].as_array().map(|a| a.len()).unwrap_or(0);
 
     // Meshes: array at root "meshes"
-    let mesh_count = doc["meshes"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let mesh_count = doc["meshes"].as_array().map(|a| a.len()).unwrap_or(0);
 
     // Accessors: each has a "count" field giving the number of vertex attributes
     let vertex_count = doc["accessors"]
@@ -110,28 +104,16 @@ fn parse_gltf(content: &str) -> Result<GltfSummary> {
         .unwrap_or(0);
 
     // Materials: array at root "materials"
-    let material_count = doc["materials"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let material_count = doc["materials"].as_array().map(|a| a.len()).unwrap_or(0);
 
     // Textures: array at root "textures" or "images"
-    let texture_count = doc["textures"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let texture_count = doc["textures"].as_array().map(|a| a.len()).unwrap_or(0);
 
     // Images (may overlap with textures but provides image-level count)
-    let image_count = doc["images"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let image_count = doc["images"].as_array().map(|a| a.len()).unwrap_or(0);
 
     // Animations: array at root "animations"
-    let animation_count = doc["animations"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let animation_count = doc["animations"].as_array().map(|a| a.len()).unwrap_or(0);
 
     Ok(GltfSummary {
         scene_count,

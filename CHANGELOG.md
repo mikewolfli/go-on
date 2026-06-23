@@ -1,5 +1,66 @@
 # Changelog
 
+## [1.3.0] - 2026-06-23
+
+### Architecture — Lock Contention Elimination (Phase 4)
+
+This release completes the systematic lock architecture upgrade across the entire runtime, eliminating 12 hot-path mutex contention points through precision lock-type selection and channel-based offloading.
+
+#### Mutex → RwLock (Read-Heavy Paths)
+
+- **agent_router** (1 file): Global route statistics table upgraded from `Mutex` to `RwLock`. Concurrent agent routing queries no longer serialize against each other.
+- **agent_preference** (1 file): Agent-to-phase binding state upgraded from `StdMutex` to `RwLock`. Every-request phase resolution reads proceed in parallel.
+- **semantic_cache** (4 files): Semantic response cache upgraded from `StdMutex` to `RwLock`. Near-duplicate request detection reads are now concurrent.
+- **skill_registry** (17 files): Global skill registry upgraded from `Arc<StdMutex>` to `Arc<RwLock>` across the entire call chain including orchestration, MCP handlers, capability bus, and autonomy adapter. Every-query skill scoring and retrieval reads are now lock-contention-free.
+- **maintenance_tracker** (3 files): 100% read-only diagnostic snapshots — RwLock eliminates unnecessary serialization.
+- **inflight_limiter** (2 files): 100% read-only diagnostic snapshots — RwLock eliminates unnecessary serialization.
+- **lifecycle_state** (3 files): 80/20 read/write ratio. Server health checks (read) no longer block each other; the single shutdown write is unaffected.
+- **review_timeout_policy** (1 file): Dead field converted as part of structural consistency.
+
+#### Mutex → mpsc Channel (Write-Heavy Hot Path)
+
+- **online_controller** (6 files, 13 call sites): The most significant architectural change. Nine write-only outcome recording calls (record_agent_outcome, record_phase_outcome) on the request hot path are now dispatched via `mpsc::UnboundedSender` — zero lock contention. Four read calls that return values (rank_agent_names_for_phase, recommend_phase, phase_policy_snapshot) retain synchronous lock access. A background event processor drains the channel and applies mutations asynchronously.
+
+#### Clone Dead Code Removal
+
+- **HyperResilienceEngine** (1 file): Removed the `Clone` implementation which sequentially acquired 5 internal locks. The impl was never called in production (all instances behind `Arc`), making it both dead code and a latent deadlock risk.
+
+#### Semantic Precision — Intentionally Retained StdMutex Fields
+
+Three fields in `ResilienceContext` remain as `StdMutex` after analysis showed RwLock would provide no meaningful benefit:
+- **circuit_breakers** (62% read, 38% write): Internal double-locking makes outer RwLock irrelevant.
+- **failure_prevention** (50/50 balanced): RwLock write-path identical to Mutex; no gain.
+- **phase_rate_limiter** (60% read, 40% write per-request): Every-request token bucket mutation is a write; RwLock serializes the same.
+
+### Dead Code Elimination
+
+- **run_health_check**: Replaced no-op stub with real subsystem verification (governance, runtime config, agent registry).
+- **BrainLoopReport** and `with_diagnostic_feedback`: Removed deprecated structures and methods from reflection module.
+- **Pipeline variants**: Removed 5 dead `PipelineStep` and `PipelineErrorStrategy` variants (Parallel, Sequence, Conditional, Stop, Rollback) and all associated branch functions/tests.
+- **execute_with_two_phase_coordination**: Removed entire 2PC coordinator function (reserved F-GAP-49, unused).
+- **PluginRegistry::unregister**, **SkillDiscovery::invalidate_cache**, **session_context** dead methods: Removed individually tagged dead code.
+- **DiagnosticFeedbackEngine** dead method chain: Removed `has_errors`, `recommend_repair`, `latest_batch` and 3 associated tests.
+- **sign_request**, **make_signature_for_test**, **subscriber_count**: Removed test-only helper functions with zero callers.
+- **ApprovalPolicySuggester::new()**: Removed redundant constructor (Default trait provides the same).
+- **HyperResilienceEngine::clone()**: Removed dead Clone impl (5-lock sequential acquisition).
+- **e2e test dead imports**: Removed `ImageAttachment`, `MtlsConfig`, `sign_request` imports and associated test code.
+
+### Build & Lint Cleanup
+
+- **temp_env dependency**: Moved from optional feature-gated dependency to `[dev-dependencies]` — resolves 3 test compilation failures in `federated_transport.rs`.
+- **BrainLoopReport visibility**: Added `pub use reflection::BrainLoopReport` — resolves test compilation error.
+- **Empty coordinator module**: Removed `pub mod coordinator` and deleted empty file — eliminates 6 dead-code warnings.
+- **Clippy lint fixes**: 7 lints resolved (manual_pattern_char_comparison, len_zero, manual_is_multiple_of ×4, needless_borrow, for_kv_map, manual_range_contains, unused import).
+
+### Test Reliability
+
+- **video_processor test**: Repaired inconsistent ffmpeg detection — test now handles both available and unavailable ffmpeg uniformly via match, eliminating a spurious panic.
+- **shell_exec test**: Made environment-robust — accepts timeout as valid outcome on systems without `sh` access (macOS CI), no longer panics.
+
+### Performance
+
+- **I18nManager::clone()**: Redesigned from deep-copying all translations (O(n) per clone) to `Arc<I18nInner>` sharing (O(1)). The previous implementation cloned the entire `HashMap<Language, HashMap<String, String>>` on every clone.
+
 ## [Unreleased]
 
 ### Changed

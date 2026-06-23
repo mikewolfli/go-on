@@ -22,7 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
 
@@ -113,7 +113,7 @@ struct ToolBusInner {
 /// to it.
 pub struct ToolBus {
     tool_registry: Arc<Mutex<ToolRegistry>>,
-    skill_registry: Arc<Mutex<SkillRegistry>>,
+    skill_registry: Arc<RwLock<SkillRegistry>>,
     inner: Mutex<ToolBusInner>,
 }
 
@@ -125,7 +125,7 @@ impl ToolBus {
     /// Create a new `ToolBus` wrapping the given registries.
     pub fn new(
         tool_registry: Arc<Mutex<ToolRegistry>>,
-        skill_registry: Arc<Mutex<SkillRegistry>>,
+        skill_registry: Arc<RwLock<SkillRegistry>>,
     ) -> Self {
         let mut stats = HashMap::new();
 
@@ -144,7 +144,7 @@ impl ToolBus {
         }
         // Pre-populate stats entries for every known skill.
         {
-            let reg = match skill_registry.lock() {
+            let reg = match skill_registry.read() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
                     tracing::warn!("[B48] skill_registry lock poisoned, recovering");
@@ -208,7 +208,7 @@ impl ToolBus {
         }
 
         // Skills
-        let reg = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+        let reg = self.skill_registry.read().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
@@ -272,7 +272,7 @@ impl ToolBus {
         }
 
         // Match skills via the skill-registry's best-match logic.
-        let reg = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+        let reg = self.skill_registry.read().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
@@ -318,7 +318,7 @@ impl ToolBus {
     /// Look up a skill by name, returning an owned Arc so the caller can
     /// drop the registry lock before .await.
     fn lookup_skill(&self, name: &str) -> Option<Arc<dyn Skill>> {
-        match self.skill_registry.lock() {
+        match self.skill_registry.read() {
             Ok(guard) => {
                 // Clone is required to drop MutexGuard before .await in caller.
                 #[allow(clippy::map_clone)]
@@ -415,7 +415,7 @@ impl ToolBus {
     // -----------------------------------------------------------------------
 
     /// Access the inner SkillRegistry for profiling / evolution tracking.
-    pub fn skill_registry_ref(&self) -> &Arc<Mutex<SkillRegistry>> {
+    pub fn skill_registry_ref(&self) -> &Arc<RwLock<SkillRegistry>> {
         &self.skill_registry
     }
 
@@ -429,7 +429,7 @@ impl ToolBus {
 
         let total_skills = self
             .skill_registry
-            .lock()
+            .read()
             .map(|reg| reg.list().len() as u32)
             .unwrap_or(0);
 
@@ -473,7 +473,7 @@ pub fn import_remote_skill(tool_bus: &ToolBus, endpoint: &str, skill_name: &str)
     let skill: Arc<dyn crate::orchestration::skill::Skill> = Arc::new(remote);
     tool_bus
         .skill_registry
-        .lock()
+        .write()
         .map_err(|e| anyhow::anyhow!("SkillRegistry lock poisoned: {}", e))?
         .register(skill)?;
 
@@ -507,11 +507,11 @@ mod tests {
 
     fn make_bus() -> ToolBus {
         let tool_registry = Arc::new(Mutex::new(ToolRegistry::new()));
-        let skill_registry = Arc::new(Mutex::new(SkillRegistry::default()));
+        let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
         let bus = ToolBus::new(tool_registry, skill_registry);
 
         // Register the builtin echo skill for testing.
-        let mut reg = bus.skill_registry.lock().unwrap_or_else(|poisoned| {
+        let mut reg = bus.skill_registry.write().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });

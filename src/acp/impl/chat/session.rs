@@ -69,7 +69,7 @@ pub async fn handle_chat(
                 server
                     .resilience
                     .lifecycle_state
-                    .lock()
+                    .read()
                     .unwrap_or_else(|poisoned| {
                         warn!("handle_chat: lifecycle_state poisoned, recovering");
                         poisoned.into_inner()
@@ -335,7 +335,7 @@ pub async fn handle_chat(
             );
         }
         // Also evaluate cache hit ratio if applicable
-        if let Ok(stats) = server.cache_deps.cache.semantic_cache.lock() {
+        if let Ok(stats) = server.cache_deps.cache.semantic_cache.read() {
             let s = stats.stats();
             if s.total_hits + s.total_misses > 0 {
                 let ratio = s.hit_ratio * 100.0;

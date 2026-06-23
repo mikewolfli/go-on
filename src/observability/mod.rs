@@ -50,7 +50,10 @@ static OBSERVABILITY_STACK: OnceLock<ObservabilityStackInner> = OnceLock::new();
 
 /// Inner observability stack — fields are initialized once and never read directly.
 /// They are stored as a singleton to keep the subsystems alive for the program lifetime.
-#[allow(dead_code, reason = "F-GAP reserved — singleton fields keep subsystems alive for program lifetime")]
+#[allow(
+    dead_code,
+    reason = "F-GAP reserved — singleton fields keep subsystems alive for program lifetime"
+)]
 struct ObservabilityStackInner {
     pub performance_monitor: Arc<Mutex<crate::observability::performance::PerformanceMonitor>>,
     pub telemetry_runtime: crate::observability::telemetry::TelemetryRuntime,

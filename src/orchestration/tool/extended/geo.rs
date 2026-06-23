@@ -291,9 +291,7 @@ mod tests {
                 { "x": 2.0, "y": 4.0, "z": 6.0 },
             ],
         }));
-        let output = tool
-            .run(&input)
-            .expect("centroid should succeed");
+        let output = tool.run(&input).expect("centroid should succeed");
         assert!(output.success);
         let c = output.result.unwrap()["centroid"].clone();
         assert!((c["x"].as_f64().unwrap() - 1.0).abs() < 1e-10);
@@ -312,9 +310,7 @@ mod tests {
                 { "x": 0.0, "y": 0.0, "z": 0.0 },
             ],
         }));
-        let output = tool
-            .run(&input)
-            .expect("bounding_box should succeed");
+        let output = tool.run(&input).expect("bounding_box should succeed");
         assert!(output.success);
         let bb = output.result.unwrap()["bounding_box"].clone();
         assert!((bb["min"]["x"].as_f64().unwrap() - (-1.0)).abs() < 1e-10);

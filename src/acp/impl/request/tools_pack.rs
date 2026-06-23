@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 use tracing::Instrument;
 
 use super::config_handlers::build_trace_payload;
@@ -32,7 +32,7 @@ pub(crate) fn skill_discovery() -> &'static Mutex<SkillDiscovery> {
 
 /// Initialize the global SkillDiscovery with a registry reference.
 /// Called during server startup to wire the live skill registry into the discovery engine.
-pub(crate) fn init_skill_discovery(registry: Arc<Mutex<SkillRegistry>>) {
+pub(crate) fn init_skill_discovery(registry: Arc<RwLock<SkillRegistry>>) {
     let mut discovery = skill_discovery().lock().unwrap_or_else(|e| e.into_inner());
     discovery.set_registry(registry);
 }
@@ -214,7 +214,7 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
         let registry = server
             .orchestration_deps
             .skill_registry
-            .lock()
+            .read()
             .unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
@@ -460,7 +460,7 @@ pub(crate) async fn execute_mcp_tool_call(
             let registry = server
                 .orchestration_deps
                 .skill_registry
-                .lock()
+                .read()
                 .unwrap_or_else(|poisoned| {
                     tracing::warn!("lock poisoned, recovering");
                     poisoned.into_inner()
@@ -636,7 +636,7 @@ pub(crate) async fn execute_mcp_tool_call(
                 let registry = server
                     .orchestration_deps
                     .skill_registry
-                    .lock()
+                    .read()
                     .unwrap_or_else(|poisoned| {
                         tracing::warn!("lock poisoned, recovering");
                         poisoned.into_inner()
@@ -651,7 +651,7 @@ pub(crate) async fn execute_mcp_tool_call(
                 let registry = server
                     .orchestration_deps
                     .skill_registry
-                    .lock()
+                    .read()
                     .unwrap_or_else(|poisoned| {
                         tracing::warn!("lock poisoned, recovering");
                         poisoned.into_inner()
@@ -666,7 +666,7 @@ pub(crate) async fn execute_mcp_tool_call(
                     let mut registry = server
                         .orchestration_deps
                         .skill_registry
-                        .lock()
+                        .write()
                         .unwrap_or_else(|poisoned| {
                             tracing::warn!("lock poisoned, recovering");
                             poisoned.into_inner()

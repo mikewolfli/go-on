@@ -299,7 +299,10 @@ impl RecoveryStrategy {
     }
 
     /// Returns the success rate of this strategy (0.0–1.0).
-    #[allow(dead_code, reason = "Public API surface for RecoveryStrategy consumers")]
+    #[allow(
+        dead_code,
+        reason = "Public API surface for RecoveryStrategy consumers"
+    )]
     pub fn success_rate(&self) -> f64 {
         if self.attempt_count == 0 {
             0.0
@@ -385,7 +388,10 @@ pub struct RecoveryOrchestrator {
     engine: Option<Arc<HyperResilienceEngine>>,
 }
 
-#[allow(dead_code, reason = "Public API surface for RecoveryOrchestrator consumers")]
+#[allow(
+    dead_code,
+    reason = "Public API surface for RecoveryOrchestrator consumers"
+)]
 impl RecoveryOrchestrator {
     /// Create a new recovery orchestrator with default thresholds.
     ///

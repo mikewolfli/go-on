@@ -125,7 +125,12 @@ struct I18nState {
 
 /// Global i18n manager
 pub struct I18nManager {
-    /// Internal state behind a single lock
+    /// Internal state behind Arc for cheap cloning
+    inner: Arc<I18nInner>,
+}
+
+struct I18nInner {
+    /// Translation state behind a single lock
     state: RwLock<I18nState>,
     /// Path to language files directory
     languages_dir: PathBuf,
@@ -133,10 +138,8 @@ pub struct I18nManager {
 
 impl Clone for I18nManager {
     fn clone(&self) -> Self {
-        let state = read_guard(&self.state, "i18n.state");
-        I18nManager {
-            state: RwLock::new(state.clone()),
-            languages_dir: self.languages_dir.clone(),
+        Self {
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -157,11 +160,13 @@ impl I18nManager {
         }
 
         let manager = I18nManager {
-            state: RwLock::new(I18nState {
-                current_language: Language::detect_system(),
-                translations: HashMap::new(),
+            inner: Arc::new(I18nInner {
+                state: RwLock::new(I18nState {
+                    current_language: Language::detect_system(),
+                    translations: HashMap::new(),
+                }),
+                languages_dir: dir,
             }),
-            languages_dir: dir,
         };
 
         // Load all available translations
@@ -192,9 +197,13 @@ impl I18nManager {
     pub fn load_language(&self, language: Language) -> Result<()> {
         // Try BCP 47 hyphen format first (e.g., zh-CN.json)
         let bcp47_path = self
+            .inner
             .languages_dir
             .join(format!("{}.json", language.bcp47_code()));
-        let underscore_path = self.languages_dir.join(format!("{}.json", language.code()));
+        let underscore_path = self
+            .inner
+            .languages_dir
+            .join(format!("{}.json", language.code()));
 
         let file_path = if bcp47_path.exists() {
             bcp47_path
@@ -216,7 +225,7 @@ impl I18nManager {
         let translations_data: Translations = serde_json::from_str(&content)
             .context(format!("Failed to parse language file: {:?}", file_path))?;
 
-        let mut state = write_guard(&self.state, "i18n.state");
+        let mut state = write_guard(&self.inner.state, "i18n.state");
         state
             .translations
             .insert(language, translations_data.messages);
@@ -232,14 +241,14 @@ impl I18nManager {
 
     /// Set current language
     pub fn set_language(&self, language: Language) {
-        let mut state = write_guard(&self.state, "i18n.state");
+        let mut state = write_guard(&self.inner.state, "i18n.state");
         state.current_language = language;
         info!("Language changed to: {:?}", language);
     }
 
     /// Get current language
     pub fn current_language(&self) -> Language {
-        let state = read_guard(&self.state, "i18n.state");
+        let state = read_guard(&self.inner.state, "i18n.state");
         state.current_language
     }
 
@@ -254,17 +263,19 @@ impl I18nManager {
     /// # Returns
     /// Translated message or key if not found
     pub fn get(&self, key: &str) -> String {
-        let state = read_guard(&self.state, "i18n.state");
+        let state = read_guard(&self.inner.state, "i18n.state");
         let lang = state.current_language;
-
-        // Look up in current language
         if let Some(msg) = state.translations.get(&lang).and_then(|m| m.get(key)) {
             return msg.clone();
         }
 
         // Fallback to English
         if lang != Language::EnUS {
-            if let Some(msg) = state.translations.get(&Language::EnUS).and_then(|m| m.get(key)) {
+            if let Some(msg) = state
+                .translations
+                .get(&Language::EnUS)
+                .and_then(|m| m.get(key))
+            {
                 return msg.clone();
             }
         }
@@ -274,7 +285,7 @@ impl I18nManager {
 
     /// Get translated message for specific language
     pub fn get_lang(&self, key: &str, language: Language) -> String {
-        let state = read_guard(&self.state, "i18n.state");
+        let state = read_guard(&self.inner.state, "i18n.state");
         Self::lookup(&state, key, language)
     }
 
@@ -326,8 +337,7 @@ impl I18nManager {
 
     /// Export translatable keys (for translation work)
     pub fn export_keys(&self) -> Result<Vec<String>> {
-        let state = read_guard(&self.state, "i18n.state");
-
+        let state = read_guard(&self.inner.state, "i18n.state");
         if let Some(en_messages) = state.translations.get(&Language::EnUS) {
             Ok(en_messages.keys().cloned().collect())
         } else {
@@ -337,8 +347,7 @@ impl I18nManager {
 
     /// Get available languages
     pub fn available_languages(&self) -> Vec<(Language, usize)> {
-        let state = read_guard(&self.state, "i18n.state");
-
+        let state = read_guard(&self.inner.state, "i18n.state");
         let mut languages: Vec<_> = state
             .translations
             .iter()
@@ -378,7 +387,7 @@ pub fn t(key: &str) -> String {
     let i18n = read_guard(&I18N, "i18n.global");
     match i18n.as_ref() {
         Some(manager) => {
-            let state = read_guard(&manager.state, "i18n.state");
+            let state = read_guard(&manager.inner.state, "i18n.state");
             I18nManager::lookup(&state, key, state.current_language)
         }
         None => key.to_string(),

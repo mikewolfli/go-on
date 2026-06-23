@@ -787,7 +787,10 @@ impl AuditEntryBuilder {
     }
 
     /// Set the tool name.
-    #[allow(dead_code, reason = "Builder pattern — reserved for future audit enrichment")]
+    #[allow(
+        dead_code,
+        reason = "Builder pattern — reserved for future audit enrichment"
+    )]
     pub fn tool(mut self, tool: &str) -> Self {
         self.tool = Some(tool.to_string());
         self
@@ -800,7 +803,10 @@ impl AuditEntryBuilder {
     }
 
     /// Set the output payload.
-    #[allow(dead_code, reason = "Builder pattern — reserved for future audit enrichment")]
+    #[allow(
+        dead_code,
+        reason = "Builder pattern — reserved for future audit enrichment"
+    )]
     pub fn outputs(mut self, outputs: serde_json::Value) -> Self {
         self.outputs = Some(outputs);
         self
@@ -819,28 +825,40 @@ impl AuditEntryBuilder {
     }
 
     /// Set the data classification label.
-    #[allow(dead_code, reason = "Builder pattern — reserved for future audit enrichment")]
+    #[allow(
+        dead_code,
+        reason = "Builder pattern — reserved for future audit enrichment"
+    )]
     pub fn data_classification(mut self, dc: &str) -> Self {
         self.data_classification = Some(dc.to_string());
         self
     }
 
     /// Add a compliance tag.
-    #[allow(dead_code, reason = "Builder pattern — reserved for future audit enrichment")]
+    #[allow(
+        dead_code,
+        reason = "Builder pattern — reserved for future audit enrichment"
+    )]
     pub fn compliance_tag(mut self, tag: &str) -> Self {
         self.compliance_tags.push(tag.to_string());
         self
     }
 
     /// Set the retention policy.
-    #[allow(dead_code, reason = "Builder pattern — reserved for future audit enrichment")]
+    #[allow(
+        dead_code,
+        reason = "Builder pattern — reserved for future audit enrichment"
+    )]
     pub fn retention_policy(mut self, rp: &str) -> Self {
         self.retention_policy = Some(rp.to_string());
         self
     }
 
     /// Set the correlation ID.
-    #[allow(dead_code, reason = "Builder pattern — reserved for future audit enrichment")]
+    #[allow(
+        dead_code,
+        reason = "Builder pattern — reserved for future audit enrichment"
+    )]
     pub fn correlation_id(mut self, cid: &str) -> Self {
         self.correlation_id = Some(cid.to_string());
         self

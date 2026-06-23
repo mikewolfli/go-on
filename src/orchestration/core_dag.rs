@@ -424,7 +424,7 @@ pub struct CoreDag<T> {
 impl<T> std::fmt::Debug for CoreDag<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut node_debug: Vec<String> = Vec::new();
-        for (id, _) in &self.nodes {
+        for id in self.nodes.keys() {
             let parents = self.parents(id);
             node_debug.push(format!("{} -> parents: {:?}", id, parents));
         }

@@ -41,10 +41,7 @@ impl Tool for InvoiceParseTool {
             anyhow::bail!("either 'text' or 'path' must be provided");
         };
 
-        info!(
-            text_len = content.len(),
-            "parsing invoice from content"
-        );
+        info!(text_len = content.len(), "parsing invoice from content");
 
         let invoice = parse_invoice(&content);
 
@@ -57,9 +54,7 @@ impl Tool for InvoiceParseTool {
             verification: Some("invoice_parsed".to_string()),
             audit_log: Some(format!(
                 "Parsed invoice: number='{}', vendor='{}', total={:?}",
-                invoice.invoice_number,
-                invoice.vendor,
-                invoice.total_amount
+                invoice.invoice_number, invoice.vendor, invoice.total_amount
             )),
             pua_report: Some(report),
         })
@@ -330,7 +325,12 @@ fn extract_line_items(text: &str) -> Vec<LineItem> {
                     (qty_val, desc_val, unit_val, amt_val)
                 } else if cap.len() == 3 {
                     // Pattern 1: just description and amount
-                    (None, cap[1].trim().to_string(), None, cap[2].replace(',', "").parse::<f64>().ok())
+                    (
+                        None,
+                        cap[1].trim().to_string(),
+                        None,
+                        cap[2].replace(',', "").parse::<f64>().ok(),
+                    )
                 } else {
                     continue;
                 };
@@ -372,7 +372,9 @@ fn extract_line_items(text: &str) -> Vec<LineItem> {
 #[cfg(feature = "document-invoice")]
 fn regex_lite(pattern: &str, text: &str) -> Option<String> {
     if let Ok(re) = regex::Regex::new(pattern) {
-        return re.captures(text).and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+        return re
+            .captures(text)
+            .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
     }
     // Fallback: simple text search for the pattern prefix
     let stripped = pattern.trim_start_matches("(?i)");

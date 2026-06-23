@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
 use anyhow::Result;
 
@@ -70,17 +70,17 @@ pub(crate) struct AgentSwitchState {
     pub(crate) primary_agent_by_phase: HashMap<String, String>,
 }
 
-static AGENT_SWITCH_STATE: OnceLock<StdMutex<AgentSwitchState>> = OnceLock::new();
+static AGENT_SWITCH_STATE: OnceLock<RwLock<AgentSwitchState>> = OnceLock::new();
 
-pub(crate) fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
-    AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
+pub(crate) fn agent_switch_state() -> &'static RwLock<AgentSwitchState> {
+    AGENT_SWITCH_STATE.get_or_init(|| RwLock::new(AgentSwitchState::default()))
 }
 
 /// Only available in non-Postgres profiles because the caller is gated.
 #[cfg(all(test, not(feature = "backend-postgres")))]
 pub(crate) fn reset_agent_switch_state_for_test() {
     if let Some(state) = AGENT_SWITCH_STATE.get() {
-        if let Ok(mut guard) = state.lock() {
+        if let Ok(mut guard) = state.write() {
             guard.forced_agent_by_phase.clear();
             guard.primary_agent_by_phase.clear();
         }
@@ -176,7 +176,7 @@ pub fn resolve_agent_preferences(
 
     // ── 3. Update primary agent by phase in global state ─────────────────
     if let Some(primary) = configured_primary_agent.as_ref() {
-        let mut state = agent_switch_state().lock().unwrap_or_else(|poisoned| {
+        let mut state = agent_switch_state().write().unwrap_or_else(|poisoned| {
             tracing::warn!("agent_switch_state lock poisoned — primary_agent_by_phase");
             poisoned.into_inner()
         });
@@ -195,7 +195,7 @@ pub fn resolve_agent_preferences(
     //    primary agent first and then the forced agent (auto-recover strategy).
     if let Some(preferred) = preferred_agent_from_request.as_deref() {
         if reorder_agents_with_priority(&mut resolved.agents, preferred) {
-            let mut state = agent_switch_state().lock().unwrap_or_else(|poisoned| {
+            let mut state = agent_switch_state().write().unwrap_or_else(|poisoned| {
                 tracing::warn!("agent_switch_state lock poisoned — forced_agent_by_phase");
                 poisoned.into_inner()
             });
@@ -207,7 +207,7 @@ pub fn resolve_agent_preferences(
             );
         }
     } else {
-        let state = agent_switch_state().lock().unwrap_or_else(|poisoned| {
+        let state = agent_switch_state().read().unwrap_or_else(|poisoned| {
             tracing::warn!("agent_switch_state lock poisoned — forced agent lookup");
             poisoned.into_inner()
         });

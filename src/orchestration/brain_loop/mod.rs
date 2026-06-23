@@ -50,7 +50,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
-use tokio::task::JoinHandle;
 
 use crate::agent::AgentRegistry;
 use crate::agents::progress_reporter::ProgressReporter;
@@ -276,10 +275,6 @@ pub(crate) struct BrainLoopInner {
     pub(crate) cancelled_plans_total: u64,
     /// Optional progress reporter for streaming status hints.
     pub(crate) progress_reporter: Option<ProgressReporter>,
-    /// Running async tasks spawned by the brain loop, keyed by plan id.
-    /// Reserved for GAP-B50-06 deep-reasoning integration.
-    #[allow(dead_code)] // F-GAP-49 — reserved for deep-reasoning task tracking
-    pub(crate) brain_loop_tasks: HashMap<String, JoinHandle<()>>,
     /// Optional metacognitive controller for self-correction feedback.
     pub(crate) metacognitive: Option<MetacognitiveController>,
     /// Planner hints accumulated during loop execution.
@@ -320,7 +315,6 @@ impl BrainLoop {
                 failed_plans_total: 0,
                 cancelled_plans_total: 0,
                 progress_reporter: None,
-                brain_loop_tasks: HashMap::new(),
                 metacognitive: None,
                 planner_hints: Vec::new(),
                 error_counts: HashMap::new(),
@@ -1296,40 +1290,5 @@ mod tests {
             config.world_model_integration,
             "world_model_integration should default to true"
         );
-    }
-
-    // -----------------------------------------------------------------------
-    // test_brain_loop_report_from_steps
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_brain_loop_report_from_steps() {
-        let step_done = BrainLoopStep {
-            status: StepStatus::Done,
-            ..make_step("s1", "done")
-        };
-        let step_pending = BrainLoopStep {
-            status: StepStatus::Pending,
-            ..make_step("s2", "pending")
-        };
-
-        let report = BrainLoopReport::from(vec![step_done, step_pending].as_slice());
-        assert_eq!(report.iterations, 1);
-        assert!(!report.converged);
-        assert!((report.final_score - 0.5).abs() < 1e-6);
-        assert_eq!(report.history.len(), 2);
-
-        // All done = converged
-        let done1 = BrainLoopStep {
-            status: StepStatus::Done,
-            ..make_step("a", "a")
-        };
-        let done2 = BrainLoopStep {
-            status: StepStatus::Done,
-            ..make_step("b", "b")
-        };
-        let report2 = BrainLoopReport::from(vec![done1, done2].as_slice());
-        assert!(report2.converged);
-        assert!((report2.final_score - 1.0).abs() < 1e-6);
     }
 }

@@ -196,7 +196,7 @@ impl Tool for PortScanTool {
                 .iter()
                 .filter_map(|v| {
                     v.as_u64().and_then(|n| {
-                        if n >= 1 && n <= 65535 {
+                        if (1..=65535).contains(&n) {
                             Some(n as u16)
                         } else {
                             None

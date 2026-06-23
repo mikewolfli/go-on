@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::orchestration::skill::SkillRegistry;
 
@@ -34,12 +34,12 @@ fn tool_lock_manager() -> &'static crate::orchestration::tool_lock::ToolLockMana
 }
 
 /// Global skill registry reference for tools that need access to registered skills.
-static SKILL_REGISTRY: OnceLock<Arc<Mutex<SkillRegistry>>> = OnceLock::new();
+static SKILL_REGISTRY: OnceLock<Arc<RwLock<SkillRegistry>>> = OnceLock::new();
 
 /// Set the global skill registry reference used by `SkillListTool` and other
 /// registry-aware tools. Call this once during server startup after the skill
 /// registry has been initialized.
-pub fn set_skill_registry(registry: Arc<Mutex<SkillRegistry>>) {
+pub fn set_skill_registry(registry: Arc<RwLock<SkillRegistry>>) {
     let _ = SKILL_REGISTRY.set(registry);
 }
 
@@ -1918,7 +1918,7 @@ impl Tool for SkillListTool {
         let start = Instant::now();
 
         let skills = match SKILL_REGISTRY.get() {
-            Some(registry) => match registry.lock() {
+            Some(registry) => match registry.read() {
                 Ok(guard) => {
                     let descriptors = guard.list();
                     descriptors

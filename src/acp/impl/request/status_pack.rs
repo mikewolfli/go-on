@@ -409,7 +409,7 @@ pub(super) async fn handle_release_readiness(
     let registered_skill_total = server
         .orchestration_deps
         .skill_registry
-        .lock()
+        .read()
         .map(|registry| registry.list().len())
         .unwrap_or(0);
     let skill_engine_core_gate = server.runtime_config.skills_enabled && registered_skill_total > 0;

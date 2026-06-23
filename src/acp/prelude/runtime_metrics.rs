@@ -247,7 +247,8 @@ impl RuntimeMetrics {
     }
 
     pub fn inc_review_gate_timeout(&self) {
-        self.review_gate_timeout_total.fetch_add(1, Ordering::Relaxed);
+        self.review_gate_timeout_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_review_gate_degraded(&self) {
@@ -391,12 +392,8 @@ impl RuntimeMetrics {
             failed_requests: self.failed_requests.load(Ordering::Relaxed),
             active_requests: self.active_requests.load(Ordering::Relaxed),
             chat_requests_total: self.chat_requests_total.load(Ordering::Relaxed),
-            agent_timeout_failures_total: self
-                .agent_timeout_failures_total
-                .load(Ordering::Relaxed),
-            runtime_probe_timeout_total: self
-                .runtime_probe_timeout_total
-                .load(Ordering::Relaxed),
+            agent_timeout_failures_total: self.agent_timeout_failures_total.load(Ordering::Relaxed),
+            runtime_probe_timeout_total: self.runtime_probe_timeout_total.load(Ordering::Relaxed),
             vector_search_total: self.vector_search_total.load(Ordering::Relaxed),
             vector_hit_total: self.vector_hit_total.load(Ordering::Relaxed),
             vector_store_total: self.vector_store_total.load(Ordering::Relaxed),
@@ -404,18 +401,10 @@ impl RuntimeMetrics {
             summary_hit_total: self.summary_hit_total.load(Ordering::Relaxed),
             summary_store_total: self.summary_store_total.load(Ordering::Relaxed),
             review_gate_total: self.review_gate_total.load(Ordering::Relaxed),
-            review_gate_approved_total: self
-                .review_gate_approved_total
-                .load(Ordering::Relaxed),
-            review_gate_rejected_total: self
-                .review_gate_rejected_total
-                .load(Ordering::Relaxed),
-            review_gate_timeout_total: self
-                .review_gate_timeout_total
-                .load(Ordering::Relaxed),
-            review_gate_degraded_total: self
-                .review_gate_degraded_total
-                .load(Ordering::Relaxed),
+            review_gate_approved_total: self.review_gate_approved_total.load(Ordering::Relaxed),
+            review_gate_rejected_total: self.review_gate_rejected_total.load(Ordering::Relaxed),
+            review_gate_timeout_total: self.review_gate_timeout_total.load(Ordering::Relaxed),
+            review_gate_degraded_total: self.review_gate_degraded_total.load(Ordering::Relaxed),
             review_gate_invalid_response_total: self
                 .review_gate_invalid_response_total
                 .load(Ordering::Relaxed),
@@ -440,7 +429,8 @@ impl RuntimeMetrics {
         self.failed_requests.store(0, Ordering::Relaxed);
         self.active_requests.store(0, Ordering::Relaxed);
         self.chat_requests_total.store(0, Ordering::Relaxed);
-        self.agent_timeout_failures_total.store(0, Ordering::Relaxed);
+        self.agent_timeout_failures_total
+            .store(0, Ordering::Relaxed);
         self.runtime_probe_timeout_total.store(0, Ordering::Relaxed);
         self.vector_search_total.store(0, Ordering::Relaxed);
         self.vector_hit_total.store(0, Ordering::Relaxed);

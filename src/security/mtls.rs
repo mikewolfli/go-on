@@ -64,8 +64,6 @@ pub struct MtlsAcceptor {
     server_config: RwLock<Option<Arc<rustls::ServerConfig>>>,
 }
 
-
-
 impl MtlsAcceptor {
     /// Create a new MtlsAcceptor from certificate paths and settings.
     pub fn new(

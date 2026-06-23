@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
 #[derive(Debug, Clone, Copy, Default)]
 struct RouteStat {
@@ -21,14 +21,15 @@ pub(crate) static AGENT_ROUTER_ENTRY_COUNT: std::sync::atomic::AtomicU64 =
 pub(crate) static AGENT_ROUTER_EVICTION_TOTAL: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-static TASK_AGENT_SUCCESS: OnceLock<Mutex<IndexMap<(String, String), RouteStat>>> = OnceLock::new();
+static TASK_AGENT_SUCCESS: OnceLock<RwLock<IndexMap<(String, String), RouteStat>>> =
+    OnceLock::new();
 
-fn route_table() -> &'static Mutex<IndexMap<(String, String), RouteStat>> {
-    TASK_AGENT_SUCCESS.get_or_init(|| Mutex::new(IndexMap::new()))
+fn route_table() -> &'static RwLock<IndexMap<(String, String), RouteStat>> {
+    TASK_AGENT_SUCCESS.get_or_init(|| RwLock::new(IndexMap::new()))
 }
 
 pub(crate) fn task_agent_success_rate(task_type: &str, agent_name: &str) -> f64 {
-    let guard = match route_table().lock() {
+    let guard = match route_table().read() {
         Ok(g) => g,
         Err(poison) => poison.into_inner(),
     };
@@ -46,7 +47,7 @@ pub(crate) fn task_agent_success_rate(task_type: &str, agent_name: &str) -> f64 
 }
 
 pub(crate) fn record_task_agent_outcome(task_type: &str, agent_name: &str, success: bool) {
-    let mut guard = match route_table().lock() {
+    let mut guard = match route_table().write() {
         Ok(g) => g,
         Err(poison) => poison.into_inner(),
     };
@@ -119,7 +120,7 @@ mod tests {
 
         // Entry count must not exceed the cap.
         let guard = route_table()
-            .lock()
+            .read()
             .expect("route table lock should not be poisoned");
         assert!(guard.len() <= MAX_ROUTE_ENTRIES);
     }

@@ -63,12 +63,6 @@ impl DeepReasoningEngine {
         self
     }
 
-    /// Attach a diagnostic feedback engine for processing step diagnostics.
-    pub fn with_diagnostic_feedback(mut self, engine: DiagnosticFeedbackEngine) -> Self {
-        self.diagnostic_feedback = Some(Arc::new(std::sync::Mutex::new(engine)));
-        self
-    }
-
     /// Produce a structured plan enhanced with LLM-level reasoning.
     ///
     /// Takes a [`TaskContext`] (chain-of-thought state from the DAG executor)
@@ -445,45 +439,6 @@ impl DeepReasoningEngine {
         }
 
         response
-    }
-}
-
-// ---------------------------------------------------------------------------
-// BrainLoopReport
-// ---------------------------------------------------------------------------
-
-/// Summary report produced by a full Plan → Execute → Reflect → Replan cycle.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrainLoopReport {
-    /// Number of iterations executed.
-    pub iterations: usize,
-    /// Final composite score.
-    pub final_score: f64,
-    /// Whether the loop converged.
-    pub converged: bool,
-    /// Full history of steps across iterations.
-    pub history: Vec<BrainLoopStep>,
-}
-
-impl From<&[BrainLoopStep]> for BrainLoopReport {
-    fn from(history: &[BrainLoopStep]) -> Self {
-        let total = history.len();
-        let done = history
-            .iter()
-            .filter(|s| s.status == StepStatus::Done)
-            .count();
-        let converged = total > 0 && done == total;
-        let final_score = if total == 0 {
-            0.0
-        } else {
-            done as f64 / total as f64
-        };
-        Self {
-            iterations: 1,
-            final_score,
-            converged,
-            history: history.to_vec(),
-        }
     }
 }
 

@@ -19,7 +19,7 @@ use go_on::orchestration::planner_executor::{Planner, PlanningContext};
 use go_on::orchestration::recovery::RecoveryOrchestrator;
 use go_on::orchestration::skill::SkillRegistry;
 use go_on::orchestration::tool::ToolRegistry;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 // ── Dimension metadata ──────────────────────────────────────────────────
 
@@ -508,7 +508,7 @@ fn measure_auto_recovery() -> DimensionScore {
 
 /// Check that FullAutoFlow is constructable and can parse tasks.
 fn measure_full_auto_closure() -> DimensionScore {
-    let skill_registry = Arc::new(Mutex::new(SkillRegistry::default()));
+    let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
     let tool_registry = Arc::new(ToolRegistry::new_empty());
     let flow = FullAutoFlow::new(skill_registry, tool_registry);
 

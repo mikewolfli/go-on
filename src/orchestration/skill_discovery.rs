@@ -19,7 +19,7 @@
 // F-GAP-51: dead_code allowed on items below in non-test builds (consumed via OnceLock)
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -269,7 +269,7 @@ pub struct SkillDiscovery {
     cache_ttl: Duration,
     max_cache_entries: usize,
     /// Optional reference to the skill registry for index rebuilds.
-    registry_ref: Option<Arc<Mutex<SkillRegistry>>>,
+    registry_ref: Option<Arc<RwLock<SkillRegistry>>>,
 }
 
 #[allow(dead_code)] // F-GAP-51 — consumed via OnceLock
@@ -290,7 +290,7 @@ impl SkillDiscovery {
     ///
     /// Call this during server startup so that `discover()` can
     /// rebuild the index from the live registry when needed.
-    pub fn set_registry(&mut self, registry: Arc<Mutex<SkillRegistry>>) {
+    pub fn set_registry(&mut self, registry: Arc<RwLock<SkillRegistry>>) {
         self.registry_ref = Some(registry);
     }
 
@@ -349,14 +349,6 @@ impl SkillDiscovery {
         );
 
         results
-    }
-
-    /// Invalidate all cached results (e.g., after skill registry changes).
-    #[allow(dead_code, reason = "F-GAP-49 — reserved for future use")]
-    pub fn invalidate_cache(&mut self) {
-        self.cache.clear();
-        self.insertion_order.clear();
-        self.index = SkillIndex::new();
     }
 
     /// Evict oldest cache entry if at capacity.

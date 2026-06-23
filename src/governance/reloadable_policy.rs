@@ -418,6 +418,7 @@ impl QualityCompassPolicy {
 
     /// Returns a reference to the parsed config, if any.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn config(&self) -> Option<&serde_json::Value> {
         self.config.as_ref()
     }
@@ -529,6 +530,7 @@ impl SandboxPolicyReloadable {
 
     /// Returns a reference to the parsed config, if any.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn config(&self) -> Option<&serde_json::Value> {
         self.config.as_ref()
     }

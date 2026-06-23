@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -218,7 +218,10 @@ impl Skill for PromptBasedSkill {
 impl PromptBasedSkill {
     /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
     /// Not called internally but kept as a public utility for consumers.
-    #[allow(dead_code, reason = "Public API — reserved for external registry wiring (F-GAP-49)")]
+    #[allow(
+        dead_code,
+        reason = "Public API — reserved for external registry wiring (F-GAP-49)"
+    )]
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }
@@ -276,7 +279,7 @@ pub struct ComposedSkill {
     pub skill_b: String,
     /// Reference to the SkillRegistry that holds skill_a and skill_b.
     /// Used at execute time to look up and delegate to the actual skills.
-    pub registry: Arc<Mutex<SkillRegistry>>,
+    pub registry: Arc<RwLock<SkillRegistry>>,
 }
 
 #[async_trait]
@@ -300,30 +303,30 @@ impl Skill for ComposedSkill {
         let skill_a_clone = {
             let registry = self
                 .registry
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Failed to lock skill registry: {}", e))?;
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to read skill registry: {}", e))?;
             registry
                 .get(&self.skill_a)
                 .ok_or_else(|| {
                     anyhow::anyhow!("Composed skill '{}' not found: {}", self.name, self.skill_a)
                 })?
                 .clone()
-        }; // MutexGuard dropped here
+        }; // RwLockReadGuard dropped here
         let result_a = skill_a_clone.execute(input).await?;
 
         // Look up skill_b and execute with skill_a's output as input
         let skill_b_clone = {
             let registry = self
                 .registry
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Failed to lock skill registry: {}", e))?;
+                .read()
+                .map_err(|e| anyhow::anyhow!("Failed to read skill registry: {}", e))?;
             registry
                 .get(&self.skill_b)
                 .ok_or_else(|| {
                     anyhow::anyhow!("Composed skill '{}' not found: {}", self.name, self.skill_b)
                 })?
                 .clone()
-        }; // MutexGuard dropped here
+        }; // RwLockReadGuard dropped here
         let result_b = skill_b_clone.execute(&result_a).await?;
 
         Ok(json!({
@@ -494,7 +497,7 @@ impl Skill for EchoSkill {
 /// Registered as `"skill-creator"` when `runtime.skills_enabled = true`.
 pub struct SkillCreatorSkill {
     /// Reference to the skill registry for creating skills.
-    pub registry: Arc<Mutex<SkillRegistry>>,
+    pub registry: Arc<RwLock<SkillRegistry>>,
 }
 
 #[async_trait]
@@ -542,8 +545,8 @@ impl Skill for SkillCreatorSkill {
         {
             let mut registry = self
                 .registry
-                .lock()
-                .map_err(|e| anyhow::anyhow!("skill registry lock error: {e}"))?;
+                .write()
+                .map_err(|e| anyhow::anyhow!("skill registry write-lock error: {e}"))?;
             registry.create_skill_from_prompt(name, description, prompt_template, input_schema)?;
         }
         // Lock is dropped before Ok()
@@ -559,7 +562,7 @@ impl Skill for SkillCreatorSkill {
 
 impl SkillCreatorSkill {
     /// Create a new SkillCreatorSkill with a reference to the skill registry.
-    pub fn new(registry: Arc<Mutex<SkillRegistry>>) -> Self {
+    pub fn new(registry: Arc<RwLock<SkillRegistry>>) -> Self {
         Self { registry }
     }
 }

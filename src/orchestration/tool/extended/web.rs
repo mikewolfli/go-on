@@ -38,12 +38,14 @@ impl Tool for WebScrapeTool {
             .build()
             .context("failed to build HTTP client")?;
 
-        let response = client.get(url)
+        let response = client
+            .get(url)
             .send()
             .with_context(|| format!("failed to fetch {url}"))?;
 
         let status = response.status().as_u16();
-        let html = response.text()
+        let html = response
+            .text()
             .with_context(|| format!("failed to read response body from {url}"))?;
 
         let document = scraper::Html::parse_document(&html);
@@ -95,7 +97,12 @@ impl Tool for WebScrapeTool {
             })),
             error: None,
             verification: None,
-            audit_log: Some(format!("web_scrape: {} elements from {} (HTTP {})", extracted.len(), url, status)),
+            audit_log: Some(format!(
+                "web_scrape: {} elements from {} (HTTP {})",
+                extracted.len(),
+                url,
+                status
+            )),
             pua_report: Some(report),
         })
     }
