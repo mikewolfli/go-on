@@ -22,7 +22,6 @@ use std::sync::Mutex;
 // ---------------------------------------------------------------------------
 
 /// Metadata describing a plugin.
-#[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     /// Unique plugin identifier.
@@ -49,7 +48,6 @@ pub struct PluginManifest {
 // ---------------------------------------------------------------------------
 
 /// Current state of a loaded plugin.
-#[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginState {
     /// Plugin manifest has been read but not initialized.
@@ -65,7 +63,6 @@ pub enum PluginState {
 }
 
 impl PluginState {
-    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn label(&self) -> &str {
         match self {
             Self::Registered => "registered",
@@ -86,6 +83,7 @@ impl PluginState {
 // ---------------------------------------------------------------------------
 
 /// Context passed to plugin lifecycle hooks.
+#[allow(dead_code)] // used by Plugin trait lifecycle hooks
 #[derive(Debug, Clone)]
 pub struct PluginContext {
     pub agent_name: String,
@@ -94,6 +92,7 @@ pub struct PluginContext {
 }
 
 /// Result returned by an agent execution, passed to plugin completion hooks.
+#[allow(dead_code)] // used by Plugin trait lifecycle hooks
 #[derive(Debug, Clone)]
 pub struct PluginResult {
     pub success: bool,
@@ -108,7 +107,7 @@ pub struct PluginResult {
 
 /// Core trait that all plugins must implement.
 #[async_trait]
-#[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
+#[allow(dead_code)] // F-GAP-12 — lifecycle hooks reserved for agent execution integration
 pub trait Plugin: Send + Sync {
     /// Get the plugin manifest.
     fn manifest(&self) -> &PluginManifest;
@@ -468,7 +467,6 @@ impl PluginRegistry {
     }
 
     /// Get a plugin by ID.
-    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn get(&self, id: &str) -> Option<PluginState> {
         let plugins = self.plugins.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
@@ -478,7 +476,6 @@ impl PluginRegistry {
     }
 
     /// List all registered plugin IDs.
-    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn list(&self) -> Vec<String> {
         self.plugins
             .lock()

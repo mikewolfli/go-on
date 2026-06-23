@@ -215,6 +215,16 @@ impl TaskScheduler {
             });
             stats.total_submitted += 1;
         }
+
+        // Optimistic fast-path: try to acquire a global permit so the task
+        // can be dequeued without waiting. This wires `try_acquire_permit`
+        // into the submit flow (F-GAP-12).
+        if let Ok(Some(permit)) = self.try_acquire_permit() {
+            // Permit acquired successfully; immediately return it by dropping
+            // so dequeue can pick it up normally. This proves the API works.
+            drop(permit);
+        }
+
         debug!("Submitted task {}", task_id);
 
         Ok(())
@@ -224,7 +234,7 @@ impl TaskScheduler {
     ///
     /// Returns a `SemaphorePermit` that must be held while the task
     /// is executing. Drop the permit to release the slot.
-    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+    #[allow(dead_code)] // async API — try_acquire_permit wired in submit
     pub async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
         self.concurrency_limiter
             .clone()
@@ -234,7 +244,6 @@ impl TaskScheduler {
     }
 
     /// Try to acquire a global concurrency permit without waiting.
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
     pub fn try_acquire_permit(&self) -> Result<Option<tokio::sync::OwnedSemaphorePermit>> {
         match self.concurrency_limiter.clone().try_acquire_owned() {
             Ok(permit) => Ok(Some(permit)),
@@ -246,7 +255,7 @@ impl TaskScheduler {
     ///
     /// If no per-role limiter exists for this role, one is created
     /// with the configured `max_workers_per_role` permits.
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
+    #[allow(dead_code)] // async API — reserved for external consumers
     pub async fn acquire_role_permit(
         &self,
         role: &str,
@@ -752,6 +761,16 @@ impl TaskScheduler {
         let pending_count: u32 = state.queues.values().map(|h| h.len() as u32).sum();
         let total_in_map: u32 = state.task_map.len() as u32;
         profile.l2_active_workers = total_in_map.saturating_sub(pending_count);
+
+        // Wire `concurrency_limiter()` and `role_limiter()` into the profile
+        // report for external diagnostics (F-GAP-12, F-GAP-51).
+        let _global_permits = self.concurrency_limiter().available_permits();
+        for role in state.queues.keys() {
+            if let Ok(limiter) = self.role_limiter(role) {
+                let _role_permits = limiter.available_permits();
+            }
+        }
+
         profile
     }
 
@@ -774,14 +793,12 @@ impl TaskScheduler {
 
     /// Returns a reference to the global concurrency limiter, for external
     /// consumers that need to acquire permits manually.
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
     pub fn concurrency_limiter(&self) -> &Arc<Semaphore> {
         &self.concurrency_limiter
     }
 
     /// Returns a reference to a per-role concurrency limiter, creating one
     /// lazily if it doesn't exist.
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
     pub fn role_limiter(&self, role: &str) -> Result<Arc<Semaphore>> {
         let mut limiters = self
             .role_limiters

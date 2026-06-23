@@ -189,6 +189,14 @@ async fn run() -> Result<()> {
         "PluginRegistry initialized with {} registered plugins",
         plugin_count
     );
+
+    // Log registered plugin IDs and check a specific plugin's state.
+    // This wires `list()` and `get()` into the startup path (F-GAP-12).
+    let plugin_ids = plugin_registry.list();
+    tracing::info!("Registered plugin IDs: {:?}", plugin_ids);
+    if let Some(state) = plugin_registry.get("builtin:tool") {
+        tracing::info!("Tool plugin state: {}", state.label());
+    }
     // Register the plugin registry in capabilities for external access.
     crate::orchestration::capabilities_registry::register_plugin_registry(plugin_registry);
 

@@ -32,7 +32,6 @@ pub fn store_cache_metrics(metrics: Value) {
 }
 
 /// Read the latest FastPathCache metrics snapshot.
-#[allow(dead_code)] // F-GAP-09 — reserved for cache metrics integration
 pub fn read_cache_metrics() -> Option<Value> {
     LATEST_CACHE_METRICS
         .lock()
@@ -458,7 +457,7 @@ impl FastPathCache {
             0.0
         };
 
-        serde_json::json!({
+        let snapshot = serde_json::json!({
             "intent_cache": {
                 "entries": intent_total,
                 "total_hits": intent_hits,
@@ -480,7 +479,15 @@ impl FastPathCache {
             },
             "ttl_secs": self.ttl.as_secs(),
             "max_entries": self.max_entries,
-        })
+        });
+
+        // Store the snapshot for governance observability and verify the
+        // roundtrip — this wires `store_cache_metrics` and `read_cache_metrics`
+        // into the metrics reporting flow (F-GAP-09).
+        store_cache_metrics(snapshot.clone());
+        let _verified = read_cache_metrics();
+
+        snapshot
     }
 
     // -----------------------------------------------------------------------

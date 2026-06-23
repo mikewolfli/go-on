@@ -15,8 +15,9 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor
     feature = "multi-users-server"
 ))]
 pub mod council; // F-GAP-15
-                 // DAG modules — all deprecated in favor of `core_dag`.
-                 // New code should use `crate::orchestration::core_dag` directly.
+pub mod diagnostic_feedback; // F-GAP-51: Reserved for full diagnostic integration
+                             // DAG modules — all deprecated in favor of `core_dag`.
+                             // New code should use `crate::orchestration::core_dag` directly.
 #[doc = "Deprecated legacy DAG driver — use [`core_dag`] instead."]
 // BLUE42 / BLUE64: Remove in next major version — use core_dag instead
 // Note: #[allow(deprecated)] is intentionally NOT used here — the inner

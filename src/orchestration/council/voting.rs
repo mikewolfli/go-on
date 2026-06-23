@@ -11,7 +11,6 @@ use std::collections::HashMap;
 
 impl OrchestrationCouncil {
     /// Initialize reputation tracking for a member (called automatically on first vote).
-    #[allow(dead_code)] // F-GAP-15 — kept for external API consistency; used indirectly via record_vote_accuracy
     pub(crate) fn ensure_reputation(&self, member_id: &str) {
         let mut rep = self.reputation.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
@@ -170,7 +169,11 @@ impl OrchestrationCouncil {
             )));
         }
 
+        let member_id = vote.member_id.clone();
         votes.insert(key, vote);
+        // Initialize reputation tracking for this member on first vote.
+        // This wires `ensure_reputation` into the vote recording flow (F-GAP-15).
+        self.ensure_reputation(&member_id);
         Ok(())
     }
 

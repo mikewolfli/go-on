@@ -172,7 +172,6 @@ pub struct PhaseTimeoutConfig {
     /// Timeout for the commit phase in milliseconds.
     pub commit_timeout_ms: u64,
     /// Timeout for the abort phase in milliseconds.
-    #[allow(dead_code)] // F-GAP-51 — reserved for future use
     pub abort_timeout_ms: u64,
 }
 
@@ -201,16 +200,10 @@ pub struct TwoPhaseCoordinator {
 impl TwoPhaseCoordinator {
     /// Create a new coordinator with default timeouts.
     pub fn new() -> Self {
-        Self {
-            active_transactions: Arc::new(RwLock::new(HashMap::new())),
-            completed_transactions: Arc::new(Mutex::new(Vec::new())),
-            timeouts: PhaseTimeoutConfig::default(),
-            max_retries: 3,
-        }
+        Self::with_timeouts(PhaseTimeoutConfig::default())
     }
 
     /// Create a new coordinator with custom timeouts.
-    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub fn with_timeouts(timeouts: PhaseTimeoutConfig) -> Self {
         Self {
             active_transactions: Arc::new(RwLock::new(HashMap::new())),
@@ -324,13 +317,21 @@ impl TwoPhaseCoordinator {
             .await;
 
         if !prepare_ok {
-            // Phase 1b: Abort
+            // Phase 1b: Abort with configured timeout
+            let abort_deadline =
+                Instant::now() + Duration::from_millis(self.timeouts.abort_timeout_ms);
             self.execute_phase(tx_id, |tx| {
                 tx.status = DistributedTxStatus::Aborting;
-                info!("[2PC] Phase 1b ABORT for {} — prepare phase failed", tx_id);
+                info!(
+                    "[2PC] Phase 1b ABORT for {} — prepare phase failed (timeout={}ms)",
+                    tx_id, self.timeouts.abort_timeout_ms
+                );
                 Ok(())
             })
             .await;
+            if Instant::now() > abort_deadline {
+                warn!("[2PC] ABORT deadline exceeded for {}", tx_id);
+            }
             return self.finalize_and_return(tx_id).await;
         }
 
@@ -433,14 +434,24 @@ impl TwoPhaseCoordinator {
         tx
     }
 
-    /// Get a transaction by ID.
-    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+    /// Look up a transaction — first checks active, then completed.
+    pub async fn get_status(&self, tx_id: &str) -> Option<DistributedTransaction> {
+        let active = self.active_transactions.read().await.get(tx_id).cloned();
+        if active.is_some() {
+            return active;
+        }
+        drop(active);
+        self.get_completed_transactions()
+            .into_iter()
+            .find(|tx| tx.tx_id == tx_id)
+    }
+
+    /// Get a transaction by ID from the active set.
     pub async fn get_transaction(&self, tx_id: &str) -> Option<DistributedTransaction> {
         self.active_transactions.read().await.get(tx_id).cloned()
     }
 
     /// Get all completed transactions.
-    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub fn get_completed_transactions(&self) -> Vec<DistributedTransaction> {
         let guard = self
             .completed_transactions

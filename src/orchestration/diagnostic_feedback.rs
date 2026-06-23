@@ -6,8 +6,6 @@
 //! diagnostic data. Enables the system to self-correct based on
 //! build output feedback.
 
-// F-GAP-51: dead_code allowed on specific items below (reserved for full diagnostic integration)
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -16,7 +14,6 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 /// Severity of a diagnostic message.
-#[allow(dead_code)] // F-GAP-51 — reserved for full diagnostic integration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiagnosticSeverity {
     Error,
@@ -42,7 +39,6 @@ impl DiagnosticSeverity {
 // ---------------------------------------------------------------------------
 
 /// A single diagnostic message parsed from compiler/LSP output.
-#[allow(dead_code)] // F-GAP-51 — reserved for full diagnostic integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticMessage {
     /// File path where the diagnostic originated.
@@ -68,7 +64,6 @@ pub struct DiagnosticMessage {
 // ---------------------------------------------------------------------------
 
 /// A batch of diagnostic messages from a single compilation run.
-#[allow(dead_code)] // F-GAP-51 — reserved for full diagnostic integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticBatch {
     /// Unique identifier for this batch.
@@ -87,7 +82,6 @@ pub struct DiagnosticBatch {
     pub loop_phase: Option<String>,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for full diagnostic integration
 impl DiagnosticBatch {
     pub fn new(messages: Vec<DiagnosticMessage>) -> Self {
         let error_count = messages
@@ -122,7 +116,6 @@ impl DiagnosticBatch {
     }
 
     /// Generate a summary suitable for BrainLoop reflect phase.
-    #[allow(dead_code)] // F-GAP-11 — reserved for BrainLoop reflect phase integration
     pub fn summary(&self) -> String {
         format!(
             "Build diagnostics: {} errors, {} warnings, {} info",
@@ -146,7 +139,6 @@ impl DiagnosticBatch {
 
 /// A known diagnostic pattern that maps to a repair strategy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-51 — reserved for full diagnostic integration
 pub struct DiagnosticPattern {
     /// Error code pattern (e.g. "E0308", "borrowck", "unused").
     pub pattern: String,
@@ -166,7 +158,6 @@ pub struct DiagnosticPattern {
 
 /// Central engine that collects diagnostics and provides feedback
 /// to the BrainLoop for self-correction.
-#[allow(dead_code)] // F-GAP-51 — reserved for full diagnostic integration
 pub struct DiagnosticFeedbackEngine {
     /// History of diagnostic batches.
     history: Vec<DiagnosticBatch>,
@@ -176,7 +167,6 @@ pub struct DiagnosticFeedbackEngine {
     max_history: usize,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for full diagnostic integration
 impl DiagnosticFeedbackEngine {
     pub fn new() -> Self {
         let mut engine = Self {
@@ -240,6 +230,15 @@ impl DiagnosticFeedbackEngine {
         if self.history.len() > self.max_history {
             self.history.remove(0);
         }
+    }
+
+    /// Process a set of diagnostic messages: creates a `DiagnosticBatch`, submits it,
+    /// and returns the error trend ("decreasing" | "stable" | "increasing").
+    /// This is the primary integration point for the BrainLoop reflection phase.
+    pub fn process_diagnostics(&mut self, messages: Vec<DiagnosticMessage>) -> &str {
+        let batch = DiagnosticBatch::new(messages);
+        self.submit_batch(batch);
+        self.error_trend()
     }
 
     /// Get the most recent diagnostic batch.
@@ -417,5 +416,17 @@ mod tests {
     fn test_severity_labels() {
         assert_eq!(DiagnosticSeverity::Error.label(), "error");
         assert_eq!(DiagnosticSeverity::Warning.label(), "warning");
+    }
+
+    #[test]
+    fn test_process_diagnostics() {
+        let mut engine = DiagnosticFeedbackEngine::new();
+        let msgs = vec![
+            make_msg(DiagnosticSeverity::Error, "E0308", "src/main.rs", 10, "type mismatch"),
+            make_msg(DiagnosticSeverity::Warning, "unused", "src/lib.rs", 5, "unused variable"),
+        ];
+        let trend = engine.process_diagnostics(msgs);
+        assert_eq!(trend, "stable");
+        assert!(engine.latest_batch().is_some());
     }
 }

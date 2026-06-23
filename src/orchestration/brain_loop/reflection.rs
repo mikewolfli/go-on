@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::orchestration::core_dag::TaskContext;
+use crate::orchestration::diagnostic_feedback::DiagnosticFeedbackEngine;
 
 use super::{
     now_epoch_ms, BrainLoopConfig, BrainLoopPhase, BrainLoopPlan, BrainLoopReflection,
@@ -32,12 +33,17 @@ pub struct DeepReasoningEngine {
     /// Maximum tokens for a single reasoning chain.
     pub max_reasoning_tokens: usize,
     /// Optional model name override for deep-reasoning calls.
-    #[allow(dead_code)] // F-GAP-49 — reserved for deep-reasoning model override
+    /// When `Some`, passed as a `"model"` option to the LLM agent call.
     pub model: Option<String>,
     /// Agent registry for LLM calls (B51-08).
     /// When `Some`, `plan_with_reasoning` and `reflect_with_reasoning` call
     /// the configured LLM agent for real reasoning chains instead of stubs.
     pub agent_registry: Option<Arc<AgentRegistry>>,
+    /// Optional diagnostic feedback engine (F-GAP-51), wrapped in an Arc<Mutex>
+    /// for interior mutability during reflection.
+    /// When `Some`, step execution results are processed as diagnostics
+    /// during the reflection phase to surface error patterns.
+    pub diagnostic_feedback: Option<Arc<std::sync::Mutex<DiagnosticFeedbackEngine>>>,
 }
 
 impl DeepReasoningEngine {
@@ -47,12 +53,19 @@ impl DeepReasoningEngine {
             max_reasoning_tokens: config.max_deep_reasoning_tokens,
             model: config.deep_reasoning_model.clone(),
             agent_registry: None,
+            diagnostic_feedback: None,
         }
     }
 
     /// Set the agent registry for LLM-backed reasoning.
     pub fn with_agent_registry(mut self, registry: Arc<AgentRegistry>) -> Self {
         self.agent_registry = Some(registry);
+        self
+    }
+
+    /// Attach a diagnostic feedback engine for processing step diagnostics.
+    pub fn with_diagnostic_feedback(mut self, engine: DiagnosticFeedbackEngine) -> Self {
+        self.diagnostic_feedback = Some(Arc::new(std::sync::Mutex::new(engine)));
         self
     }
 
@@ -101,7 +114,8 @@ impl DeepReasoningEngine {
                     context.assumptions,
                     self.max_reasoning_tokens,
                 );
-                let reasoning = Self::call_llm_and_collect(&agent, &prompt).await;
+                let reasoning =
+                    Self::call_llm_and_collect(&agent, &prompt, self.model.as_deref()).await;
                 enriched.reasoning = Some(reasoning);
                 return enriched;
             }
@@ -167,6 +181,45 @@ impl DeepReasoningEngine {
         let now = now_epoch_ms();
         let prev_confidence = history.last().map(|r| r.confidence).unwrap_or(1.0);
 
+        // ── Feed step result through diagnostic feedback engine ──
+        if let Some(ref engine_arc) = self.diagnostic_feedback {
+            if let Ok(ref mut engine) = engine_arc.lock() {
+                let diagnostics: Vec<_> = result
+                    .lines()
+                    .filter(|l| {
+                        l.contains("error:")
+                            || l.contains("warning:")
+                            || l.contains("Error:")
+                            || l.contains("Warning:")
+                    })
+                    .enumerate()
+                    .map(|(i, line)| {
+                        use crate::orchestration::diagnostic_feedback::{
+                            DiagnosticMessage, DiagnosticSeverity,
+                        };
+                        DiagnosticMessage {
+                            file: step_id.to_string(),
+                            line: i + 1,
+                            column: 1,
+                            severity: if line.contains("error:") || line.contains("Error:") {
+                                DiagnosticSeverity::Error
+                            } else {
+                                DiagnosticSeverity::Warning
+                            },
+                            code: None,
+                            message: line.to_string(),
+                            suggestion: None,
+                            source_snippet: None,
+                        }
+                    })
+                    .collect();
+                if !diagnostics.is_empty() {
+                    let trend = engine.process_diagnostics(diagnostics);
+                    tracing::info!("Diagnostic feedback trend: {}", trend);
+                }
+            }
+        }
+
         // ── Attempt LLM-backed reflection if agent registry is available ──
         if let Some(ref registry) = self.agent_registry {
             if let Some(agent) = registry.get("primary") {
@@ -192,7 +245,8 @@ impl DeepReasoningEngine {
                     prev_confidence,
                     self.max_reasoning_tokens,
                 );
-                let analysis = Self::call_llm_and_collect(&agent, &prompt).await;
+                let analysis =
+                    Self::call_llm_and_collect(&agent, &prompt, self.model.as_deref()).await;
                 return BrainLoopReflection {
                     step_id: step_id.to_string(),
                     observations: vec![result.to_string(), analysis.clone()],
@@ -295,7 +349,8 @@ impl DeepReasoningEngine {
                         &json_str
                     }
                 );
-                let response = Self::call_llm_and_collect(&agent, &prompt).await;
+                let response =
+                    Self::call_llm_and_collect(&agent, &prompt, self.model.as_deref()).await;
                 // Parse floating point from response
                 let score: f64 = response
                     .trim()
@@ -336,7 +391,11 @@ impl DeepReasoningEngine {
     // ── Private helpers ────────────────────────────────────────────────
 
     /// Call an LLM agent with a prompt and collect the full text response.
-    async fn call_llm_and_collect(agent: &Arc<dyn Agent>, prompt: &str) -> String {
+    async fn call_llm_and_collect(
+        agent: &Arc<dyn Agent>,
+        prompt: &str,
+        model: Option<&str>,
+    ) -> String {
         let msg = Message {
             role: "user".to_string(),
             content: prompt.to_string(),
@@ -346,10 +405,18 @@ impl DeepReasoningEngine {
         let agent_clone = Arc::clone(agent);
         let msg_clone = msg.clone();
 
-        let task =
-            tokio::spawn(
-                async move { agent_clone.chat(vec![msg_clone], None, None, sender).await },
-            );
+        // Build options, injecting model preference if provided
+        let options = model.map(|m| {
+            let mut opts = std::collections::HashMap::new();
+            opts.insert("model".to_string(), serde_json::json!(m));
+            opts
+        });
+
+        let task = tokio::spawn(async move {
+            agent_clone
+                .chat(vec![msg_clone], None, options, sender)
+                .await
+        });
 
         let mut response = String::new();
         while let Some(token) = rx.recv().await {
@@ -386,8 +453,6 @@ impl DeepReasoningEngine {
 // ---------------------------------------------------------------------------
 
 /// Summary report produced by a full Plan → Execute → Reflect → Replan cycle.
-// Reserved for future BrainLoop integration.
-#[allow(dead_code)] // F-GAP-49 — reserved for BrainLoop report integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopReport {
     /// Number of iterations executed.
@@ -398,6 +463,28 @@ pub struct BrainLoopReport {
     pub converged: bool,
     /// Full history of steps across iterations.
     pub history: Vec<BrainLoopStep>,
+}
+
+impl From<&[BrainLoopStep]> for BrainLoopReport {
+    fn from(history: &[BrainLoopStep]) -> Self {
+        let total = history.len();
+        let done = history
+            .iter()
+            .filter(|s| s.status == StepStatus::Done)
+            .count();
+        let converged = total > 0 && done == total;
+        let final_score = if total == 0 {
+            0.0
+        } else {
+            done as f64 / total as f64
+        };
+        Self {
+            iterations: 1,
+            final_score,
+            converged,
+            history: history.to_vec(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

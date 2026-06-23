@@ -312,7 +312,6 @@ impl EvidenceWeightedPromotion {
     }
 
     /// Return a snapshot of the full promotion history.
-    #[allow(dead_code)] // F-GAP-13 — reserved for diagnostic / observability endpoint
     pub fn all_history(&self) -> HashMap<String, Vec<PromotionHistoryEntry>> {
         self.history
             .lock()
@@ -487,6 +486,22 @@ mod tests {
         let shared = reg.into_shared();
         let guard = shared.lock().unwrap();
         assert_eq!(guard.plugin_count(), 1);
+    }
+
+    #[test]
+    fn test_evidence_weighted_promotion_all_history() {
+        let plugin = EvidenceWeightedPromotion::new(0.5, 2.0);
+        let ctx1 = PromotionContext::new("agent-a", "code", 0.9, 0.8);
+        let ctx2 = PromotionContext::new("agent-b", "research", 0.85, 0.7);
+        let _ = plugin.promote(&ctx1);
+        let _ = plugin.promote(&ctx2);
+
+        let history = plugin.all_history();
+        assert_eq!(history.len(), 2);
+        assert!(history.contains_key("agent-a"));
+        assert!(history.contains_key("agent-b"));
+        assert_eq!(history["agent-a"].len(), 1);
+        assert_eq!(history["agent-b"].len(), 1);
     }
 
     #[test]

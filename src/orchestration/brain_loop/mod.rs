@@ -38,8 +38,7 @@ pub mod execution;
 pub mod planning;
 pub mod reflection;
 
-#[allow(unused_imports)]
-pub use reflection::{BrainLoopReport, DeepReasoningEngine, Reflection};
+pub use reflection::DeepReasoningEngine;
 
 // ---------------------------------------------------------------------------
 // Imports
@@ -1297,5 +1296,40 @@ mod tests {
             config.world_model_integration,
             "world_model_integration should default to true"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // test_brain_loop_report_from_steps
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_brain_loop_report_from_steps() {
+        let step_done = BrainLoopStep {
+            status: StepStatus::Done,
+            ..make_step("s1", "done")
+        };
+        let step_pending = BrainLoopStep {
+            status: StepStatus::Pending,
+            ..make_step("s2", "pending")
+        };
+
+        let report = BrainLoopReport::from(vec![step_done, step_pending].as_slice());
+        assert_eq!(report.iterations, 1);
+        assert!(!report.converged);
+        assert!((report.final_score - 0.5).abs() < 1e-6);
+        assert_eq!(report.history.len(), 2);
+
+        // All done = converged
+        let done1 = BrainLoopStep {
+            status: StepStatus::Done,
+            ..make_step("a", "a")
+        };
+        let done2 = BrainLoopStep {
+            status: StepStatus::Done,
+            ..make_step("b", "b")
+        };
+        let report2 = BrainLoopReport::from(vec![done1, done2].as_slice());
+        assert!(report2.converged);
+        assert!((report2.final_score - 1.0).abs() < 1e-6);
     }
 }

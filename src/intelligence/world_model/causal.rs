@@ -6,6 +6,7 @@
 use super::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 
 /// Maintains inference state for discovering causal relationships
 /// by analyzing entity state changes over time windows.
@@ -155,11 +156,45 @@ impl CausalReasoner {
     }
 
     /// Returns the current set of discovered correlations.
-    #[allow(dead_code)] // F-GAP reserved
     pub fn correlations(&self) -> &[Correlation] {
         &self.correlations
     }
+}
 
+impl fmt::Display for CausalReasoner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cors = self.correlations();
+        if cors.is_empty() {
+            writeln!(f, "CausalReasoner: no correlations discovered")?;
+        } else {
+            writeln!(f, "CausalReasoner: {} correlations:", cors.len())?;
+            for corr in cors.iter().take(10) {
+                writeln!(
+                    f,
+                    "  {}:{} → {}:{} (confidence={:.3}, count={})",
+                    corr.cause_entity,
+                    corr.cause_property,
+                    corr.effect_entity,
+                    corr.effect_property,
+                    corr.confidence,
+                    corr.co_occurrence_count
+                )?;
+            }
+            if cors.len() > 10 {
+                writeln!(f, "  ... and {} more", cors.len() - 10)?;
+            }
+        }
+        writeln!(
+            f,
+            "History: {} snapshots, window={}ms",
+            self.history.len(),
+            self.window_ms
+        )?;
+        Ok(())
+    }
+}
+
+impl CausalReasoner {
     /// Chains discovered correlations into causal sequences.
     ///
     /// Starting from each correlation, greedily extends chains of the form

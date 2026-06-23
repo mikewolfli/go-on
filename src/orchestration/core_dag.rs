@@ -411,7 +411,7 @@ pub struct DagNode<T> {
 /// Stores nodes in a `HashMap` keyed by node ID, and maintains both
 /// forward edges (`edges: parent -> children`) and backward edges
 /// (`dependencies` stored on each node).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CoreDag<T> {
     /// All nodes in the graph, keyed by their `id`.
     pub nodes: HashMap<String, DagNode<T>>,
@@ -419,6 +419,21 @@ pub struct CoreDag<T> {
     pub edges: HashMap<String, HashSet<String>>,
     /// Nodes that have no dependencies (entry points for topological sort).
     pub entry_points: Vec<String>,
+}
+
+impl<T> std::fmt::Debug for CoreDag<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut node_debug: Vec<String> = Vec::new();
+        for (id, _) in &self.nodes {
+            let parents = self.parents(id);
+            node_debug.push(format!("{} -> parents: {:?}", id, parents));
+        }
+        f.debug_struct("CoreDag")
+            .field("nodes", &node_debug)
+            .field("edges", &self.edges)
+            .field("entry_points", &self.entry_points)
+            .finish()
+    }
 }
 
 impl<T> CoreDag<T> {
@@ -462,7 +477,6 @@ impl<T> CoreDag<T> {
     }
 
     /// Return the parents (direct dependencies) of a node.
-    #[allow(dead_code)] // F-GAP-49 -- reserved for DAG consumer migration
     pub fn parents(&self, id: &str) -> Vec<&str> {
         self.nodes
             .get(id)
@@ -636,7 +650,7 @@ pub struct DagMetrics {
 // -- Conversion traits (reserved for future use) -----------------------------
 
 /// Trait for converting from another DAG type into a `CoreDag<T>`.
-#[allow(dead_code)] // F-GAP-49 -- reserved for DAG consumer migration
+#[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
 pub trait IntoCoreDag<T, Source> {
     /// Convert `Source` into a `CoreDag<T>`.
     fn into_core_dag(source: Source) -> CoreDag<T>;
@@ -645,6 +659,7 @@ pub trait IntoCoreDag<T, Source> {
 // -- Iterators ---------------------------------------------------------------
 
 /// An iterator over the nodes of a `CoreDag` in topological order.
+#[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
 pub struct TopoIter<'a, T> {
     dag: &'a CoreDag<T>,
     order: Vec<&'a str>,
@@ -652,7 +667,7 @@ pub struct TopoIter<'a, T> {
 }
 
 impl<'a, T> TopoIter<'a, T> {
-    #[allow(dead_code)] // F-GAP-49 -- reserved for DAG consumer migration
+    #[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
     fn new(dag: &'a CoreDag<T>) -> Result<Self, String> {
         let order = dag.topological_sort()?;
         Ok(Self {
@@ -675,7 +690,7 @@ impl<'a, T> Iterator for TopoIter<'a, T> {
 
 impl<T> CoreDag<T> {
     /// Return an iterator over nodes in topological order.
-    #[allow(dead_code)] // F-GAP-49 -- reserved for DAG consumer migration
+    #[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
     pub fn iter_topo(&self) -> Result<TopoIter<'_, T>, String> {
         TopoIter::new(self)
     }
@@ -1490,5 +1505,42 @@ mod tests {
 
         let ids: Vec<&str> = dag.iter_topo().unwrap().map(|(id, _)| id).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_into_core_dag() {
+        struct SimpleGraph {
+            nodes: Vec<String>,
+            edges: Vec<(String, String)>,
+        }
+
+        impl IntoCoreDag<String, SimpleGraph> for SimpleGraph {
+            fn into_core_dag(source: SimpleGraph) -> CoreDag<String> {
+                let mut dag = CoreDag::new();
+                for n in &source.nodes {
+                    dag.add_node(n.clone(), n.clone(), vec![]);
+                }
+                for (from, to) in &source.edges {
+                    // Add dependency edges: `to` depends on `from`
+                    if let Some(node) = dag.nodes.get_mut(to) {
+                        node.dependencies.push(from.clone());
+                    }
+                    dag.edges
+                        .entry(from.clone())
+                        .or_default()
+                        .insert(to.clone());
+                }
+                dag.recompute_entry_points();
+                dag
+            }
+        }
+
+        let graph = SimpleGraph {
+            nodes: vec!["a".to_string(), "b".to_string()],
+            edges: vec![("a".to_string(), "b".to_string())],
+        };
+        let dag: CoreDag<String> = SimpleGraph::into_core_dag(graph);
+        assert!(dag.nodes.contains_key("a"));
+        assert!(dag.nodes.contains_key("b"));
     }
 }

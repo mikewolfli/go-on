@@ -6,6 +6,7 @@
 //! a 1-10 complexity score that feeds into the BrainLoop and scheduler.
 
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -68,7 +69,6 @@ impl ComplexityLevel {
 
 /// Individual signals that contribute to complexity estimation.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // F-GAP-17 — reserved for complexity signal diagnostics
 struct ComplexitySignal {
     /// Description of the signal.
     pub name: String,
@@ -111,8 +111,7 @@ pub struct ComplexityEstimator {
     /// Keywords that indicate low complexity.
     simple_keywords: Vec<String>,
     /// Historical complexity scores for similar tasks (task summary → score).
-    #[allow(dead_code)] // F-GAP-17 — reserved for historical complexity tracking
-    history: HashMap<String, u8>,
+    history: RefCell<HashMap<String, u8>>,
 }
 
 impl ComplexityEstimator {
@@ -149,7 +148,7 @@ impl ComplexityEstimator {
                 "version".to_string(),
                 "help".to_string(),
             ],
-            history: HashMap::new(),
+            history: RefCell::new(HashMap::new()),
         }
     }
 
@@ -240,22 +239,36 @@ impl ComplexityEstimator {
 
         let signals = vec![
             format!(
-                "{} (weight={}, score={:.2})",
-                signal1.name, signal1.weight, signal1.normalized
+                "{} (raw={}, weight={}, score={:.2})",
+                signal1.name, signal1.raw_value, signal1.weight, signal1.normalized
             ),
             format!(
-                "{} (weight={}, score={:.2})",
-                signal2.name, signal2.weight, signal2.normalized
+                "{} (raw={}, weight={}, score={:.2})",
+                signal2.name, signal2.raw_value, signal2.weight, signal2.normalized
             ),
             format!(
-                "{} (weight={}, score={:.2})",
-                signal3.name, signal3.weight, signal3.normalized
+                "{} (raw={}, weight={}, score={:.2})",
+                signal3.name, signal3.raw_value, signal3.weight, signal3.normalized
             ),
             format!(
-                "{} (weight={}, score={:.2})",
-                signal4.name, signal4.weight, signal4.normalized
+                "{} (raw={}, weight={}, score={:.2})",
+                signal4.name, signal4.raw_value, signal4.weight, signal4.normalized
             ),
         ];
+
+        // Record in history for trend analysis (F-GAP-17).
+        // Keep at most 1000 entries to bound memory growth.
+        {
+            let mut history = self.history.borrow_mut();
+            if history.len() >= 1000 {
+                // Retain only the most recent 500 entries.
+                let keys: Vec<String> = history.keys().take(500).cloned().collect();
+                for k in keys {
+                    history.remove(&k);
+                }
+            }
+            history.insert(task_description.to_string(), score);
+        }
 
         ComplexityEstimate {
             score,

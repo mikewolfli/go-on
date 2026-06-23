@@ -100,13 +100,10 @@ pub struct ModelPreferences {
     #[serde(default)]
     pub hints: Option<Vec<ModelHint>>,
     #[serde(default)]
-    #[allow(dead_code)] // F-GAP reserved
     pub cost_priority: Option<f64>,
     #[serde(default)]
-    #[allow(dead_code)] // F-GAP reserved
     pub speed_priority: Option<f64>,
     #[serde(default)]
-    #[allow(dead_code)] // F-GAP reserved
     pub intelligence_priority: Option<f64>,
 }
 
@@ -122,7 +119,7 @@ pub struct CreateMessageRequest {
     #[serde(default)]
     pub model_preferences: Option<ModelPreferences>,
     #[serde(default)]
-    #[allow(dead_code)] // F-GAP reserved
+    #[allow(dead_code)]
     pub metadata: Option<HashMap<String, Value>>,
 }
 
@@ -1016,14 +1013,39 @@ impl McpServer {
             .map_err(|e| invalid_params(format!("Invalid sampling request: {}", e)))?;
 
         // Determine which agent to use based on model preferences
-        let agent_name = create_request
+        let (agent_name, overridden_model) = create_request
             .model_preferences
             .as_ref()
-            .and_then(|prefs| prefs.hints.as_ref())
-            .and_then(|hints| hints.first())
-            .and_then(|hint| hint.name.as_ref())
-            .cloned()
-            .unwrap_or_else(|| "primary".to_string());
+            .map(|prefs| {
+                let name = prefs
+                    .hints
+                    .as_ref()
+                    .and_then(|hints| hints.first())
+                    .and_then(|hint| hint.name.as_ref())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        // Use priority hints to select a suitable agent
+                        if prefs.cost_priority.unwrap_or(0.0) > 0.7 {
+                            "economy"
+                        } else if prefs.speed_priority.unwrap_or(0.0) > 0.7 {
+                            "fast"
+                        } else if prefs.intelligence_priority.unwrap_or(0.0) > 0.7 {
+                            "reasoning"
+                        } else {
+                            "primary"
+                        }
+                        .to_string()
+                    });
+                (
+                    name,
+                    prefs
+                        .hints
+                        .as_ref()
+                        .and_then(|h| h.first())
+                        .and_then(|h| h.name.clone()),
+                )
+            })
+            .unwrap_or_else(|| ("primary".to_string(), None));
 
         let agent = self
             .agent_registry
@@ -1053,11 +1075,27 @@ impl McpServer {
             });
         }
 
-        // Build options
+        // Build options from request parameters and model preferences
         let mut options = HashMap::new();
         options.insert("max_tokens".to_string(), json!(create_request.max_tokens));
         if !create_request.stop_sequences.is_empty() {
             options.insert("stop".to_string(), json!(create_request.stop_sequences));
+        }
+        // Inject model override from preferences, if provided
+        if let Some(ref model_override) = overridden_model {
+            options.insert("model".to_string(), json!(model_override));
+        }
+        // Pass preference hints to the agent so it can optimize accordingly
+        if let Some(ref prefs) = create_request.model_preferences {
+            if let Some(cost) = prefs.cost_priority {
+                options.insert("cost_priority".to_string(), json!(cost));
+            }
+            if let Some(speed) = prefs.speed_priority {
+                options.insert("speed_priority".to_string(), json!(speed));
+            }
+            if let Some(intel) = prefs.intelligence_priority {
+                options.insert("intelligence_priority".to_string(), json!(intel));
+            }
         }
 
         // Channel to collect streaming response
@@ -1272,9 +1310,9 @@ impl McpServer {
     /// Transport-level push of `notifications/resources/list_changed`
     /// is wired when the ACP server provides a notification channel.
     ///
-    /// This is a public API surface reserved for external callers who
-    /// need to notify subscribers of resource changes.
-    #[allow(dead_code)] // F-GAP-49 — reserved for external resource change notification
+    /// Notify subscribers that a resource has changed.
+    /// External callers invoke this to trigger real-time SSE updates
+    /// for connected MCP clients.
     pub fn notify_resource_changed(&self, resource_uri: &str) {
         let has_subscribers = {
             let subs = self

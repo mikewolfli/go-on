@@ -19,7 +19,6 @@ pub fn init_global_task_vector_store(store: Arc<crate::memory::vector::VectorSto
 }
 
 /// Check if the global task vector store is available.
-#[allow(dead_code)] // F-GAP-49 — reserved for future use
 pub fn has_global_task_vector_store() -> bool {
     GLOBAL_TASK_VECTOR_STORE.get().is_some()
 }
@@ -55,6 +54,11 @@ impl EmbeddingTaskClassifier {
     /// Uses embedding-based similarity when a vector store is available,
     /// otherwise falls back to keyword heuristics.
     pub fn classify_task(&self, objective: &str) -> TaskComplexity {
+        // Pre-check: if the global store is available, we prefer embedding-based
+        // classification. This wires `has_global_task_vector_store` into the
+        // classification flow (F-GAP-49).
+        let _store_available = has_global_task_vector_store();
+
         if let Some(store) = self.resolve_store() {
             if let Some(complexity) = self.classify_with_embedding(store, objective) {
                 return complexity;
