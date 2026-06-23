@@ -313,8 +313,10 @@ fn test_dp_noise_small_epsilon_produces_large_noise() {
 
 #[cfg(feature = "sub-bus-distributed-memory")]
 use go_on::intelligence::reinforcement::federated_discovery::{
-    NodeDiscovery, NodeInfo, NodeRole, StaticDiscovery,
+    NodeDiscovery, NodeInfo, StaticDiscovery,
 };
+#[cfg(feature = "sub-bus-distributed-memory")]
+use go_on::intelligence::reinforcement::federated_transport::NodeRole;
 #[cfg(feature = "sub-bus-distributed-memory")]
 use go_on::intelligence::reinforcement::federated_transport::PeerInfo;
 

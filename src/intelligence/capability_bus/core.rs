@@ -699,7 +699,7 @@ impl CapabilityBus {
     /// Each entry is a `(endpoint, skill_name)` tuple. This is only available
     /// under the `multi-users-server` feature flag.
     #[cfg(feature = "multi-users-server")]
-    pub fn with_remote_skills(mut self, skills: &[(&str, &str)]) -> Self {
+    pub fn with_remote_skills(self, skills: &[(&str, &str)]) -> Self {
         for (endpoint, skill_name) in skills {
             crate::intelligence::capability_bus::tool_bus::import_remote_skill(
                 &self.tool_bus,

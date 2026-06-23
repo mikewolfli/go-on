@@ -129,8 +129,6 @@ struct ReplayStep {
 
 #[derive(Debug, Clone)]
 struct ReplayScenario {
-    #[allow(dead_code)]
-    name: &'static str,
     steps: Vec<ReplayStep>,
 }
 
@@ -221,17 +219,13 @@ fn scenario_simple_task() -> ReplayScenario {
             reroute: false,
         });
     }
-    ReplayScenario {
-        name: "simple_task",
-        steps,
-    }
+    ReplayScenario { steps }
 }
 
 /// Three serial tool calls, measures rounds + accuracy.
 /// Single flow: planner -> coder -> reviewer (3 rounds, 3 tool calls).
 fn scenario_multi_tool_serial() -> ReplayScenario {
     ReplayScenario {
-        name: "multi_tool_serial",
         steps: vec![
             ReplayStep {
                 round: 1,
@@ -261,7 +255,6 @@ fn scenario_multi_tool_serial() -> ReplayScenario {
 /// Five parallel tool calls followed by a join, measures fanout efficiency.
 fn scenario_parallel_fanout() -> ReplayScenario {
     ReplayScenario {
-        name: "parallel_fanout",
         steps: vec![
             ReplayStep {
                 round: 1,
@@ -312,7 +305,6 @@ fn scenario_parallel_fanout() -> ReplayScenario {
 /// Tool failure followed by automatic recovery, measures recovery success.
 fn scenario_failure_recovery() -> ReplayScenario {
     ReplayScenario {
-        name: "failure_recovery",
         steps: vec![
             // Primary tool fails
             ReplayStep {
@@ -337,7 +329,6 @@ fn scenario_failure_recovery() -> ReplayScenario {
 /// Full execution with audit trail: plan -> execute -> review -> record.
 fn scenario_audit_trail() -> ReplayScenario {
     ReplayScenario {
-        name: "audit_trail",
         steps: vec![
             ReplayStep {
                 round: 1,
@@ -677,10 +668,7 @@ fn regression_gate_detects_latency_regression() {
             reroute: false,
         });
     }
-    let scenario = ReplayScenario {
-        name: "high_latency",
-        steps,
-    };
+    let scenario = ReplayScenario { steps };
     let metrics = replay_metrics(&scenario);
 
     let result =
@@ -712,10 +700,7 @@ fn regression_gate_detects_rounds_inflation() {
         })
         .collect();
 
-    let scenario = ReplayScenario {
-        name: "inflated_rounds",
-        steps,
-    };
+    let scenario = ReplayScenario { steps };
     let metrics = replay_metrics(&scenario);
 
     let result = benchmark_dimension_for_scenario(&scenario, &metrics, BenchmarkDimension::Rounds);

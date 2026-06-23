@@ -1,11 +1,10 @@
 //! Providers view — listing, editing, catalog, and Copilot OAuth.
 //!
-//! This module has been decomposed into sub-modules:
+//! Sub-modules (see F-GAP-65 for rendering migration):
 //! - `list` — provider name constants and model suggestions
 //! - `editor` — provider editing form helpers
 //! - `catalog` — provider catalog fetched from backend RPC
-//!
-//! TODO (BLUE65): Migrate rendering logic into these sub-modules.
+//! - `render` — monolithic `show()` method, to be split into sub-modules
 
 pub mod catalog;
 pub mod editor;

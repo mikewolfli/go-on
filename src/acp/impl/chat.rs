@@ -932,7 +932,7 @@ pub(crate) struct FullAutoExecutionResult {
 // the Think-Act-Observe (TAO) loop when the autonomy loop did not handle
 // tool execution. Uses a cached task description to avoid redundant calls.
 //
-// TODO-BLUE64: FullAuto has overlapping execution paths:
+// F-GAP-64: FullAuto has overlapping execution paths:
 //   1. FullAutoFlow (BLUE43, skill-based, ~L2038)
 //   2. TAO loop (Think-Act-Observe, ~L2073)
 //   3. Raw string comparisons below (~L2224-2288)
@@ -1242,7 +1242,7 @@ pub(crate) async fn apply_review_gate_assemble(
     let task_description = extract_task_description(&params.messages);
 
     // Memory policy execution integration
-    // TODO-BLUE64: Use structured ModeKind::FullAuto check instead of raw string comparison.
+    // F-GAP-64: Use structured ModeKind::FullAuto check instead of raw string comparison.
     // Same pattern repeated at L~2260, L~2277, L~2284.
     let memory_promotion_result = if params.mode.eq_ignore_ascii_case("full_auto") {
         let memory_entry = MemoryEntry {

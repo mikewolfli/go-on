@@ -10,9 +10,8 @@
 //! FUTURE: After startup, the GUI can call `fetch_catalog()` to get the authoritative
 //! catalog and overlay it on top of the built-in fallback.
 //!
-//! TODO-BACKEND-ENDPOINT: The backend `/v1/providers/catalog` (or `provider.catalog` RPC)
-//! endpoint exists but is not yet wired into the GUI startup flow. Once wired, the startup
-//! sequence should:
+//! F-GAP-59: The backend `/v1/providers/catalog` endpoint is defined but not yet wired
+//! into the GUI startup flow. Once wired:
 //!   1. Check backend availability via `health()`
 //!   2. Call `fetch_catalog()` to get the authoritative catalog
 //!   3. Merge or overlay the backend catalog on top of `built_in_provider_specs()`

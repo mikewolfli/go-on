@@ -317,7 +317,7 @@ pub struct ProviderSpec {
     pub recommended_delivery_request_timeout_seconds: Option<u64>,
 }
 
-// TODO-BLUE64: Add builder pattern for ProviderSpec (31 fields) to simplify
+// F-GAP-64: Add builder pattern for ProviderSpec (31 fields) to simplify
 // construction with sensible defaults and avoid repetitive `Option` wrapping.
 
 impl ProviderSpec {

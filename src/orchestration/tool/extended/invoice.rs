@@ -353,7 +353,7 @@ fn extract_line_items(text: &str) -> Vec<LineItem> {
                 items.push(LineItem {
                     description: desc,
                     quantity: qty,
-                    unit_price: unit_price,
+                    unit_price,
                     amount,
                 });
             }

@@ -493,10 +493,9 @@ impl ApprovalEngine {
         self.queue.push(request.clone());
 
         // Persist to SQLite if configured.
-        #[allow(unused_variables)]
-        if let Some(ref db_path) = self.db_path {
+        if let Some(ref _db_path) = self.db_path {
             #[cfg(feature = "backend-sqlite")]
-            if let Err(e) = Self::upsert_sqlite(db_path, &request) {
+            if let Err(e) = Self::upsert_sqlite(_db_path, &request) {
                 tracing::warn!(error = %e, id = %id, "Failed to persist approval request to SQLite");
             }
         }
@@ -554,7 +553,6 @@ impl ApprovalEngine {
         self.feedback_to_learner(&status);
 
         // Update SQLite if configured.
-        #[allow(unused_variables)]
         if let Some(ref _db_path) = self.db_path {
             #[cfg(feature = "backend-sqlite")]
             if let Err(e) = Self::update_status_sqlite(_db_path, &status) {
@@ -608,7 +606,6 @@ impl ApprovalEngine {
         self.feedback_to_learner(&request_clone);
 
         // Update SQLite if configured.
-        #[allow(unused_variables)]
         if let Some(ref _db_path) = self.db_path {
             #[cfg(feature = "backend-sqlite")]
             if let Err(e) = Self::update_status_sqlite(_db_path, &request_clone) {
@@ -719,10 +716,8 @@ impl ApprovalEngine {
         {
             let db_path = self.db_path.clone();
             std::thread::scope(|scope| {
-                #[allow(unused_variables)]
                 for _req in &snapshots {
                     // Persist to SQLite concurrently per request.
-                    #[allow(unused_variables)]
                     if let Some(ref _db_path) = db_path {
                         scope.spawn(|| {
                             #[cfg(feature = "backend-sqlite")]
@@ -796,9 +791,7 @@ impl ApprovalEngine {
         }
 
         // Remove from SQLite if configured.
-        #[allow(unused_variables)]
         if let Some(ref _db_path) = self.db_path {
-            #[allow(unused_variables)]
             for _id in &old_ids {
                 #[cfg(feature = "backend-sqlite")]
                 if let Err(e) = Self::delete_from_sqlite(_db_path, _id) {

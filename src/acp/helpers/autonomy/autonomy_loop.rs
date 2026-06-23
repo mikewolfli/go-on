@@ -540,7 +540,6 @@ pub async fn run_autonomy_loop(
     mut config: AutonomyLoopConfig,
     _timeout_duration: Option<std::time::Duration>,
 ) -> Result<AutonomyLoopResult> {
-    #[allow(unused_variables)]
     let start = Instant::now();
     let mut all_rounds: Vec<AutonomyRound> = Vec::with_capacity(config.max_iterations + 1);
     let mut audit_trail = AuditTrail::new("autonomy-loop", 100);
@@ -697,8 +696,7 @@ pub async fn run_autonomy_loop(
         }
 
         // Use capability signals or planner-guided tool preferences
-        #[allow(unused_variables)]
-        let preferred_tools: Vec<String> = if let Some(ref cap_sig) = config.capability_signals {
+        let _preferred_tools: Vec<String> = if let Some(ref cap_sig) = config.capability_signals {
             let tools = cap_sig.resolve_tool_preferences(config.max_tools_per_round);
             if !tools.is_empty() {
                 planner_guided = true;

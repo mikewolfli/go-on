@@ -147,18 +147,13 @@ impl ChatView {
         let now = crate::fs_util::epoch_secs();
         let atts = std::mem::take(&mut self.attachments);
 
-        // ── TODO(MM-FIX6): Integrate MultimodalProcessor ──────────────────────
-        // Currently, image/audio/video attachments are only included as a text
-        // summary (base64 metadata or truncated payload) in the outbound message.
-        // For true multimodal support, the GUI should:
-        //   1. Read attachment data (files from disk or decoded base64 from paste)
-        //   2. Route to the backend's `/v1/multimodal/process` endpoint:
-        //       POST /v1/multimodal/process  body: { "inputs": [{ "modality": "image",
-        //       "data": "<base64>", "mime": "image/png" }] }
-        //   3. Inject the returned ProcessedContent (text + images) into the
-        //      outbound payload so vision-capable models receive image data inline.
-        // See `go-on/src/multimodal/mod.rs` — MultimodalProcessor::process_input().
-        // ────────────────────────────────────────────────────────────────────────
+        // F-GAP-66: Integrate MultimodalProcessor for attachment processing.
+        // Currently attachments are only included as text summary in the outbound message.
+        // When backend supports multimodal content parts (OpenAI-style format with
+        // content array containing {type, text|image_url|image_data} parts), the
+        // attachment data should be injected as image_url parts:
+        //   "content": [{ "type": "text", "text": "..." },
+        //                { "type": "image_url", "image_url": { "url": "data:{mime};base64,{data}" }}]
 
         let attachment_summary = Self::build_attachment_summary(&atts);
         let outbound_msg = format!("{expanded_msg}{attachment_summary}");
