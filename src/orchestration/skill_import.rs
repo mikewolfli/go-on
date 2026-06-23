@@ -244,6 +244,10 @@ impl SkillImportStore {
         }
 
         self.records.insert(record.name.clone(), record.clone());
+
+        // Persist the updated index immediately.
+        self.save()?;
+
         Ok(record)
     }
 }

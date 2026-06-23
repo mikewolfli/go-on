@@ -1,3 +1,7 @@
+// Suite-level serialization: all tests acquire a global MutexGuard before starting.
+// The guard is intentionally held across .await points to serialize test execution.
+// This is safe because no cross-lock deadlock chains exist and all tests share the
+// same current_thread tokio runtime.
 #![allow(clippy::await_holding_lock)]
 
 /// Transport parity gate — BLUE25
@@ -23,6 +27,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
+use tokio::time::sleep;
 
 pub mod common;
 use common::CrossProcessLock;
@@ -42,6 +47,7 @@ fn suite_guard() -> &'static Mutex<()> {
     GUARD.get_or_init(|| Mutex::new(()))
 }
 
+#[allow(clippy::await_holding_lock)]
 fn lock_suite_guard() -> std::sync::MutexGuard<'static, ()> {
     suite_guard().lock().unwrap_or_else(|err| err.into_inner())
 }
@@ -186,6 +192,8 @@ async fn post_json_with_retry(
 /// ACP HTTP /chat must return platform_context.profile_class == "infrastructure".
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_chat_response_has_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -228,6 +236,8 @@ async fn acp_http_chat_response_has_platform_context() {
 /// ACP HTTP /health must also include platform_context for transport baseline parity.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_health_response_has_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -261,6 +271,8 @@ async fn acp_http_health_response_has_platform_context() {
 /// ACP HTTP /v1/chat/completions must return platform_context.profile_class == "infrastructure".
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_openai_completions_response_has_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -303,6 +315,8 @@ async fn acp_http_openai_completions_response_has_platform_context() {
 /// ACP HTTP /v1/responses must return platform_context.profile_class == "infrastructure".
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_responses_api_response_has_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -345,6 +359,8 @@ async fn acp_http_responses_api_response_has_platform_context() {
 /// confirming they draw from the same single injection source.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_stdio_and_acp_http_share_same_schema_version() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
 
@@ -427,6 +443,8 @@ async fn acp_stdio_and_acp_http_share_same_schema_version() {
 /// ACP HTTP compatibility endpoints must keep platform_context on 4xx error payloads.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_error_payloads_keep_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -474,6 +492,8 @@ async fn acp_http_error_payloads_keep_platform_context() {
 /// ACP HTTP Responses API 502 branch must keep the context-aware writer.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let runtime_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/openai_compat.rs");
@@ -504,6 +524,8 @@ async fn acp_http_responses_api_upstream_502_branch_keeps_context_writer() {
 /// ACP HTTP /v1/responses/stream failed branch must inject platform_context.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_responses_api_stream_failed_branch_keeps_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let runtime_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/openai_compat.rs");
@@ -529,6 +551,8 @@ async fn acp_http_responses_api_stream_failed_branch_keeps_platform_context() {
 /// ACP HTTP /chat/stream error branches must inject platform_context before SSE write.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_chat_stream_error_branches_keep_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let runtime_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/acp/impl/runtime/http.rs");
     let source = fs::read_to_string(&runtime_path).expect("runtime source must be readable");
@@ -557,6 +581,8 @@ async fn acp_http_chat_stream_error_branches_keep_platform_context() {
 /// ACP HTTP 405 responses must retain platform_context on method-not-allowed baseline path.
 #[tokio::test(flavor = "current_thread")]
 async fn acp_http_method_not_allowed_has_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -591,6 +617,8 @@ async fn acp_http_method_not_allowed_has_platform_context() {
 /// MCP HTTP errors (unknown method + parse error) must include platform_context in error.data.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_error_data_keeps_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -647,6 +675,8 @@ async fn mcp_http_error_data_keeps_platform_context() {
 /// MCP HTTP /health must include platform_context for parity with ACP HTTP/stdio health paths.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_health_response_has_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -680,6 +710,8 @@ async fn mcp_http_health_response_has_platform_context() {
 /// MCP HTTP must support initialize -> tools/list -> tools/call on the JSON-RPC root path.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_initialize_list_and_call_succeeds() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -763,6 +795,8 @@ async fn mcp_http_initialize_list_and_call_succeeds() {
 /// MCP HTTP 405 responses must keep platform_context on method-not-allowed baseline path.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_method_not_allowed_has_platform_context() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -774,14 +808,25 @@ async fn mcp_http_method_not_allowed_has_platform_context() {
         .expect("build client");
     wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
 
-    let body: Value = client
-        .get(format!("{}/", harness.base_url))
-        .send()
-        .await
-        .expect("mcp http get / request failed")
-        .json()
-        .await
-        .expect("invalid mcp http 405 json");
+    // Retry the GET request with backoff to handle transient subprocess startup races
+    let body = 'retry: {
+        for attempt in 1..=3 {
+            match client.get(format!("{}/", harness.base_url)).send().await {
+                Ok(resp) => match resp.json::<Value>().await {
+                    Ok(json) => break 'retry json,
+                    Err(_) if attempt < 3 => {
+                        sleep(Duration::from_millis(500 * attempt)).await;
+                    }
+                    _ => {}
+                },
+                Err(_) if attempt < 3 => {
+                    sleep(Duration::from_millis(500 * attempt)).await;
+                }
+                _ => {}
+            }
+        }
+        panic!("mcp http get / request failed after retries");
+    };
 
     let err_msg = body["error"].as_str().unwrap_or_default();
     assert!(
@@ -802,6 +847,8 @@ async fn mcp_http_method_not_allowed_has_platform_context() {
 /// request execution for the same request id.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_cancel_notification_blocks_matching_request_id() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
     let cfg = tmp.path().join("config.toml");
@@ -868,6 +915,8 @@ async fn mcp_http_cancel_notification_blocks_matching_request_id() {
 #[test]
 fn acp_http_route_inventory_changes_require_transport_gate_update() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: Suite-level serialization lock; held only in sync block
+        // (catch_unwind) — no .await in this scope.
         let _guard = lock_suite_guard();
         use std::collections::BTreeSet;
 
@@ -960,6 +1009,8 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
 /// code path is equivalent regardless of transport layer.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_stdio_and_http_tool_call_shapes_match() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
 
@@ -1116,6 +1167,8 @@ async fn mcp_stdio_and_http_tool_call_shapes_match() {
 /// MCP stdio and HTTP timeout handling must produce equivalent error codes.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_stdio_and_http_timeout_codes_match() {
+    // SAFETY: Suite-level serialization lock; intentionally held across
+    // .await to serialize test execution. No cross-runtime deadlock risk.
     let _guard = lock_suite_guard();
     let tmp = tempdir().expect("tempdir");
 

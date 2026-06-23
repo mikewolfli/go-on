@@ -1414,45 +1414,48 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "10K-vector benchmark — run explicitly with -- --ignored"]
-    fn hnsw_benchmark_10k_vectors() {
+    fn hnsw_index_functional_test() {
+        // Functional test: validates HNSW build + search with a moderate dataset.
+        // Uses 100 vectors (not 10K) for fast execution in CI.
         let dir = tempfile::tempdir().expect("temp dir should be created");
-        let db_path = dir.path().join("hnsw_10k.sqlite3");
-        let store = VectorStore::new(&db_path, 128, 10000).expect("vector store init");
+        let db_path = dir.path().join("hnsw_func.sqlite3");
+        let store = VectorStore::new(&db_path, 128, 500).expect("vector store init");
 
-        // Insert 10,000 vectors using the public upsert API.
-        // HNSW index is None during this phase, so each upsert only goes to SQLite.
-        for i in 0..10_000 {
-            let query = format!("benchmark query number {i}");
-            let response = format!("benchmark response {i}");
+        // Insert 100 vectors - enough to validate the HNSW index works
+        for i in 0..100 {
+            let query = format!("functional test query number {i}");
+            let response = format!("functional test response {i}");
             store.upsert("bench", &query, &response).expect("upsert");
         }
 
-        // Build the HNSW index from the SQLite data
+        // Build the HNSW index
         let built = store.ensure_hnsw_index().expect("ensure_hnsw_index");
         assert!(built, "HNSW index should be built");
 
-        // Warm-up: run one search to ensure any lazy initialization is done
-        let _ = store
-            .search("bench", "benchmark query number 42", 10, 0.0, 200)
-            .expect("warmup search");
-
-        // Measure HNSW search latency for 10 queries
-        let start = std::time::Instant::now();
-        for _ in 0..10 {
+        // Run searches and verify results are returned correctly
+        // Note: with hash-based embeddings and 100 vectors, the top result
+        // may not always be the exact semantic match. We verify that:
+        // 1. Results are returned for each query
+        // 2. At least one of the top-10 results matches each query index
+        for query_idx in [0, 25, 50, 99] {
+            let query = format!("functional test query number {query_idx}");
             let (hits, _) = store
-                .search("bench", "benchmark query number 42", 10, 0.0, 200)
-                .expect("search");
-            assert!(!hits.is_empty(), "should find similar entries");
+                .search("bench", &query, 10, 0.0, 200)
+                .expect("search should succeed");
+            assert!(
+                !hits.is_empty(),
+                "should find results for query {query_idx}"
+            );
+            let found = hits.iter().any(|h| {
+                h.response_snippet
+                    .contains(&format!("response {query_idx}"))
+            });
+            assert!(
+                found,
+                "query={query_idx} should be in top-10 results, top={}",
+                hits[0].response_snippet
+            );
         }
-        let elapsed = start.elapsed();
-        let avg_us = elapsed.as_micros() as f64 / 10.0;
-
-        // HNSW search should be fast: each search under 10 ms on 10K vectors
-        assert!(
-            avg_us < 10_000.0,
-            "HNSW search too slow: {avg_us:.0}us avg (expected < 10ms)"
-        );
     }
 
     #[test]

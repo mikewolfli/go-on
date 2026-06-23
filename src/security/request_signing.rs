@@ -183,7 +183,10 @@ fn current_timestamp_ms() -> u64 {
 ///
 /// For Ed25519, `key_bytes` must be a 32-byte signing key seed.
 /// For HmacSha256, `key_bytes` is the HMAC shared secret.
-#[allow(dead_code)] // Public API for test/tooling consumers
+///
+/// Gated behind `#[cfg(test)]` — this is only used by test code.
+/// Production signing is handled by dedicated signing middleware.
+#[cfg(test)]
 pub fn sign_request(
     key_bytes: &[u8],
     body: &[u8],
@@ -226,6 +229,7 @@ pub fn sign_request(
 
 /// Build a `RequestSignature` from raw fields for test use.
 #[cfg(test)]
+#[allow(dead_code)]
 fn make_signature_for_test(
     algorithm: SigningAlgorithm,
     key_id: &str,

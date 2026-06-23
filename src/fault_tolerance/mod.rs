@@ -40,20 +40,6 @@ pub(crate) struct Inner {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Acquire a write lock on the tokio::sync::RwLock.
-///
-/// Directly awaits the write lock. No need for `block_in_place` because
-/// tokio::sync::RwLock::write() is an async operation that yields
-/// appropriately when contended.
-pub(crate) async fn write_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
-    lock.write().await
-}
-
-/// Acquire a read lock on the RwLock.
-pub(crate) async fn read_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
-    lock.read().await
-}
-
 /// Compute cluster health from raw counts (shared by `profile` and `cluster_health`).
 pub(crate) fn cluster_health_from_counts(
     total_nodes: usize,
@@ -130,7 +116,7 @@ impl FaultToleranceEngine {
 
     /// Return a snapshot profile of the cluster state.
     pub async fn profile(&self) -> FaultToleranceProfile {
-        let inner = read_guard(&self.inner).await;
+        let inner = self.inner.read().await;
         let total_nodes = inner.heartbeats.len();
         let online_nodes = inner
             .heartbeats
@@ -189,7 +175,7 @@ impl FaultToleranceEngine {
         for node_id in &offenders {
             // Check if a plan already exists for this node
             let existing = {
-                let inner = read_guard(&self.inner).await;
+                let inner = self.inner.read().await;
                 inner
                     .recovery_plans
                     .values()
@@ -285,7 +271,7 @@ impl FaultToleranceEngine {
                     );",
                 );
 
-                let inner = write_guard(&self.inner).await;
+                let inner = self.inner.write().await;
 
                 // Clear existing data for idempotent save
                 let _ = conn.execute("DELETE FROM faults", []);
@@ -377,7 +363,7 @@ impl FaultToleranceEngine {
             if let Some(parent) = cache_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let inner = read_guard(&self.inner).await;
+            let inner = self.inner.read().await;
             if let Ok(json) = serde_json::to_string_pretty(&*inner) {
                 let _ = std::fs::write(&cache_path, json);
                 tracing::info!(

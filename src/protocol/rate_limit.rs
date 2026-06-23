@@ -7,9 +7,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::warn;
+
+use crate::shared::token_bucket::TokenBucket;
 
 /// Rate limit configuration for a tenant
 #[derive(Debug, Clone)]
@@ -23,61 +25,6 @@ pub struct TenantRateLimit {
 impl Default for TenantRateLimit {
     fn default() -> Self {
         Self { rpm: 60, burst: 10 }
-    }
-}
-
-/// Rate limiter state for a single tenant
-#[derive(Debug)]
-struct TokenBucket {
-    tokens: f64,
-    last_refill: Instant,
-    last_access: Instant,
-    capacity: f64,
-    refill_rate: f64, // tokens per second
-}
-
-impl TokenBucket {
-    fn new(rpm: u64, burst: u64) -> Self {
-        Self {
-            tokens: burst as f64,
-            last_refill: Instant::now(),
-            last_access: Instant::now(),
-            capacity: burst as f64,
-            refill_rate: rpm as f64 / 60.0,
-        }
-    }
-
-    fn is_idle(&self, idle_timeout: Duration) -> bool {
-        self.last_access.elapsed() >= idle_timeout
-    }
-
-    fn refill(&mut self) {
-        let elapsed = self.last_refill.elapsed().as_secs_f64();
-        if elapsed > 0.0 {
-            self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
-            self.last_refill = Instant::now();
-        }
-    }
-
-    fn try_consume(&mut self, tokens: f64) -> bool {
-        self.refill();
-        self.last_access = Instant::now();
-        if self.tokens >= tokens {
-            self.tokens -= tokens;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Return the wait time in milliseconds until a single token is available.
-    fn wait_time_ms(&self) -> u64 {
-        if self.tokens >= 1.0 {
-            return 0;
-        }
-        let deficit = 1.0 - self.tokens;
-        let secs = (deficit / self.refill_rate).ceil();
-        (secs * 1000.0) as u64
     }
 }
 
@@ -151,9 +98,12 @@ impl RateLimitMiddleware {
             return Err(60); // 60 second backoff hint
         }
 
-        let bucket = buckets
-            .entry(tenant_id.to_string())
-            .or_insert_with(|| TokenBucket::new(self.default_limit.rpm, self.default_limit.burst));
+        let bucket = buckets.entry(tenant_id.to_string()).or_insert_with(|| {
+            TokenBucket::new(
+                self.default_limit.burst as f64,
+                self.default_limit.rpm as f64 / 60.0,
+            )
+        });
 
         if bucket.try_consume(1.0) {
             Ok(())
@@ -241,14 +191,6 @@ pub struct RateLimitState {
     pub capacity: u64,
     pub refill_per_second: f64,
 }
-
-// Global rate limiter instance — available when standalone server mode is needed.
-// Currently unused; uncomment and wire when a standalone server entry point requires
-// a shared global rate limiter.
-// static RATE_LIMITER: std::sync::OnceLock<RateLimitMiddleware> = std::sync::OnceLock::new();
-// pub fn rate_limiter() -> &'static RateLimitMiddleware {
-//     RATE_LIMITER.get_or_init(|| RateLimitMiddleware::new(TenantRateLimit::default()))
-// }
 
 #[cfg(test)]
 mod tests {

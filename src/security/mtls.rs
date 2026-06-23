@@ -64,44 +64,7 @@ pub struct MtlsAcceptor {
     server_config: RwLock<Option<Arc<rustls::ServerConfig>>>,
 }
 
-// ---------------------------------------------------------------------------
-// MtlsConfig
-// ---------------------------------------------------------------------------
 
-/// Configuration for mTLS, holding certificate paths and settings.
-/// This is a plain-data config struct distinct from the runtime `MtlsAcceptor`.
-#[allow(dead_code, reason = "Public API surface for mTLS consumers")]
-#[derive(Debug, Clone)]
-pub struct MtlsConfig {
-    /// Path to the CA certificate file (PEM).
-    pub ca_cert_path: PathBuf,
-    /// Path to the server certificate file (PEM).
-    pub server_cert_path: PathBuf,
-    /// Path to the server private key file (PEM).
-    pub server_key_path: PathBuf,
-    /// Whether to require client certificates for incoming connections.
-    pub require_client_cert: bool,
-    /// Optional list of allowed Common Names for client certificates.
-    pub allowed_cn_list: Vec<String>,
-}
-
-impl MtlsConfig {
-    /// Create a new `MtlsConfig` from certificate paths.
-    #[allow(dead_code, reason = "Public API surface for mTLS consumers")]
-    pub fn new(
-        ca_cert_path: impl Into<PathBuf>,
-        server_cert_path: impl Into<PathBuf>,
-        server_key_path: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            ca_cert_path: ca_cert_path.into(),
-            server_cert_path: server_cert_path.into(),
-            server_key_path: server_key_path.into(),
-            require_client_cert: true,
-            allowed_cn_list: Vec::new(),
-        }
-    }
-}
 
 impl MtlsAcceptor {
     /// Create a new MtlsAcceptor from certificate paths and settings.
@@ -288,7 +251,10 @@ impl MtlsAcceptor {
     }
 
     /// Builder-pattern: enable or disable client certificate verification.
-    #[allow(dead_code, reason = "Builder method — wired from ACP HTTP server under multi-users-server feature")]
+    #[allow(
+        dead_code,
+        reason = "Builder method — wired from ACP HTTP server under multi-users-server feature"
+    )]
     pub fn with_client_cert(mut self, enabled: bool) -> Self {
         self.require_client_cert = enabled;
         self
@@ -296,7 +262,10 @@ impl MtlsAcceptor {
 
     /// Builder-pattern: restrict mTLS to client certificates whose Common Name
     /// appears in the given list. An empty list disables CN filtering.
-    #[allow(dead_code, reason = "Builder method — wired from ACP HTTP server under multi-users-server feature")]
+    #[allow(
+        dead_code,
+        reason = "Builder method — wired from ACP HTTP server under multi-users-server feature"
+    )]
     pub fn with_allowed_cns(mut self, allowed: Vec<String>) -> Self {
         self.allowed_cn_list = allowed;
         self
@@ -307,9 +276,7 @@ impl MtlsAcceptor {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
-mod tests {
-    // mTLS tests removed — MtlsConfig and CertificateInfo were dead code
-    // (F-GAP-49 reserved mTLS feature). Keep the module empty so the
-    // build does not produce "unused module" warnings.
-}
+// #[cfg(test)] module intentionally omitted — mTLS tests were removed
+// (log-20260623-7). The MtlsConfig and CertificateInfo types were dead
+// code with no downstream consumers. When mTLS integration is re-enabled
+// (F-GAP-49), recreate meaningful tests here.

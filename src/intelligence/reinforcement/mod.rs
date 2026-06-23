@@ -98,6 +98,7 @@ fn now_ts() -> i64 {
 
 // ── Re-exports ────────────────────────────────────────────────────────────
 
+pub use crate::orchestration::core_dag::TaskGraphCheckpointArtifact;
 pub use action_check::{
     run_action_check, ActionCheckItem, ActionCheckKind, ActionCheckReport, FinalSummaryArtifact,
 };
@@ -119,6 +120,7 @@ pub use learning::{
     LearningPattern, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
     WorkflowLearningBusArtifact, WorkflowLearningEvent,
 };
+
 pub use task_plan::{
     build_task_plan, build_workflow_generated_artifact, load_task_graph_checkpoint,
     persist_clarification_session_artifact, persist_consultation_artifact,
@@ -135,9 +137,8 @@ pub use task_plan::{
     GovernancePolicyArtifact, ParallelPhaseDecisionRecord, PipelineUnifiedMetricsArtifact,
     PlannedSubtaskRecord, PrimaryFailoverReportItem, PrimarySecondaryFailoverArtifact,
     PrimarySecondaryPolicyArtifact, RequirementContractArtifact, TaskExecutionMetrics,
-    TaskExecutionSummary, TaskGraphCheckpointArtifact, TaskPlanArtifact, WorkflowEdge,
-    WorkflowGeneratedArtifact, WorkflowNode, WorkflowOptimizationPolicyArtifact,
-    WorkflowResearchArtifact, WorkflowWorkGradeArtifact,
+    TaskExecutionSummary, TaskPlanArtifact, WorkflowEdge, WorkflowGeneratedArtifact, WorkflowNode,
+    WorkflowOptimizationPolicyArtifact, WorkflowResearchArtifact, WorkflowWorkGradeArtifact,
 };
 
 use std::sync::{Arc, Mutex};

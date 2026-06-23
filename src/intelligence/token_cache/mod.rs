@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
+use tracing;
 
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::core::error::Result as AppResult;
@@ -814,7 +815,7 @@ impl L2SemanticCache {
 // CacheEntry is already in scope from the shared types above.
 
 /// A reusable template extracted from a long-context interaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplatePattern {
     /// Pattern name / category (e.g., "code_review", "arch_design", "debug_analysis")
     pub pattern_type: String,
@@ -834,8 +835,7 @@ pub struct TemplatePattern {
 pub struct L3TemplateCache {
     /// Known templates by structure signature
     templates: HashMap<String, TemplatePattern>,
-    /// Disk path for future template persistence
-    #[allow(dead_code)] // F-GAP-49 — planned wiring for persistence
+    /// Disk path for template persistence
     store_path: Option<String>,
     /// Maximum number of templates before FIFO eviction
     max_templates: usize,
@@ -848,11 +848,16 @@ impl L3TemplateCache {
         } else {
             Some(store_path.to_string())
         };
-        Self {
+        let mut cache = Self {
             templates: HashMap::new(),
             store_path,
             max_templates: 500,
+        };
+        // Restore any previously persisted templates.
+        if let Err(e) = cache.load_from_disk() {
+            tracing::warn!("L3TemplateCache: failed to load from disk: {e}");
         }
+        cache
     }
 
     /// Extract a structural signature from input text.
@@ -986,6 +991,11 @@ impl L3TemplateCache {
         };
 
         self.templates.insert(sig, pattern);
+
+        // Persist to disk after each new template.
+        if let Err(e) = self.save_to_disk() {
+            tracing::warn!("L3TemplateCache: failed to persist to disk: {e}");
+        }
     }
 
     /// Clear all templates.
@@ -1005,6 +1015,38 @@ impl L3TemplateCache {
     /// All known patterns (for reporting).
     pub fn patterns(&self) -> Vec<TemplatePattern> {
         self.templates.values().cloned().collect()
+    }
+
+    /// Persist all templates to disk at `store_path`.
+    /// Does nothing if `store_path` is `None`.
+    pub fn save_to_disk(&self) -> std::io::Result<()> {
+        let path = match &self.store_path {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let json = serde_json::to_string_pretty(&self.templates).map_err(std::io::Error::other)?;
+        // Write atomically via a temp file, then rename.
+        let tmp = format!("{}.tmp", path);
+        std::fs::write(&tmp, &json)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// Load templates from disk at `store_path`.
+    /// Does nothing if `store_path` is `None` or the file does not exist.
+    pub fn load_from_disk(&mut self) -> std::io::Result<()> {
+        let path = match &self.store_path {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if !std::path::Path::new(path).exists() {
+            return Ok(());
+        }
+        let content = std::fs::read_to_string(path)?;
+        let loaded: HashMap<String, TemplatePattern> =
+            serde_json::from_str(&content).map_err(std::io::Error::other)?;
+        self.templates = loaded;
+        Ok(())
     }
 }
 

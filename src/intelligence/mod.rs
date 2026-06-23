@@ -53,11 +53,16 @@ pub fn write_guard<T>(rw: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<
 }
 
 pub mod adaptive_selector;
+pub mod causal_bayesian_graph;
 pub mod consensus;
+pub mod continuous_learning;
 pub mod discovery;
 pub mod hot_failover;
+pub mod hub;
 pub mod matcher;
 pub mod metacognitive;
+pub mod quality_models;
+pub mod reputation;
 pub mod semantic_matcher;
 
 pub mod code_quality;
@@ -69,21 +74,15 @@ pub mod consciousness;
 pub mod evaluation;
 
 pub mod model_selector;
-pub mod quality_models;
 pub mod reinforcement;
-pub mod reputation;
 pub mod token_cache;
 pub mod verification;
 
 pub mod self_model;
 
-pub mod continuous_learning;
-
 pub mod evolution_graph;
 
-pub mod causal_bayesian_graph;
 pub mod fusion_evolution_bridge;
-pub mod hub;
 pub mod triple_fusion;
 pub mod voter_impls;
 pub mod weighted_vote;

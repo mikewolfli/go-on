@@ -23,7 +23,7 @@ impl Tool for DnsLookupTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: hostname"))?;
 
-        let port = input.payload["port"].as_u16().unwrap_or(80);
+        let port = input.payload["port"].as_u64().unwrap_or(80) as u16;
 
         debug!(hostname = %hostname, port = %port, "tool: performing DNS lookup");
 

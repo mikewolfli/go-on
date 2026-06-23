@@ -30,7 +30,6 @@ pub use prelude::{
     now_ts_ms,
     with_acp_lock,
     with_acp_lock_async,
-    AcpLockMonitor,
     CircuitBreakerAdmission,
     CircuitBreakerRegistry,
     CircuitBreakerSnapshot,

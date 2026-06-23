@@ -414,6 +414,233 @@ impl NativeToolBridge {
                     }
                 }
             }),
+            // ── Game tools: Server & Online ────────────────────────────────
+            "game_server_query" => json!({
+                "type": "function",
+                "function": {
+                    "name": "game_server_query",
+                    "description": "Query an online game server for status info (players, map, gamemode)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "server_address": {"type": "string", "description": "Server address in host:port format"},
+                            "protocol": {"type": "string", "enum": ["a2s", "http"], "description": "Query protocol"}
+                        },
+                        "required": ["server_address"]
+                    }
+                }
+            }),
+            "game_price_tracker" => json!({
+                "type": "function",
+                "function": {
+                    "name": "game_price_tracker",
+                    "description": "Track game prices across stores (Steam, GOG, Epic)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "game_name": {"type": "string", "description": "Name of the game to look up"},
+                            "stores": {"type": "array", "items": {"type": "string", "enum": ["steam", "gog", "epic", "all"]}, "description": "Stores to check"}
+                        },
+                        "required": ["game_name"]
+                    }
+                }
+            }),
+            // ── Game tools: Process Management ────────────────────────────
+            "game_launch" => json!({
+                "type": "function",
+                "function": {
+                    "name": "game_launch",
+                    "description": "Launch a game executable with optional arguments",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "executable": {"type": "string", "description": "Path to the game executable"},
+                            "args": {"type": "string", "description": "Optional command-line arguments"},
+                            "working_dir": {"type": "string", "description": "Working directory for the process"}
+                        },
+                        "required": ["executable"]
+                    }
+                }
+            }),
+            "game_process_list" => json!({
+                "type": "function",
+                "function": {
+                    "name": "game_process_list",
+                    "description": "List running game processes, optionally filtered by name",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filter": {"type": "string", "description": "Optional process name filter"}
+                        },
+                        "required": []
+                    }
+                }
+            }),
+            "game_process_stop" => json!({
+                "type": "function",
+                "function": {
+                    "name": "game_process_stop",
+                    "description": "Terminate a game process by PID (single-player use only)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pid": {"type": "integer", "description": "Process ID to terminate"},
+                            "signal": {"type": "string", "enum": ["term", "kill"], "description": "Signal to send (term=SIGTERM, kill=SIGKILL)"}
+                        },
+                        "required": ["pid"]
+                    }
+                }
+            }),
+            // ── Game tools: Screen Capture & Recording ────────────────────
+            "screen_capture" => json!({
+                "type": "function",
+                "function": {
+                    "name": "screen_capture",
+                    "description": "Capture a screenshot of the display or a specific window",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "output_path": {"type": "string", "description": "File path to save the screenshot"},
+                            "format": {"type": "string", "enum": ["png", "jpg"], "description": "Image format"},
+                            "window_name": {"type": "string", "description": "Optional window name/title to capture"}
+                        },
+                        "required": ["output_path"]
+                    }
+                }
+            }),
+            "screen_record" => json!({
+                "type": "function",
+                "function": {
+                    "name": "screen_record",
+                    "description": "Record a video of the screen or game window (requires ffmpeg)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "output_path": {"type": "string", "description": "Output video file path"},
+                            "duration_secs": {"type": "integer", "description": "Recording duration in seconds"},
+                            "fps": {"type": "integer", "description": "Frames per second"},
+                            "window_id": {"type": "string", "description": "X11 window ID (Linux) or display identifier"}
+                        },
+                        "required": ["output_path"]
+                    }
+                }
+            }),
+            "screen_ocr" => json!({
+                "type": "function",
+                "function": {
+                    "name": "screen_ocr",
+                    "description": "Extract visible text from a screenshot using OCR (requires tesseract)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "image_path": {"type": "string", "description": "Path to the screenshot image"},
+                            "language": {"type": "string", "description": "OCR language (e.g. eng, chi_sim)"}
+                        },
+                        "required": ["image_path"]
+                    }
+                }
+            }),
+            // ── Game tools: Input Simulation ──────────────────────────────
+            "keyboard_input" => json!({
+                "type": "function",
+                "function": {
+                    "name": "keyboard_input",
+                    "description": "Send keyboard input to the focused window (accessibility/automation)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "description": "Text to type"},
+                            "key_delay_ms": {"type": "integer", "description": "Delay between keystrokes in ms"}
+                        },
+                        "required": ["text"]
+                    }
+                }
+            }),
+            "mouse_input" => json!({
+                "type": "function",
+                "function": {
+                    "name": "mouse_input",
+                    "description": "Send mouse click at screen coordinates (accessibility/automation)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "integer", "description": "X coordinate"},
+                            "y": {"type": "integer", "description": "Y coordinate"},
+                            "button": {"type": "string", "enum": ["left", "middle", "right"], "description": "Mouse button"},
+                            "click_type": {"type": "string", "enum": ["click", "down", "up"], "description": "Click type"}
+                        },
+                        "required": ["x", "y"]
+                    }
+                }
+            }),
+            // ── Game tools: AI Agent & Coaching ───────────────────────────
+            "game_agent" => json!({
+                "type": "function",
+                "function": {
+                    "name": "game_agent",
+                    "description": "AI game agent — coordinates screen capture, analysis, and input for game automation",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["observe", "act"], "description": "observe=examine game state, act=execute action plan"},
+                            "screenshot_path": {"type": "string", "description": "Path to existing screenshot (optional)"},
+                            "target": {"type": "string", "description": "Game window name or identifier"},
+                            "actions": {"type": "array", "description": "Array of action objects for 'act' mode"}
+                        },
+                        "required": ["action"]
+                    }
+                }
+            }),
+            // ── Game tools: Save & Achievement Management ─────────────────
+            "save_file" => json!({
+                "type": "function",
+                "function": {
+                    "name": "save_file",
+                    "description": "Manage game save files — list, backup, or restore",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {"type": "string", "enum": ["list", "backup", "restore"], "description": "Operation to perform"},
+                            "game": {"type": "string", "description": "Game name for save file discovery"},
+                            "save_path": {"type": "string", "description": "Path to save file (for backup/restore)"},
+                            "backup_path": {"type": "string", "description": "Path to backup file (for restore)"}
+                        },
+                        "required": ["operation", "game"]
+                    }
+                }
+            }),
+            "achievement_tracker" => json!({
+                "type": "function",
+                "function": {
+                    "name": "achievement_tracker",
+                    "description": "Track game achievements locally — list or unlock",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "game": {"type": "string", "description": "Game name"},
+                            "operation": {"type": "string", "enum": ["list", "unlock"], "description": "Operation"},
+                            "achievement_id": {"type": "string", "description": "Achievement ID for unlock"}
+                        },
+                        "required": ["game", "operation"]
+                    }
+                }
+            }),
+            // ── Game tools: Mod Management ────────────────────────────────
+            "mod_manager" => json!({
+                "type": "function",
+                "function": {
+                    "name": "mod_manager",
+                    "description": "List installed mods for supported games",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "game": {"type": "string", "description": "Game name (minecraft, stardew_valley, skyrim)"},
+                            "operation": {"type": "string", "enum": ["list"], "description": "Operation"}
+                        },
+                        "required": ["game", "operation"]
+                    }
+                }
+            }),
             _ => json!({
                 "type": "function",
                 "function": {

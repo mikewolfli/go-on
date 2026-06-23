@@ -208,7 +208,7 @@ pub async fn new_acp_server(
         let preference_learner = Arc::new(std::sync::RwLock::new(
             ApprovalPreferenceLearner::with_thresholds(20, 0.9),
         ));
-        let engine = Arc::new(std::sync::RwLock::new(
+        let engine = Arc::new(tokio::sync::RwLock::new(
             ApprovalEngine::new(pua_rule_engine, TimeoutPolicy::default())
                 .with_learner(preference_learner),
         ));
@@ -514,13 +514,8 @@ pub async fn new_acp_server(
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
-                let mut guard = match engine.write() {
-                    Ok(g) => g,
-                    Err(poisoned) => {
-                        tracing::error!("approval_engine lock poisoned in timeout task");
-                        poisoned.into_inner()
-                    }
-                };
+                // tokio::sync::RwLock does not use lock poisoning.
+                let mut guard = engine.write().await;
                 let changed = guard.process_timeouts();
                 if !changed.is_empty() {
                     tracing::info!("approval engine timed out {} request(s)", changed.len());

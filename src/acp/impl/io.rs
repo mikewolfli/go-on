@@ -23,7 +23,7 @@ pub async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -
     write_response(
         server,
         JsonRpcResponse {
-            jsonrpc: "2.0",
+            jsonrpc: "2.0".to_string(),
             id,
             result: Some(result),
             error: None,
@@ -73,7 +73,7 @@ pub async fn send_error(
     write_response(
         server,
         JsonRpcResponse {
-            jsonrpc: "2.0",
+            jsonrpc: "2.0".to_string(),
             id,
             result: None,
             error: Some(JsonRpcError {

@@ -12,20 +12,6 @@ use std::collections::HashMap;
 
 const DEFAULT_EXPLORATION_BIAS: f32 = 0.8;
 const DEFAULT_MAX_MODELS: usize = 1000;
-#[allow(dead_code)] // F-GAP reserved
-const CONTEXT_BUCKETS: &[&str] = &[
-    "time.morning",
-    "time.afternoon",
-    "time.evening",
-    "time.night",
-    "task.chat",
-    "task.code",
-    "task.reasoning",
-    "task.embedding",
-    "latency.low",
-    "latency.medium",
-    "latency.high",
-];
 
 // ---------------------------------------------------------------------------
 // Context Features

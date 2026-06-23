@@ -233,8 +233,6 @@ pub enum ProtocolError {
     },
 }
 
-impl ProtocolError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -224,7 +224,16 @@ pub async fn start_background_tasks(
                     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
                     loop {
                         tokio::select! {
-                            _ = shutdown.notified() => break,
+                            _ = shutdown.notified() => {
+                                // Clean up snapshot on graceful shutdown.
+                                if let Err(e) = persistence.clear() {
+                                    tracing::warn!(
+                                        target: "metacognitive_persistence",
+                                        "failed to clear metacognitive snapshot: {e}"
+                                    );
+                                }
+                                break;
+                            }
                             _ = interval.tick() => {}
                         }
                         if let Err(e) = persistence.save(&cb.metacognitive) {

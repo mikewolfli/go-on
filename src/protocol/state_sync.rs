@@ -132,7 +132,10 @@ pub fn subscribe() -> broadcast::Receiver<StateSyncEvent> {
 }
 
 /// Number of active subscribers currently listening.
-#[allow(dead_code, reason = "Public API surface for subscriber count queries")]
+///
+/// Gated behind `#[cfg(test)]` because this is only used in tests — the
+/// public monitoring path uses receiver_count via other observability channels.
+#[cfg(test)]
 pub fn subscriber_count() -> usize {
     BROADCASTER.receiver_count()
 }

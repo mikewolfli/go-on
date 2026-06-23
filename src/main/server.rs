@@ -58,15 +58,8 @@ pub(crate) async fn start_server(
     // FlowManager is initialized inside dispatch_server via transport_factory::flow_manager()
     // with access to the parsed AppConfig. No need to create it here.
 
-    // Display agent vendor information
-    let agents_by_vendor = registry.agents_by_vendor();
-    info!("Agents organized by vendor category:");
-    for (category, agents) in &agents_by_vendor {
-        info!("  {:?}: {} agents", category, agents.len());
-        for agent in agents {
-            info!("    - {}", agent);
-        }
-    }
+    let agent_names = registry.names();
+    info!("Registered {} agents: {:?}", agent_names.len(), agent_names);
 
     // ── Inject the first available agent into ContinuousLearningCenter ──
     // This enables true LLM-based semantic distillation during review cycles

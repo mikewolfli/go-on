@@ -14,7 +14,6 @@ use std::io::Read;
 
 /// Configuration for SSE streaming behavior
 #[derive(Debug, Clone)]
-#[allow(dead_code, reason = "Public API surface for SSE streaming consumers")]
 pub struct StreamingConfig {
     /// Enable gzip compression on the SSE stream
     pub enable_compression: bool,
@@ -36,7 +35,6 @@ impl Default for StreamingConfig {
 ///
 /// Despite its name, this is a **decompressor** — it decompresses
 /// gzip-encoded streaming data.
-#[allow(dead_code, reason = "Public API surface for SSE decompression consumers")]
 pub struct SseDecompressor {
     buffer: Vec<u8>,
     threshold: usize,
@@ -117,11 +115,6 @@ impl SseDecompressor {
 // ---------------------------------------------------------------------------
 // Deprecated aliases for backward compatibility
 // ---------------------------------------------------------------------------
-
-/// activated, formerly F-GAP-51 — deprecated alias kept for backward compat
-#[deprecated(since = "0.1.0", note = "renamed to SseDecompressor")]
-#[allow(dead_code, reason = "Deprecated alias kept for backward compatibility")]
-pub type SseCompressor = SseDecompressor;
 
 #[cfg(test)]
 mod tests {

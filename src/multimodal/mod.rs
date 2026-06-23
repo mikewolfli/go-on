@@ -26,8 +26,6 @@ pub mod excel_processor;
 pub mod excel_writer;
 #[cfg(feature = "document-ppt")]
 pub mod ppt_processor;
-#[cfg(feature = "document-ppt")]
-pub mod ppt_reader;
 
 // ── Re-exports from document_parser ────────────────────────────────────────
 #[allow(unused_imports)]

@@ -112,6 +112,36 @@ pub fn build_runtime_healthcheck_report(
                         details: serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
                     });
                     components.push(build_provider_dependency_component(&config));
+
+                    // Secret pool diagnostics — shows which secrets are resolved.
+                    let secret_details = secret_pool_status(&config);
+                    components.push(ComponentReport {
+                        name: "secret_pool".to_string(),
+                        status: CheckStatus::Healthy,
+                        message: "secret pool status".to_string(),
+                        details: secret_details,
+                    });
+
+                    // Missing environment variables for agents.
+                    let missing = missing_envs_for_agent(&config);
+                    if missing.is_empty() {
+                        components.push(ComponentReport {
+                            name: "agent_env".to_string(),
+                            status: CheckStatus::Healthy,
+                            message: "all agent environment variables are set".to_string(),
+                            details: json!({}),
+                        });
+                    } else {
+                        components.push(ComponentReport {
+                            name: "agent_env".to_string(),
+                            status: CheckStatus::Warn,
+                            message: format!(
+                                "{} agent(s) have missing environment variables",
+                                missing.len()
+                            ),
+                            details: json!(missing),
+                        });
+                    }
                 }
                 Err(err) => components.push(ComponentReport {
                     name: "config".to_string(),
@@ -358,7 +388,6 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
     candidates
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for secret pool diagnostics
 fn secret_pool_status(config: &AppConfig) -> Value {
     let mut secrets = Vec::new();
     for agent_config in config.agents().values() {
@@ -373,7 +402,6 @@ fn secret_pool_status(config: &AppConfig) -> Value {
     json!(secrets)
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for agent environment validation
 fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
     let mut missing = Vec::new();
     for agent_config in config.agents().values() {

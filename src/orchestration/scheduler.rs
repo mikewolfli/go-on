@@ -1508,52 +1508,19 @@ mod tests {
         assert_eq!(task3.task_id, "t3");
     }
 
-    // ── persistence smoke tests (backend-sqlite) ───────────────────────
+    // ── persistent scheduler smoke test ────────────────────────────────
+    // Persistence layer was removed; factory delegates to in-memory scheduler.
 
     #[test]
     #[cfg(feature = "backend-sqlite")]
-    fn persistence_smoke_new_and_is_enabled() {
-        use tempfile::NamedTempFile;
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let p = SchedulerPersistence::new(Some(path));
-        assert!(p.is_enabled());
-
-        let p_disabled = SchedulerPersistence::new(None);
-        assert!(!p_disabled.is_enabled());
-    }
-
-    #[test]
-    #[cfg(feature = "backend-sqlite")]
-    fn persistence_smoke_snapshot_and_restore() {
-        use tempfile::NamedTempFile;
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let p = SchedulerPersistence::new(Some(path));
-
-        let tasks = vec![make_task("persist-1", "worker", 5, 10.0)];
-        p.snapshot_queue(&tasks).unwrap();
-        let restored = p.restore_queue().unwrap();
-        assert_eq!(restored.len(), 1);
-        assert_eq!(restored[0].task_id, "persist-1");
-    }
-
-    #[test]
-    #[cfg(feature = "backend-sqlite")]
-    fn scheduler_with_persistence_smoke() {
-        use std::sync::Arc;
-        use tempfile::NamedTempFile;
-
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let config = SchedulerConfig::default();
-        let persistence = SchedulerPersistence::new(Some(path));
-        let scheduler = TaskScheduler::new_with_persistence(config, persistence);
-
-        // Submit a task and persist.
+    fn persistent_scheduler_delegates_to_in_memory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("scheduler.db");
+        let scheduler = create_persistent_scheduler(Some(path));
+        let _profile = scheduler.profile();
+        // Smoke: submit a task to ensure the scheduler is alive.
         scheduler
             .submit(make_task("p-task", "worker", 3, 20.0))
             .unwrap();
-        let arc_scheduler = Arc::new(scheduler);
     }
 }

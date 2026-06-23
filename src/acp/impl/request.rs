@@ -233,7 +233,7 @@ pub async fn handle_request(
             .and_then(|v| v.as_str())
             .unwrap_or("default");
         let limiter = crate::security::rate_limiter::global_rate_limiter();
-        if !limiter.try_consume_tenant(tenant, 1.0).await {
+        if !limiter.try_consume_tenant(tenant, 1.0) {
             return send_error(
                 server,
                 request.id,
@@ -399,7 +399,7 @@ pub async fn handle_request(
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
-        if !rate_limiter.try_consume_tenant(tenant_id, 1.0).await {
+        if !rate_limiter.try_consume_tenant(tenant_id, 1.0) {
             anyhow::bail!("rate limit exceeded for tenant: {}", tenant_id);
         }
     }

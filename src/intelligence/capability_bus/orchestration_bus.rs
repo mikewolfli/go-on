@@ -14,7 +14,7 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::orchestration::execution_graph::{ExCondition, ExNode, ExNodeKind, ExecutionGraph};
+use crate::orchestration::core_dag::{ExCondition, ExNode, ExNodeKind, ExecutionGraph};
 use crate::orchestration::flow::FlowManager;
 
 fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
@@ -465,7 +465,7 @@ impl OrchestrationBus {
     pub fn set_graph_node_state(
         &self,
         id: &str,
-        state: crate::orchestration::execution_graph::ExNodeState,
+        state: crate::orchestration::core_dag::ExNodeState,
     ) -> Result<()> {
         lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph")
             .set_node_state(id, state)
@@ -480,7 +480,7 @@ impl OrchestrationBus {
     /// Count graph nodes in a given state.
     pub fn count_graph_nodes_by_state(
         &self,
-        state: &crate::orchestration::execution_graph::ExNodeState,
+        state: &crate::orchestration::core_dag::ExNodeState,
     ) -> usize {
         lock_mutex_recover(self.execution_graph.as_ref(), "execution_graph").count_by_state(state)
     }

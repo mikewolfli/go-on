@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 fn directory_usage(path: &Path) -> (u64, u64, u64, u64) {
     let mut total_bytes = 0u64;

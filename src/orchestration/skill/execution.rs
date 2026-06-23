@@ -338,10 +338,6 @@ impl Skill for ComposedSkill {
     }
 }
 
-impl ComposedSkill {
-    // Future convenience methods for skill composition go here.
-}
-
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------

@@ -86,9 +86,21 @@ impl CrossProcessLock {
     }
 }
 
-/// Check whether a process with the given PID is still alive (Linux-only via /proc).
+/// Check whether a process with the given PID is still alive.
+/// Uses `/proc/{pid}` on Linux, `kill -0` on macOS/other Unix.
+#[cfg(target_os = "linux")]
 fn process_is_alive(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_is_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 impl Drop for CrossProcessLock {

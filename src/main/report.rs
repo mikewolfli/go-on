@@ -11,20 +11,21 @@ use crate::setup::recommendation_snapshot_for_config;
 /// * `warnings` - Slice of configuration warnings
 /// * `mirror_stderr` - Whether to also print warnings to stderr
 pub(crate) fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
+    if !mirror_stderr {
+        return;
+    }
     for warning in warnings {
         let severity = match warning.severity {
             ConfigWarningSeverity::Critical => "critical",
             ConfigWarningSeverity::Warn => "warn",
             ConfigWarningSeverity::Info => "info",
         };
-        if mirror_stderr {
-            tracing::warn!(
-                "config warning [{}:{}] {}",
-                severity,
-                warning.code,
-                warning.message
-            );
-        }
+        tracing::warn!(
+            "config warning [{}:{}] {}",
+            severity,
+            warning.code,
+            warning.message
+        );
     }
 }
 

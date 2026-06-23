@@ -219,7 +219,7 @@ impl RbacEnforcer {
     }
 
     /// Return the number of registered tenants.
-    #[allow(dead_code)] // Public API for test consumers
+    #[cfg(test)]
     pub fn tenant_count(&self) -> usize {
         self.tenants.len()
     }

@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 pub(super) fn resolve_workspace_root(config_path: Option<&str>) -> PathBuf {
     config_path

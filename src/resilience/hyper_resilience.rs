@@ -12,22 +12,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::{Mutex, RwLock};
 use tokio::sync::watch;
-use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-
-/// Lock a tokio Mutex, recovering from poison with a log.
-async fn lock_mutex<T>(mtx: &Mutex<T>) -> tokio::sync::MutexGuard<'_, T> {
-    mtx.lock().await
-}
-
-/// Lock a RwLock for reading, recovering from poison with a log.
-async fn read_lock<T>(rw: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
-    rw.read().await
-}
 
 #[cfg(feature = "chaos-testing")]
 use super::chaos::{ChaosEngine, FaultType};
+
+// ---------------------------------------------------------------------------
+// Lock helpers
+// ---------------------------------------------------------------------------
+
+/// Acquire a write lock on a Mutex.
+fn lock_mutex<T>(mtx: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mtx.lock().expect("hyper_resilience mutex poisoned")
+}
+
+/// Acquire a read lock on a RwLock.
+fn read_lock<T>(rw: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    rw.read().expect("hyper_resilience rwlock poisoned")
+}
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -211,7 +215,7 @@ pub struct HyperResilienceEngine {
     /// Optional path for persisting circuit breaker state.
     persist_path: Option<String>,
     /// Optional fault consensus for distributed fault detection.
-    fault_consensus: Option<tokio::sync::Mutex<FaultConsensus>>,
+    fault_consensus: Option<Mutex<FaultConsensus>>,
     /// Optional recovery plan store for persisting recovery plans.
     plan_store: Option<RecoveryPlanStore>,
 }
@@ -238,15 +242,17 @@ impl std::fmt::Debug for HyperResilienceEngine {
 
 impl Clone for HyperResilienceEngine {
     fn clone(&self) -> Self {
-        // Use blocking_lock()/blocking_read() since Clone is synchronous
-        // and the locks are tokio::sync types (lock() returns a Future).
-        // The original try_lock()+sleep(1ms) spin pattern was worse:
-        // it blocked the calling thread for at least 1ms per attempt.
-        let config = RwLock::new(self.config.blocking_read().clone());
-        let circuit_breakers = Mutex::new(self.circuit_breakers.blocking_lock().clone());
-        let failover_groups = Mutex::new(self.failover_groups.blocking_lock().clone());
-        let test_avg_latency_ms = Mutex::new(*self.test_avg_latency_ms.blocking_lock());
-        let test_error_rate = Mutex::new(*self.test_error_rate.blocking_lock());
+        // std::sync locks are used throughout, so we can synchronously lock
+        // without deadlock risk (no lock is ever held across an .await point).
+        let config = RwLock::new(self.config.read().expect("config poisoned").clone());
+        let circuit_breakers =
+            Mutex::new(self.circuit_breakers.lock().expect("cbs poisoned").clone());
+        let failover_groups =
+            Mutex::new(self.failover_groups.lock().expect("fgs poisoned").clone());
+        let test_avg_latency_ms =
+            Mutex::new(*self.test_avg_latency_ms.lock().expect("latency poisoned"));
+        let test_error_rate =
+            Mutex::new(*self.test_error_rate.lock().expect("error rate poisoned"));
         Self {
             config,
             circuit_breakers,
@@ -265,7 +271,7 @@ impl Clone for HyperResilienceEngine {
             fault_consensus: self
                 .fault_consensus
                 .as_ref()
-                .map(|m| Mutex::new(m.blocking_lock().clone())),
+                .map(|m| Mutex::new(m.lock().expect("consensus poisoned").clone())),
             plan_store: self.plan_store.clone(),
         }
     }
@@ -353,7 +359,7 @@ impl HyperResilienceEngine {
         threshold: u64,
         recovery_timeout_ms: u64,
     ) -> Result<()> {
-        let mut cbs = lock_mutex(&self.circuit_breakers).await;
+        let mut cbs = lock_mutex(&self.circuit_breakers);
         if cbs.contains_key(name) {
             bail!(
                 "{}",
@@ -401,7 +407,7 @@ impl HyperResilienceEngine {
     ) -> Result<CircuitState> {
         let state: CircuitState;
         {
-            let mut cbs = lock_mutex(&self.circuit_breakers).await;
+            let mut cbs = lock_mutex(&self.circuit_breakers);
             let cb = cbs.get_mut(breaker_name).with_context(|| {
                 tf("error.circuit_breaker_not_found", &[("name", breaker_name)])
             })?;
@@ -452,7 +458,7 @@ impl HyperResilienceEngine {
     /// If the breaker is half-open, a success moves it back to closed.
     pub async fn record_success(&self, breaker_name: &str) -> Result<()> {
         {
-            let mut cbs = lock_mutex(&self.circuit_breakers).await;
+            let mut cbs = lock_mutex(&self.circuit_breakers);
             let cb = cbs.get_mut(breaker_name).with_context(|| {
                 tf("error.circuit_breaker_not_found", &[("name", breaker_name)])
             })?;
@@ -503,7 +509,7 @@ impl HyperResilienceEngine {
     /// config (e.g. `health_check_cycle` → `record_execution`).
     pub async fn is_available(&self, breaker_name: &str) -> bool {
         // Acquire circuit_breakers FIRST — this is the canonical lock order.
-        let mut cbs = lock_mutex(&self.circuit_breakers).await;
+        let mut cbs = lock_mutex(&self.circuit_breakers);
         let cb = match cbs.get_mut(breaker_name) {
             Some(cb) => cb,
             None => return false,
@@ -513,7 +519,7 @@ impl HyperResilienceEngine {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
                 // Acquire config RwLock only in the Open branch (not in the fast path).
-                let probe_interval = read_lock(&self.config).await.half_open_probe_interval_ms;
+                let probe_interval = read_lock(&self.config).half_open_probe_interval_ms;
                 let now = now_millis();
                 if now >= cb.last_failure_ms + probe_interval {
                     cb.state = CircuitState::HalfOpen;
@@ -532,7 +538,7 @@ impl HyperResilienceEngine {
     ///
     /// This is the state-mutating counterpart of `is_available()`.
     pub async fn probe(&self, breaker_name: &str) -> bool {
-        let mut cbs = lock_mutex(&self.circuit_breakers).await;
+        let mut cbs = lock_mutex(&self.circuit_breakers);
         let cb = match cbs.get_mut(breaker_name) {
             Some(cb) => cb,
             None => return false,
@@ -560,7 +566,7 @@ impl HyperResilienceEngine {
         primary: &str,
         replicas: Vec<String>,
     ) -> Result<()> {
-        let mut fgs = lock_mutex(&self.failover_groups).await;
+        let mut fgs = lock_mutex(&self.failover_groups);
         if fgs.contains_key(group_id) {
             bail!(
                 "{}",
@@ -598,7 +604,7 @@ impl HyperResilienceEngine {
     ///
     /// Returns the identifier of the new leader.
     pub async fn trigger_failover(&self, group_id: &str) -> Result<String> {
-        let mut fgs = lock_mutex(&self.failover_groups).await;
+        let mut fgs = lock_mutex(&self.failover_groups);
         let group = fgs
             .get_mut(group_id)
             .with_context(|| tf("error.failover_group_not_found", &[("name", group_id)]))?;
@@ -632,17 +638,17 @@ impl HyperResilienceEngine {
 
     /// Return a snapshot of the current system health.
     pub async fn system_health(&self) -> SystemHealth {
-        let cbs = lock_mutex(&self.circuit_breakers).await;
+        let cbs = lock_mutex(&self.circuit_breakers);
         let active_circuit_breakers = cbs.len();
         let open_circuits = cbs
             .values()
             .filter(|cb| matches!(cb.state, CircuitState::Open))
             .count();
-        let avg_latency_ms = *lock_mutex(&self.test_avg_latency_ms).await;
-        let error_rate = *lock_mutex(&self.test_error_rate).await;
+        let avg_latency_ms = *lock_mutex(&self.test_avg_latency_ms);
+        let error_rate = *lock_mutex(&self.test_error_rate);
         drop(cbs);
 
-        let fgs = lock_mutex(&self.failover_groups).await;
+        let fgs = lock_mutex(&self.failover_groups);
         let active_failovers = fgs.values().filter(|g| g.failover_count > 0).count();
         drop(fgs);
 
@@ -692,7 +698,7 @@ impl HyperResilienceEngine {
         let (success, result) = match &action {
             SelfHealingAction::ClearCircuitBreaker => {
                 // Clear the circuit breaker if it exists.
-                let mut cbs = lock_mutex(&self.circuit_breakers).await;
+                let mut cbs = lock_mutex(&self.circuit_breakers);
                 if let Some(cb) = cbs.get_mut(target) {
                     cb.state = CircuitState::Closed;
                     cb.failure_count = 0;
@@ -711,7 +717,7 @@ impl HyperResilienceEngine {
             }
             SelfHealingAction::PromoteReplica => {
                 // Simulate promoting a replica by triggering a failover.
-                let mut fgs = lock_mutex(&self.failover_groups).await;
+                let mut fgs = lock_mutex(&self.failover_groups);
                 if let Some(group) = fgs.get_mut(target) {
                     let new_leader = if group.replica_nodes.is_empty() {
                         group.primary_node.clone()
@@ -744,7 +750,7 @@ impl HyperResilienceEngine {
                 );
                 // Reset circuit breaker state for the node's service
                 {
-                    let mut cbs = lock_mutex(&self.circuit_breakers).await;
+                    let mut cbs = lock_mutex(&self.circuit_breakers);
                     if let Some(cb) = cbs.get_mut(target) {
                         cb.state = CircuitState::Closed;
                         cb.failure_count = 0;
@@ -754,7 +760,7 @@ impl HyperResilienceEngine {
                 }
                 // Reset health_score back to max
                 {
-                    let mut fgs = lock_mutex(&self.failover_groups).await;
+                    let mut fgs = lock_mutex(&self.failover_groups);
                     if let Some(group) = fgs.get_mut(target) {
                         group.health_score = 100.0;
                     }
@@ -774,7 +780,7 @@ impl HyperResilienceEngine {
                     target
                 );
                 {
-                    let mut fgs = lock_mutex(&self.failover_groups).await;
+                    let mut fgs = lock_mutex(&self.failover_groups);
                     if let Some(group) = fgs.get_mut(target) {
                         group.health_score = (group.health_score * 1.2).min(100.0);
                     }
@@ -794,7 +800,7 @@ impl HyperResilienceEngine {
                     target
                 );
                 {
-                    let mut cbs = lock_mutex(&self.circuit_breakers).await;
+                    let mut cbs = lock_mutex(&self.circuit_breakers);
                     if let Some(cb) = cbs.get_mut(target) {
                         cb.state = CircuitState::Closed;
                         cb.failure_count = 0;
@@ -854,7 +860,7 @@ impl HyperResilienceEngine {
 
     /// Return the current resilience profile summarising overall engine state.
     pub async fn profile(&self) -> ResilienceProfile {
-        let cbs = lock_mutex(&self.circuit_breakers).await;
+        let cbs = lock_mutex(&self.circuit_breakers);
         let total_circuit_breakers = cbs.len();
         let open_circuits = cbs
             .values()
@@ -862,7 +868,7 @@ impl HyperResilienceEngine {
             .count();
         drop(cbs);
 
-        let fgs = lock_mutex(&self.failover_groups).await;
+        let fgs = lock_mutex(&self.failover_groups);
         let failover_groups = fgs.len();
         drop(fgs);
 
@@ -908,7 +914,7 @@ impl HyperResilienceEngine {
     /// server startup. Safe to call multiple times — subsequent calls are
     /// no-ops.
     pub async fn start_health_checks(self: &Arc<Self>) {
-        let interval_ms = read_lock(&self.config).await.health_check_interval_ms;
+        let interval_ms = read_lock(&self.config).health_check_interval_ms;
 
         let engine = Arc::clone(self);
         let mut rx = self.cancel_tx.subscribe();
@@ -939,7 +945,7 @@ impl HyperResilienceEngine {
                 );
             }
         });
-        *self.health_check_handle.lock().await = Some(handle);
+        *self.health_check_handle.lock().expect("handle poisoned") = Some(handle);
     }
 
     /// Stop background health checks by signalling the cancellation token.
@@ -961,7 +967,7 @@ impl HyperResilienceEngine {
     pub async fn health_check_cycle(&self) {
         // ── Phase 1: Probe all circuit breakers ────────────────────────────
         let breaker_names: Vec<String> = {
-            let cbs = lock_mutex(&self.circuit_breakers).await;
+            let cbs = lock_mutex(&self.circuit_breakers);
             cbs.keys().cloned().collect()
         };
         for name in &breaker_names {
@@ -970,8 +976,8 @@ impl HyperResilienceEngine {
 
         // Record fault votes based on breaker states after probing (P3-7)
         if let Some(ref consensus_mutex) = self.fault_consensus {
-            let mut consensus = consensus_mutex.lock().await;
-            let cbs = lock_mutex(&self.circuit_breakers).await;
+            let mut consensus = consensus_mutex.lock().expect("consensus poisoned");
+            let cbs = lock_mutex(&self.circuit_breakers);
             for (name, cb) in cbs.iter() {
                 let healthy = matches!(cb.state, CircuitState::Closed);
                 consensus.record_vote(FaultVote {
@@ -991,7 +997,7 @@ impl HyperResilienceEngine {
             // ── Phase 2: Fault consensus evaluation for active failover groups ─
             consensus.evict_stale();
             let fg_ids: Vec<String> = {
-                let fgs = lock_mutex(&self.failover_groups).await;
+                let fgs = lock_mutex(&self.failover_groups);
                 fgs.keys().cloned().collect()
             };
             for group_id in &fg_ids {
@@ -1013,7 +1019,7 @@ impl HyperResilienceEngine {
 
         // Update real operational metrics (only circuit_breakers + test metrics locks)
         {
-            let cbs = lock_mutex(&self.circuit_breakers).await;
+            let cbs = lock_mutex(&self.circuit_breakers);
             let total = cbs.len();
             let open = cbs
                 .values()
@@ -1025,8 +1031,8 @@ impl HyperResilienceEngine {
                 .count();
             drop(cbs);
 
-            let mut avg_latency = lock_mutex(&self.test_avg_latency_ms).await;
-            let mut err_rate = lock_mutex(&self.test_error_rate).await;
+            let mut avg_latency = lock_mutex(&self.test_avg_latency_ms);
+            let mut err_rate = lock_mutex(&self.test_error_rate);
 
             if total > 0 {
                 *err_rate = open as f64 / total as f64;
@@ -1043,11 +1049,11 @@ impl HyperResilienceEngine {
 
         // ── Phase 4: Auto-heal if degraded ────────────────────────────────
         if health.level >= DegradationLevel::Constrained {
-            let healing_enabled = read_lock(&self.config).await.self_healing_enabled;
+            let healing_enabled = read_lock(&self.config).self_healing_enabled;
             if healing_enabled {
                 for name in &breaker_names {
                     let is_open = {
-                        let cbs = lock_mutex(&self.circuit_breakers).await;
+                        let cbs = lock_mutex(&self.circuit_breakers);
                         cbs.get(name)
                             .map(|cb| matches!(cb.state, CircuitState::Open))
                             .unwrap_or(false)
@@ -1088,9 +1094,11 @@ impl HyperResilienceEngine {
     /// Stores the circuit_breakers HashMap as a JSON blob, enabling recovery
     /// across process restarts. Uses the provided `path` for the output file.
     pub async fn persist_to_db(&self, path: &str) -> Result<()> {
-        let cbs = lock_mutex(&self.circuit_breakers).await;
-        let json = serde_json::to_string_pretty(&*cbs)
-            .context("failed to serialize circuit breakers for persistence")?;
+        let json = {
+            let cbs = lock_mutex(&self.circuit_breakers);
+            serde_json::to_string_pretty(&*cbs)
+                .context("failed to serialize circuit breakers for persistence")?
+        };
         tokio::fs::write(path, &json)
             .await
             .context("failed to write resilience state to disk")?;
@@ -1166,82 +1174,88 @@ impl HyperResilienceEngine {
         let threshold: u64;
         let recovery_timeout_ms: u64;
         {
-            let config = read_lock(&self.config).await;
+            let config = read_lock(&self.config);
             threshold = config.circuit_breaker_threshold;
             recovery_timeout_ms = config.recovery_timeout_ms;
         }
 
         // Phase 2: Lock only circuit_breakers for the auto-register + state transition.
-        let mut cbs = lock_mutex(&self.circuit_breakers).await;
+        // The block scopes the MutexGuard so it is dropped before the persist await
+        // below (std::sync::MutexGuard is not Send, so it cannot cross an await).
+        let persist = {
+            let mut cbs = lock_mutex(&self.circuit_breakers);
 
-        let cb_ref = cbs
-            .entry(breaker_name.to_string())
-            .or_insert_with(|| CircuitBreaker {
-                name: breaker_name.to_string(),
-                state: CircuitState::Closed,
-                failure_count: 0,
-                threshold,
-                recovery_timeout_ms,
-                last_failure_ms: 0,
-                half_open_attempts: 0,
-                last_failure_mode: None,
-                failure_history: Vec::new(),
-            });
+            let cb_ref = cbs
+                .entry(breaker_name.to_string())
+                .or_insert_with(|| CircuitBreaker {
+                    name: breaker_name.to_string(),
+                    state: CircuitState::Closed,
+                    failure_count: 0,
+                    threshold,
+                    recovery_timeout_ms,
+                    last_failure_ms: 0,
+                    half_open_attempts: 0,
+                    last_failure_mode: None,
+                    failure_history: Vec::new(),
+                });
 
-        let now = now_millis();
+            let now = now_millis();
 
-        if success {
-            match cb_ref.state {
-                CircuitState::HalfOpen => {
-                    // Success in half-open → closed.
-                    cb_ref.state = CircuitState::Closed;
-                    cb_ref.failure_count = 0;
-                    cb_ref.half_open_attempts = 0;
-                    cb_ref.last_failure_ms = 0;
-                }
-                CircuitState::Closed => {
-                    // Reset failure count on success while closed.
-                    cb_ref.failure_count = 0;
-                }
-                CircuitState::Open => {
-                    // No-op: an open breaker can't accept successes directly;
-                    // it must transition through half-open first.
-                }
-            }
-        } else {
-            // Track failure mode (default to ResourceExhaustion like record_failure).
-            let failure_mode = FailureMode::ResourceExhaustion;
-            cb_ref.last_failure_mode = Some(failure_mode);
-            cb_ref.failure_history.push(failure_mode);
-            if cb_ref.failure_history.len() > 10 {
-                cb_ref.failure_history.remove(0);
-            }
-
-            match cb_ref.state {
-                CircuitState::Closed => {
-                    cb_ref.failure_count += 1;
-                    cb_ref.last_failure_ms = now;
-                    if cb_ref.failure_count >= cb_ref.threshold {
-                        cb_ref.state = CircuitState::Open;
+            if success {
+                match cb_ref.state {
+                    CircuitState::HalfOpen => {
+                        // Success in half-open → closed.
+                        cb_ref.state = CircuitState::Closed;
+                        cb_ref.failure_count = 0;
+                        cb_ref.half_open_attempts = 0;
+                        cb_ref.last_failure_ms = 0;
+                    }
+                    CircuitState::Closed => {
+                        // Reset failure count on success while closed.
+                        cb_ref.failure_count = 0;
+                    }
+                    CircuitState::Open => {
+                        // No-op: an open breaker can't accept successes directly;
+                        // it must transition through half-open first.
                     }
                 }
-                CircuitState::Open => {
-                    // Already open; update last_failure so the timer resets.
-                    cb_ref.last_failure_ms = now;
+            } else {
+                // Track failure mode (default to ResourceExhaustion like record_failure).
+                let failure_mode = FailureMode::ResourceExhaustion;
+                cb_ref.last_failure_mode = Some(failure_mode);
+                cb_ref.failure_history.push(failure_mode);
+                if cb_ref.failure_history.len() > 10 {
+                    cb_ref.failure_history.remove(0);
                 }
-                CircuitState::HalfOpen => {
-                    // Failure in half-open immediately trips back to open.
-                    cb_ref.state = CircuitState::Open;
-                    cb_ref.failure_count += 1;
-                    cb_ref.last_failure_ms = now;
-                    cb_ref.half_open_attempts = 0;
+
+                match cb_ref.state {
+                    CircuitState::Closed => {
+                        cb_ref.failure_count += 1;
+                        cb_ref.last_failure_ms = now;
+                        if cb_ref.failure_count >= cb_ref.threshold {
+                            cb_ref.state = CircuitState::Open;
+                        }
+                    }
+                    CircuitState::Open => {
+                        // Already open; update last_failure so the timer resets.
+                        cb_ref.last_failure_ms = now;
+                    }
+                    CircuitState::HalfOpen => {
+                        // Failure in half-open immediately trips back to open.
+                        cb_ref.state = CircuitState::Open;
+                        cb_ref.failure_count += 1;
+                        cb_ref.last_failure_ms = now;
+                        cb_ref.half_open_attempts = 0;
+                    }
                 }
             }
-        }
 
-        // Persist state after transition (P3-2)
-        if let Some(ref path) = self.persist_path {
-            let _ = self.persist_to_db(path).await;
+            self.persist_path.clone()
+        };
+
+        // Persist state after transition (P3-2) — outside the lock scope.
+        if let Some(ref path) = persist {
+            let _ = self.persist_to_db(&path).await;
         }
     }
 }

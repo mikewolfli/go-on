@@ -18,9 +18,6 @@
 //! - Autotune, confirmation, meta-cognition
 
 #![cfg(test)]
-// Test file — dead_code allowed for config writers and helpers
-// that are shared across test functions.
-#![allow(dead_code)]
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -435,6 +432,10 @@ fn assert_blue22_execution_cycle_shape(result: &Value) {
     assert!(result["execution_cycle"]["current_cycle"]["plan_version"].is_string());
 }
 
+#[expect(
+    dead_code,
+    reason = "BLUE45 scaffold — extends assert_blue22_execution_cycle_shape; kept for future runtime-specific tests"
+)]
 fn assert_blue22_runtime_execute_cycle_shape(result: &Value) {
     assert_blue22_execution_cycle_shape(result);
     assert!(result["execution_cycle"]["history_summary"]["current_iteration"].is_number());
@@ -500,7 +501,9 @@ struct AdvancedRpcHarness {
     mock_responses: std::collections::HashMap<String, Value>,
 }
 
+#[allow(dead_code)]
 struct TestScenario {
+    #[allow(dead_code)]
     name: String,
     requests: Vec<Value>,
     expected_outcomes: Vec<ScenarioOutcome>,
@@ -508,9 +511,14 @@ struct TestScenario {
 
 enum ScenarioOutcome {
     Success,
+    #[allow(dead_code)]
     ErrorContains(String),
 }
 
+#[expect(
+    dead_code,
+    reason = "Scaffold for scenario-driven testing; kept for future use"
+)]
 fn load_scenarios_from_dir(dir: &Path) -> Vec<TestScenario> {
     let mut entries = fs::read_dir(dir)
         .expect("scenario directory should be readable")
@@ -559,10 +567,15 @@ impl AdvancedRpcHarness {
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "Scaffold for mock-based testing; kept for future use"
+    )]
     fn register_mock(&mut self, method: &str, response: Value) {
         self.mock_responses.insert(method.to_string(), response);
     }
 
+    #[allow(dead_code)]
     fn send_request(&mut self, request: Value) -> Result<Value, String> {
         let method = request
             .get("method")
@@ -613,6 +626,10 @@ impl AdvancedRpcHarness {
             .collect()
     }
 
+    #[expect(
+        dead_code,
+        reason = "Scaffold for scenario-file replay; kept for future use"
+    )]
     fn run_scenario_file(&mut self, path: &Path) -> Vec<(Value, Result<Value, String>)> {
         for attempt in 1..=3 {
             let content = fs::read_to_string(path).expect("scenario file should be readable");
@@ -682,6 +699,10 @@ fallback = true
     fs::write(path, config).expect("failed to write config file");
 }
 
+#[expect(
+    dead_code,
+    reason = "Config variant for managed-service deployment target; kept for future tests"
+)]
 fn write_managed_service_config(path: &Path, maintenance: u64, health: u64, shutdown: u64) {
     write_test_config(path, maintenance, health, shutdown);
     let mut config = fs::read_to_string(path).expect("failed to read base config");
@@ -694,6 +715,10 @@ fn write_managed_service_config(path: &Path, maintenance: u64, health: u64, shut
     fs::write(path, config).expect("failed to write managed-service config");
 }
 
+#[expect(
+    dead_code,
+    reason = "Config variant for unknown deployment target; kept for future tests"
+)]
 fn write_unknown_deployment_target_config(path: &Path) {
     write_test_config(path, 60, 120, 5);
     let mut config = fs::read_to_string(path).expect("failed to read base config");
@@ -706,6 +731,10 @@ fn write_unknown_deployment_target_config(path: &Path) {
     fs::write(path, config).expect("failed to write unknown deployment_target config");
 }
 
+#[expect(
+    dead_code,
+    reason = "Config variant with warning flow parameters; kept for future tests"
+)]
 fn write_warning_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -748,6 +777,7 @@ fallback = false
     fs::write(path, config).expect("failed to write warning config file");
 }
 
+#[allow(dead_code)]
 fn write_provider_failure_degrade_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -779,6 +809,7 @@ request_timeout_seconds = 1
     fs::write(path, config).expect("failed to write provider failure config file");
 }
 
+#[allow(dead_code)]
 fn write_review_timeout_collision_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -825,6 +856,10 @@ fallback = false
     fs::write(path, config).expect("failed to write review timeout collision config file");
 }
 
+#[expect(
+    dead_code,
+    reason = "Config variant for shutdown drain validation; kept for future tests"
+)]
 fn write_shutdown_drain_validation_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -852,6 +887,7 @@ request_timeout_seconds = 10
     fs::write(path, config).expect("failed to write shutdown drain validation config file");
 }
 
+#[allow(dead_code)]
 fn write_cache_vector_unavailable_config(path: &Path, cache_path: &str, vector_path: &str) {
     let config = format!(
         r#"default_phase = "coding"
@@ -956,6 +992,7 @@ review_required_checks = []
     fs::write(path, config).expect("failed to write workflow governance config file");
 }
 
+#[allow(dead_code)]
 fn write_workflow_dual_review_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -1001,6 +1038,10 @@ fallback = false
     fs::write(path, config).expect("failed to write workflow dual review config file");
 }
 
+#[expect(
+    dead_code,
+    reason = "Config variant for autotune-enabled tests; kept for future use"
+)]
 fn write_autotune_enabled_config(path: &Path, state_path: &Path) {
     let escaped_state_path = state_path.display().to_string().replace('\\', "\\\\");
     let config = format!(
@@ -1221,6 +1262,7 @@ mod advanced {
         harness.inner.wait_for_exit(Duration::from_secs(8));
     }
 
+    #[test]
     fn provider_matrix_checks_all_registry_providers() {
         let temp = tempdir().expect("failed to create temp dir");
         let config_path = temp.path().join("config.toml");
@@ -1335,6 +1377,7 @@ mod advanced {
         harness.inner.wait_for_exit(Duration::from_secs(8));
     }
 
+    #[test]
     fn scenario_outcome_error_contains_keeps_error_expectation_path_alive() {
         let expected = ScenarioOutcome::ErrorContains("blocked".to_string());
         match expected {
@@ -1344,6 +1387,7 @@ mod advanced {
     }
 
     // ── B16-R1: debug_panel.get / debug.panel.get ─────────────────────────────
+    #[test]
     fn rpc_conversation_rollback_restores_checkpoint() {
         let temp = tempdir().expect("failed to create temp dir");
         let config_path = temp.path().join("config.toml");
@@ -1954,6 +1998,7 @@ fn rpc_cache_clear_and_checkpoint_missing_messages() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+#[test]
 fn rpc_rejects_non_2_0_jsonrpc_version() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2010,6 +2055,7 @@ fn rpc_chat_rejects_invalid_params() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+#[test]
 fn rpc_chat_provider_failure_degrades_to_fallback_agent() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2052,6 +2098,7 @@ fn rpc_chat_provider_failure_degrades_to_fallback_agent() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+#[test]
 fn rpc_chat_review_timeout_collision_reports_timeout_and_gate_outcome() {
     // Retry up to 3 times to mitigate flaky child-process races.
     for attempt in 1..=3 {
@@ -2071,6 +2118,7 @@ fn rpc_chat_review_timeout_collision_reports_timeout_and_gate_outcome() {
     }
 }
 
+#[allow(dead_code)]
 fn rpc_chat_review_timeout_collision_body() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2125,6 +2173,7 @@ fn rpc_chat_review_timeout_collision_body() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+#[test]
 fn startup_fails_when_cache_vector_paths_are_unavailable() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2224,6 +2273,7 @@ fn rpc_chat_rate_limit_saturation_returns_rate_limited_error() {
 }
 
 // B26-S11: task.execute must return task_graph_checkpoint with checkpoint_id + resume_eligible
+#[test]
 fn rpc_workflow_execute_enforces_dual_review_and_returns_decisions() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2277,6 +2327,7 @@ fn rpc_workflow_execute_enforces_dual_review_and_returns_decisions() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+#[test]
 fn rpc_primary_secondary_summary_reports_stability_and_failover_metrics() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2579,6 +2630,7 @@ fn rpc_confirm_body() {
     harness.wait_for_exit(Duration::from_secs(8));
 }
 
+#[test]
 fn rpc_workflow_execute_auto_consultation_blocks_without_consensus() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2632,6 +2684,7 @@ fn rpc_workflow_execute_auto_consultation_blocks_without_consensus() {
 
 /// Verify meta_cognition block is present and well-formed in learning_profile.
 /// Uses the existing task-plan-execute benchmark to ensure proper request ordering.
+#[test]
 fn blue24_self_model_has_meta_cognition_block() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");
@@ -2692,6 +2745,7 @@ fn blue24_self_model_has_meta_cognition_block() {
 // These tests verify that the system handles unexpected, invalid, or edge-case
 // inputs robustly — a prerequisite for the deterministic+adversarial dual-track gate.
 
+#[test]
 fn adversarial_invalid_method_returns_jsonrpc_error_does_not_crash_process() {
     // Sending an unknown method must return a JSON-RPC -32601 error and must NOT
     // terminate or corrupt the process — subsequent valid requests must still work.
@@ -2735,6 +2789,7 @@ fn adversarial_invalid_method_returns_jsonrpc_error_does_not_crash_process() {
 
 // ── BLUE35 S1-S17: full profile coverage assertions ───────────────────────────
 
+#[test]
 fn blue35_readiness_profiles_present_for_s1_s17() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");

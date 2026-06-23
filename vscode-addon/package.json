@@ -13,10 +13,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:go-on.chat",
     "onCommand:go-on.start",
     "onCommand:go-on.stop",
-    "onCommand:go-on.status",
     "onView:go-on-chat"
   ],
   "main": "./out/extension.js",
@@ -450,6 +448,12 @@
           "name": "Process Flow",
           "icon": "$(graph)",
           "contextualTitle": "Go-On Process Flow"
+        },
+        {
+          "id": "go-on-approval",
+          "name": "Approval",
+          "icon": "$(verified)",
+          "contextualTitle": "Go-On Approval"
         }
       ]
     },

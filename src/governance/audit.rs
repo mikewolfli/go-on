@@ -126,7 +126,7 @@ struct AuditLogInner {
 
 impl ThreadSafeAuditLog {
     /// Return a new `Arc`-cloned handle to the same underlying log.
-    #[allow(dead_code)] // Public API for test consumers
+    #[cfg(test)]
     pub fn clone_arc(&self) -> Self {
         Self {
             inner: self.inner.clone(),

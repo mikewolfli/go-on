@@ -62,7 +62,6 @@ impl Default for WeightedVoteConfig {
 
 /// A single round's worth of debate history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-49-2: reserved for Delphi debate round tracking
 pub struct DelphiRound {
     /// Round number (0-based).
     pub round: usize,
@@ -74,7 +73,6 @@ pub struct DelphiRound {
 
 /// Result of a full Delphi-method debate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-49-2: reserved for Delphi debate result type
 pub struct DelphiResult {
     /// Final votes, keyed by agent name.
     pub votes: HashMap<String, Vote>,

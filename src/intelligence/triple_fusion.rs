@@ -59,9 +59,17 @@ pub fn global_triple_fusion_bridge() -> &'static Arc<Mutex<TripleFusionBridge>> 
     })
 }
 
+impl std::fmt::Debug for TripleFusionBridge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TripleFusionBridge")
+            .field("fusion_cycles", &self.fusion_cycles())
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
 impl TripleFusionBridge {
     /// Return the number of fusion cycles executed so far.
-    #[allow(dead_code)] // Public API for test consumers
     pub fn fusion_cycles(&self) -> u64 {
         self.fusion_cycles
             .load(std::sync::atomic::Ordering::Relaxed)

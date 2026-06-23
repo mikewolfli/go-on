@@ -14,8 +14,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-#[cfg(test)]
-use anyhow::Context;
 use anyhow::Result;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -49,45 +47,6 @@ macro_rules! ansi {
             ""
         }
     }};
-}
-
-/// Resolve a path relative to the current working directory.
-/// Rejects paths that escape the workspace via ".." or absolute paths outside cwd.
-///
-/// TOCTOU-safe: returns the canonicalized path that should be used for all subsequent
-/// file operations to prevent symlink race conditions.
-#[cfg(test)]
-fn resolve_safe_path(path_str: &str, allow_new_file: bool) -> Result<std::path::PathBuf> {
-    let cwd = std::env::current_dir().context("failed to get current directory")?;
-    let cwd = cwd.canonicalize().context("failed to canonicalize cwd")?;
-    let target = std::path::Path::new(path_str);
-    let target = if target.is_relative() {
-        cwd.join(target)
-    } else {
-        target.to_path_buf()
-    };
-    // For new files, canonicalize the parent to check it's within cwd
-    if allow_new_file && !target.exists() {
-        if let Some(parent) = target.parent() {
-            let canon_parent = parent.canonicalize().with_context(|| {
-                format!("parent directory does not exist: {}", parent.display())
-            })?;
-            if !canon_parent.starts_with(&cwd) {
-                anyhow::bail!("path '{}' is outside the workspace directory", path_str);
-            }
-            // Return the canonicalized parent + filename to avoid TOCTOU
-            return Ok(canon_parent.join(target.file_name().unwrap_or_default()));
-        }
-        return Ok(target);
-    }
-    // For existing files, canonicalize the full path and return it
-    let target = target
-        .canonicalize()
-        .with_context(|| format!("path does not exist: {path_str}"))?;
-    if !target.starts_with(&cwd) {
-        anyhow::bail!("path '{}' is outside the workspace directory", path_str);
-    }
-    Ok(target)
 }
 
 /// Run an interactive terminal chat session with full agent capabilities.
@@ -544,65 +503,6 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
 mod tests {
     use super::*;
 
-    // ── resolve_safe_path tests ──────────────────────────────────────
-
-    /// Verify that `resolve_safe_path` rejects paths with ".." that escape
-    /// the current working directory.
-    #[test]
-    fn test_resolve_safe_path_rejects_traversal() {
-        // Path traversal that escapes cwd
-        let result = resolve_safe_path("../../../etc/passwd", false);
-        assert!(
-            result.is_err(),
-            "path traversal should be rejected, got: {:?}",
-            result
-        );
-        let err = result.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("outside the workspace") || msg.contains("does not exist"),
-            "error should mention outside workspace or does not exist, got: {}",
-            msg
-        );
-
-        // Absolute path outside cwd
-        let result = resolve_safe_path("/etc/passwd", false);
-        assert!(
-            result.is_err(),
-            "absolute path outside cwd should be rejected"
-        );
-    }
-
-    /// Verify that `resolve_safe_path` allows paths within the workspace.
-    #[test]
-    fn test_resolve_safe_path_allows_relative_paths() {
-        // A relative path to a file that exists (Cargo.toml should be in cwd)
-        let result = resolve_safe_path("Cargo.toml", false);
-        assert!(
-            result.is_ok(),
-            "Cargo.toml in cwd should be resolvable, got: {:?}",
-            result
-        );
-
-        // A relative path to a new file (with allow_new_file = true)
-        let result = resolve_safe_path("test_temp_new_file.txt", true);
-        assert!(
-            result.is_ok(),
-            "new file in cwd should be resolvable with allow_new_file=true, got: {:?}",
-            result
-        );
-    }
-
-    /// Verify that allowing a new file checks the parent directory exists.
-    #[test]
-    fn test_resolve_safe_path_new_file_in_nonexistent_dir() {
-        let result = resolve_safe_path("nonexistent_dir/some_file.txt", true);
-        assert!(
-            result.is_err(),
-            "new file in nonexistent parent dir should fail"
-        );
-    }
-
     // ── execute_simple_tool security ──────────────────────────────────
 
     /// Verify that `execute_simple_tool` rejects path traversal via the
@@ -658,31 +558,6 @@ mod tests {
                 .to_string()
                 .contains("not registered in governance gate"),
             "error should indicate unknown tool was rejected by governance"
-        );
-    }
-
-    // ── Safety edge cases ────────────────────────────────────────────
-
-    /// Verify that resolve_safe_path with relative path that stays within
-    /// workspace works even when file doesn't exist (allow_new_file=true).
-    #[test]
-    fn test_resolve_safe_path_new_file_allowed() {
-        // This should work: path is relative and parent (cwd) exists
-        let result = resolve_safe_path("_test_write_cleanup.txt", true);
-        assert!(result.is_ok(), "new file in cwd should be OK");
-    }
-
-    /// Verify that resolve_safe_path with file that exists works.
-    #[test]
-    fn test_resolve_safe_path_existing_file() {
-        let cwd = std::env::current_dir().expect("current directory should be available");
-        // Try to resolve the src dir which definitely exists
-        let result = resolve_safe_path("src", false);
-        assert!(result.is_ok(), "src dir should be resolvable");
-        let path = result.expect("resolve_safe_path should succeed for src dir");
-        assert!(
-            path.starts_with(&cwd),
-            "resolved path should start with cwd"
         );
     }
 }

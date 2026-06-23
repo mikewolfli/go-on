@@ -153,21 +153,15 @@ impl ToolLockManager {
     ///
     /// Panics if the internal mutex is poisoned.
     pub fn acquire(&self, path: &str, mode: LockMode) -> Result<LockHandle, AcquireError> {
+        // Fast path: try non-blocking first.
+        if let Some(handle) = self.try_acquire(path, mode) {
+            return Ok(handle);
+        }
+
         let deadline = Instant::now() + Self::ACQUIRE_TIMEOUT;
         let mut backoff_us = Self::BACKOFF_INITIAL_US;
 
         loop {
-            {
-                let mut table = self.lock_table();
-                if Self::try_acquire_inner(&mut table, path, mode) {
-                    return Ok(LockHandle {
-                        path: path.to_string(),
-                        mode,
-                        manager: self.clone(),
-                    });
-                }
-            }
-
             if Instant::now() >= deadline {
                 return Err(AcquireError::Timeout {
                     path: path.to_string(),
@@ -180,6 +174,10 @@ impl ToolLockManager {
             let sleep_us = backoff_us.min(Self::BACKOFF_MAX_MS * 1000);
             std::thread::sleep(Duration::from_micros(sleep_us));
             backoff_us = backoff_us.saturating_mul(2);
+
+            if let Some(handle) = self.try_acquire(path, mode) {
+                return Ok(handle);
+            }
         }
     }
 
@@ -194,7 +192,6 @@ impl ToolLockManager {
     /// Attempt to acquire a lock without blocking.
     ///
     /// Returns `Some(LockHandle)` on success, `None` if the lock would block.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn try_acquire(&self, path: &str, mode: LockMode) -> Option<LockHandle> {
         let mut table = self.lock_table();
         if Self::try_acquire_inner(&mut table, path, mode) {

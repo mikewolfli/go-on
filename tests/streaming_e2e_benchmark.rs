@@ -11,11 +11,11 @@
 /// Regression detection: TTFT p50 > baseline × 1.5
 ///
 /// NOTE: This test requires a live LLM server with streaming capabilities.
-/// It is ignored by default because it takes ~9 minutes and requires
-/// external infrastructure. Run with `cargo test -- --include-ignored`
-/// when a streaming backend is available.
+/// It takes ~9 minutes when a server is available.
+/// If no server is detected at 127.0.0.1:8090, the test soft-skips.
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -395,11 +395,22 @@ fn run_benchmarks() -> BTreeMap<String, Vec<StreamBenchResult>> {
 // Tests
 // ---------------------------------------------------------------------------
 
-// Ignored by default — requires live LLM streaming server.
-// Run with: cargo test --test streaming_e2e_benchmark -- --include-ignored
-#[ignore = "requires live LLM streaming server; takes ~9 minutes"]
 #[test]
 fn streaming_e2e_benchmark() {
+    // Quick health check: try to reach the local server
+    let server_available = TcpStream::connect_timeout(
+        &"127.0.0.1:8090".parse().expect("valid socket addr"),
+        std::time::Duration::from_secs(2),
+    )
+    .is_ok();
+    if !server_available {
+        eprintln!("╔═══════════════════════════════════════════════════════════╗");
+        eprintln!("║   Streaming E2E Benchmark: SKIPPED                       ║");
+        eprintln!("║   No LLM server detected at 127.0.0.1:8090               ║");
+        eprintln!("║   Start the server and re-run to run the benchmark.      ║");
+        eprintln!("╚═══════════════════════════════════════════════════════════╝");
+        return;
+    }
     eprintln!("╔═══════════════════════════════════════════════════════════╗");
     eprintln!("║   GAP-B50-20: Streaming E2E Performance Benchmark       ║");
     eprintln!("╚═══════════════════════════════════════════════════════════╝");

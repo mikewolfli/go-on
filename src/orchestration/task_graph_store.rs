@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use anyhow::Result;
 use serde_json;
 
-use crate::orchestration::task_graph::{TaskGraph, TaskGraphCheckpointArtifact, TaskNode};
+use crate::orchestration::core_dag::{TaskGraph, TaskGraphCheckpointArtifact, TaskNode};
 
 // ─── SQLite backend (local / simple-server) ──────────────────
 #[cfg(not(feature = "backend-postgres"))]
@@ -519,7 +519,7 @@ fn now_ts() -> i64 {
 #[cfg(all(test, not(feature = "backend-postgres")))]
 mod tests {
     use super::*;
-    use crate::orchestration::task_graph::PlannedSubtaskRecord;
+    use crate::orchestration::core_dag::PlannedSubtaskRecord;
 
     fn make_sample_graph() -> (String, TaskGraph) {
         let graph_id = "test-graph-001".to_string();

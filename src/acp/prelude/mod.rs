@@ -11,7 +11,7 @@
 //! | `constants` | Magic numbers, default values, lock names |
 //! | `types` | Shared data types (conversation, review, server status) |
 //! | `functions` | Utility functions (timestamps, conversation management) |
-//! | `lock_monitor` | Lock monitor, lock acquisition helpers |
+//! | `lock_helpers` | Lock acquisition helpers with poison recovery |
 //! | `circuit_breaker` | Circuit breaker registry and snapshots |
 //! | `lifecycle` | Server lifecycle state |
 //! | `maintenance` | Maintenance tracker |
@@ -25,7 +25,7 @@ pub mod constants;
 pub mod functions;
 pub mod inflight;
 pub mod lifecycle;
-pub mod lock_monitor;
+pub mod lock_helpers;
 pub mod maintenance;
 pub mod rate_limiter;
 pub mod re_exports;
@@ -40,7 +40,7 @@ pub use constants::*;
 pub use functions::*;
 pub use inflight::*;
 pub use lifecycle::*;
-pub use lock_monitor::*;
+pub use lock_helpers::*;
 pub use maintenance::*;
 pub use rate_limiter::*;
 pub use re_exports::*;

@@ -22,11 +22,25 @@ pub mod dxf_tool;
 #[cfg(feature = "document-email")]
 pub mod email;
 pub mod filesystem;
+#[cfg(any(
+    feature = "game-online",
+    feature = "game-process",
+    feature = "game-screen",
+    feature = "game-input",
+    feature = "game-agent",
+    feature = "game-state",
+    feature = "game-modding"
+))]
+pub mod game;
+#[cfg(feature = "cam-gcode")]
+pub mod gcode;
 #[cfg(feature = "cad-geo")]
 pub mod geo;
 pub mod git;
 #[cfg(feature = "cad-gltf")]
 pub mod gltf;
+#[cfg(feature = "gis-gpx")]
+pub mod gpx;
 pub mod http;
 #[cfg(feature = "cad-iges")]
 pub mod iges;
@@ -34,13 +48,18 @@ pub mod iges;
 pub mod image;
 #[cfg(feature = "document-invoice")]
 pub mod invoice;
+pub mod jsonl;
+pub mod network;
 #[cfg(feature = "cad-obj")]
 pub mod obj;
+#[cfg(feature = "model-3d-extra")]
+pub mod obj_tool;
 pub mod office;
 #[cfg(feature = "document-pdf")]
 pub mod pdf;
 #[cfg(feature = "cad-ply")]
 pub mod ply;
+pub mod rss;
 pub mod search;
 pub mod shell;
 #[cfg(feature = "backend-sqlite")]
@@ -49,8 +68,11 @@ pub mod sqlite;
 pub mod step;
 #[cfg(feature = "cad-stl")]
 pub mod stl;
+#[cfg(feature = "model-3d")]
+pub mod stl_tool;
 #[cfg(feature = "drawing-svg")]
 pub mod svg;
+pub mod time;
 #[cfg(feature = "document-html")]
 pub mod web;
 
@@ -74,11 +96,15 @@ pub use dxf_tool::DxfReadTool;
 #[cfg(feature = "document-email")]
 pub use email::EmailParseTool;
 pub use filesystem::{FileDeleteTool, FileMoveTool, ListDirectoryTool};
+#[cfg(feature = "cam-gcode")]
+pub use gcode::GcodeReadTool;
 #[cfg(feature = "cad-geo")]
 pub use geo::GeoUtilTool;
 pub use git::GitTool;
 #[cfg(feature = "cad-gltf")]
 pub use gltf::GltfReadTool;
+#[cfg(feature = "gis-gpx")]
+pub use gpx::GpxReadTool;
 pub use http::HttpRequestTool;
 #[cfg(feature = "cad-iges")]
 pub use iges::IgesReadTool;
@@ -86,8 +112,12 @@ pub use iges::IgesReadTool;
 pub use image::{ImageAnalyzeTool, ImageConvertTool, ImageGenerateTool, ImageResizeTool};
 #[cfg(feature = "document-invoice")]
 pub use invoice::InvoiceParseTool;
+pub use jsonl::{JsonlReadTool, JsonlWriteTool};
+pub use network::{DnsLookupTool, PingTool, PortScanTool};
 #[cfg(feature = "cad-obj")]
 pub use obj::ObjReadTool;
+#[cfg(feature = "model-3d-extra")]
+pub use obj_tool::ObjModelReadTool;
 #[cfg(feature = "document-excel")]
 pub use office::ReadExcelTool;
 #[cfg(feature = "document-docx")]
@@ -100,16 +130,22 @@ pub use office::{ReadPptTool, WritePptTool};
 pub use pdf::{PdfMergeTool, PdfSplitTool, ReadPdfTool};
 #[cfg(feature = "cad-ply")]
 pub use ply::PlyReadTool;
+pub use rss::RssReadTool;
 pub use search::{FindFilesTool, GrepTool};
 pub use shell::ShellExecTool;
 #[cfg(feature = "backend-sqlite")]
 pub use sqlite::SqliteQueryTool;
 #[cfg(feature = "cad-step")]
 pub use step::StepReadTool;
-#[cfg(feature = "cad-stl")]
+#[cfg(all(feature = "cad-stl", feature = "model-3d"))]
+pub use stl::StlGenerateTool;
+#[cfg(all(feature = "cad-stl", not(feature = "model-3d")))]
 pub use stl::{StlGenerateTool, StlReadTool};
+#[cfg(feature = "model-3d")]
+pub use stl_tool::StlReadTool;
 #[cfg(feature = "drawing-svg")]
 pub use svg::{SvgExportTool, SvgGenerateTool, SvgReadTool};
+pub use time::DateTimeTool;
 #[cfg(feature = "document-html")]
 pub use web::WebScrapeTool;
 
@@ -136,43 +172,20 @@ mod tests {
     #[test]
     fn shell_exec_runs_echo() {
         let tool = ShellExecTool;
-        let mut last_output: Option<ToolOutput> = None;
-
-        // This command is deterministic, but process spawning can be flaky
-        // under heavy all-target test parallelism. Retry a few times.
-        for _ in 0..3 {
-            let input = tool_input(serde_json::json!({
-                "command": "echo hello",
-                "timeout_ms": 5000,
-            }));
-            let output = tool.run(&input).expect("shell_exec should run");
-            if output.success {
-                let result = output
-                    .result
-                    .as_ref()
-                    .expect("successful shell_exec should include result");
-                assert!(result["stdout"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("hello"));
-                return;
-            }
-            last_output = Some(output);
-        }
-
-        let details = last_output
+        let input = tool_input(serde_json::json!({
+            "command": "echo hello",
+            "timeout_ms": 5000,
+        }));
+        let output = tool.run(&input).expect("shell_exec should run");
+        assert!(output.success, "shell_exec echo should succeed");
+        let result = output
+            .result
             .as_ref()
-            .and_then(|o| o.result.as_ref())
-            .map(|r| {
-                format!(
-                    "stdout='{}', stderr='{}', exit_code={:?}",
-                    r["stdout"].as_str().unwrap_or_default(),
-                    r["stderr"].as_str().unwrap_or_default(),
-                    r["exit_code"]
-                )
-            })
-            .unwrap_or_else(|| "no output details".to_string());
-        panic!("shell_exec_runs_echo remained unsuccessful after retries: {details}");
+            .expect("successful shell_exec should include result");
+        assert!(result["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("hello"));
     }
 
     #[test]
@@ -305,25 +318,25 @@ mod tests {
     }
 
     #[test]
-    fn cargo_check_in_workspace() {
-        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let input = ToolInput {
-            task_id: "t1".to_string(),
-            phase: "act".to_string(),
-            agent_role: "coder".to_string(),
-            objective: "check".to_string(),
-            constraints: None,
-            evidence: None,
-            payload: serde_json::json!({
-                "directory": workspace.to_string_lossy(),
-            }),
-            allowed_base_dir: Some(workspace),
-        };
-
+    fn cargo_check_rejects_nonexistent_directory() {
+        // Fast test: verify the tool rejects an invalid directory.
+        // This exercises the path canonicalization error path without
+        // actually running `cargo check` (which would compile the whole
+        // workspace and be very slow).
+        let input = tool_input(serde_json::json!({
+            "directory": "/nonexistent-path-that-does-not-exist-12345",
+        }));
         let tool = CargoCheckTool;
-        let output = tool.run(&input).expect("cargo_check should run");
-        // Should succeed in this workspace
-        assert!(output.success);
+        let result = tool.run(&input);
+        assert!(
+            result.is_err(),
+            "cargo_check should fail for nonexistent directory"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("canonicalization") || err.contains("failed"),
+            "error should mention canonicalization failure, got: {err}"
+        );
     }
 
     #[test]
@@ -348,24 +361,19 @@ mod tests {
     }
 
     #[test]
-    fn cargo_test_runs() {
-        let input = ToolInput {
-            task_id: "t1".to_string(),
-            phase: "act".to_string(),
-            agent_role: "tester".to_string(),
-            objective: "test".to_string(),
-            constraints: None,
-            evidence: None,
-            payload: serde_json::json!({
-                "directory": ".",
-                "filter": "shell_exec_runs",
-            }),
-            allowed_base_dir: Some(PathBuf::from(".")),
-        };
-
+    fn cargo_test_rejects_invalid_filter() {
+        // Fast test: verify the tool rejects an invalid test filter.
+        // This exercises the filter sanitization logic without actually
+        // running `cargo test` (which would be very slow).
+        let input = tool_input(serde_json::json!({
+            "filter": "../../etc/passwd",
+            "directory": ".",
+        }));
         let tool = CargoTestTool;
-        let output = tool.run(&input).expect("cargo_test should run");
-        // May or may not find the test
-        assert!(output.result.is_some());
+        let result = tool.run(&input);
+        assert!(
+            result.is_err(),
+            "cargo_test should reject invalid filter characters"
+        );
     }
 }

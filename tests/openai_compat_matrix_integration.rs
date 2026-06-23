@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::header::CONTENT_TYPE;
 use serde_json::{json, Value};
-use serial_test::serial;
+
 use tempfile::tempdir;
 
 pub mod common;
@@ -143,7 +143,6 @@ async fn wait_healthy(client: &reqwest::Client, base_url: &str, timeout: Duratio
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[serial]
 async fn openai_http_request_matrix_regression() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -271,7 +270,6 @@ async fn openai_http_request_matrix_regression() {
 /// Phase R1 baseline: verify /v1/responses returns a structured `response` object,
 /// and that missing required fields return a Responses-style error.
 #[tokio::test(flavor = "current_thread")]
-#[serial]
 async fn responses_api_r1_minimal_request() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -1578,7 +1576,6 @@ async fn responses_api_r1_minimal_request() {
 /// Phase R4: golden field matrix — field completeness and event ordering assertions
 /// separated from validation-edge-case tests for clarity and faster triage.
 #[tokio::test(flavor = "current_thread")]
-#[serial]
 async fn responses_api_r4_complete_field_matrix() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -1779,7 +1776,6 @@ async fn responses_api_r4_complete_field_matrix() {
 
 /// Phase R4.1: route contract assertions for root capabilities and unsupported methods.
 #[tokio::test(flavor = "current_thread")]
-#[serial]
 async fn responses_api_r4_route_contracts() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -1865,7 +1861,6 @@ async fn responses_api_r4_route_contracts() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[serial]
 async fn responses_api_stream_degrades_setup_unavailable() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");
@@ -2009,7 +2004,6 @@ async fn responses_api_stream_degrades_setup_unavailable() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[serial]
 async fn responses_api_non_stream_degrades_setup_unavailable() {
     let dir = tempdir().expect("failed to create tempdir");
     let config_path = dir.path().join("config.toml");

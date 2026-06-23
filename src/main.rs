@@ -69,7 +69,6 @@ pub use crate::orchestration::mode;
 pub use crate::orchestration::orchestrator;
 pub use crate::orchestration::roles;
 pub use crate::orchestration::task_decomposer;
-pub use crate::orchestration::task_graph;
 pub use crate::orchestration::task_router;
 pub use crate::orchestration::tool;
 pub use crate::protocol::mcp_server;

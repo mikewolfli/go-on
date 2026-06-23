@@ -736,6 +736,9 @@ async function initializeGoOn(
   context.subscriptions.push(statusMonitor);
 
   const statusProv = new GoOnStatusProvider(manager);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("go-on-status", statusProv),
+  );
 
   const runtimeBootstrap: RuntimeBootstrapDeps = {
     ensureBinary: ensureGoOnBinary,

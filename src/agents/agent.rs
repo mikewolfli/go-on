@@ -23,7 +23,6 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, warn};
 
-use crate::agents::vendors;
 use crate::agents::{
     Ai21Agent, AlephAgent, AnthropicAgent, CohereAgent, CopilotAgent, DeepQuestAgent,
     DeepSeekAgent, FaceWallAgent, FireworksAgent, GeminiAgent, GlmAgent, GroqAgent, HunyuanAgent,
@@ -756,52 +755,6 @@ impl AgentRegistry {
             .collect::<Vec<_>>();
         catalog.sort_by(|left, right| left.0.cmp(&right.0));
         catalog
-    }
-
-    /// Get agents grouped by vendor category
-    ///
-    /// # Returns
-    /// * `HashMap<VendorCategory, Vec<String>>` - Map of vendor categories to agent names
-    pub fn agents_by_vendor(&self) -> HashMap<vendors::VendorCategory, Vec<String>> {
-        let mut result: HashMap<vendors::VendorCategory, Vec<String>> = HashMap::new();
-
-        for name in self.agents.keys() {
-            // Try to determine vendor category based on agent name
-            let category =
-                if name.contains("openai") || name.contains("anthropic") || name.contains("cohere")
-                {
-                    vendors::VendorCategory::OpenAIFamily
-                } else if name.contains("deepseek")
-                    || name.contains("wenxin")
-                    || name.contains("qianfan")
-                    || name.contains("qwen")
-                    || name.contains("glm")
-                    || name.contains("yi")
-                    || name.contains("hunyuan")
-                    || name.contains("doubao")
-                    || name.contains("minimax")
-                    || name.contains("stepfun")
-                    || name.contains("skywork")
-                    || name.contains("xihu")
-                    || name.contains("langboat")
-                    || name.contains("loopai")
-                    || name.contains("siliconflow")
-                    || name.contains("deepquest")
-                {
-                    vendors::VendorCategory::ChineseVendors
-                } else {
-                    vendors::VendorCategory::OtherVendors
-                };
-
-            result.entry(category).or_default().push(name.clone());
-        }
-
-        // Sort agent names within each category
-        for agents in result.values_mut() {
-            agents.sort();
-        }
-
-        result
     }
 
     /// Returns a reference to the capability graph used for agent routing

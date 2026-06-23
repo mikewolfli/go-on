@@ -10,6 +10,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::orchestration::core_dag::TaskGraphCheckpointArtifact;
 use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 
@@ -107,18 +108,6 @@ pub struct CheckpointSummaryArtifact {
     pub message_count: usize,
     pub message_chars: usize,
     pub assistant_excerpt: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskGraphCheckpointArtifact {
-    pub checkpoint_id: String,
-    pub schema_version: String,
-    pub created_at: i64,
-    pub task: String,
-    pub phases_completed: usize,
-    pub subtask_records: Vec<PlannedSubtaskRecord>,
-    pub resume_eligible: bool,
-    pub resume_reason: Option<String>,
 }
 
 // ── Research artifact ──────────────────────────────────────────────────────

@@ -540,7 +540,7 @@ pub fn run_timeout_check(cycle: u64, pending_count: Option<usize>, timeout_secs:
 pub fn spawn_timeout_loop(
     shutdown_notify: std::sync::Arc<tokio::sync::Notify>,
     approval_engine: Option<
-        std::sync::Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
+        std::sync::Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
     >,
 ) {
     tokio::spawn(async move {
@@ -562,19 +562,9 @@ pub fn spawn_timeout_loop(
 
                     // 2. Process approval engine timeouts if available
                     if let Some(ref engine) = approval_engine {
-                        // std::sync::RwLock is used here (not tokio::sync::RwLock)
-                        // because ApprovalEngine operations are synchronous.
-                        // The lock scope is brief and never held across .await points.
-                        let mut guard = match engine.write() {
-                            Ok(g) => g,
-                            Err(poisoned) => {
-                                tracing::error!(
-                                    target: "runtime_controls",
-                                    "approval_engine lock poisoned in timeout loop"
-                                );
-                                poisoned.into_inner()
-                            }
-                        };
+                        // tokio::sync::RwLock does not use lock poisoning,
+                        // so .write().await returns the guard directly.
+                        let mut guard = engine.write().await;
                         let changed = guard.process_timeouts();
                         if !changed.is_empty() {
                             tracing::info!(

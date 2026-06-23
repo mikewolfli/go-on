@@ -5,8 +5,9 @@
 //! 2. Global max concurrent requests (semaphore-based)
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+
+use crate::shared::token_bucket::TokenBucket;
 
 /// Rate limiter configuration.
 #[derive(Debug, Clone)]
@@ -26,60 +27,26 @@ impl Default for RateLimitConfig {
     }
 }
 
-struct TenantBucket {
-    tokens: f64,
-    last_refill: Instant,
-    capacity: f64,
-    refill_rate: f64,
-}
-
-impl TenantBucket {
-    fn new(capacity: f64, refill_rate: f64) -> Self {
-        Self {
-            tokens: capacity,
-            last_refill: Instant::now(),
-            capacity,
-            refill_rate,
-        }
-    }
-
-    fn try_consume(&mut self, tokens: f64) -> bool {
-        self.refill();
-        if self.tokens >= tokens {
-            self.tokens -= tokens;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn refill(&mut self) {
-        let elapsed = self.last_refill.elapsed().as_secs_f64();
-        self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
-        self.last_refill = Instant::now();
-    }
-}
-
 /// Global rate limiter instance.
 pub struct GlobalRateLimiter {
     config: RateLimitConfig,
-    tenants: tokio::sync::Mutex<HashMap<String, TenantBucket>>,
+    tenants: Mutex<HashMap<String, TokenBucket>>,
 }
 
 impl GlobalRateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
-            tenants: tokio::sync::Mutex::new(HashMap::new()),
+            tenants: Mutex::new(HashMap::new()),
         }
     }
 
     /// Try to consume a token for the given tenant.
     /// Returns true if allowed, false if rate limited.
-    pub async fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
-        let mut tenants = self.tenants.lock().await;
+    pub fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
+        let mut tenants = self.tenants.lock().unwrap();
         let bucket = tenants.entry(tenant_id.to_string()).or_insert_with(|| {
-            TenantBucket::new(self.config.tenant_burst as f64, self.config.tenant_rps)
+            TokenBucket::new(self.config.tenant_burst as f64, self.config.tenant_rps)
         });
         bucket.try_consume(tokens)
     }

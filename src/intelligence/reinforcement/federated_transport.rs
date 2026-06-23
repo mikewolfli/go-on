@@ -629,16 +629,19 @@ pub struct HttpFederatedTransport {
     /// HTTP client (reused across requests).
     client: reqwest::Client,
     /// Request timeout.
-    #[allow(dead_code)] // F-GAP-49 — reserved federated transport feature
     timeout: Duration,
 }
 
 impl HttpFederatedTransport {
     /// Create a new HTTP transport with default timeout (10s).
     pub fn new() -> Self {
+        let timeout = Duration::from_secs(10);
         Self {
-            client: reqwest::Client::new(),
-            timeout: Duration::from_secs(10),
+            client: reqwest::Client::builder()
+                .timeout(timeout)
+                .build()
+                .unwrap_or_default(),
+            timeout,
         }
     }
 
@@ -651,6 +654,11 @@ impl HttpFederatedTransport {
                 .unwrap_or_default(),
             timeout,
         }
+    }
+
+    /// Return the configured request timeout.
+    pub fn timeout(&self) -> Duration {
+        self.timeout
     }
 }
 
@@ -833,34 +841,9 @@ mod tests {
     fn test_http_transport_default() {
         let transport = HttpFederatedTransport::new();
         // Just validate it doesn't panic.
-        assert!(transport.timeout.as_secs() > 0);
+        assert!(transport.timeout().as_secs() > 0);
     }
 }
 
-// Use `temp_env` for env var tests. If not available, the env var tests
-// use a stand-in that directly sets/restores the env var.
-#[cfg(not(feature = "temp_env"))]
-mod temp_env_compat {
-    /// A stand-in that sets the env var for the duration of the closure and
-    /// restores the previous value afterwards.
-    #[allow(dead_code)] // F-GAP-49 — reserved federated transport feature
-    pub fn with_var<F>(key: &str, value: Option<&str>, f: F)
-    where
-        F: FnOnce(),
-    {
-        let prev = std::env::var(key).ok();
-        if let Some(val) = value {
-            std::env::set_var(key, val);
-        } else {
-            std::env::remove_var(key);
-        }
-        f();
-        match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
-        }
-    }
-}
-#[cfg(not(feature = "temp_env"))]
-#[allow(unused_imports)]
-use temp_env_compat as temp_env;
+// When the `temp_env` crate feature is not available, use the real crate.
+// The compat module was removed; the `temp_env` crate is used directly.

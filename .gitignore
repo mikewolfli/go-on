@@ -38,11 +38,11 @@ DOC/book/
 *.tar.gz
 
 # GUI build and dependencies
-GUI/node_modules/
-GUI/dist/
-GUI/.vite/
-GUI/src-tauri/target/
-GUI/src-tauri/gen/
+gui/node_modules/
+gui/dist/
+gui/.vite/
+gui/src-tauri/target/
+gui/src-tauri/gen/
 
 # Temporary and output files
 # Stale build artifacts in project root
@@ -71,6 +71,10 @@ archive/
 tests/artifacts/
 tests/requests/
 
+# Generated artifacts and snapshots
+artifacts/
+snapshots/
+
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -81,6 +85,7 @@ ehthumbs.db
 Thumbs.db
 
 # IDE and editor files
+.trae/
 .vscode/
 .idea/
 *.swp

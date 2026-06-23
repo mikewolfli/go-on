@@ -96,7 +96,6 @@ sub-bus-multimodal = [
 
 # Data utilities (optional, feature-gated)
 data-export = ["dep:csv", "dep:serde_yaml"]
-string-similarity = ["dep:strsim"]
 
 # Barcode / 2D code generation tools (optional, feature-gated)
 barcode-tools = []
@@ -118,7 +117,15 @@ cad-geo = []
 cad-gltf = []
 cad-iges = []
 cad-ply = []
+# CAM / GIS tools (feature-gated, no new dependencies needed)
+cam-gcode = []
+gis-gpx = []
 drawing-svg = ["dep:svg"]
+# 3D model processing (optional, feature-gated)
+model-3d = ["dep:stl"]
+
+# Additional 3D formats
+model-3d-extra = ["dep:tobj"]
 
 # Profile definitions (mutually exclusive via compile-time assertions)
 #
@@ -160,6 +167,11 @@ multi-users-server = [
     "vault",
 ]
 
+# Office / Document / Data tools
+charting = ["dep:plotters"]
+data-collection = ["dep:serialport"]
+image-extra = ["dep:imageproc"]
+
 # Full-feature profile for local development and CI testing
 # Includes EVERY feature for maximum coverage
 full = [
@@ -176,7 +188,6 @@ full = [
     "audio-whisper-openai",
     "audio-vosk",
     "data-export",
-    "string-similarity",
     "image-processing",
     "cad-dxf",
     "cad-stl",
@@ -188,10 +199,23 @@ full = [
     "cad-iges",
     "cad-ply",
     "drawing-svg",
+    "model-3d",
+    "model-3d-extra",
     "document-email",
     "document-invoice",
     "barcode-tools",
+    "cam-gcode",
+    "gis-gpx",
     "vault",
+    "charting",
+    "image-extra",
+    "game-online",
+    "game-process",
+    "game-screen",
+    "game-input",
+    "game-agent",
+    "game-state",
+    "game-modding",
 ]
 
 # Backend implementations
@@ -207,6 +231,15 @@ vault = []
 document-email = []
 document-invoice = []
 temp_env = ["dep:temp-env"]
+
+# ── Game tools (optional, feature-gated) ─────────────────────────
+game-online = []
+game-process = []
+game-screen = []
+game-input = []
+game-agent = []
+game-state = []
+game-modding = []
 # Chaos engineering fault injection (opt-in, not in any profile by default)
 chaos-testing = []
 
@@ -263,15 +296,16 @@ rustls-pemfile = "2"
 tokio-rustls = "0.26"
 x509-parser = { version = "0.18", default-features = false, features = ["verify"] }
 
-# ── Data export / string similarity ─────────────────────────────────────────
+# ── Data export ──────────────────────────────────────────────────────────
 csv = { version = "1.3", optional = true }
-strsim = { version = "0.11", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
 serde_yaml = { version = "0.9", optional = true }
 
 # ── CAD / Drawing / Document tools (optional) ──────────────────────────
 dxf = { version = "0.6", optional = true }
 svg = { version = "0.18", optional = true }
+stl = { version = "0.2", optional = true }
+tobj = { version = "4", optional = true }
 
 # ── Multimodal document parsing (optional) ──────────────────────────────────
 lopdf = { version = "0.41", optional = true }
@@ -282,6 +316,17 @@ calamine = { version = "0.26", optional = true }
 rust_xlsxwriter = { version = "0.82", optional = true }
 quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 temp-env = { version = "0.3", optional = true }
+# ── Office / Document tools ──────────────────────────────────────────
+# plotters: Charts and data visualisation
+plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series"], optional = true }
+
+# ── Data collection / I/O ──────────────────────────────────────────────
+# serialport: Serial port communication for data acquisition
+serialport = { version = "4", features = ["serde"], optional = true }
+
+# ── Image processing extras ────────────────────────────────────────────
+imageproc = { version = "0.25", optional = true }
+
 zip = "2"
 tar = "0.4"
 

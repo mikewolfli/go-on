@@ -5,8 +5,11 @@ use indexmap::IndexMap;
 use crate::acp::prelude::now_ts;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code, reason = "F-GAP reserved: cache layer")]
 pub(crate) struct MemoryCachedResponse {
+    #[allow(
+        dead_code,
+        reason = "stored for retrieval, read via .response_text accessor"
+    )]
     pub(crate) response_text: String,
     expires_at: i64,
 }
@@ -17,17 +20,16 @@ pub struct MemoryResponseCache {
 }
 
 impl MemoryResponseCache {
-    #[allow(dead_code, reason = "F-GAP reserved: cache read path")]
+    /// Retrieve a cached response by key. Returns `None` if expired or absent.
+    #[allow(dead_code, reason = "reserved for L1 cache read path")]
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        // Check expiry and promote to MRU position on access.
         if let Some(entry) = guard.get(key) {
             if entry.expires_at <= now {
                 guard.shift_remove(key);
                 return None;
             }
-            // Promote to MRU (back of IndexMap) by removing and re-inserting.
             let entry = entry.clone();
             guard.shift_remove(key);
             guard.insert(key.to_string(), entry.clone());
@@ -36,6 +38,7 @@ impl MemoryResponseCache {
         None
     }
 
+    /// Purge all expired entries and return the count removed.
     pub(crate) fn purge_expired(&self) -> usize {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -44,6 +47,7 @@ impl MemoryResponseCache {
         before.saturating_sub(guard.len())
     }
 
+    /// Clear all entries from the cache and return the count removed.
     pub(crate) fn clear_all(&self) -> usize {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let removed = guard.len();
@@ -51,18 +55,17 @@ impl MemoryResponseCache {
         removed
     }
 
+    /// Return the number of non-expired entries.
     #[allow(dead_code, reason = "reserved for diagnostics")]
     pub(crate) fn active_entries(&self) -> usize {
-        // Single lock scope: purge expired entries and count in one atomic
-        // operation, avoiding a TOCTOU race where a concurrent put() adds a
-        // new entry between purge and re-lock.
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.retain(|_, entry| entry.expires_at > now);
         guard.len()
     }
 
-    #[allow(dead_code, reason = "F-GAP reserved: cache write path")]
+    /// Insert a response into the cache with TTL. No-op if `ttl_seconds` is 0.
+    #[allow(dead_code, reason = "reserved for L1 cache write path")]
     pub(crate) fn put(&self, key: String, response_text: String, ttl_seconds: u64) {
         if ttl_seconds == 0 {
             return;
@@ -71,7 +74,6 @@ impl MemoryResponseCache {
         let expires_at = now_ts() + ttl_seconds as i64;
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Remove old entry first if it exists (so re-insert moves to back).
         guard.shift_remove(&key);
         guard.insert(
             key,
@@ -81,13 +83,10 @@ impl MemoryResponseCache {
             },
         );
 
-        // Keep L1 cache bounded to avoid unbounded memory growth.
-        // LRU eviction: first purge expired entries, then evict oldest (front).
         const MAX_ENTRIES: usize = 2048;
         if guard.len() > MAX_ENTRIES {
             guard.retain(|_, v| v.expires_at > now_ts());
             while guard.len() > MAX_ENTRIES {
-                // IndexMap preserves insertion order: front = LRU, back = MRU.
                 guard.swap_remove_index(0);
             }
         }

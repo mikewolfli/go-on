@@ -2,7 +2,6 @@
 //! buffer pooling, and extraction caching for maximum throughput.
 
 use std::sync::Mutex;
-use tracing;
 
 // ---------------------------------------------------------------------------
 // SseBufferPool

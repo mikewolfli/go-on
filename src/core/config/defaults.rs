@@ -757,6 +757,7 @@ mod rules {
             rules_dir.join("global.md"),
             rules_dir.join("common.md"),
             rules_dir.join("local.md"),
+            rules_dir.join("pua.md"),
         ]
     }
 

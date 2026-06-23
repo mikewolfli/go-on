@@ -41,14 +41,51 @@ fi
 # Run skills environment setup if available.
 SKILLS_SETUP="$ROOT_DIR/scripts/skills-setup.sh"
 if [[ -x "$SKILLS_SETUP" ]]; then
-  echo "Running skills environment setup..."
-  if "$SKILLS_SETUP"; then
-    echo "Skills environment setup complete."
-  else
-    echo "Skills environment setup completed with warnings (non-fatal)."
-  fi
+  echo "Skills environment setup..."
+  # Install language toolchains as needed:
+  #   ./scripts/skills-setup.sh rust
+  #   ./scripts/skills-setup.sh node
+  #   ./scripts/skills-setup.sh python
+  "$SKILLS_SETUP" rust
+  "$SKILLS_SETUP" node
+  "$SKILLS_SETUP" python
+  echo "Skills installed: rust, node, python."
 else
   echo "Skills setup script not found at $SKILLS_SETUP — skipping."
+fi
+
+# Create agent skills directory for SKILL.md auto-discovery.
+AGENT_SKILLS_DIR="$HOME/.agents/skills"
+if [ ! -d "$AGENT_SKILLS_DIR" ]; then
+  mkdir -p "$AGENT_SKILLS_DIR"
+  echo "Created $AGENT_SKILLS_DIR — place SKILL.md files here for auto-discovery"
+  # Write an example SKILL.md for users to reference.
+  EXAMPLE_SKILL="$AGENT_SKILLS_DIR/example-skill/SKILL.md"
+  mkdir -p "$(dirname "$EXAMPLE_SKILL")"
+  cat > "$EXAMPLE_SKILL" << 'EOF'
+---
+name: example-skill
+description: Example skill demonstrating SKILL.md format for go-on auto-discovery
+version: 1.0.0
+---
+
+# Example Skill
+
+This is an example skill for the go-on agent system.
+
+## Usage
+
+Run this command to test the skill:
+
+```bash
+echo "Hello from example-skill!"
+```
+
+## Input Schema
+
+- `command` (string): The command to execute
+EOF
+  echo "Created example skill at $EXAMPLE_SKILL"
 fi
 
 echo "macOS first-run trust bootstrap finished."

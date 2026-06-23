@@ -4,7 +4,7 @@ pub mod mcp_server;
 pub mod negotiator;
 pub mod session_sync;
 pub mod state_sync;
-// F-GAP-99: Legacy JSON-RPC types (superseded by mcp/schema.rs) — kept for existing callers in runtime.rs.
+// Legacy JSON-RPC types + trace helpers — used across ACP / MCP / governance.
 pub mod rpc_protocol;
 
 pub mod rate_limit;

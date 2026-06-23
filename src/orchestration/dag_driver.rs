@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::orchestration::core_dag::CoreDag;
-use crate::orchestration::execution_graph::{ExNodeId, ExNodeState};
+use crate::orchestration::core_dag::{ExNodeId, ExNodeState};
 use crate::orchestration::planner_executor::ExecutionPlan;
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 

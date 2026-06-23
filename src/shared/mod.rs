@@ -1,11 +1,10 @@
 pub mod alert_severity;
 pub mod execution_recorder;
 pub mod http_client;
-pub mod image_attachment;
-pub mod metrics_helpers;
 pub mod protocol_mode;
 pub mod provenance_helpers;
 pub mod role_types;
 pub mod secret_override;
 pub mod timestamps;
+pub mod token_bucket;
 pub mod tool_descriptors;

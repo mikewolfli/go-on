@@ -2,7 +2,16 @@
 //!
 //! Tracks request-level metrics, latency histograms, vector/summary counters,
 //! agent timeouts, and review-gate outcomes.
+//!
+//! # Performance
+//!
+//! Individual counters use `AtomicU64` for lock-free reads/writes.
+//! Latency histograms and aggregate fields that must be read atomically
+//! together still use a `StdMutex<AggregateSnapshot>`.
+//!
+//! Migrated from a single `StdMutex<MetricsSnapshot>` (log-20260623-8).
 
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex as StdMutex;
 
 use serde::Serialize;
@@ -13,7 +22,6 @@ use tracing::warn;
 // ============================================================================
 
 /// Latency bucket boundaries for metrics (milliseconds).
-/// 9 boundaries → 10 buckets (the +Inf bucket is implicit via `len()`).
 const METRIC_LATENCY_BUCKETS_MS: [f64; 9] =
     [1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0];
 
@@ -27,356 +35,334 @@ fn latency_bucket_index_ms(duration_ms: f64) -> usize {
 }
 
 // ============================================================================
-// Metrics snapshot (public)
+// Aggregate snapshot (Mutex-protected — for multi-field atomic reads)
 // ============================================================================
 
-/// Metrics snapshot
+/// Fields that must be read atomically together are in this snapshot.
+/// Individual counters use `AtomicU64` and are lock-free.
 #[derive(Debug, Clone, Serialize, Default)]
-pub struct MetricsSnapshot {
-    /// Total requests processed
-    pub total_requests: u64,
-    /// Successful requests
-    pub successful_requests: u64,
-    /// Failed requests
-    pub failed_requests: u64,
-    /// Average request duration in milliseconds
-    pub avg_request_duration_ms: f64,
-    /// Cumulative request duration in milliseconds
+struct AggregateSnapshot {
+    /// Request latency sum (used for avg_duration computation)
     pub request_latency_sum_ms: f64,
     /// Request latency histogram bucket counts (ms buckets +Inf)
     pub request_latency_bucket_counts: [u64; 10],
-    /// Current active requests
-    pub active_requests: u32,
-    /// Cache hit rate (0.0 to 1.0)
-    pub cache_hit_rate: f64,
-    /// Circuit breaker open count
-    pub circuit_breaker_open_count: u32,
-    /// Memory usage in bytes
-    pub memory_usage_bytes: u64,
-    /// CPU usage percentage (0.0 to 100.0)
-    pub cpu_usage_percent: f64,
-    /// Total chat requests
-    pub chat_requests_total: u64,
-    /// Agent request timeout count across chat / execution paths
-    pub agent_timeout_failures_total: u64,
-    /// Local runtime probe timeout count for agent readiness checks
-    pub runtime_probe_timeout_total: u64,
-    /// Vector search requests executed
-    pub vector_search_total: u64,
-    /// Vector hits returned across searches
-    pub vector_hit_total: u64,
-    /// Vector entries stored
-    pub vector_store_total: u64,
-    /// Summary lookups executed
-    pub summary_read_total: u64,
-    /// Summary cache hits
-    pub summary_hit_total: u64,
-    /// Summary entries stored
-    pub summary_store_total: u64,
-    /// Cumulative chat duration in milliseconds
+    /// Chat latency sum
     pub chat_latency_sum_ms: f64,
-    /// Chat latency histogram bucket counts (ms buckets +Inf)
+    /// Chat latency histogram bucket counts
     pub chat_latency_bucket_counts: [u64; 10],
-    /// Review gate invocations
-    pub review_gate_total: u64,
-    /// Cumulative review-gate duration in milliseconds
+    /// Review latency sum
     pub review_latency_sum_ms: f64,
-    /// Review latency histogram bucket counts (ms buckets +Inf)
+    /// Review latency histogram bucket counts
     pub review_latency_bucket_counts: [u64; 10],
-    /// Review gate approved count
+    /// Average request duration (computed, not stored independently)
+    pub avg_request_duration_ms: f64,
+}
+
+// ============================================================================
+// Metrics snapshot (public — for observability consumers)
+// ============================================================================
+
+/// Metrics snapshot — combines atomic counters + aggregate snapshot.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct MetricsSnapshot {
+    // ── Lock-free atomic counters ──────────────────────────────────────────
+    pub total_requests: u64,
+    pub successful_requests: u64,
+    pub failed_requests: u64,
+    pub active_requests: u32,
+    pub chat_requests_total: u64,
+    pub agent_timeout_failures_total: u64,
+    pub runtime_probe_timeout_total: u64,
+    pub vector_search_total: u64,
+    pub vector_hit_total: u64,
+    pub vector_store_total: u64,
+    pub summary_read_total: u64,
+    pub summary_hit_total: u64,
+    pub summary_store_total: u64,
+    pub review_gate_total: u64,
     pub review_gate_approved_total: u64,
-    /// Review gate rejected count
     pub review_gate_rejected_total: u64,
-    /// Review gate timeout count
     pub review_gate_timeout_total: u64,
-    /// Review gate degraded count
     pub review_gate_degraded_total: u64,
-    /// Review gate invalid response count
     pub review_gate_invalid_response_total: u64,
+    // ── Aggregate fields (read from Mutex) ─────────────────────────────────
+    pub avg_request_duration_ms: f64,
+    pub request_latency_sum_ms: f64,
+    pub request_latency_bucket_counts: [u64; 10],
+    pub chat_latency_sum_ms: f64,
+    pub chat_latency_bucket_counts: [u64; 10],
+    pub review_latency_sum_ms: f64,
+    pub review_latency_bucket_counts: [u64; 10],
+    // ── System metrics (set externally) ────────────────────────────────────
+    pub cache_hit_rate: f64,
+    pub circuit_breaker_open_count: u32,
+    pub memory_usage_bytes: u64,
+    pub cpu_usage_percent: f64,
 }
 
 // ============================================================================
 // Runtime metrics (public API)
 // ============================================================================
 
-/// Runtime metrics for tracking server performance
+/// Runtime metrics for tracking server performance.
+///
+/// Individual counters use `AtomicU64` for lock-free access.
+/// Latency histograms and aggregates use a single `StdMutex`.
 #[derive(Debug)]
 pub struct RuntimeMetrics {
-    inner: StdMutex<MetricsSnapshot>,
+    // ── Lock-free counters ─────────────────────────────────────────────────
+    total_requests: AtomicU64,
+    successful_requests: AtomicU64,
+    failed_requests: AtomicU64,
+    active_requests: AtomicU32,
+    chat_requests_total: AtomicU64,
+    agent_timeout_failures_total: AtomicU64,
+    runtime_probe_timeout_total: AtomicU64,
+    vector_search_total: AtomicU64,
+    vector_hit_total: AtomicU64,
+    vector_store_total: AtomicU64,
+    summary_read_total: AtomicU64,
+    summary_hit_total: AtomicU64,
+    summary_store_total: AtomicU64,
+    review_gate_total: AtomicU64,
+    review_gate_approved_total: AtomicU64,
+    review_gate_rejected_total: AtomicU64,
+    review_gate_timeout_total: AtomicU64,
+    review_gate_degraded_total: AtomicU64,
+    review_gate_invalid_response_total: AtomicU64,
+    // ── Aggregate fields (Mutex-protected) ─────────────────────────────────
+    aggregates: StdMutex<AggregateSnapshot>,
 }
 
 impl RuntimeMetrics {
     /// Create new runtime metrics
     pub fn new() -> Self {
         Self {
-            inner: StdMutex::new(MetricsSnapshot::default()),
+            total_requests: AtomicU64::new(0),
+            successful_requests: AtomicU64::new(0),
+            failed_requests: AtomicU64::new(0),
+            active_requests: AtomicU32::new(0),
+            chat_requests_total: AtomicU64::new(0),
+            agent_timeout_failures_total: AtomicU64::new(0),
+            runtime_probe_timeout_total: AtomicU64::new(0),
+            vector_search_total: AtomicU64::new(0),
+            vector_hit_total: AtomicU64::new(0),
+            vector_store_total: AtomicU64::new(0),
+            summary_read_total: AtomicU64::new(0),
+            summary_hit_total: AtomicU64::new(0),
+            summary_store_total: AtomicU64::new(0),
+            review_gate_total: AtomicU64::new(0),
+            review_gate_approved_total: AtomicU64::new(0),
+            review_gate_rejected_total: AtomicU64::new(0),
+            review_gate_timeout_total: AtomicU64::new(0),
+            review_gate_degraded_total: AtomicU64::new(0),
+            review_gate_invalid_response_total: AtomicU64::new(0),
+            aggregates: StdMutex::new(AggregateSnapshot::default()),
         }
     }
 
-    /// Increment successful requests
+    // ── Counter increments (lock-free) ─────────────────────────────────────
+
+    #[inline]
     pub fn inc_successful_requests(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.successful_requests += 1;
-        guard.total_requests += 1;
+        self.successful_requests.fetch_add(1, Ordering::Relaxed);
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment failed requests
+    #[inline]
     pub fn inc_failed_requests(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.failed_requests += 1;
-        guard.total_requests += 1;
+        self.failed_requests.fetch_add(1, Ordering::Relaxed);
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment active requests
+    #[inline]
     pub fn inc_active_requests(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.active_requests += 1;
+        self.active_requests.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Decrement active requests
+    #[inline]
     pub fn dec_active_requests(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.active_requests = guard.active_requests.saturating_sub(1);
+        self.active_requests.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Get successful requests count
+    // ── Counter reads (lock-free) ──────────────────────────────────────────
+
+    #[inline]
     pub fn successful_requests(&self) -> u64 {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.successful_requests
+        self.successful_requests.load(Ordering::Relaxed)
     }
 
-    /// Get failed requests count
+    #[inline]
     pub fn failed_requests(&self) -> u64 {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.failed_requests
+        self.failed_requests.load(Ordering::Relaxed)
     }
 
-    /// Get active requests count
+    #[inline]
     pub fn active_requests(&self) -> u32 {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.active_requests
+        self.active_requests.load(Ordering::Relaxed)
     }
 
-    /// Get total requests count
+    #[inline]
     pub fn total_requests(&self) -> u64 {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.total_requests
+        self.total_requests.load(Ordering::Relaxed)
     }
 
-    /// Get average request duration in milliseconds
+    #[inline]
     pub fn avg_request_duration_ms(&self) -> f64 {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.avg_request_duration_ms
+        self.aggregates
+            .lock()
+            .map(|g| g.avg_request_duration_ms)
+            .unwrap_or(0.0)
     }
 
-    /// Update average request duration
+    // ── Aggregate updates (Mutex-protected) ────────────────────────────────
+
     pub fn update_avg_duration(&self, duration_ms: f64) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let total = guard.total_requests as f64;
+        let total = self.total_requests.load(Ordering::Relaxed) as f64;
+        let mut guard = match self.aggregates.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                warn!("metrics aggregates lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
         guard.avg_request_duration_ms = if total <= 1.0 {
             duration_ms
         } else {
             (guard.avg_request_duration_ms * (total - 1.0) + duration_ms) / total
         };
-    }
-
-    /// Increment review gate count
-    pub fn inc_review_gate(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.review_gate_total += 1;
-    }
-
-    /// Increment review gate rejected count
-    pub fn inc_review_gate_rejected(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.review_gate_rejected_total += 1;
-    }
-
-    /// Increment review gate timeout count
-    pub fn inc_review_gate_timeout(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.review_gate_timeout_total += 1;
-    }
-
-    /// Increment review gate degraded count
-    pub fn inc_review_gate_degraded(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.review_gate_degraded_total += 1;
-    }
-
-    /// Increment review gate approved count
-    pub fn inc_review_gate_approved(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.review_gate_approved_total += 1;
-    }
-
-    /// Increment review gate invalid response count
-    pub fn inc_review_gate_invalid_response(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.review_gate_invalid_response_total += 1;
-    }
-
-    /// Increment chat requests count
-    pub fn inc_chat_requests(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.chat_requests_total += 1;
-    }
-
-    /// Record one ACP request outcome with duration.
-    pub fn record_request_outcome(&self, success: bool, duration_ms: f64) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        if success {
-            guard.successful_requests += 1;
-        } else {
-            guard.failed_requests += 1;
-        }
-        guard.total_requests += 1;
-
-        let duration_ms = duration_ms.max(0.0);
         guard.request_latency_sum_ms += duration_ms;
         let bucket_idx = latency_bucket_index_ms(duration_ms);
         guard.request_latency_bucket_counts[bucket_idx] =
             guard.request_latency_bucket_counts[bucket_idx].saturating_add(1);
-        guard.avg_request_duration_ms = if guard.total_requests == 0 {
+    }
+
+    pub fn inc_review_gate(&self) {
+        self.review_gate_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_review_gate_rejected(&self) {
+        self.review_gate_rejected_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_review_gate_timeout(&self) {
+        self.review_gate_timeout_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_review_gate_degraded(&self) {
+        self.review_gate_degraded_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_review_gate_approved(&self) {
+        self.review_gate_approved_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_review_gate_invalid_response(&self) {
+        self.review_gate_invalid_response_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn inc_chat_requests(&self) {
+        self.chat_requests_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record one ACP request outcome with duration.
+    pub fn record_request_outcome(&self, success: bool, duration_ms: f64) {
+        if success {
+            self.successful_requests.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.failed_requests.fetch_add(1, Ordering::Relaxed);
+        }
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
+
+        let duration_ms = duration_ms.max(0.0);
+        let mut guard = match self.aggregates.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                warn!("metrics aggregates lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        guard.request_latency_sum_ms += duration_ms;
+        let bucket_idx = latency_bucket_index_ms(duration_ms);
+        guard.request_latency_bucket_counts[bucket_idx] =
+            guard.request_latency_bucket_counts[bucket_idx].saturating_add(1);
+        let total = self.total_requests.load(Ordering::Relaxed) as f64;
+        guard.avg_request_duration_ms = if total == 0.0 {
             0.0
         } else {
-            guard.request_latency_sum_ms / guard.total_requests as f64
+            guard.request_latency_sum_ms / total
         };
     }
 
     /// Record chat latency.
     pub fn record_chat_latency(&self, duration_ms: f64) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        self.chat_requests_total.fetch_add(1, Ordering::Relaxed);
         let duration_ms = duration_ms.max(0.0);
-        guard.chat_requests_total += 1;
+        let mut guard = match self.aggregates.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                warn!("metrics aggregates lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
         guard.chat_latency_sum_ms += duration_ms;
         let bucket_idx = latency_bucket_index_ms(duration_ms);
         guard.chat_latency_bucket_counts[bucket_idx] =
             guard.chat_latency_bucket_counts[bucket_idx].saturating_add(1);
     }
 
-    /// Increment agent timeout failure counter.
+    #[inline]
     pub fn inc_agent_timeout_failure(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.agent_timeout_failures_total = guard.agent_timeout_failures_total.saturating_add(1);
+        self.agent_timeout_failures_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Increment runtime probe timeout counter.
+    #[inline]
     pub fn inc_runtime_probe_timeout(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.runtime_probe_timeout_total = guard.runtime_probe_timeout_total.saturating_add(1);
+        self.runtime_probe_timeout_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record a vector search with hit count.
+    #[inline]
     pub fn record_vector_search(&self, hit_count: usize) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.vector_search_total = guard.vector_search_total.saturating_add(1);
-        guard.vector_hit_total = guard.vector_hit_total.saturating_add(hit_count as u64);
+        self.vector_search_total.fetch_add(1, Ordering::Relaxed);
+        self.vector_hit_total
+            .fetch_add(hit_count as u64, Ordering::Relaxed);
     }
 
-    /// Record a vector store operation.
+    #[inline]
     pub fn record_vector_store(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.vector_store_total = guard.vector_store_total.saturating_add(1);
+        self.vector_store_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record a summary read, with hit indicator.
+    #[inline]
     pub fn record_summary_read(&self, hit: bool) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.summary_read_total = guard.summary_read_total.saturating_add(1);
+        self.summary_read_total.fetch_add(1, Ordering::Relaxed);
         if hit {
-            guard.summary_hit_total = guard.summary_hit_total.saturating_add(1);
+            self.summary_hit_total.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Record a summary store operation.
+    #[inline]
     pub fn record_summary_store(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.summary_store_total = guard.summary_store_total.saturating_add(1);
+        self.summary_store_total.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record review gate latency.
     pub fn record_review_latency(&self, duration_ms: f64) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
         let duration_ms = duration_ms.max(0.0);
+        let mut guard = match self.aggregates.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                warn!("metrics aggregates lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
         guard.review_latency_sum_ms += duration_ms;
         let bucket_idx = latency_bucket_index_ms(duration_ms);
         guard.review_latency_bucket_counts[bucket_idx] =
@@ -388,26 +374,90 @@ impl RuntimeMetrics {
     where
         F: FnOnce(&mut MetricsSnapshot),
     {
-        if let Ok(mut guard) = self.inner.lock() {
-            f(&mut guard);
-        }
+        let mut snapshot = self.snapshot();
+        f(&mut snapshot);
     }
 
-    /// Get the current metrics snapshot.
+    /// Get the current metrics snapshot (combines atomics + aggregates).
     pub fn snapshot(&self) -> MetricsSnapshot {
-        self.inner
+        let agg = self
+            .aggregates
             .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        MetricsSnapshot {
+            total_requests: self.total_requests.load(Ordering::Relaxed),
+            successful_requests: self.successful_requests.load(Ordering::Relaxed),
+            failed_requests: self.failed_requests.load(Ordering::Relaxed),
+            active_requests: self.active_requests.load(Ordering::Relaxed),
+            chat_requests_total: self.chat_requests_total.load(Ordering::Relaxed),
+            agent_timeout_failures_total: self
+                .agent_timeout_failures_total
+                .load(Ordering::Relaxed),
+            runtime_probe_timeout_total: self
+                .runtime_probe_timeout_total
+                .load(Ordering::Relaxed),
+            vector_search_total: self.vector_search_total.load(Ordering::Relaxed),
+            vector_hit_total: self.vector_hit_total.load(Ordering::Relaxed),
+            vector_store_total: self.vector_store_total.load(Ordering::Relaxed),
+            summary_read_total: self.summary_read_total.load(Ordering::Relaxed),
+            summary_hit_total: self.summary_hit_total.load(Ordering::Relaxed),
+            summary_store_total: self.summary_store_total.load(Ordering::Relaxed),
+            review_gate_total: self.review_gate_total.load(Ordering::Relaxed),
+            review_gate_approved_total: self
+                .review_gate_approved_total
+                .load(Ordering::Relaxed),
+            review_gate_rejected_total: self
+                .review_gate_rejected_total
+                .load(Ordering::Relaxed),
+            review_gate_timeout_total: self
+                .review_gate_timeout_total
+                .load(Ordering::Relaxed),
+            review_gate_degraded_total: self
+                .review_gate_degraded_total
+                .load(Ordering::Relaxed),
+            review_gate_invalid_response_total: self
+                .review_gate_invalid_response_total
+                .load(Ordering::Relaxed),
+            avg_request_duration_ms: agg.avg_request_duration_ms,
+            request_latency_sum_ms: agg.request_latency_sum_ms,
+            request_latency_bucket_counts: agg.request_latency_bucket_counts,
+            chat_latency_sum_ms: agg.chat_latency_sum_ms,
+            chat_latency_bucket_counts: agg.chat_latency_bucket_counts,
+            review_latency_sum_ms: agg.review_latency_sum_ms,
+            review_latency_bucket_counts: agg.review_latency_bucket_counts,
+            cache_hit_rate: 0.0,
+            circuit_breaker_open_count: 0,
+            memory_usage_bytes: 0,
+            cpu_usage_percent: 0.0,
+        }
     }
 
     /// Reset all collected runtime metrics.
     pub fn reset_all(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        *guard = MetricsSnapshot::default();
+        self.total_requests.store(0, Ordering::Relaxed);
+        self.successful_requests.store(0, Ordering::Relaxed);
+        self.failed_requests.store(0, Ordering::Relaxed);
+        self.active_requests.store(0, Ordering::Relaxed);
+        self.chat_requests_total.store(0, Ordering::Relaxed);
+        self.agent_timeout_failures_total.store(0, Ordering::Relaxed);
+        self.runtime_probe_timeout_total.store(0, Ordering::Relaxed);
+        self.vector_search_total.store(0, Ordering::Relaxed);
+        self.vector_hit_total.store(0, Ordering::Relaxed);
+        self.vector_store_total.store(0, Ordering::Relaxed);
+        self.summary_read_total.store(0, Ordering::Relaxed);
+        self.summary_hit_total.store(0, Ordering::Relaxed);
+        self.summary_store_total.store(0, Ordering::Relaxed);
+        self.review_gate_total.store(0, Ordering::Relaxed);
+        self.review_gate_approved_total.store(0, Ordering::Relaxed);
+        self.review_gate_rejected_total.store(0, Ordering::Relaxed);
+        self.review_gate_timeout_total.store(0, Ordering::Relaxed);
+        self.review_gate_degraded_total.store(0, Ordering::Relaxed);
+        self.review_gate_invalid_response_total
+            .store(0, Ordering::Relaxed);
+        if let Ok(mut guard) = self.aggregates.lock() {
+            *guard = AggregateSnapshot::default();
+        }
     }
 }
 

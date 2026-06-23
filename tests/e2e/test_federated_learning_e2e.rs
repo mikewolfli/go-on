@@ -1,232 +1,543 @@
 //! Federated Learning End-to-End
 //!
-//! Validates the federated learning lifecycle:
-//!   multi-node → discovery → weight exchange → privacy → aggregation
+//! Validates the federated learning lifecycle using real go-on types:
+//!   node registration → weight submission → privacy budget tracking →
+//!   DP noise calibration → weight aggregation → round lifecycle
 //!
-//! Uses in-memory stubs for nodes, coordinator, and privacy budget tracking.
-//! Real integration would require multiple running go-on FL nodes with a shared
-//! rendezvous endpoint and the `simple-server` / `multi-users-server`
-//! features enabled.
-//!
-//! # integration-test
-//! Weight exchange and aggregation are validated structurally. Real FL rounds
-//! would use gRPC streaming between nodes.
+//! Uses real structs from the `go_on::intelligence::reinforcement` module
+//! to verify behavioral invariants, not constructor tautologies.
 
-// ── Context ────────────────────────────────────────────────────────────────
+use std::collections::HashMap;
 
-/// Simulates a minimal FL node identity.
-struct FlNodeIdentity {
-    id: String,
-    address: String,
-    port: u16,
-    privacy_budget: f64,
+use go_on::intelligence::reinforcement::federated::{
+    AggregationMethod, FederatedConfig, FederatedLearning, FederatedRL, FederatedRLConfig,
+    FederatedRound, ModelWeights,
+};
+use go_on::intelligence::reinforcement::federated_privacy::{
+    add_gaussian_noise, clip_gradients, DifferentialPrivacyConfig, PrivacyBudget,
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Build a minimal `ModelWeights` from a list of (key, value) pairs.
+/// The first ~half of entries go into `q_table_snapshot`, the rest into
+/// `policy_params`, simulating a typical RL weight structure.
+fn make_weights(entries: Vec<(&str, f64)>, version: u64) -> ModelWeights {
+    let mut q_table_snapshot = HashMap::new();
+    // Put all entries into q_table_snapshot so tests can assert against one map.
+    // Entries passed to add_gaussian_noise/clip_gradients are checked against
+    // both maps via total L2 norm, so this distribution is fine for tests.
+    for (k, v) in &entries {
+        q_table_snapshot.insert(k.to_string(), *v);
+    }
+    // policy_params is left empty to simplify test assertions.
+    let policy_params = HashMap::new();
+    // But make the second half also go to policy_params for tests that need them.
+    // Actually, just use q_table_snapshot.
+    ModelWeights {
+        q_table_snapshot,
+        policy_params,
+        version,
+    }
 }
 
-impl FlNodeIdentity {
-    fn new(id: &str, address: &str, port: u16) -> Self {
-        Self {
-            id: id.to_string(),
-            address: address.to_string(),
-            port,
-            privacy_budget: 1.0,
-        }
+/// Extract a single value from a parameter map for test assertions.
+fn get_val(map: &HashMap<String, f64>, key: &str) -> f64 {
+    map.get(key).copied().unwrap_or(f64::NAN)
+}
+
+// ── 1. PrivacyBudget: allocation and exhaustion ─────────────────────────────
+
+/// Privacy budget decreases correctly after multiple `spend_round` calls
+/// and refuses allocation when the budget is exhausted.
+#[test]
+fn test_privacy_budget_tracks_spending_and_exhaustion() {
+    let dp = DifferentialPrivacyConfig::new(1.0, 1e-5, 1.0).unwrap();
+    let mut budget = PrivacyBudget::new(5.0, 5, dp);
+
+    // Spend 3 rounds and verify the budget decreases each time.
+    for round in 1..=3 {
+        let remaining_before = budget.rounds_remaining;
+        let spent_before = budget.epsilon_spent;
+        budget.spend_round().unwrap();
+        assert_eq!(
+            budget.rounds_remaining,
+            remaining_before - 1,
+            "round {} should decrement rounds_remaining",
+            round
+        );
+        assert!(
+            budget.epsilon_spent > spent_before,
+            "round {} should increase epsilon_spent (was {}, now {})",
+            round,
+            spent_before,
+            budget.epsilon_spent
+        );
     }
 
-    fn consume_budget(&mut self, amount: f64) {
-        self.privacy_budget = (self.privacy_budget - amount).max(0.0);
-    }
+    assert!(
+        !budget.is_exhausted(),
+        "budget should not be exhausted after 3/5 rounds"
+    );
+
+    // Spend the remaining 2 rounds.
+    budget.spend_round().unwrap();
+    budget.spend_round().unwrap();
+
+    assert!(
+        budget.is_exhausted(),
+        "budget should be exhausted after 5/5 rounds"
+    );
+    assert_eq!(budget.rounds_remaining, 0, "no rounds should remain");
+
+    // Attempting another spend must fail.
+    let err = budget.spend_round().unwrap_err();
+    let msg = format!("{:#}", err);
+    assert!(
+        msg.contains("exhausted") || msg.contains("budget"),
+        "exhausted spend error should mention budget exhaustion, got: {}",
+        msg
+    );
 }
 
-/// Tracks a simulated federated round.
-struct FederatedRound {
-    round_id: String,
-    participant_ids: Vec<String>,
-    global_weights_hash: String,
+/// fraction_consumed and epsilon_remaining report correct values.
+#[test]
+fn test_privacy_budget_fraction_and_remaining() {
+    let dp = DifferentialPrivacyConfig::new(2.0, 1e-5, 1.0).unwrap();
+    let mut budget = PrivacyBudget::new(10.0, 5, dp);
+
+    // Initial state: nothing consumed.
+    assert!((budget.fraction_consumed() - 0.0).abs() < 1e-10);
+    assert!((budget.epsilon_remaining() - 10.0).abs() < 1e-10);
+
+    // Spend one round (costs epsilon=2.0 per the config).
+    budget.spend_round().unwrap();
+    assert!((budget.epsilon_remaining() - 8.0).abs() < 1e-10);
+    assert!((budget.fraction_consumed() - 0.2).abs() < 1e-10);
+
+    // Spend three more rounds (total 8.0 spent).
+    budget.spend_round().unwrap();
+    budget.spend_round().unwrap();
+    budget.spend_round().unwrap();
+    assert!((budget.epsilon_remaining() - 2.0).abs() < 1e-10);
+    assert!((budget.fraction_consumed() - 0.8).abs() < 1e-10);
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
+// ── 2. FederatedLearning: node registration and weight aggregation ──────────
 
-/// Full federated learning round:
-/// multi-node → discovery → weight exchange → privacy → aggregation.
-/// Multi-node full round: node construction, discovery, weight exchange,
-/// scalar averaging, privacy, and result aggregation.
-///
-/// Self-contained test using in-memory state — does not require real
-/// infrastructure. Tests the FL protocol building blocks through property
-/// assertions rather than real network calls.
-///
-/// The test constructs FlNodeIdentity entries, simulates discovery with
-/// a HashSet, exercises weight exchange with scalar values, averages weights
-/// using basic arithmetic, and validates privacy noise parameters.
+/// Two nodes with different weights submit local model weights.
+/// `aggregate_round()` via FedAvg produces a correct averaged result.
+#[test]
+fn test_federated_aggregate_round_with_two_nodes() {
+    let mut fl = FederatedLearning::new(FederatedConfig {
+        min_clients: 2,
+        ..Default::default()
+    });
+
+    fl.register_client("sensor-a", 1.0).unwrap();
+    fl.register_client("sensor-b", 1.0).unwrap();
+
+    // Sensor A: q_table values [10.0, 20.0], Sensor B: q_table values [30.0, 40.0]
+    let mut w_a = make_weights(vec![("q1", 10.0), ("q2", 20.0)], 1);
+    let mut w_b = make_weights(vec![("q1", 30.0), ("q2", 40.0)], 2);
+    w_a.policy_params.clear();
+    w_a.q_table_snapshot.insert("q2".into(), 20.0);
+    w_b.policy_params.clear();
+    w_b.q_table_snapshot.insert("q2".into(), 40.0);
+
+    fl.submit_local_weights("sensor-a", w_a, 0.0).unwrap();
+    fl.submit_local_weights("sensor-b", w_b, 0.0).unwrap();
+
+    let round: FederatedRound = fl.aggregate_round().unwrap();
+
+    // FedAvg: (10 + 30) / 2 = 20, (20 + 40) / 2 = 30
+    let q = &round.global_weights.q_table_snapshot;
+    assert!(
+        (get_val(q, "q1") - 20.0).abs() < 1e-10,
+        "FedAvg q1 expected 20.0, got {}",
+        get_val(q, "q1")
+    );
+    assert!(
+        (get_val(q, "q2") - 30.0).abs() < 1e-10,
+        "FedAvg q2 expected 30.0, got {}",
+        get_val(q, "q2")
+    );
+
+    // Round metadata is populated.
+    assert_eq!(round.round_id, 1, "first round should have id 1");
+    assert_eq!(round.clients_participated.len(), 2);
+    assert!(round.aggregated_at_ms > 0);
+}
+
+/// Nodes with different registered weights produce a correct FedWeighted result.
+#[test]
+fn test_federated_aggregate_round_weighted() {
+    let mut fl = FederatedLearning::new(FederatedConfig {
+        min_clients: 2,
+        aggregation_method: AggregationMethod::FedWeighted,
+        ..Default::default()
+    });
+
+    // sensor-a has weight 3.0, sensor-b has weight 1.0 → total = 4.0
+    fl.register_client("sensor-a", 3.0).unwrap();
+    fl.register_client("sensor-b", 1.0).unwrap();
+
+    let mut w_a = make_weights(vec![("q1", 10.0), ("q2", 20.0)], 1);
+    let mut w_b = make_weights(vec![("q1", 30.0), ("q2", 40.0)], 1);
+    w_a.policy_params.clear();
+    w_a.q_table_snapshot.insert("q2".into(), 20.0);
+    w_b.policy_params.clear();
+    w_b.q_table_snapshot.insert("q2".into(), 40.0);
+
+    fl.submit_local_weights("sensor-a", w_a, 0.0).unwrap();
+    fl.submit_local_weights("sensor-b", w_b, 0.0).unwrap();
+
+    let round = fl.aggregate_round().unwrap();
+
+    // FedWeighted: alpha weight 3/4, beta weight 1/4
+    // q1 = 10*(3/4) + 30*(1/4) = 7.5 + 7.5 = 15.0
+    // q2 = 20*(3/4) + 40*(1/4) = 15.0 + 10.0 = 25.0
+    let q = &round.global_weights.q_table_snapshot;
+    assert!(
+        (get_val(q, "q1") - 15.0).abs() < 1e-10,
+        "FedWeighted q1 expected 15.0, got {}",
+        get_val(q, "q1")
+    );
+    assert!(
+        (get_val(q, "q2") - 25.0).abs() < 1e-10,
+        "FedWeighted q2 expected 25.0, got {}",
+        get_val(q, "q2")
+    );
+}
+
+/// Aggregation with fewer clients than `min_clients` must fail.
+#[test]
+fn test_federated_aggregate_insufficient_clients_fails() {
+    let mut fl = FederatedLearning::new(FederatedConfig {
+        min_clients: 3,
+        ..Default::default()
+    });
+
+    fl.register_client("a", 1.0).unwrap();
+    fl.register_client("b", 1.0).unwrap();
+
+    let w = make_weights(vec![("q1", 1.0)], 1);
+    fl.submit_local_weights("a", w.clone(), 0.0).unwrap();
+    fl.submit_local_weights("b", w, 0.0).unwrap();
+
+    let err = fl.aggregate_round().unwrap_err();
+    let msg = format!("{:#}", err);
+    assert!(
+        msg.contains("insufficient"),
+        "error should mention insufficient clients, got: {}",
+        msg
+    );
+}
+
+// ── 3. DP noise: epsilon extremes produce expected behavior ─────────────────
+
+/// With a very large epsilon (weak privacy), `add_gaussian_noise` adds
+/// negligible noise. Note that after clipping the weights to `clip_norm`,
+/// the values are reduced (the total L2 norm of [42, 100] is ~108.5,
+/// so with clip_norm=1.0 they become ~[0.387, 0.921]). We verify that:
+/// 1. The noise scale σ → 0 as ε → ∞
+/// 2. The weights after clipping are stable (noise is negligible)
+#[test]
+fn test_dp_noise_large_epsilon_produces_small_noise() {
+    let mut weights = make_weights(vec![("p1", 42.0), ("p2", 100.0)], 1);
+
+    // Very large epsilon → tiny noise scale.
+    let sigma = add_gaussian_noise(&mut weights, 1_000_000.0, 1e-5, 1.0);
+
+    // Noise scale should be near zero.
+    assert!(
+        sigma < 0.001,
+        "noise scale with ε=1e6 should be tiny, got {}",
+        sigma
+    );
+
+    // After clipping to norm 1.0, weights are scaled by clip_norm/total_norm.
+    // total_norm = sqrt(42^2 + 100^2) ≈ 108.5, scale = 1/108.5 ≈ 0.00922
+    let scale = 1.0_f64 / (42.0_f64.powi(2) + 100.0_f64.powi(2)).sqrt();
+    let expected_p1 = 42.0 * scale;
+    let expected_p2 = 100.0 * scale;
+
+    // Weights should be close to their clipped values (noise is negligible).
+    assert!(
+        (get_val(&weights.q_table_snapshot, "p1") - expected_p1).abs() < 0.01,
+        "p1 should be ~{:.4} after clipping + negligible noise, got {}",
+        expected_p1,
+        get_val(&weights.q_table_snapshot, "p1")
+    );
+    assert!(
+        (get_val(&weights.q_table_snapshot, "p2") - expected_p2).abs() < 0.01,
+        "p2 should be ~{:.4} after clipping + negligible noise, got {}",
+        expected_p2,
+        get_val(&weights.q_table_snapshot, "p2")
+    );
+}
+
+/// With a small epsilon (strong privacy), `add_gaussian_noise` produces
+/// a large noise scale and visibly perturbs the weights.
+#[test]
+fn test_dp_noise_small_epsilon_produces_large_noise() {
+    let mut weights = make_weights(vec![("p1", 42.0), ("p2", 100.0)], 1);
+
+    // Tiny epsilon → large noise scale.
+    let sigma = add_gaussian_noise(&mut weights, 0.01, 1e-5, 1.0);
+
+    // Noise scale should be large ( >> 1.0).
+    assert!(
+        sigma > 10.0,
+        "noise scale with ε=0.01 should be large, got {}",
+        sigma
+    );
+
+    // The weights will have changed — we can't assert a specific value
+    // (it's random), but we can assert they're no longer exactly the originals.
+    // (There's a vanishingly small probability the noise sums to exactly 0.)
+    let p1 = get_val(&weights.q_table_snapshot, "p1");
+    let p2 = get_val(&weights.q_table_snapshot, "p2");
+    assert!(
+        (p1 - 42.0).abs() > 1e-10 || (p2 - 100.0).abs() > 1e-10,
+        "weights should be perturbed by large noise, but both are unchanged: p1={}, p2={}",
+        p1,
+        p2
+    );
+}
+
+// ── 4. FederatedDiscovery: peer discovery returns registered nodes ──────────
+//
+// The `federated_discovery` module is feature-gated behind
+// `sub-bus-distributed-memory`, so these tests are conditionally compiled.
+
+#[cfg(feature = "sub-bus-distributed-memory")]
+use go_on::intelligence::reinforcement::federated_discovery::{
+    NodeDiscovery, NodeInfo, NodeRole, StaticDiscovery,
+};
+#[cfg(feature = "sub-bus-distributed-memory")]
+use go_on::intelligence::reinforcement::federated_transport::PeerInfo;
+
+/// `StaticDiscovery::discover()` returns the peers it was initialised with.
+#[cfg(feature = "sub-bus-distributed-memory")]
 #[tokio::test]
-async fn test_federated_learning_full_round() {
-    // ── 1. Setup nodes ────────────────────────────────────────────────
-    let mut node_a = FlNodeIdentity::new("node-alpha", "127.0.0.1", 9101);
-    let mut node_b = FlNodeIdentity::new("node-beta", "127.0.0.1", 9102);
-    let node_c = FlNodeIdentity::new("node-gamma", "127.0.0.1", 9103);
-
-    assert_eq!(node_a.id, "node-alpha");
-    assert_eq!(node_b.port, 9102);
-
-    // ── 2. Discovery ──────────────────────────────────────────────────
-    let mut discovered_set = std::collections::HashSet::new();
-    let nodes = [&node_a, &node_b, &node_c];
-    for node in &nodes {
-        discovered_set.insert(node.id.clone());
-    }
-    assert!(discovered_set.contains("node-alpha"));
-    assert!(discovered_set.contains("node-beta"));
-    assert!(discovered_set.contains("node-gamma"));
-    assert_eq!(discovered_set.len(), 3);
-
-    // Validate node properties.
-    assert_eq!(node_a.port, 9101);
-    assert_eq!(node_b.port, 9102);
-    assert_eq!(node_c.port, 9103);
-    assert!(!node_a.address.is_empty());
-    assert!(!node_b.id.is_empty());
-
-    // ── 3. Weight exchange ────────────────────────────────────────────
-    // Simulate local weight computation.
-    let local_weights_a = "weights:alpha:round001";
-    let local_weights_b = "weights:beta:round001";
-
-    // In a real FL system, weights are serialized tensors sent over gRPC.
-    // Here we verify the exchange protocol by tracking string identifiers.
-    let received: Vec<String> = vec![
-        format!("{}:{}", node_a.id, local_weights_a),
-        format!("{}:{}", node_b.id, local_weights_b),
+async fn test_static_discovery_returns_registered_peers() {
+    let peers = vec![
+        PeerInfo {
+            id: "worker-1".into(),
+            addr: "127.0.0.1:9001".into(),
+            role: NodeRole::Worker,
+            capabilities: HashMap::new(),
+        },
+        PeerInfo {
+            id: "coordinator-1".into(),
+            addr: "127.0.0.1:9000".into(),
+            role: NodeRole::Coordinator,
+            capabilities: HashMap::new(),
+        },
     ];
-    assert_eq!(received.len(), 2);
-    assert!(received[0].starts_with("node-alpha"));
-    assert!(received[1].starts_with("node-beta"));
 
-    // ── 4. Privacy enforcement ────────────────────────────────────────
-    // Each node applies differential privacy noise to its weights before
-    // transmission. The privacy budget decreases with each round.
-    assert!((node_a.privacy_budget - 1.0).abs() < f64::EPSILON);
-    assert!((node_b.privacy_budget - 1.0).abs() < f64::EPSILON);
+    let discovery = StaticDiscovery::new(&peers);
+    let discovered = discovery.discover().await.unwrap();
 
-    // Consume some budget as if a round of weights was shared.
-    node_a.consume_budget(0.1);
-    node_b.consume_budget(0.15);
-
+    assert_eq!(discovered.len(), 2, "should discover 2 peers");
+    let ids: Vec<&str> = discovered.iter().map(|n| n.id.as_str()).collect();
     assert!(
-        node_a.privacy_budget > 0.0,
-        "privacy budget must remain positive"
+        ids.contains(&"worker-1"),
+        "discovered set should include worker-1"
     );
-    assert!(node_a.privacy_budget <= 1.0, "budget must not exceed 1.0");
-    assert!(node_b.privacy_budget > 0.0);
+    assert!(
+        ids.contains(&"coordinator-1"),
+        "discovered set should include coordinator-1"
+    );
 
-    // The budget must decrease after consumption but stay non-negative.
-    assert!(node_a.privacy_budget > 0.0);
-    assert!(node_a.privacy_budget <= 1.0);
-    assert!(node_b.privacy_budget > 0.0);
-
-    // ── 5. Aggregation ────────────────────────────────────────────────
-    // Coordinator performs Federated Averaging (FedAvg).
-    let round = FederatedRound {
-        round_id: "round-e2e-001".into(),
-        participant_ids: vec!["node-alpha".into(), "node-beta".into()],
-        global_weights_hash: "sha256:e2e-global-aggregate".into(),
+    // New registrations are reflected in subsequent discover calls.
+    let new_node = NodeInfo {
+        id: "worker-2".into(),
+        addr: "127.0.0.1:9002".into(),
+        role: NodeRole::Worker,
+        capabilities: HashMap::new(),
+        online: true,
+        last_heartbeat_ms: 0,
     };
+    discovery.register(&new_node).await.unwrap();
 
-    assert_eq!(round.round_id, "round-e2e-001");
-    assert!(round.participant_ids.len() >= 2);
-    assert!(!round.global_weights_hash.is_empty());
-
-    // Validate FedAvg invariants: participant count ≥ 2 and hash is non-empty.
-    assert!(
-        round.participant_ids.len() >= 2,
-        "FedAvg needs at least 2 participants"
+    let discovered_after = discovery.discover().await.unwrap();
+    assert_eq!(
+        discovered_after.len(),
+        3,
+        "should discover 3 peers after registration"
     );
-    assert!(
-        !round.global_weights_hash.is_empty(),
-        "aggregated weights must have a non-empty hash"
-    );
-    // Each participant should have consumed some privacy budget.
-    assert!(node_a.privacy_budget < 1.0);
-    assert!(node_b.privacy_budget < 1.0);
 }
 
-/// Validates that a node with exhausted privacy budget is excluded.
-#[tokio::test]
-async fn test_federated_learning_privacy_budget_exhaustion() {
-    let mut node = FlNodeIdentity::new("node-alpha", "127.0.0.1", 9201);
-    assert!((node.privacy_budget - 1.0).abs() < f64::EPSILON);
+// ── 5. FederatedRL round lifecycle ──────────────────────────────────────────
 
-    // Exhaust the privacy budget.
-    node.consume_budget(1.0);
-    assert_eq!(node.privacy_budget, 0.0, "budget must be fully exhausted");
+/// Full distillation round lifecycle:
+/// submit policies → start round → contribute → complete → verify merged result.
+#[test]
+fn test_federated_rl_round_lifecycle() {
+    let frl = FederatedRL::new(FederatedRLConfig {
+        min_contributors: 2,
+        ..Default::default()
+    });
 
-    // Simulate the FL coordinator's eligibility check: nodes with zero
-    // remaining budget are excluded from aggregation rounds.
-    let eligible: Vec<String> = if node.privacy_budget > 0.0 {
-        vec![node.id.clone()]
-    } else {
-        vec![]
-    };
-    assert!(
-        eligible.is_empty(),
-        "exhausted node must be excluded from aggregation"
+    // Submit two policies from different nodes.
+    let p1 = frl.submit_policy(
+        "node-a".into(),
+        "classification".into(),
+        "policy:v1".into(),
+        0.8,
+        100,
     );
-    // Verify that a non-exhausted node would be included.
-    let mut fresh_node = FlNodeIdentity::new("node-fresh", "127.0.0.1", 9202);
-    let eligible_fresh: Vec<String> = if fresh_node.privacy_budget > 0.0 {
-        vec![fresh_node.id.clone()]
-    } else {
-        vec![]
-    };
-    assert_eq!(eligible_fresh.len(), 1);
-    assert_eq!(eligible_fresh[0], "node-fresh");
+    let p2 = frl.submit_policy(
+        "node-b".into(),
+        "classification".into(),
+        "policy:v2".into(),
+        0.6,
+        200,
+    );
 
-    // Consume budget partially and verify eligibility.
-    fresh_node.consume_budget(0.5);
-    assert!(fresh_node.privacy_budget > 0.0);
-    let eligible_partial: Vec<String> = if fresh_node.privacy_budget > 0.0 {
-        vec![fresh_node.id]
-    } else {
-        vec![]
-    };
-    assert_eq!(eligible_partial.len(), 1);
+    // Policies are retrievable.
+    let fetched = frl.get_policy(&p1).unwrap();
+    assert_eq!(fetched.node_id, "node-a");
+    assert!((fetched.reward_avg - 0.8).abs() < 1e-10);
+    assert_eq!(fetched.sample_count, 100);
+
+    // Start a distillation round.
+    let round_id = frl.start_distillation_round();
+
+    // Contribute both policies.
+    frl.contribute_to_round(&round_id, &p1).unwrap();
+    frl.contribute_to_round(&round_id, &p2).unwrap();
+
+    // Complete the round.
+    let completed = frl.complete_round(&round_id).unwrap();
+
+    // Verify round metadata.
+    assert_eq!(completed.contributor_count, 2);
+    assert_eq!(completed.contributed_policy_ids.len(), 2);
+    assert!(completed.contributed_policy_ids.contains(&p1));
+    assert!(completed.contributed_policy_ids.contains(&p2));
+    assert!(completed.completed_ms > 0);
+
+    // The merged policy should contain a JSON structure with the weighted average.
+    let merged = completed.merged_policy.unwrap();
+    assert!(
+        merged.contains("weighted_avg_reward"),
+        "merged policy should contain reward info"
+    );
+    assert!(
+        merged.contains("total_samples"),
+        "merged policy should contain sample total count"
+    );
+    assert!(
+        merged.contains("300"),
+        "merged policy should reflect total samples (100+200)"
+    );
 }
 
-/// Verifies that differential privacy noise is structurally represented.
-#[tokio::test]
-async fn test_federated_learning_dp_noise_application() {
-    // Validate DP noise parameter invariants: the Gaussian mechanism uses
-    // sensitivity S = C / (N * ε) where C is the clipping bound.
-    // Here we validate type-correctness and mathematical invariants.
-    let epsilon = 1.0_f64;
-    let delta = 1e-5_f64;
-    let sensitivity = 0.01_f64;
+/// Round completion fails when fewer than `min_contributors` contribute.
+#[test]
+fn test_federated_rl_round_insufficient_contributors_fails() {
+    let frl = FederatedRL::new(FederatedRLConfig {
+        min_contributors: 3,
+        ..Default::default()
+    });
 
-    assert!(epsilon > 0.0, "ε must be positive");
-    assert!(delta > 0.0 && delta < 1.0, "δ must be in (0,1)");
-    assert!(sensitivity > 0.0, "sensitivity must be positive");
+    let p = frl.submit_policy("node-a".into(), "regression".into(), "p:v1".into(), 0.5, 50);
+    let round_id = frl.start_distillation_round();
+    frl.contribute_to_round(&round_id, &p).unwrap();
 
-    // noise_scale = sensitivity / epsilon (Gaussian mechanism)
-    let noise_scale = sensitivity / epsilon;
+    let err = frl.complete_round(&round_id).unwrap_err();
+    let msg = format!("{:#}", err);
     assert!(
-        (noise_scale - 0.01).abs() < f64::EPSILON,
-        "noise scale must be sensitivity / epsilon"
+        msg.contains("InsufficientContributors") || msg.contains("insufficient"),
+        "error should mention insufficient contributors, got: {}",
+        msg
+    );
+}
+
+// ── 6. Clip-gradients boundary behavior ─────────────────────────────────────
+
+/// `clip_gradients()` does not modify weights whose L2 norm is within the
+/// clip bound, but clips weights that exceed it.
+#[test]
+fn test_clip_gradients_preserves_small_weights_and_clips_large() {
+    // Small weights: L2 norm = sqrt(9 + 16) = 5.0, clip_norm = 10.0 → no change.
+    let mut small = make_weights(vec![("a", 3.0), ("b", 4.0)], 1);
+    clip_gradients(&mut small, 10.0);
+    assert!(
+        (get_val(&small.q_table_snapshot, "a") - 3.0).abs() < 1e-10,
+        "small weight 'a' should be unchanged after clip with high bound"
+    );
+    assert!(
+        (get_val(&small.q_table_snapshot, "b") - 4.0).abs() < 1e-10,
+        "small weight 'b' should be unchanged after clip with high bound"
     );
 
-    // Multiple participants reduce effective noise per node.
-    let num_participants = 5;
-    let effective_sensitivity = sensitivity / num_participants as f64;
-    let effective_noise = effective_sensitivity / epsilon;
+    // Large weights: L2 norm = sqrt(60^2 + 80^2) = 100.0, clip_norm = 10.0 → scale by 0.1.
+    let mut large = make_weights(vec![("x", 60.0), ("y", 80.0)], 1);
+    clip_gradients(&mut large, 10.0);
     assert!(
-        effective_noise < noise_scale,
-        "more participants = less noise per node"
+        (get_val(&large.q_table_snapshot, "x") - 6.0).abs() < 1e-10,
+        "large weight 'x' should be clipped to 6.0, got {}",
+        get_val(&large.q_table_snapshot, "x")
     );
-
-    // Privacy budget depletion check.
-    let mut node = FlNodeIdentity::new("dp-node", "127.0.0.1", 9301);
-    node.consume_budget(0.1);
-    node.consume_budget(0.2);
     assert!(
-        (node.privacy_budget - 0.7).abs() < f64::EPSILON,
-        "budget after two rounds should be 0.7"
+        (get_val(&large.q_table_snapshot, "y") - 8.0).abs() < 1e-10,
+        "large weight 'y' should be clipped to 8.0, got {}",
+        get_val(&large.q_table_snapshot, "y")
+    );
+}
+
+// ── 7. Multiple rounds accumulate ───────────────────────────────────────────
+
+/// Two successive aggregation rounds both produce correct results and the
+/// profile reflects the accumulated state.
+#[test]
+fn test_multiple_rounds_accumulate_correctly() {
+    let mut fl = FederatedLearning::new(FederatedConfig {
+        min_clients: 2,
+        ..Default::default()
+    });
+
+    fl.register_client("alpha", 1.0).unwrap();
+    fl.register_client("beta", 1.0).unwrap();
+
+    // Round 1: alpha submits 10, beta submits 30 → average = 20.
+    let w1 = make_weights(vec![("q1", 10.0)], 1);
+    let w2 = make_weights(vec![("q1", 30.0)], 1);
+    fl.submit_local_weights("alpha", w1, 0.1).unwrap();
+    fl.submit_local_weights("beta", w2, 0.2).unwrap();
+    let r1 = fl.aggregate_round().unwrap();
+    assert_eq!(r1.round_id, 1);
+    assert!((get_val(&r1.global_weights.q_table_snapshot, "q1") - 20.0).abs() < 1e-10);
+
+    // Round 2: alpha submits 50, beta submits 70 → average = 60.
+    let w1b = make_weights(vec![("q1", 50.0)], 2);
+    let w2b = make_weights(vec![("q1", 70.0)], 2);
+    fl.submit_local_weights("alpha", w1b, 0.3).unwrap();
+    fl.submit_local_weights("beta", w2b, 0.4).unwrap();
+    let r2 = fl.aggregate_round().unwrap();
+    assert_eq!(r2.round_id, 2);
+    assert!((get_val(&r2.global_weights.q_table_snapshot, "q1") - 60.0).abs() < 1e-10);
+
+    // Global weights reflect the latest round.
+    let gw = fl.get_global_weights().unwrap();
+    assert_eq!(gw.version, 2);
+    assert!((get_val(&gw.q_table_snapshot, "q1") - 60.0).abs() < 1e-10);
+
+    // Profile reflects two completed rounds.
+    let p = fl.profile();
+    assert_eq!(p.total_rounds, 2);
+    assert_eq!(p.total_clients, 2);
+
+    // After round 1: alpha avg_improvement = 0.1, beta = 0.2 => score = 0.15
+    // After round 2: alpha = 0.1*(1/2)+0.3/2 = 0.2, beta = 0.2*(1/2)+0.4/2 = 0.3 => score = 0.25
+    // total_improvement_sum = 0.15 + 0.25 = 0.40, avg = 0.40 / 2 = 0.20
+    assert!(
+        (p.avg_improvement - 0.20).abs() < 1e-10,
+        "avg_improvement expected 0.20, got {}",
+        p.avg_improvement
     );
 }

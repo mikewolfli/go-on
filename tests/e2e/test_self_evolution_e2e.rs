@@ -58,10 +58,24 @@ fn make_analysis(trigger: EvolutionTrigger) -> Analysis {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-/// Full self-evolution flow:
-/// trigger → analyze → propose → approval → sandbox → compile → submit → rollback.
+/// Validates the ERROR path of the self-evolution lifecycle when no trigger
+/// sources are configured. This is NOT a full end-to-end test of the entire
+/// trigger→analyze→propose→approval→sandbox→compile→submit→rollback flow.
+///
+/// To run a genuine full-lifecycle test, you would need:
+///   - A live EvolutionLoop with a registered trigger source (e.g. polling interval)
+///   - A real or mocked sandbox that compiles and returns BuildResult::Success
+///   - Git integration for commit / rollback
+///
+/// For now this test validates:
+///   1. run() errors with "no trigger sources" when poll interval is set but no source is added
+///   2. All EvolutionTrigger variants can be constructed and have non-empty labels/descriptions
+///   3. Analysis, Approval, CodePatch, and BuildResult data structures are correctly shaped
+///
+/// NOTE: This test only covers the error path. The happy-path lifecycle must be
+/// validated separately (e.g. via integration tests with a mock trigger source).
 #[tokio::test]
-async fn test_self_evolution_full_lifecycle() {
+async fn test_self_evolution_error_path_no_triggers() {
     let ctx = EvolutionE2eContext::new("livecycle-001");
     let sandbox =
         SandboxExecutor::new(ctx.workdir.clone(), 10).with_allowed_targets(vec!["**/*.rs".into()]);
@@ -197,9 +211,21 @@ async fn test_self_evolution_full_lifecycle() {
     assert!(!rejected.is_approved());
 }
 
-/// Validates that a rollback can be triggered automatically.
+/// Validates the ERROR path of the evolution loop under auto-approval mode.
+/// This test does NOT actually trigger a rollback — it only verifies that
+/// EvolutionLoop::run() returns an error when no trigger sources are configured.
+///
+/// A genuine auto-rollback test would require:
+///   - A live EvolutionLoop with a trigger source that fires
+///   - A sandbox that reports compile success, followed by a health check
+///     that returns failure, causing the loop to call Approval::approved("auto-rollback")
+///     and execute a git revert
+///
+/// For now this test validates:
+///   1. run() errors with "no trigger sources" under ApprovalMode::AutoApproval
+///   2. The Approval::approved structure used for automated rollback decisions
 #[tokio::test]
-async fn test_self_evolution_auto_rollback_on_health_check_failure() {
+async fn test_self_evolution_error_path_no_triggers_auto_approval() {
     let ctx = EvolutionE2eContext::new("rollback-001");
     let sandbox =
         SandboxExecutor::new(ctx.workdir.clone(), 3).with_allowed_targets(vec!["**/*.rs".into()]);

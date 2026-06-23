@@ -485,13 +485,29 @@ mod e2e_tests {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // BLUE45 Module Contract Validation Tests
+    // BLUE45 Module Contract Validation Tests — LIVING DOCUMENTATION
     // ═══════════════════════════════════════════════════════════════════════
     //
-    // These tests validate the structural shapes, enum variants, and config
-    // contracts for all modules added in the BLUE45 improvement plan. They
-    // follow the same json! structural assertion pattern as
-    // e2e_three_endpoint_contract_validation above.
+    // IMPORTANT: The following tests (E2E-08 through E2E-21) are **living API
+    // documentation**, NOT behavioral tests. They construct json!() literals
+    // and assert field types/shapes to document the expected contract of each
+    // module's data structures.
+    //
+    // These tests do NOT spawn processes, connect to sockets, or call production
+    // code. They cannot fail due to code regressions — they only validate that
+    // the serde json!() macro produces the expected types from each literal.
+    //
+    // Purpose: Serve as a single source of truth for API contract shapes.
+    // If a shape changes (e.g. adding/removing a field in a real struct),
+    // these tests will NOT catch it automatically. Update them manually to
+    // keep the documentation accurate.
+    //
+    // These tests could be consolidated into a single test function (or even
+    // a compiled markdown snapshot) to reduce test-runner overhead, but are
+    // kept separate per-module for readability.
+    //
+    // See e2e_three_endpoint_contract_validation for the same structural
+    // assertion pattern used outside this block.
 
     /// E2E-08: Native tool bridge formats tools for OpenAI and Anthropic
     #[test]

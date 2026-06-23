@@ -513,6 +513,34 @@ impl ToolRegistry {
                 fallback_chain: Vec::new(),
             },
         );
+        #[cfg(feature = "document-docx")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::WriteDocxTool,
+            ToolCapabilityProfile {
+                capability: "docx_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "document-ppt")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::WritePptTool,
+            ToolCapabilityProfile {
+                capability: "ppt_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
 
         // ── SQLite query tools (feature-gated) ───────────────
         #[cfg(feature = "backend-sqlite")]
@@ -793,7 +821,7 @@ impl ToolRegistry {
         );
 
         // ── CAD/STL tools (feature-gated) ────────────────────
-        #[cfg(feature = "cad-stl")]
+        #[cfg(all(feature = "cad-stl", not(feature = "model-3d")))]
         registry.register_with_profile(
             crate::orchestration::tool_extended::StlReadTool,
             ToolCapabilityProfile {
@@ -983,6 +1011,183 @@ impl ToolRegistry {
                 fallback_chain: Vec::new(),
             },
         );
+
+        // ── RSS feed reader tool (no feature gate) ────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::RssReadTool,
+            ToolCapabilityProfile {
+                capability: "rss_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── 3D model (STL) reader tool (feature-gated) ────────────
+        #[cfg(feature = "model-3d")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::StlReadTool,
+            ToolCapabilityProfile {
+                capability: "stl_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── CAM/G-code reader tool (feature-gated) ────────────────
+        #[cfg(feature = "cam-gcode")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::GcodeReadTool,
+            ToolCapabilityProfile {
+                capability: "gcode_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── GIS/GPX reader tool (feature-gated) ────────────────────
+        #[cfg(feature = "gis-gpx")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::GpxReadTool,
+            ToolCapabilityProfile {
+                capability: "gpx_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── 3D model (OBJ) reader tool (feature-gated) ────────────────
+        #[cfg(feature = "model-3d-extra")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ObjModelReadTool,
+            ToolCapabilityProfile {
+                capability: "obj_model_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── JSON Lines read tool (no feature gate) ────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::JsonlReadTool,
+            ToolCapabilityProfile {
+                capability: "jsonl_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── JSON Lines write tool (no feature gate) ───────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::JsonlWriteTool,
+            ToolCapabilityProfile {
+                capability: "jsonl_write".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Network tools ─────────────────────────────────────────--
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DnsLookupTool,
+            ToolCapabilityProfile {
+                capability: "dns_lookup".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::PingTool,
+            ToolCapabilityProfile {
+                capability: "network_ping".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::PortScanTool,
+            ToolCapabilityProfile {
+                capability: "port_scan".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Date/Time tools ─────────────────────────────────────────--
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DateTimeTool,
+            ToolCapabilityProfile {
+                capability: "date_time".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 5_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Game tools (feature-gated) ───────────────────────────────
+        #[cfg(any(
+            feature = "game-online",
+            feature = "game-process",
+            feature = "game-screen",
+            feature = "game-input",
+            feature = "game-agent",
+            feature = "game-state",
+            feature = "game-modding"
+        ))]
+        crate::orchestration::tool::extended::game::register_game_tools(&mut registry);
 
         // ── Skill listing tool (always compiled, no feature gate) ────
         registry.register_with_profile(

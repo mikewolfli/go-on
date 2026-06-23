@@ -694,6 +694,30 @@ impl CapabilityBus {
         self
     }
 
+    /// Import remote skills from the given endpoint/skill-name pairs.
+    ///
+    /// Each entry is a `(endpoint, skill_name)` tuple. This is only available
+    /// under the `multi-users-server` feature flag.
+    #[cfg(feature = "multi-users-server")]
+    pub fn with_remote_skills(mut self, skills: &[(&str, &str)]) -> Self {
+        for (endpoint, skill_name) in skills {
+            crate::intelligence::capability_bus::tool_bus::import_remote_skill(
+                &self.tool_bus,
+                endpoint,
+                skill_name,
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to import remote skill {} from {}: {}",
+                    skill_name,
+                    endpoint,
+                    e
+                );
+            });
+        }
+        self
+    }
+
     /// Attach an ObservabilityBus to the CapabilityBus
     #[cfg(feature = "sub-bus-observability")]
     pub fn with_observability_bus(mut self, bus: ObservabilityBus) -> Self {

@@ -789,7 +789,7 @@ pub async fn run_autonomy_loop(
                         .iter()
                         .map(|n| {
                             let decision = match &n.state {
-                                crate::orchestration::execution_graph::ExNodeState::Completed => {
+                                crate::orchestration::core_dag::ExNodeState::Completed => {
                                     LoopDecision::Complete(ToolOutput {
                                         success: true,
                                         // Preserve real tool output as evidence for observe/replan
@@ -803,20 +803,22 @@ pub async fn run_autonomy_loop(
                                         pua_report: None,
                                     })
                                 }
-                                crate::orchestration::execution_graph::ExNodeState::Failed(
-                                    reason,
-                                ) => LoopDecision::Failed {
-                                    reason: reason.clone(),
-                                    // Preserve detailed failure payload for diagnostic use
-                                    last_output: n.tool_output.clone().map(|result| ToolOutput {
-                                        success: false,
-                                        result: Some(result),
-                                        error: n.error_payload.clone(),
-                                        verification: None,
-                                        audit_log: None,
-                                        pua_report: None,
-                                    }),
-                                },
+                                crate::orchestration::core_dag::ExNodeState::Failed(reason) => {
+                                    LoopDecision::Failed {
+                                        reason: reason.clone(),
+                                        // Preserve detailed failure payload for diagnostic use
+                                        last_output: n.tool_output.clone().map(|result| {
+                                            ToolOutput {
+                                                success: false,
+                                                result: Some(result),
+                                                error: n.error_payload.clone(),
+                                                verification: None,
+                                                audit_log: None,
+                                                pua_report: None,
+                                            }
+                                        }),
+                                    }
+                                }
                                 _ => LoopDecision::Failed {
                                     reason: tf("status.autonomy.dag_node_skipped", &[]),
                                     last_output: None,

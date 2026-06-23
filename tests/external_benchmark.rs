@@ -129,6 +129,7 @@ struct ReplayStep {
 
 #[derive(Debug, Clone)]
 struct ReplayScenario {
+    #[allow(dead_code)]
     name: &'static str,
     steps: Vec<ReplayStep>,
 }

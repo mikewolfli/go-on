@@ -60,17 +60,6 @@ impl ComplexityLevel {
             Self::VeryComplex => 8,
         }
     }
-
-    #[allow(dead_code)] // F-GAP-17 — reserved for complexity level label access
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Trivial => "trivial",
-            Self::Simple => "simple",
-            Self::Moderate => "moderate",
-            Self::Complex => "complex",
-            Self::VeryComplex => "very_complex",
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

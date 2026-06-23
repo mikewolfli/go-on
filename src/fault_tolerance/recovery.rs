@@ -6,14 +6,14 @@
 use anyhow::{anyhow, Result};
 
 use crate::fault_tolerance::{
-    now_millis, read_guard, write_guard, ConsistencyCheckEvent, FaultEvent, FaultToleranceEngine,
-    FaultType, NodeStatus, RecoveryAction, RecoveryPlan, RecoveryState, MAX_RECOVERY_PLANS,
+    now_millis, ConsistencyCheckEvent, FaultEvent, FaultToleranceEngine, FaultType, NodeStatus,
+    RecoveryAction, RecoveryPlan, RecoveryState, MAX_RECOVERY_PLANS,
 };
 
 impl FaultToleranceEngine {
     /// Reintegrate a previously isolated node back into the cluster.
     pub async fn reintegrate_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -82,7 +82,7 @@ impl FaultToleranceEngine {
     /// Create a recovery plan for a failed node.
     /// Determines appropriate recovery actions based on fault type and severity.
     pub async fn create_recovery_plan(&self, node_id: &str) -> Result<String> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -173,7 +173,7 @@ impl FaultToleranceEngine {
 
     /// Execute a recovery plan — transitions it to InProgress.
     pub async fn execute_recovery_plan(&self, plan_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -190,7 +190,7 @@ impl FaultToleranceEngine {
 
     /// Run a post-recovery consistency check and return the result.
     pub async fn post_recovery_consistency_check(&self, plan_id: &str) -> ConsistencyCheckEvent {
-        let inner = read_guard(&self.inner).await;
+        let inner = self.inner.read().await;
         let plan = inner.recovery_plans.get(plan_id);
 
         let now = now_millis();
@@ -256,7 +256,7 @@ impl FaultToleranceEngine {
         plan_id: &str,
         result: &str,
     ) -> Result<ConsistencyCheckEvent> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -292,7 +292,7 @@ impl FaultToleranceEngine {
 
     /// Fail a recovery plan.
     pub async fn fail_recovery_plan(&self, plan_id: &str, error: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -305,7 +305,7 @@ impl FaultToleranceEngine {
 
     /// Get active recovery plans.
     pub async fn active_recovery_plans(&self) -> Vec<RecoveryPlan> {
-        let inner = read_guard(&self.inner).await;
+        let inner = self.inner.read().await;
         inner
             .recovery_plans
             .values()

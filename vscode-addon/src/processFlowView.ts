@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { RuntimeManagerLike } from "./managerTypes";
 import { i18n, MessageKeys } from "./i18n";
-import { getErrorMessage } from "./utils";
+import { getErrorMessage, getNonce } from "./utils";
 
 interface ProcessStage {
   type: "chat" | "code" | "delay" | "manual";
@@ -489,14 +489,4 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
             </body>
             </html>`;
   }
-}
-
-function getNonce() {
-  let text = "";
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
 }

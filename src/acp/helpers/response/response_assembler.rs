@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::acp::server::AcpServer;
 use crate::orchestration::roles::{AgentRole, RoleRegistry};
-use crate::orchestration::task_graph::{TaskGraph, TaskNode};
+use crate::orchestration::core_dag::{TaskGraph, TaskNode};
 
 /// Bundles all parameters required to assemble a chat response payload.
 ///
@@ -298,12 +298,12 @@ pub fn build_task_graph_checkpoint(
             tracing::warn!(target: "task_graph", "failed to save graph: {e}");
         }
 
-        let subtask_records: Vec<crate::orchestration::task_graph::PlannedSubtaskRecord> =
+        let subtask_records: Vec<crate::orchestration::core_dag::PlannedSubtaskRecord> =
             task_graph
                 .nodes
                 .values()
                 .filter(|n| n.id != task_graph.root)
-                .map(|n| crate::orchestration::task_graph::PlannedSubtaskRecord {
+                .map(|n| crate::orchestration::core_dag::PlannedSubtaskRecord {
                     subtask_id: n.id.clone(),
                     description: n
                         .input

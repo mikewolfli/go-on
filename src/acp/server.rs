@@ -57,7 +57,6 @@ use super::prelude::{
 ///
 /// When draining is active, new requests are rejected with 503 + Retry-After.
 /// In-flight requests are given `drain_timeout` to complete before force-shutdown.
-#[allow(dead_code)]
 pub struct DrainGuard {
     /// Whether the server is currently draining.
     pub draining: AtomicBool,
@@ -77,7 +76,6 @@ pub struct DrainGuard {
 ///
 /// Wraps `OwnedSemaphorePermit` so that releasing the permit triggers
 /// a notification to `DrainGuard::wait_for_drain()` instead of polling.
-#[allow(dead_code)]
 pub struct DrainPermit {
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
     notify: Arc<tokio::sync::Notify>,
@@ -193,7 +191,6 @@ impl Default for DrainGuard {
 }
 
 /// Cache-related subsystems grouped together
-#[allow(dead_code)]
 pub struct CacheLayer {
     /// Response cache (SQLite-based)
     pub response_cache: Option<Arc<ResponseCache>>,
@@ -208,7 +205,6 @@ pub struct CacheLayer {
 }
 
 /// Cache + vector + autotune subsystems grouped together
-#[allow(dead_code)]
 pub struct CacheServerDeps {
     /// Cache-layer subsystems (response cache, vector store, token cache)
     pub cache: CacheLayer,
@@ -223,7 +219,6 @@ pub struct CacheServerDeps {
 }
 
 /// Flow + agent + model selection subsystems grouped together
-#[allow(dead_code)]
 pub struct ModelServerDeps {
     /// Flow manager for handling request routing through phases
     pub flow_manager: Option<Arc<FlowManager>>,
@@ -236,7 +231,6 @@ pub struct ModelServerDeps {
 }
 
 /// Governance subsystems grouped together (harness + capability + audit + pua + rbac)
-#[allow(dead_code)]
 pub struct GovernanceServerDeps {
     /// HarnessBus strategy engine (BLUE38 ARCH-13)
     pub harness_bus: Option<Arc<HarnessBus>>,
@@ -250,7 +244,7 @@ pub struct GovernanceServerDeps {
     pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
     /// Approval engine for HITL workflow (GAP-B52-19)
     pub approval_engine:
-        Option<Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
+        Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     /// Prompt injection detector (GAP-B52-25)
     pub injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
     /// Content safety checker (GAP-B52-28)
@@ -289,7 +283,6 @@ pub struct GovernanceServerDeps {
 }
 
 /// Orchestration subsystems grouped together (scheduler + planner + executor + skill)
-#[allow(dead_code)]
 pub struct OrchestrationServerDeps {
     /// Dual-level task scheduler for priority queue and worker pool
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
@@ -304,7 +297,6 @@ pub struct OrchestrationServerDeps {
 }
 
 /// Observability-related subsystems grouped together
-#[allow(dead_code)]
 pub struct ObservabilityLayer {
     /// Runtime metrics collection
     pub metrics: Arc<RuntimeMetrics>,
@@ -340,7 +332,6 @@ pub struct ObservabilityLayer {
 /// All StdMutex fields here are safe because they are never held across `.await` boundaries:
 /// locks are acquired, used in short synchronous operations, and released within the same scope.
 /// None of these fields have an `.await` point inside their critical sections.
-#[allow(dead_code)]
 pub struct ResilienceContext {
     /// Online controller for adaptive strategy from live outcomes
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
@@ -384,7 +375,6 @@ pub struct ResilienceContext {
 /// `conversation_state` uses `tokio::sync::Mutex` because its lock is held across `.await` boundaries
 /// (e.g. checkpoint operations that involve async I/O). The other fields are either lock-free
 /// (`audit_log` is thread-safe internally) or use StdMutex for short synchronous operations.
-#[allow(dead_code)]
 pub struct SessionContext {
     /// Conversation state management (uses tokio::sync::Mutex — held across .await points)
     pub conversation_state: Arc<Mutex<ConversationState>>,
@@ -405,7 +395,6 @@ pub struct SessionContext {
 /// Both fields use StdMutex for short synchronous critical sections:
 /// `rate_limit_middleware.check()` and `tenant_budget.check_can_start()`/`start_task()`
 /// are fast non-async operations with no `.await` inside the locked scope.
-#[allow(dead_code)]
 pub struct RateLimitContext {
     /// Tenant-level rate limit middleware (F-GAP-49)
     pub rate_limit_middleware: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
@@ -419,7 +408,6 @@ pub struct RateLimitContext {
 ///
 /// All fields use StdMutex — each is accessed in short synchronous critical sections
 /// (locking, reading/writing, releasing). No `.await` points inside any locked scope.
-#[allow(dead_code)]
 pub struct RegistryContext {
     /// SchemaRegistry — task envelope validation (F-GAP-07)
     // SAFETY: StdMutex is never held across `.await` — schema lookups are synchronous
@@ -449,7 +437,6 @@ pub struct RegistryContext {
 ///
 /// All fields use StdMutex — locks are acquired, used synchronously, and released.
 /// No `.await` points inside any locked scope.
-#[allow(dead_code)]
 pub struct PersistenceContext {
     /// Cross-request memory policy store
     // SAFETY: StdMutex is never held across `.await` — memory store lookups are synchronous
@@ -467,7 +454,6 @@ pub struct PersistenceContext {
 ///
 /// This struct represents the core ACP server that handles incoming requests,
 /// manages agents, and coordinates the overall system flow.
-#[allow(dead_code)]
 pub struct AcpServer {
     /// Cache-related deps (cache + vector + autotune)
     pub cache_deps: CacheServerDeps,
@@ -791,7 +777,6 @@ impl AcpServer {
 }
 
 /// Server builder for constructing AcpServer instances
-#[allow(dead_code)]
 pub struct ServerBuilder {
     flow_manager: Option<Arc<FlowManager>>,
     agent_registry: Option<Arc<AgentRegistry>>,
@@ -808,7 +793,7 @@ pub struct ServerBuilder {
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
     planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
     approval_engine:
-        Option<Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
+        Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
     safety_checker: Option<Arc<crate::security::content_safety::SafetyChecker>>,
     hash_chain_auditor:
@@ -914,7 +899,7 @@ impl ServerBuilder {
     /// Set the approval engine
     pub fn with_approval_engine(
         mut self,
-        engine: Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
+        engine: Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
     ) -> Self {
         self.approval_engine = Some(engine);
         self
@@ -1101,8 +1086,9 @@ impl ServerBuilder {
             }
         }
 
-        // Wire the skill registry into the global discovery engine
+        // Wire the skill registry into the global discovery and tool layers
         crate::acp::r#impl::request::tools_pack::init_skill_discovery(skill_registry.clone());
+        crate::orchestration::tool::set_skill_registry(skill_registry.clone());
 
         // Spawn background task to periodically rescan ~/.agents/skills/ for new skills.
         // New SKILL.md files placed in the directory will be registered automatically

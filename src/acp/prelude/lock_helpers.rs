@@ -1,21 +1,16 @@
-//! ACP Lock Monitor
+//! ACP Lock Helpers
 //!
-//! Lock monitoring infrastructure: tracks poisonings and recovery for
-//! all ACP `std::sync::Mutex` instances. Wait-time instrumentation has
-//! been removed (log-20260622-5: lock monitor stats never queried in
-//! production; the atomic ops and Instant::now() syscalls added ~500ns
-//! per acquisition with zero downstream consumers).
+//! Poison-recovery lock wrappers for `std::sync::Mutex` and `tokio::sync::Mutex`.
+//! Wait-time instrumentation removed (log-20260622-5: lock monitor stats were
+//! never queried in production; the atomic ops and Instant::now() syscalls added
+//! ~500ns per acquisition with zero downstream consumers).
+//!
+//! The dead `AcpLockMonitor` placeholder has been removed (log-20260623-7).
 
 use std::sync::Mutex as StdMutex;
 
 use tokio::sync::Mutex as TokioMutex;
 use tracing::warn;
-
-/// AcpLockMonitor — retained as a zero-overhead placeholder for ABI compatibility.
-/// All counter/timing fields removed (never queried in production).
-#[derive(Debug, Default)]
-#[allow(dead_code)]
-pub struct AcpLockMonitor;
 
 // ============================================================================
 // Lock helper functions

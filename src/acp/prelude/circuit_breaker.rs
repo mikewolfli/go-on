@@ -46,14 +46,11 @@ struct CircuitBreakerState {
     success_count: u32,
     last_state_change: i64,
     open_until: Option<i64>,
+    failure_threshold: u32,
 }
 
 /// Circuit breaker stage
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[expect(
-    dead_code,
-    reason = "F-GAP-49 planned wiring; matched but not yet constructed"
-)]
 enum CircuitBreakerStage {
     #[default]
     Closed,
@@ -69,6 +66,7 @@ impl Default for CircuitBreakerState {
             success_count: 0,
             last_state_change: 0,
             open_until: None,
+            failure_threshold: 5,
         }
     }
 }
@@ -77,9 +75,12 @@ impl Default for CircuitBreakerState {
 ///
 /// Public API type — re-exported for ACP consumers.
 #[non_exhaustive]
-#[allow(dead_code)]
 pub enum CircuitBreakerAdmission {
+    /// The breaker is Closed — request is allowed.
     Closed,
+    /// Request allowed as a probe to test if the downstream has recovered.
+    HalfOpenProbe,
+    /// Request is rejected because the breaker is not ready.
     Rejected {
         state: &'static str,
         retry_after_seconds: Option<i64>,
@@ -171,5 +172,110 @@ impl CircuitBreakerRegistry {
     /// Check if circuit breakers are healthy
     pub fn is_healthy(&self) -> bool {
         self.open_count() == 0
+    }
+
+    /// Check whether the named breaker is in the HalfOpen state.
+    /// Returns `false` if the breaker is not tracked.
+    pub fn is_half_open(&self, name: &str) -> bool {
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard
+            .get(name)
+            .is_some_and(|state| state.stage == CircuitBreakerStage::HalfOpen)
+    }
+
+    /// Admit a request for the given circuit breaker.
+    ///
+    /// Returns [`CircuitBreakerAdmission::Closed`] when the breaker is green,
+    /// [`CircuitBreakerAdmission::HalfOpenProbe`] when a probe is allowed,
+    /// and [`CircuitBreakerAdmission::Rejected`] when the breaker is open.
+    pub fn admit(&self, name: &str) -> CircuitBreakerAdmission {
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let state = guard.entry(name.to_string()).or_default();
+        match state.stage {
+            CircuitBreakerStage::Closed => CircuitBreakerAdmission::Closed,
+            CircuitBreakerStage::HalfOpen => {
+                // Allow a probe request.
+                CircuitBreakerAdmission::HalfOpenProbe
+            }
+            CircuitBreakerStage::Open => {
+                // Check if the open timeout has expired — move to HalfOpen.
+                if let Some(until) = state.open_until {
+                    if now_ts() >= until {
+                        state.stage = CircuitBreakerStage::HalfOpen;
+                        state.last_state_change = now_ts();
+                        return CircuitBreakerAdmission::HalfOpenProbe;
+                    }
+                    let retry = until - now_ts();
+                    return CircuitBreakerAdmission::Rejected {
+                        state: "open",
+                        retry_after_seconds: Some(retry),
+                    };
+                }
+                CircuitBreakerAdmission::Rejected {
+                    state: "open",
+                    retry_after_seconds: None,
+                }
+            }
+        }
+    }
+
+    /// Record a successful call, closing or moving out of half-open state.
+    pub fn record_success(&self, name: &str) {
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(state) = guard.get_mut(name) {
+            state.success_count += 1;
+            match state.stage {
+                CircuitBreakerStage::HalfOpen | CircuitBreakerStage::Open => {
+                    // Reset to closed on success.
+                    state.stage = CircuitBreakerStage::Closed;
+                    state.failure_count = 0;
+                    state.last_state_change = now_ts();
+                    state.open_until = None;
+                }
+                CircuitBreakerStage::Closed => {}
+            }
+        }
+    }
+
+    /// Record a failure, potentially transitioning to Open.
+    pub fn record_failure(&self, name: &str) {
+        self._record_failure(name);
+    }
+
+    /// Internal implementation shared by `record_failure`.
+    fn _record_failure(&self, name: &str) {
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let state = guard.entry(name.to_string()).or_default();
+        state.failure_count += 1;
+        match state.stage {
+            CircuitBreakerStage::Closed => {
+                if state.failure_count >= state.failure_threshold {
+                    state.stage = CircuitBreakerStage::Open;
+                    state.last_state_change = now_ts();
+                    state.open_until = Some(now_ts() + 30);
+                }
+            }
+            CircuitBreakerStage::HalfOpen => {
+                // Failure during half-open probe → back to open.
+                state.stage = CircuitBreakerStage::Open;
+                state.last_state_change = now_ts();
+                state.open_until = Some(now_ts() + 30);
+            }
+            CircuitBreakerStage::Open => {
+                // Already open, just count.
+            }
+        }
     }
 }

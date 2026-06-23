@@ -937,7 +937,14 @@ pub(super) async fn handle_harness_status(
 
     let requests_root = std::path::Path::new("requests").to_path_buf();
     // Use spawn_blocking to avoid blocking the tokio runtime with synchronous fs I/O.
-    let result: Result<_, _> = tokio::task::spawn_blocking(move || -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    type RequestLists = (
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+    );
+    let result: Result<_, _> = tokio::task::spawn_blocking(move || -> RequestLists {
         let mut smoke = Vec::new();
         let mut regression = Vec::new();
         let mut adversarial = Vec::new();

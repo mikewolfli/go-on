@@ -17,6 +17,11 @@ pub mod facewall;
     feature = "multi-users-server"
 ))]
 pub mod factory;
+#[cfg(any(
+    feature = "sub-bus-tool",
+    feature = "simple-server",
+    feature = "multi-users-server"
+))]
 pub mod fireworks;
 pub mod gemini;
 pub mod glm;
@@ -44,7 +49,6 @@ pub mod sse_optimizer;
 pub mod stepfun;
 pub mod titan;
 pub mod together;
-pub mod vendors;
 pub mod wenxin;
 pub mod xai;
 pub mod xihu;

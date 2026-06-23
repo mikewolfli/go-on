@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use crate::agent::AgentTaskEnvelope;
-use crate::orchestration::execution_graph::{ExNode, ExNodeKind, ExNodeState, ExecutionGraph};
+use crate::orchestration::core_dag::{ExNode, ExNodeKind, ExNodeState, ExecutionGraph};
 use crate::orchestration::planner_executor::{ExecutionPlan, Planner};
 
 /// Build an `ExecutionGraph` DAG from a `Planner::plan()` output.

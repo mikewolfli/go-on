@@ -193,7 +193,6 @@ impl CausalBayesianGraph {
     /// ```text
     /// P_new = (P_old * count_old + 1) / (count_old + 1)
     /// ```
-    #[allow(dead_code)] // F-GAP-49 — reserved for manual observation injection
     pub fn record_observation(
         &mut self,
         cause: &CausalNode,
@@ -255,6 +254,9 @@ impl CausalBayesianGraph {
     }
 
     /// Record a batch of observations from the existing Correlation data.
+    ///
+    /// Delegates to [`record_observation`](Self::record_observation) for each
+    /// unit of `count`, ensuring consistent Bayesian updating across all paths.
     #[allow(clippy::too_many_arguments)]
     pub fn record_correlation(
         &mut self,
@@ -263,45 +265,14 @@ impl CausalBayesianGraph {
         effect_entity: &str,
         effect_property: &str,
         count: u64,
-        confidence: f64,
+        _confidence: f64,
         avg_delay_ms: i64,
     ) {
         let cause = CausalNode::new(cause_entity, cause_property, "");
         let effect = CausalNode::new(effect_entity, effect_property, "");
-
-        let cause_idx = self.ensure_node(&cause);
-        let effect_idx = self.ensure_node(&effect);
-
-        // Check for existing edge, update or create
-        for edge_idx in &self.outgoing[cause_idx] {
-            let edge = &mut self.edges[*edge_idx];
-            if edge.effect_idx == effect_idx {
-                let old_count = edge.observation_count;
-                let total_count = old_count + count;
-                edge.probability = (edge.probability * old_count as f64
-                    + confidence * count as f64)
-                    / total_count as f64;
-                edge.observation_count = total_count;
-                edge.avg_delay_ms = (edge.avg_delay_ms * old_count as i64
-                    + avg_delay_ms * count as i64)
-                    / total_count as i64;
-                return;
-            }
+        for _ in 0..count {
+            self.record_observation(&cause, &effect, avg_delay_ms, &[], 0);
         }
-
-        let edge = CausalEdge {
-            cause_idx,
-            effect_idx,
-            probability: confidence,
-            observation_count: count,
-            avg_delay_ms,
-            context_tags: vec![],
-            abstraction_level: 0,
-        };
-        let edge_idx = self.edges.len();
-        self.edges.push(edge);
-        self.outgoing[cause_idx].push(edge_idx);
-        self.incoming[effect_idx].push(edge_idx);
     }
 
     // ── MCTS Path Finding ────────────────────────────────────────────────
@@ -621,13 +592,11 @@ impl CausalBayesianGraph {
     }
 
     /// Get all nodes in the graph (for inspection/debugging).
-    #[allow(dead_code)] // F-GAP-49 — reserved for diagnostics/inspection
     pub fn nodes(&self) -> &[CausalNode] {
         &self.nodes
     }
 
     /// Get all edges in the graph (for inspection/debugging).
-    #[allow(dead_code)] // F-GAP-49 — reserved for diagnostics/inspection
     pub fn edges(&self) -> &[CausalEdge] {
         &self.edges
     }
@@ -785,6 +754,39 @@ impl CausalBayesianGraph {
         let p_effect_given_not_cause = (p_effect - p_cause * p_effect_given_cause) / p_not_cause;
 
         p_effect_given_not_cause.clamp(0.0, 1.0)
+    }
+}
+
+impl std::fmt::Display for CausalBayesianGraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "CausalBayesianGraph ({} nodes, {} edges, {} total observations)",
+            self.nodes().len(),
+            self.edges().len(),
+            self.total_observations
+        )?;
+        for node in self.nodes() {
+            writeln!(
+                f,
+                "  Node: {} | {} = {}",
+                node.entity, node.property, node.value
+            )?;
+        }
+        for edge in self.edges() {
+            let cause = &self.nodes[edge.cause_idx];
+            let effect = &self.nodes[edge.effect_idx];
+            writeln!(
+                f,
+                "  Edge: {} → {}  (prob={:.3}, count={}, delay={}ms)",
+                cause.key(),
+                effect.key(),
+                edge.probability,
+                edge.observation_count,
+                edge.avg_delay_ms
+            )?;
+        }
+        Ok(())
     }
 }
 

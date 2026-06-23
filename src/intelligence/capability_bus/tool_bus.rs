@@ -465,22 +465,14 @@ impl ToolBus {
 ///
 /// Only available under the `multi-users-server` feature flag.
 #[cfg(feature = "multi-users-server")]
-#[allow(dead_code)] // F-GAP-49 — planned wiring: capability bus / orchestration
-pub fn import_remote_skill(
-    tool_bus: &Arc<Mutex<ToolBus>>,
-    endpoint: &str,
-    skill_name: &str,
-) -> Result<()> {
+pub fn import_remote_skill(tool_bus: &ToolBus, endpoint: &str, skill_name: &str) -> Result<()> {
     use crate::orchestration::skill_import::RemoteSkill;
-
-    let bus = tool_bus
-        .lock()
-        .map_err(|e| anyhow::anyhow!("ToolBus lock poisoned: {}", e))?;
 
     let remote = RemoteSkill::new(endpoint, skill_name)?;
 
     let skill: Arc<dyn crate::orchestration::skill::Skill> = Arc::new(remote);
-    bus.skill_registry
+    tool_bus
+        .skill_registry
         .lock()
         .map_err(|e| anyhow::anyhow!("SkillRegistry lock poisoned: {}", e))?
         .register(skill)?;

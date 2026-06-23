@@ -25,9 +25,7 @@ pub mod council; // F-GAP-15
 pub mod dag_driver;
 #[allow(unused_imports)]
 pub use core_dag::TaskContext; // GAP-B50-05 (migrated from dag_executor to core_dag)
-pub mod diagnostic_feedback;
 pub mod distributed_tx; // BLUE45 item 4: Two-Phase Commit (2PC) over multiple nodes
-pub mod execution_graph;
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod flow_with_models;
@@ -57,7 +55,6 @@ pub mod skill_market;
 pub mod skills_folder;
 pub mod startup_context;
 pub mod task_decomposer;
-pub mod task_graph;
 pub mod task_graph_store;
 pub mod task_router;
 pub mod task_schema;

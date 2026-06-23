@@ -1,4 +1,4 @@
-﻿//! Phase 5: Role-Specialized Multi-Agent Collaboration
+//! Phase 5: Role-Specialized Multi-Agent Collaboration
 //! These structures are intentional framework definitions for Phase 0-9 architecture.
 //! Agent roles and handoff contracts define multi-agent delegation patterns,
 //! to be integrated into the agent orchestrator once role routing is implemented.

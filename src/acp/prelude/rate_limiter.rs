@@ -8,38 +8,7 @@ use std::sync::Mutex as StdMutex;
 use tracing::warn;
 
 use crate::acp::prelude::functions::now_ts_ms;
-
-// ============================================================================
-// Internal token bucket
-// ============================================================================
-
-#[derive(Debug, Clone)]
-struct TokenBucketState {
-    tokens: f64,
-    capacity: f64,
-    refill_per_second: f64,
-    last_refill_ms: i64,
-}
-
-impl TokenBucketState {
-    fn new(capacity: f64, refill_per_second: f64, now_ms: i64) -> Self {
-        Self {
-            tokens: capacity,
-            capacity,
-            refill_per_second,
-            last_refill_ms: now_ms,
-        }
-    }
-
-    fn refill(&mut self, now_ms: i64) {
-        let elapsed_ms = (now_ms - self.last_refill_ms).max(0) as f64;
-        if elapsed_ms > 0.0 {
-            let refill = elapsed_ms / 1000.0 * self.refill_per_second;
-            self.tokens = (self.tokens + refill).min(self.capacity);
-            self.last_refill_ms = now_ms;
-        }
-    }
-}
+use crate::shared::token_bucket::TokenBucket;
 
 // ============================================================================
 // Phase rate limiter (public API)
@@ -48,7 +17,7 @@ impl TokenBucketState {
 /// Phase rate limiter for phase-level throttling
 #[derive(Debug, Default)]
 pub struct PhaseRateLimiter {
-    inner: StdMutex<HashMap<String, TokenBucketState>>,
+    inner: StdMutex<HashMap<String, TokenBucket>>,
 }
 
 impl PhaseRateLimiter {
@@ -68,15 +37,15 @@ impl PhaseRateLimiter {
         });
         let state = guard
             .entry(phase_name.to_string())
-            .or_insert_with(|| TokenBucketState::new(capacity, refill_per_second, now));
+            .or_insert_with(|| TokenBucket::new_ms(capacity, refill_per_second, now));
 
         if (state.capacity - capacity).abs() > f64::EPSILON
-            || (state.refill_per_second - refill_per_second).abs() > f64::EPSILON
+            || (state.refill_rate - refill_per_second).abs() > f64::EPSILON
         {
-            *state = TokenBucketState::new(capacity, refill_per_second, now);
+            *state = TokenBucket::new_ms(capacity, refill_per_second, now);
         }
 
-        state.refill(now);
+        state.refill_ms(now);
         if state.tokens < 1.0 {
             return false;
         }
