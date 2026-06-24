@@ -147,17 +147,12 @@ pub struct RouteTemplate {
 /// Each sub-cache has configurable TTL and max-entries limits.  When the
 /// entry count exceeds `max_entries`, the oldest 25 % of entries are evicted.
 ///
-/// Internal state for `FastPathCache` — all sub-caches behind a single Mutex.
-struct FastPathCacheInner {
-    intent_cache: HashMap<u64, CacheEntry<IntentCacheValue>>,
-    skill_cache: HashMap<u64, CacheEntry<SkillCacheValue>>,
-    env_cache: HashMap<u64, CacheEntry<EnvCacheValue>>,
-    route_cache: HashMap<String, RouteTemplate>,
-}
-
 pub struct FastPathCache {
-    /// All sub-caches behind a single Mutex (F-GAP-49: merged 4→1 to reduce lock overhead).
-    inner: Mutex<FastPathCacheInner>,
+    /// Each sub-cache behind its own Mutex to minimise lock contention.
+    intent_cache: Mutex<HashMap<u64, CacheEntry<IntentCacheValue>>>,
+    skill_cache: Mutex<HashMap<u64, CacheEntry<SkillCacheValue>>>,
+    env_cache: Mutex<HashMap<u64, CacheEntry<EnvCacheValue>>>,
+    route_cache: Mutex<HashMap<String, RouteTemplate>>,
     /// Max TTL for cache entries (default 5 minutes).
     ttl: Duration,
     /// Max entries per cache.
@@ -173,12 +168,10 @@ impl FastPathCache {
     /// per sub-cache.
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(FastPathCacheInner {
-                intent_cache: HashMap::new(),
-                skill_cache: HashMap::new(),
-                env_cache: HashMap::new(),
-                route_cache: HashMap::new(),
-            }),
+            intent_cache: Mutex::new(HashMap::new()),
+            skill_cache: Mutex::new(HashMap::new()),
+            env_cache: Mutex::new(HashMap::new()),
+            route_cache: Mutex::new(HashMap::new()),
             ttl: Duration::from_secs(300),
             max_entries: 128,
             warming_hits: AtomicU64::new(0),
@@ -191,12 +184,10 @@ impl FastPathCache {
     #[cfg(test)]
     pub fn new_with(ttl: Duration, max_entries: usize) -> Self {
         Self {
-            inner: Mutex::new(FastPathCacheInner {
-                intent_cache: HashMap::new(),
-                skill_cache: HashMap::new(),
-                env_cache: HashMap::new(),
-                route_cache: HashMap::new(),
-            }),
+            intent_cache: Mutex::new(HashMap::new()),
+            skill_cache: Mutex::new(HashMap::new()),
+            env_cache: Mutex::new(HashMap::new()),
+            route_cache: Mutex::new(HashMap::new()),
             ttl,
             max_entries,
             warming_hits: AtomicU64::new(0),
@@ -274,15 +265,18 @@ impl FastPathCache {
     /// exceeded the TTL.
     pub fn get_intent(&self, task_text: &str) -> Option<IntentCacheValue> {
         let key = Self::fingerprint(task_text);
-        let mut inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        if let Some(entry) = inner.intent_cache.get_mut(&key) {
+        let mut intent_cache = self
+            .intent_cache
+            .lock()
+            .expect("intent_cache lock poisoned");
+        if let Some(entry) = intent_cache.get_mut(&key) {
             if entry.created_at.elapsed() < self.ttl {
                 entry.hit_count += 1;
                 debug!("Intent cache HIT for fingerprint={}", key);
                 return Some(entry.value.clone());
             }
             debug!("Intent cache EXPIRED for fingerprint={}", key);
-            inner.intent_cache.remove(&key);
+            intent_cache.remove(&key);
         }
         debug!("Intent cache MISS for fingerprint={}", key);
         None
@@ -291,9 +285,12 @@ impl FastPathCache {
     /// Store a parsed intent in the cache.
     pub fn set_intent(&self, task_text: &str, value: IntentCacheValue) {
         let key = Self::fingerprint(task_text);
-        let mut inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        Self::evict_if_needed(&mut inner.intent_cache, self.max_entries);
-        inner.intent_cache.insert(key, CacheEntry::new(value));
+        let mut intent_cache = self
+            .intent_cache
+            .lock()
+            .expect("intent_cache lock poisoned");
+        Self::evict_if_needed(&mut intent_cache, self.max_entries);
+        intent_cache.insert(key, CacheEntry::new(value));
         debug!("Intent cache SET for fingerprint={}", key);
     }
 
@@ -304,15 +301,15 @@ impl FastPathCache {
     /// Retrieve cached skills for the task text, if fresh.
     pub fn get_skills(&self, task_text: &str) -> Option<SkillCacheValue> {
         let key = Self::fingerprint(task_text);
-        let mut inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        if let Some(entry) = inner.skill_cache.get_mut(&key) {
+        let mut skill_cache = self.skill_cache.lock().expect("skill_cache lock poisoned");
+        if let Some(entry) = skill_cache.get_mut(&key) {
             if entry.created_at.elapsed() < self.ttl {
                 entry.hit_count += 1;
                 debug!("Skill cache HIT for fingerprint={}", key);
                 return Some(entry.value.clone());
             }
             debug!("Skill cache EXPIRED for fingerprint={}", key);
-            inner.skill_cache.remove(&key);
+            skill_cache.remove(&key);
         }
         debug!("Skill cache MISS for fingerprint={}", key);
         None
@@ -321,9 +318,9 @@ impl FastPathCache {
     /// Store matched skills in the cache.
     pub fn set_skills(&self, task_text: &str, value: SkillCacheValue) {
         let key = Self::fingerprint(task_text);
-        let mut inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        Self::evict_if_needed(&mut inner.skill_cache, self.max_entries);
-        inner.skill_cache.insert(key, CacheEntry::new(value));
+        let mut skill_cache = self.skill_cache.lock().expect("skill_cache lock poisoned");
+        Self::evict_if_needed(&mut skill_cache, self.max_entries);
+        skill_cache.insert(key, CacheEntry::new(value));
         debug!("Skill cache SET for fingerprint={}", key);
     }
 
@@ -334,15 +331,15 @@ impl FastPathCache {
     /// Retrieve a cached environment result for the given prerequisites.
     pub fn get_env(&self, prerequisites: &[String]) -> Option<EnvCacheValue> {
         let key = Self::fingerprint_slice(prerequisites);
-        let mut inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        if let Some(entry) = inner.env_cache.get_mut(&key) {
+        let mut env_cache = self.env_cache.lock().expect("env_cache lock poisoned");
+        if let Some(entry) = env_cache.get_mut(&key) {
             if entry.created_at.elapsed() < self.ttl {
                 entry.hit_count += 1;
                 debug!("Env cache HIT for fingerprint={}", key);
                 return Some(entry.value.clone());
             }
             debug!("Env cache EXPIRED for fingerprint={}", key);
-            inner.env_cache.remove(&key);
+            env_cache.remove(&key);
         }
         debug!("Env cache MISS for fingerprint={}", key);
         None
@@ -351,9 +348,9 @@ impl FastPathCache {
     /// Store an environment result in the cache.
     pub fn set_env(&self, prerequisites: &[String], value: EnvCacheValue) {
         let key = Self::fingerprint_slice(prerequisites);
-        let mut inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        Self::evict_if_needed(&mut inner.env_cache, self.max_entries);
-        inner.env_cache.insert(key, CacheEntry::new(value));
+        let mut env_cache = self.env_cache.lock().expect("env_cache lock poisoned");
+        Self::evict_if_needed(&mut env_cache, self.max_entries);
+        env_cache.insert(key, CacheEntry::new(value));
         debug!("Env cache SET for fingerprint={}", key);
     }
 
@@ -368,8 +365,7 @@ impl FastPathCache {
     /// match count wins.
     pub fn match_route(&self, task_text: &str) -> Option<RouteTemplate> {
         let lower = task_text.to_lowercase();
-        let inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        let route_cache = &inner.route_cache;
+        let route_cache = self.route_cache.lock().expect("route_cache lock poisoned");
 
         let mut best_match: Option<&RouteTemplate> = None;
         let mut best_count = 0usize;
@@ -391,10 +387,8 @@ impl FastPathCache {
 
     /// Register a route template for fast-path matching.
     pub fn register_route(&self, template: RouteTemplate) {
-        let mut inner = self.inner.lock().expect("FastPathCache lock poisoned");
-        inner
-            .route_cache
-            .insert(template.task_type.clone(), template);
+        let mut route_cache = self.route_cache.lock().expect("route_cache lock poisoned");
+        route_cache.insert(template.task_type.clone(), template);
         debug!("Route template registered");
     }
 
@@ -431,26 +425,31 @@ impl FastPathCache {
     /// Returns a JSON value with entry counts, total hit counts, average
     /// hits per entry, TTL, and max-entries setting.
     pub fn cache_metrics_snapshot(&self) -> Value {
-        let inner = self.inner.lock().expect("FastPathCache lock poisoned");
+        let intent_cache = self
+            .intent_cache
+            .lock()
+            .expect("intent_cache lock poisoned");
+        let skill_cache = self.skill_cache.lock().expect("skill_cache lock poisoned");
+        let env_cache = self.env_cache.lock().expect("env_cache lock poisoned");
 
-        let intent_total: usize = inner.intent_cache.len();
-        let intent_hits: u64 = inner.intent_cache.values().map(|e| e.hit_count).sum();
+        let intent_total: usize = intent_cache.len();
+        let intent_hits: u64 = intent_cache.values().map(|e| e.hit_count).sum();
         let intent_avg = if intent_total > 0 {
             intent_hits as f64 / intent_total as f64
         } else {
             0.0
         };
 
-        let skill_total: usize = inner.skill_cache.len();
-        let skill_hits: u64 = inner.skill_cache.values().map(|e| e.hit_count).sum();
+        let skill_total: usize = skill_cache.len();
+        let skill_hits: u64 = skill_cache.values().map(|e| e.hit_count).sum();
         let skill_avg = if skill_total > 0 {
             skill_hits as f64 / skill_total as f64
         } else {
             0.0
         };
 
-        let env_total: usize = inner.env_cache.len();
-        let env_hits: u64 = inner.env_cache.values().map(|e| e.hit_count).sum();
+        let env_total: usize = env_cache.len();
+        let env_hits: u64 = env_cache.values().map(|e| e.hit_count).sum();
         let env_avg = if env_total > 0 {
             env_hits as f64 / env_total as f64
         } else {
@@ -485,7 +484,7 @@ impl FastPathCache {
         // roundtrip — this wires `store_cache_metrics` and `read_cache_metrics`
         // into the metrics reporting flow (F-GAP-09).
         store_cache_metrics(snapshot.clone());
-        let _verified = read_cache_metrics();
+        let _ = read_cache_metrics();
 
         snapshot
     }

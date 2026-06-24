@@ -1,17 +1,9 @@
+use super::send_with_retry;
 use crate::backend::{BackendClient, ErrorGroup, HealthStatus, MetricsWindowPoint, ProviderStatus};
 use crate::i18n::I18n;
 use crate::widgets::cache::CachedView;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-
-/// Send a message over a SyncSender, trying once without blocking.
-/// If the channel is full, the message is silently dropped — the monitor
-/// will pick up fresh data on the next refresh cycle.
-///
-/// This avoids blocking the UI thread with `thread::sleep` calls.
-fn send_with_retry(tx: &mpsc::SyncSender<String>, msg: String) {
-    let _ = tx.try_send(msg);
-}
 
 pub struct MonitorView {
     pub health: Option<HealthStatus>,

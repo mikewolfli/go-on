@@ -463,10 +463,21 @@ impl PolicyEvaluator {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
             poisoned.into_inner()
         });
+        // ── All tools categorized by operation type ────────────────
+        //
+        // Each tool is classified by its dominant operation class so that
+        // the sandbox level check is fine-grained.  Tools not explicitly
+        // listed fall through to require user review.
+        let mut recognized = true;
         let allowed = match tool {
+            // ── Read / Query tools (safe at ALL sandbox levels) ───────
             "read_file"
             | "search_files"
             | "inspect_git_diff"
+            | "list_directory"
+            | "date_time"
+            | "skill_list"
+            | "skill-finder"
             | "chat.execute"
             | "acp_trace_get"
             | "acp_debug_panel_get"
@@ -477,14 +488,127 @@ impl PolicyEvaluator {
             | "goon_provider_capabilities"
             | "prompts_list"
             | "prompts_get"
-            | "skill-finder" => SandboxPolicy::can_execute_read_file(level),
-            "grep" | "find_path" | "semantic_search" => SandboxPolicy::can_execute_search(level),
+            | "workflow_execute"
+            | "workflow_ask"
+            | "workflow_generate"
+            | "import_skill"
+            | "skill_execute"
+            | "cargo_check"
+            | "archive_inspect"
+            | "jsonl_read"
+            // ── Diagnostic / environment tools ─────────────────────
+            | "diagnostics"
+            | "environment_info"
+            // ── Skill query / echo tools (safe at ALL sandbox levels) ─
+            | "echo_skill"
+            | "builtin.echo"
+            | "goon_skill_version_list"
+            // ── Document readers ──────────────────────────────
+            | "read_pdf"
+            | "pdf_merge"
+            | "pdf_split"
+            | "read_docx"
+            | "read_excel"
+            | "read_ppt"
+            | "email_parse"
+            | "invoice_parse"
+            | "web_scrape"
+            // ── CAD / 3D readers ──────────────────────────────
+            | "dxf_read"
+            | "cad_convert"
+            | "step_read"
+            | "obj_read"
+            | "obj_model_read"
+            | "stl_read"
+            | "gltf_read"
+            | "iges_read"
+            | "ply_read"
+            | "geo_util"
+            | "gcode_read"
+            | "gpx_read"
+            // ── Image / Drawing readers ────────────────────────
+            | "image_analyze"
+            | "image_convert"
+            | "svg_read"
+            // ── Data readers ──────────────────────────────────
+            | "csv_read"
+            | "csv_analyze"
+            | "toml_read"
+            | "yaml_read"
+            // ── Database ───────────────────────────────────────
+            | "sqlite_query"
+            // ── Game readers ───────────────────────────────────
+            | "game_server_query"
+            | "game_price_tracker"
+            | "game_matchmaking"
+            | "game_achievements"
+            | "game_mod_list"
+            | "game_coaching_assistant" => SandboxPolicy::can_execute_read_file(level),
+            // ── Game process / automation (shell) — requires unrestricted ─
+            "game_launch"
+            | "game_keyboard_input"
+            | "game_mouse_input"
+            | "game_auto_grind" => SandboxPolicy::can_execute_shell(level),
+            // ── Game file operations (write) — restricted at Strict+ ─
+            "game_screen_capture"
+            | "game_replay_recorder"
+            | "game_save_manager"
+            | "game_mod_install" => SandboxPolicy::can_execute_write(level),
+            // ── Search / Discovery tools ──────────────────────────
+            "grep" | "find_path" | "semantic_search" | "find_files" => {
+                SandboxPolicy::can_execute_search(level)
+            }
+            // ── Network / Outbound tools ─────────────────────────
+            "http_request"
+            | "dns_lookup"
+            | "ping"
+            | "port_scan"
+            | "git"
+            | "github_search_skills"
+            | "rss_read"
+            | "game_monitor"
+            | "goon_provider_test_connection"
+            | "goon_provider_test_completion" => SandboxPolicy::can_execute_network(level),
+            // ── Write / Admin tools (restricted in stricter sandbox levels) ─
             "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path"
-            | "copy_path" => SandboxPolicy::can_execute_write(level),
-            "run_tests" | "execute_command" | "terminal" | "bash" => {
+            | "copy_path" | "file_move" | "file_delete" | "compress" | "decompress"
+            | "archive_extract" | "jsonl_write"
+            // ── Skill admin tools (write operations) ───────────────────
+            | "goon_skill_update"
+            | "goon_skill_version_rollback"
+            | "skill-creator"
+            // ── Workflow admin tools (write operations) ────────────────
+            | "goon_workflow_run_cancel"
+            | "goon_workflow_run_pause"
+            | "goon_workflow_run_resume"
+            // ── CSV / Data write tools ────────────────────────────────
+            | "csv_write"
+            | "csv_transform"
+            | "toml_write"
+            | "yaml_write"
+            // ── Image write tools ─────────────────────────────────────
+            | "image_resize"
+            | "image_generate"
+            // ── Drawing / SVG write tools ─────────────────────────────
+            | "svg_generate"
+            | "svg_export"
+            // ── 3D / CAD write tools ──────────────────────────────────
+            | "stl_generate"
+            // ── Barcode tools ─────────────────────────────────────────
+            | "qrcode_generate"
+            // ── Document write tools ──────────────────────────────────
+            | "write_docx"
+            | "write_ppt"
+            | "write_excel" => SandboxPolicy::can_execute_write(level),
+            // ── Shell / Execution tools ────────────────────────────
+            "run_tests" | "execute_command" | "terminal" | "bash" | "cargo_test" | "shell_exec" => {
                 SandboxPolicy::can_execute_shell(level)
             }
-            _ => false,
+            // ── Unknown tools — require user review (not auto-allowed) ─
+            _ => {
+                recognized = false;
+                false
+            }
         };
         let idempotent = self
             .idempotency
@@ -507,6 +631,7 @@ impl PolicyEvaluator {
         let permitted = self.check_permission(tool, _args);
         ToolVerdict {
             allowed,
+            require_review: !recognized,
             idempotent,
             budget_ok,
             permitted,
@@ -603,7 +728,7 @@ impl PolicyEvaluator {
         if let Some(ref rbac) = inner_guard {
             let required_perm = match action {
                 GovernanceAction::Write => Permission::Write,
-                GovernanceAction::Shell => Permission::Execute,
+                GovernanceAction::Shell | GovernanceAction::Network => Permission::Execute,
                 GovernanceAction::Read | GovernanceAction::Search => Permission::Read,
             };
             let tenant_id = rbac.tenant_ids().into_iter().next();

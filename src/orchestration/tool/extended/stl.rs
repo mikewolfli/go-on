@@ -84,7 +84,7 @@ fn parse_ascii_stl(content: &str) -> Result<(Vec<Facet>, Option<String>)> {
     // Skip leading empty lines, look for "solid" keyword at start of any non-empty line
     // Actually STL ASCII format can have comments? No, official format has no comments.
     // First non-empty line should be "solid [name]"
-    while let Some(line) = lines.next() {
+    for line in lines.by_ref() {
         let line = line.trim();
         if line.is_empty() {
             continue;

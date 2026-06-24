@@ -31,12 +31,6 @@ struct CacheEntry {
     created_at: Instant,
     /// Time-to-live
     ttl: Duration,
-    /// Access count
-    #[allow(dead_code, reason = "Reserved for cache analytics")]
-    access_count: u64,
-    /// Hit count
-    #[allow(dead_code, reason = "Reserved for cache analytics")]
-    hits: u64,
     /// When this entry was last accessed (for LRU eviction)
     last_accessed: Instant,
 }
@@ -206,8 +200,6 @@ impl SemanticResponseCache {
             request_hash: hash,
             created_at: now,
             ttl: Duration::from_secs(self.config.default_ttl_seconds),
-            access_count: 1,
-            hits: 0,
             last_accessed: now,
         };
 

@@ -139,6 +139,26 @@ impl GoOnClient {
         builder.build()
     }
 
+    /// Return the base URL this client was configured with.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Return the request timeout (None if not set).
+    pub fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
+
+    /// Return the maximum number of retry attempts for transient failures.
+    pub fn max_retries(&self) -> u32 {
+        self.max_retries
+    }
+
+    /// Return the delay between retry attempts.
+    pub fn retry_delay(&self) -> Duration {
+        self.retry_delay
+    }
+
     // ── Streaming chat ────────────────────────────────────────────────
 
     /// Send a chat request and receive the response as a real-time SSE stream

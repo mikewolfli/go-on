@@ -308,12 +308,36 @@ impl SkillDiscovery {
             }
         }
 
-        // Search
-        let mut results = self.index.search(query, top_k);
+        // Search — when the query is empty or whitespace-only, return all
+        // available skills sorted by name (up to top_k) instead of nothing.
+        let query_trimmed = query.trim();
+        let mut results = if query_trimmed.is_empty() {
+            // List all known skills from the registry
+            let mut all: Vec<ScoredSkill> = registry
+                .list()
+                .into_iter()
+                .map(|desc| ScoredSkill {
+                    name: desc.name,
+                    description: desc.description,
+                    score: 0.0,
+                    input_schema: desc.input_schema,
+                    total_calls: desc.total_calls,
+                    success_calls: desc.success_calls,
+                    failure_calls: desc.failure_calls,
+                    average_latency_ms: desc.average_latency_ms,
+                })
+                .collect();
+            all.sort_by(|a, b| a.name.cmp(&b.name));
+            all.truncate(top_k);
+            all
+        } else {
+            self.index.search(query, top_k)
+        };
 
         // Enrich with runtime stats from the registry
+        let all_descriptors = registry.list();
         for result in &mut results {
-            if let Some(desc) = registry.list().into_iter().find(|d| d.name == result.name) {
+            if let Some(desc) = all_descriptors.iter().find(|d| d.name == result.name) {
                 result.total_calls = desc.total_calls;
                 result.success_calls = desc.success_calls;
                 result.failure_calls = desc.failure_calls;
@@ -321,8 +345,8 @@ impl SkillDiscovery {
                 result.input_schema = desc.input_schema.clone();
 
                 // Re-score with actual runtime stats
-                let entry = SkillIndexEntry::from_descriptor(&desc);
-                let query_tokens = tokenize(query);
+                let entry = SkillIndexEntry::from_descriptor(desc);
+                let query_tokens = tokenize(query_trimmed);
                 if !query_tokens.is_empty() {
                     result.score = (entry.similarity(&query_tokens) * 100.0).round() / 100.0;
                 }

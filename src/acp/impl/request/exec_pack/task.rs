@@ -1113,6 +1113,10 @@ fn execute_model_tool_calls(
     record_index: usize,
     tool_calls: &[Value],
 ) -> Vec<String> {
+    if tool_calls.is_empty() {
+        return Vec::new();
+    }
+
     let mut observations = Vec::new();
     for (idx, tc) in tool_calls.iter().enumerate() {
         let tool_name = tc
@@ -1128,12 +1132,29 @@ fn execute_model_tool_calls(
             .or_else(|| tc.get("function").and_then(|f| f.get("arguments")))
             .cloned()
             .unwrap_or_default();
+
         let observation = format!(
             "[Tool call {idx}] tool={tool_name} args={args} task={task} subtask={subtask} record={rid}",
             idx = idx + 1, tool_name = tool_name, args = tool_args,
             task = task, subtask = subtask_description, rid = record_index,
         );
         observations.push(observation);
+
+        // NOTE: Model-level tool calls extracted from agent responses are not
+        // directly executed here because this function is a sync context without
+        // access to the ToolRegistry, AcpServer, or runtime execution state.
+        // The tool calls are returned as observations and fed back into the
+        // agent's context for the next Think → Act → Observe cycle. Actual
+        // execution happens in the MCP dispatch path (tools_pack.rs:
+        // execute_mcp_tool_call) or the autonomy loop's tool runner.
+        tracing::warn!(
+            target: "exec_pack",
+            tool = %tool_name,
+            idx = idx,
+            task = %task,
+            record = record_index,
+            "model-requested tool call not executed here — forwarded as observation for MCP dispatch (tools_pack::execute_mcp_tool_call) or autonomy loop"
+        );
     }
     observations
 }

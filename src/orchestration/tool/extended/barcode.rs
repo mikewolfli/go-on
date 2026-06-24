@@ -130,7 +130,7 @@ fn select_version(data_len: usize) -> Result<usize> {
     // Byte mode overhead: 4 bits mode indicator + 8 bits (v1-9) character count + data
     // For byte mode: total bits = 4 + 8 + data_len * 8
     let needed_bits = 4 + 8 + data_len * 8;
-    let needed_codewords = (needed_bits + 7) / 8;
+    let needed_codewords = needed_bits.div_ceil(8);
 
     for v in 1..=4 {
         let (capacity, _) = QR_VERSION_DATA[v];
@@ -183,14 +183,14 @@ fn encode_data(data: &[u8], version: usize) -> Result<Vec<u8>> {
     }
 
     // Pad to byte boundary
-    while bits.len() % 8 != 0 {
+    while !bits.len().is_multiple_of(8) {
         bits.push(false);
     }
 
     // Pad to capacity with alternating 0xEC and 0x11
     while bits.len() < capacity * 8 {
         let remaining = capacity * 8 - bits.len();
-        let pad_byte: u8 = if (bits.len() / 8) % 2 == 0 {
+        let pad_byte: u8 = if (bits.len() / 8).is_multiple_of(2) {
             0xEC
         } else {
             0x11
@@ -325,7 +325,7 @@ fn place_finder_at(modules: &mut [Vec<bool>], start_row: usize, start_col: usize
             if row < size && col < size {
                 // Dark if on border (r==0||r==6||c==0||c==6) or in center 3x3 (r>=2&&r<=4&&c>=2&&c<=4)
                 let dark = (r == 0 || r == 6 || c == 0 || c == 6)
-                    || (r >= 2 && r <= 4 && c >= 2 && c <= 4);
+                    || ((2..=4).contains(&r) && (2..=4).contains(&c));
                 modules[row][col] = dark;
             }
         }
@@ -445,11 +445,9 @@ fn place_data(modules: &mut [Vec<bool>], bits: &[bool], version: usize) {
             if row >= 0 && row < size as isize {
                 for col_offset in 0..2 {
                     let c = (col - col_offset) as usize;
-                    if c < size && !reserved[row as usize][c] {
-                        if bit_idx < bits.len() {
-                            modules[row as usize][c] = bits[bit_idx];
-                            bit_idx += 1;
-                        }
+                    if c < size && !reserved[row as usize][c] && bit_idx < bits.len() {
+                        modules[row as usize][c] = bits[bit_idx];
+                        bit_idx += 1;
                     }
                 }
             }
@@ -582,7 +580,7 @@ fn render_svg(modules: &[Vec<bool>], module_size: u32, quiet_zone: u32) -> Strin
     let canvas_size = (size + 2 * quiet_zone) * module_size;
 
     let mut svg = String::new();
-    svg.push_str(&format!(r##"<?xml version="1.0" encoding="UTF-8"?>"##));
+    svg.push_str(r##"<?xml version="1.0" encoding="UTF-8"?>"##);
     svg.push_str(&format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="{}" height="{}" shape-rendering="crispEdges">"##,
         canvas_size, canvas_size

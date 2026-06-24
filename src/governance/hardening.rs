@@ -716,16 +716,27 @@ impl SandboxPolicy {
         }
     }
 
+    /// Check if outbound network operations (HTTP requests, DNS lookups, ping) are allowed.
+    ///
+    /// Network access is restricted at Strict/Isolated levels to prevent data exfiltration.
+    pub fn can_execute_network(level: SandboxLevel) -> bool {
+        match level {
+            SandboxLevel::None => true,
+            SandboxLevel::Basic => true,
+            SandboxLevel::Strict => false,
+            SandboxLevel::Isolated => false,
+        }
+    }
+
     /// Check whether a given operation is allowed at the given sandbox level,
     /// delegating to the specific `can_execute_*` method based on the operation name.
     pub fn check(level: SandboxLevel, operation: &str) -> bool {
         match operation {
-            "read" | "read_file" => Self::can_execute_read_file(level),
-            "search" | "grep" | "find_path" => Self::can_execute_search(level),
-            "write" | "write_file" | "apply_patch" | "create_directory" => {
-                Self::can_execute_write(level)
-            }
-            "shell" | "execute_command" | "terminal" | "bash" => Self::can_execute_shell(level),
+            "read" => Self::can_execute_read_file(level),
+            "search" => Self::can_execute_search(level),
+            "write" => Self::can_execute_write(level),
+            "shell" => Self::can_execute_shell(level),
+            "network" => Self::can_execute_network(level),
             _ => false,
         }
     }
@@ -737,6 +748,7 @@ pub enum GovernanceAction {
     Search,
     Write,
     Shell,
+    Network,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -764,6 +776,7 @@ pub fn enforce_action(policy: &PolicyBundle, action: GovernanceAction) -> Harden
         GovernanceAction::Search => SandboxPolicy::can_execute_search(policy.sandbox_level),
         GovernanceAction::Write => SandboxPolicy::can_execute_write(policy.sandbox_level),
         GovernanceAction::Shell => SandboxPolicy::can_execute_shell(policy.sandbox_level),
+        GovernanceAction::Network => SandboxPolicy::can_execute_network(policy.sandbox_level),
     };
 
     let action_label = match action {
@@ -771,6 +784,7 @@ pub fn enforce_action(policy: &PolicyBundle, action: GovernanceAction) -> Harden
         GovernanceAction::Search => "search",
         GovernanceAction::Write => "write",
         GovernanceAction::Shell => "shell",
+        GovernanceAction::Network => "network",
     };
 
     HardeningDecision {

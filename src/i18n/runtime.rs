@@ -451,7 +451,10 @@ mod tests {
         ];
 
         for lang in ["en-US", "zh-CN", "zh-TW"] {
-            let path = root.join("languages").join(format!("{}.json", lang));
+            let path = root
+                .join("config")
+                .join("languages")
+                .join(format!("{}.json", lang));
             let raw = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
             let json: Value = serde_json::from_str(&raw)

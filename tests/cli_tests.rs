@@ -112,11 +112,21 @@ fn test_cli_config_validation_rejects_missing_config() {
 
 #[test]
 fn test_cli_verbose_mode_output() {
-    let (_, _stderr, status) =
+    let (stdout, stderr, status) =
         run_cli(&["--verbose", "--validate-config", "--config", "/dev/null"]);
     assert!(
         status.success(),
         "Expected verbose mode to succeed, got exit status: {status}"
     );
-    // Verbose mode may produce additional diagnostic output, but no assertion on content.
+    // Verbose mode should produce diagnostic output on stderr.
+    assert!(
+        !stderr.is_empty(),
+        "Expected verbose mode to emit diagnostic output to stderr"
+    );
+    // Ensure stdout or stderr contains a validation message.
+    assert!(
+        stdout.contains("config") || stderr.contains("config"),
+        "Expected verbose mode to mention config validation, \
+         stdout: {stdout}, stderr: {stderr}"
+    );
 }

@@ -164,12 +164,11 @@ pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
         | "goon_provider_test_connection"
         | "goon_provider_test_completion" => ToolRiskClass::HighRiskExecute,
 
-        // Admin tools
-        name if name.starts_with("goon_skill_")
-            || name.starts_with("goon_workflow_run_cancel")
-            || name.starts_with("goon_workflow_run_pause")
-            || name.starts_with("goon_workflow_run_resume") =>
-        {
+        // Admin tools (goon_skill_* prefix catches all skill admin tools)
+        name if name.starts_with("goon_skill_") => ToolRiskClass::Admin,
+
+        // Workflow admin tools (exact match for known workflow control tools)
+        "goon_workflow_run_cancel" | "goon_workflow_run_pause" | "goon_workflow_run_resume" => {
             ToolRiskClass::Admin
         }
 

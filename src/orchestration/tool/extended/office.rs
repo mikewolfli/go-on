@@ -282,9 +282,9 @@ fn build_pptx(slides: &[serde_json::Value]) -> Result<Vec<u8>> {
 "#
     )?;
     for i in 1..=slides.len() {
-        write!(
+        writeln!(
             zip,
-            "  <Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>\n"
+            "  <Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
         )?;
     }
     write!(zip, "</Types>")?;
@@ -312,9 +312,9 @@ fn build_pptx(slides: &[serde_json::Value]) -> Result<Vec<u8>> {
 "#
     )?;
     for i in 0..slides.len() {
-        write!(
+        writeln!(
             zip,
-            "    <p:sldId id=\"{}\" r:id=\"rId{}\"/>\n",
+            "    <p:sldId id=\"{}\" r:id=\"rId{}\"/>",
             i + 256,
             i + 2
         )?;
@@ -340,9 +340,9 @@ fn build_pptx(slides: &[serde_json::Value]) -> Result<Vec<u8>> {
 "#
     )?;
     for i in 0..slides.len() {
-        write!(
+        writeln!(
             zip,
-            "  <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide{}.xml\"/>\n",
+            "  <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide{}.xml\"/>",
             i + 2,
             i + 1
         )?;

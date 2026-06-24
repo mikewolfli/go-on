@@ -255,7 +255,7 @@ fn finalize_repair_action_results(
     records: &[crate::reinforcement::PlannedSubtaskRecord],
     iteration: u32,
 ) {
-    let mut outcome_by_id = HashMap::new();
+    let mut outcome_by_id = HashMap::with_capacity(records.len());
     for record in records {
         outcome_by_id.insert(
             record.id.clone(),
@@ -285,7 +285,7 @@ fn apply_repair_strategy_to_failed_subtasks(
     failed_records: &[crate::reinforcement::PlannedSubtaskRecord],
     context: &mut RepairContext,
 ) -> Vec<Value> {
-    let mut repair_outcomes = Vec::new();
+    let mut repair_outcomes = Vec::with_capacity(failed_records.len());
     for record in failed_records {
         if context.iteration >= context.max_iterations {
             break;

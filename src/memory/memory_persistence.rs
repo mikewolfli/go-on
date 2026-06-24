@@ -26,6 +26,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::Once;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::memory::summarization::{MemorySummarizer, SummarizedMemory};
@@ -1471,6 +1472,14 @@ impl MemoryPersistence {
 
     /// Returns the count of entries in each tier.
     pub fn tier_counts(&self) -> Result<TierCounts> {
+        static COLD_COUNT_WARN: Once = Once::new();
+        COLD_COUNT_WARN.call_once(|| {
+            tracing::warn!(
+                target: "memory_persistence",
+                "cold tier count not tracked in tier_counts() — requires linear shard scan; persist count after compaction"
+            );
+        });
+
         let hot_count = self
             .hot
             .lock()
@@ -1483,9 +1492,8 @@ impl MemoryPersistence {
         Ok(TierCounts {
             hot: hot_count,
             warm: warm_count,
-            cold: 0, // TODO: track cold count from ColdStorage metadata; currently requires a linear
-                     //       scan of all shards which is too expensive for this hot path. After the next
-                     //       cold storage compaction / scan, persist the count and load it here.
+            cold: 0, // Cold count requires a linear scan of all shards, too expensive for this hot path.
+                     // After the next cold storage compaction / scan, persist the count and load it here.
         })
     }
 

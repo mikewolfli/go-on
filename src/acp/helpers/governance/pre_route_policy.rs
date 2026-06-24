@@ -165,6 +165,8 @@ mod tests {
             result.is_ok(),
             "pre-route policies should pass with empty server config"
         );
+        // Confirm evaluation completed without error (result is unit on success)
+        result.unwrap();
     }
 
     #[tokio::test]
@@ -174,6 +176,8 @@ mod tests {
 
         let result = evaluate_pre_route_policies(&server, &params, "tenant-42").await;
         assert!(result.is_ok(), "should work for any tenant id");
+        // Confirm evaluation completed without error
+        result.unwrap();
     }
 
     #[tokio::test]
@@ -195,5 +199,7 @@ mod tests {
 
         let result = evaluate_pre_route_policies(&server, &params, "test-tenant").await;
         assert!(result.is_ok(), "should handle multiple messages");
+        // Confirm evaluation completed without error
+        result.unwrap();
     }
 }

@@ -1,19 +1,9 @@
+use super::send_with_retry;
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use crate::views::security_prefs::{self, SecurityPrefs};
 use crate::widgets::cache::CachedView;
 use std::sync::mpsc;
-
-/// Send a message over a SyncSender with a single try_send attempt.
-/// If the channel is full the message is silently dropped — the next poll cycle
-/// will fetch fresh state from the backend.
-///
-/// No retry loop with thread::sleep is used to avoid blocking the UI thread.
-fn send_with_retry(tx: &mpsc::SyncSender<String>, msg: String) {
-    if tx.try_send(msg).is_err() {
-        eprintln!("WARN: security update dropped (channel full)");
-    }
-}
 
 pub struct SecurityView {
     state: SecurityPrefs,

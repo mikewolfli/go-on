@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 use tracing::warn;
 
@@ -81,8 +80,6 @@ pub struct IdempotencyStore {
 
 /// Internal record for a single idempotency key.
 struct IdempotencyRecord {
-    _key: String,
-    _first_seen_ms: u64,
     last_result: Option<ToolCallResult>,
     conflict_count: u32,
 }
@@ -125,16 +122,9 @@ impl IdempotencyStore {
         }
 
         // New key — insert a placeholder record.
-        let now_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-
         keys.insert(
             composite,
             IdempotencyRecord {
-                _key: key.to_string(),
-                _first_seen_ms: now_ms,
                 last_result: None,
                 conflict_count: 0,
             },

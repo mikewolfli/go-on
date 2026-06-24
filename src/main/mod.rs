@@ -173,8 +173,9 @@ pub(crate) async fn main() {
 
 async fn run() -> Result<()> {
     // GAP-46-12: PluginRegistry is now properly initialized and registered.
-    // SessionCompressor and TransactionScope use targeted #[allow(dead_code)]
-    // for scaffolded API surface — no touch function needed.
+    // SessionCompressor is fully wired into the chat pipeline (compress method
+    // called from session.rs). The #[cfg_attr(not(test), allow(dead_code))]
+    // on SessionCompressor struct covers test-only fields.
     // The registry is lazily populated with built-in plugin manifests
     // and is available for runtime plugin discovery.
     let plugin_registry = crate::orchestration::plugin_system::PluginRegistry::new();

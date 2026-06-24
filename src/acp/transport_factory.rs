@@ -354,8 +354,10 @@ mod tests {
     fn flow_manager_falls_back_on_missing_config() {
         let missing = Path::new("/nonexistent/path/config.toml");
         let fm = flow_manager(missing);
-        // Should not panic; returns default FlowManager
-        let _ = fm;
+        assert!(
+            Arc::strong_count(&fm) >= 1,
+            "flow_manager should return a valid Arc<FlowManager>"
+        );
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub struct MemoryResponseCache {
 
 impl MemoryResponseCache {
     /// Retrieve a cached response by key. Returns `None` if expired or absent.
-    #[allow(dead_code, reason = "reserved for L1 cache read path")]
+    #[expect(dead_code, reason = "public API surface for cache integration")]
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -56,7 +56,7 @@ impl MemoryResponseCache {
     }
 
     /// Return the number of non-expired entries.
-    #[allow(dead_code, reason = "reserved for diagnostics")]
+    #[expect(dead_code, reason = "public API surface for cache integration")]
     pub(crate) fn active_entries(&self) -> usize {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -65,7 +65,7 @@ impl MemoryResponseCache {
     }
 
     /// Insert a response into the cache with TTL. No-op if `ttl_seconds` is 0.
-    #[allow(dead_code, reason = "reserved for L1 cache write path")]
+    #[expect(dead_code, reason = "public API surface for cache integration")]
     pub(crate) fn put(&self, key: String, response_text: String, ttl_seconds: u64) {
         if ttl_seconds == 0 {
             return;

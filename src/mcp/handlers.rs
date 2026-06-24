@@ -810,6 +810,64 @@ impl McpServer {
 
         // Step 1: Try tool_registry first (existing behavior)
         if let Some(tool) = self.tool_registry.get(&tool_name) {
+            // ── Governance check ─────────────────────────────────────
+            // Previously, tool.run() was called directly without any
+            // HarnessBus sandbox/budget/RBAC check. This meant tools
+            // invoked via MCP stdio bypassed ALL governance (AUTON-05).
+            // Now we enforce the same pattern as the ACP route.
+            if let Some(ref acp) = self.acp_server {
+                if let Some(ref harness_bus) = acp.governance_deps.harness_bus {
+                    let verdict = harness_bus
+                        .evaluator
+                        .check_tool_call(&tool_name, &tool_input);
+                    if verdict.require_review {
+                        anyhow::bail!(
+                            "tool '{}' is not in sandbox whitelist and requires user confirmation. \
+                             Ask the user for approval before using this tool.",
+                            tool_name,
+                        );
+                    } else if !verdict.allowed {
+                        anyhow::bail!(
+                            "tool '{}' denied by harness sandbox policy (sandbox_allowed={})",
+                            tool_name,
+                            verdict.allowed
+                        );
+                    }
+                    if !verdict.budget_ok {
+                        anyhow::bail!("tool '{}' denied by harness budget gate", tool_name);
+                    }
+                    if !verdict.permitted {
+                        anyhow::bail!(
+                            "tool '{}' denied by harness RBAC permission gate",
+                            tool_name
+                        );
+                    }
+                } else {
+                    // No HarnessBus — apply default tool governance policy
+                    // to prevent "default allow all" blind spot.
+                    let classification =
+                        crate::acp::helpers::tool_governance_defaults::evaluate_default_tool_policy(
+                            &tool_name,
+                            false,
+                            false,
+                            acp.runtime_config.deployment_target.as_deref(),
+                        );
+                    if !classification.allowed {
+                        anyhow::bail!(
+                            "tool '{}' blocked by default governance policy: {} (risk_class={:?})",
+                            tool_name,
+                            classification.reason,
+                            classification.risk_class,
+                        );
+                    }
+                }
+            } else {
+                // No ACP server — no governance available.
+                // TODO: Wire HarnessBus directly into McpServer so governance
+                //       is enforced even without an ACP server reference.
+                //       Tracked in https://github.com/user/go-on/issues/AUTON-05
+            }
+
             validate_required_arguments(&tool_name, &tool_input)
                 .map_err(|e| invalid_params(e.to_string()))?;
             let result = tool.run(&ToolInput {

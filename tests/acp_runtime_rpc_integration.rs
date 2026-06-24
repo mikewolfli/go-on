@@ -432,55 +432,6 @@ fn assert_blue22_execution_cycle_shape(result: &Value) {
     assert!(result["execution_cycle"]["current_cycle"]["plan_version"].is_string());
 }
 
-#[expect(
-    dead_code,
-    reason = "BLUE45 scaffold — extends assert_blue22_execution_cycle_shape; kept for future runtime-specific tests"
-)]
-fn assert_blue22_runtime_execute_cycle_shape(result: &Value) {
-    assert_blue22_execution_cycle_shape(result);
-    assert!(result["execution_cycle"]["history_summary"]["current_iteration"].is_number());
-    assert!(result["execution_cycle"]["history_summary"]["repair_iterations"].is_number());
-    assert!(result["execution_cycle"]["auto_repair"]["status"].is_string());
-    assert!(result["execution_cycle"]["current_cycle"]["patch_set"].is_array());
-    assert!(result["execution_cycle"]["current_cycle"]["patch_set_size"].is_number());
-    assert!(result["execution_cycle"]["auto_repair"]["target_subtasks"].is_array());
-    assert!(result["execution_cycle"]["auto_repair"]
-        .get("next_cycle_preview")
-        .is_some());
-    assert!(result["multi_agent"].is_object());
-    assert!(result["multi_agent"]["agent_session"].is_object());
-    assert!(result["multi_agent"]["subtask_sessions"].is_array());
-    assert!(result["multi_agent"]["merge_session"].is_object());
-    // B26-S11: task_graph_checkpoint must be present and resumable in execution_cycle
-    assert!(result["execution_cycle"]["task_graph_checkpoint"].is_object());
-    assert!(result["execution_cycle"]["task_graph_checkpoint"]["checkpoint_id"].is_string());
-    assert!(result["execution_cycle"]["task_graph_checkpoint"]["resume_eligible"].is_boolean());
-    assert!(result["execution_cycle"]["task_graph_checkpoint"]["phases_completed"].is_number());
-    // B26-S12: tool_loop (think-act-observe) must be in execution_cycle
-    assert!(result["execution_cycle"]["tool_loop"].is_object());
-    assert!(result["execution_cycle"]["tool_loop"]["phase"].is_string());
-    assert!(result["execution_cycle"]["tool_loop"]["safety_gate_passed"].is_boolean());
-    assert!(result["execution_cycle"]["tool_loop"]["governance"].is_object());
-    // B26-S13: multi_agent must have handoff_protocol + conflict_resolution
-    assert!(result["multi_agent"]["handoff_protocol"].is_object());
-    assert!(result["multi_agent"]["handoff_protocol"]["schema_version"].is_string());
-    assert!(result["multi_agent"]["conflict_resolution"].is_object());
-    assert!(result["multi_agent"]["conflict_resolution"]["resolved"].is_boolean());
-    // B26-S5: memory_graph profile must be present
-    assert!(result["memory_graph"].is_object());
-    assert!(result["memory_graph"]["drift_detected"].is_boolean());
-    // B26-S6: review_adjudication must be structured
-    assert!(result["review_adjudication"].is_object());
-    assert!(result["review_adjudication"]["adjudication"].is_string());
-    assert!(result["review_adjudication"]["evidence_bound"].is_boolean());
-    // B26-S7: replay_scoring (3D) must be present
-    assert!(result["replay_scoring"].is_object());
-    assert!(result["replay_scoring"]["quality_score"].is_number());
-    assert!(result["replay_scoring"]["stability_score"].is_number());
-    assert!(result["replay_scoring"]["cost_score"].is_number());
-    assert!(result["replay_scoring"]["gate_passed"].is_boolean());
-}
-
 fn assert_blue22_change_bundle_shape(result: &Value) {
     assert!(result["change_bundle"].is_object());
     assert!(result["change_bundle"]["files"].is_array());
@@ -501,98 +452,12 @@ struct AdvancedRpcHarness {
     mock_responses: std::collections::HashMap<String, Value>,
 }
 
-#[allow(dead_code)]
-struct TestScenario {
-    #[allow(dead_code)]
-    name: String,
-    requests: Vec<Value>,
-    expected_outcomes: Vec<ScenarioOutcome>,
-}
-
-enum ScenarioOutcome {
-    Success,
-    #[allow(dead_code)]
-    ErrorContains(String),
-}
-
-#[expect(
-    dead_code,
-    reason = "Scaffold for scenario-driven testing; kept for future use"
-)]
-fn load_scenarios_from_dir(dir: &Path) -> Vec<TestScenario> {
-    let mut entries = fs::read_dir(dir)
-        .expect("scenario directory should be readable")
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("ndjson"))
-        .collect::<Vec<_>>();
-    entries.sort();
-
-    entries
-        .into_iter()
-        .map(|path| {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let content = fs::read_to_string(&path).expect("scenario file should be readable");
-            let requests = content
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(|line| {
-                    serde_json::from_str::<Value>(line)
-                        .expect("scenario request should be valid json")
-                })
-                .collect::<Vec<_>>();
-            let expected_outcomes = requests
-                .iter()
-                .map(|_| ScenarioOutcome::Success)
-                .collect::<Vec<_>>();
-
-            TestScenario {
-                name,
-                requests,
-                expected_outcomes,
-            }
-        })
-        .collect()
-}
-
 impl AdvancedRpcHarness {
     fn new(config_path: &Path) -> Self {
         Self {
             inner: RpcHarness::spawn(config_path),
             mock_responses: std::collections::HashMap::new(),
         }
-    }
-
-    #[expect(
-        dead_code,
-        reason = "Scaffold for mock-based testing; kept for future use"
-    )]
-    fn register_mock(&mut self, method: &str, response: Value) {
-        self.mock_responses.insert(method.to_string(), response);
-    }
-
-    #[allow(dead_code)]
-    fn send_request(&mut self, request: Value) -> Result<Value, String> {
-        let method = request
-            .get("method")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "request missing method".to_string())?;
-
-        if let Some(mock) = self.mock_responses.get(method) {
-            return Ok(mock.clone());
-        }
-
-        let id = request
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| format!("request '{}' missing numeric id", method))?;
-
-        let params = request.get("params").cloned();
-        Ok(self.inner.request(id, method, params))
     }
 
     fn send_concurrent(&mut self, request: Value, n: usize) -> Vec<Result<Value, String>> {
@@ -624,45 +489,6 @@ impl AdvancedRpcHarness {
                     .read_response_for_id(start_id + offset as u64, Duration::from_secs(15)))
             })
             .collect()
-    }
-
-    #[expect(
-        dead_code,
-        reason = "Scaffold for scenario-file replay; kept for future use"
-    )]
-    fn run_scenario_file(&mut self, path: &Path) -> Vec<(Value, Result<Value, String>)> {
-        for attempt in 1..=3 {
-            let content = fs::read_to_string(path).expect("scenario file should be readable");
-            let requests: Vec<Value> = content
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(|line| serde_json::from_str(line).expect("scenario line should be valid json"))
-                .collect();
-
-            let mut results = Vec::with_capacity(requests.len());
-            for request in &requests {
-                let result = self.send_request(request.clone());
-                results.push((request.clone(), result));
-            }
-
-            // Check if all results are ok (no "stdout closed" errors)
-            let all_ok = results.iter().all(|(_, r)| r.is_ok());
-            if all_ok || attempt == 3 {
-                return results;
-            }
-            eprintln!(
-                "run_scenario_file attempt {attempt} failed for {:?}, retrying...",
-                path.file_name().unwrap_or_default()
-            );
-            // Re-spawn harness for retry
-            let _config_path = path
-                .parent()
-                .map(|_| std::env::temp_dir().join("config_retry.toml"));
-            // Re-create harness by calling spawn again (inner is replaced)
-            // Note: this requires that the config file still exists from the test setup
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-        unreachable!()
     }
 }
 
@@ -699,85 +525,6 @@ fallback = true
     fs::write(path, config).expect("failed to write config file");
 }
 
-#[expect(
-    dead_code,
-    reason = "Config variant for managed-service deployment target; kept for future tests"
-)]
-fn write_managed_service_config(path: &Path, maintenance: u64, health: u64, shutdown: u64) {
-    write_test_config(path, maintenance, health, shutdown);
-    let mut config = fs::read_to_string(path).expect("failed to read base config");
-    let marker = format!("shutdown_drain_seconds = {}\n", shutdown);
-    let replacement = format!(
-        "shutdown_drain_seconds = {}\ndeployment_target = \"managed-service\"\n",
-        shutdown
-    );
-    config = config.replacen(&marker, &replacement, 1);
-    fs::write(path, config).expect("failed to write managed-service config");
-}
-
-#[expect(
-    dead_code,
-    reason = "Config variant for unknown deployment target; kept for future tests"
-)]
-fn write_unknown_deployment_target_config(path: &Path) {
-    write_test_config(path, 60, 120, 5);
-    let mut config = fs::read_to_string(path).expect("failed to read base config");
-    // Use a deployment_target value that is not in the managed-service inference list.
-    config = config.replacen(
-        "shutdown_drain_seconds = 5\n",
-        "shutdown_drain_seconds = 5\ndeployment_target = \"custom-enterprise-deploy\"\n",
-        1,
-    );
-    fs::write(path, config).expect("failed to write unknown deployment_target config");
-}
-
-#[expect(
-    dead_code,
-    reason = "Config variant with warning flow parameters; kept for future tests"
-)]
-fn write_warning_config(path: &Path) {
-    let config = r#"default_phase = "coding"
-
-[flow]
-name = "Warning Flow"
-phases = ["coding", "review"]
-
-[runtime]
-maintenance_interval_seconds = 30
-health_interval_seconds = 45
-shutdown_drain_seconds = 7
-
-[agents.copilot]
-type = "copilot"
-url = "http://127.0.0.1:8080"
-
-[agents.reviewer_a]
-type = "copilot"
-url = "http://127.0.0.1:8080"
-
-[agents.reviewer_b]
-type = "copilot"
-url = "http://127.0.0.1:8080"
-
-[phases.coding]
-description = "Coding"
-agents = ["copilot"]
-fallback = true
-
-[phases.coding.options]
-autopilot_complexity = "complex"
-full_auto_review_agents = ["reviewer_a", "reviewer_b"]
-
-[phases.review]
-description = "Review"
-agents = ["reviewer_a", "reviewer_b"]
-fallback = false
-"#;
-
-    fs::write(path, config).expect("failed to write warning config file");
-}
-
-#[allow(dead_code)]
 fn write_provider_failure_degrade_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -809,7 +556,6 @@ request_timeout_seconds = 1
     fs::write(path, config).expect("failed to write provider failure config file");
 }
 
-#[allow(dead_code)]
 fn write_review_timeout_collision_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -856,38 +602,6 @@ fallback = false
     fs::write(path, config).expect("failed to write review timeout collision config file");
 }
 
-#[expect(
-    dead_code,
-    reason = "Config variant for shutdown drain validation; kept for future tests"
-)]
-fn write_shutdown_drain_validation_config(path: &Path) {
-    let config = r#"default_phase = "coding"
-
-[flow]
-name = "Shutdown Drain Validation"
-phases = ["coding"]
-
-[runtime]
-maintenance_interval_seconds = 30
-health_interval_seconds = 45
-shutdown_drain_seconds = 5
-
-[agents.slow_main]
-type = "local_slow_approve"
-
-[phases.coding]
-description = "Coding"
-agents = ["slow_main"]
-fallback = true
-
-[phases.coding.options]
-request_timeout_seconds = 10
-"#;
-
-    fs::write(path, config).expect("failed to write shutdown drain validation config file");
-}
-
-#[allow(dead_code)]
 fn write_cache_vector_unavailable_config(path: &Path, cache_path: &str, vector_path: &str) {
     let config = format!(
         r#"default_phase = "coding"
@@ -992,7 +706,6 @@ review_required_checks = []
     fs::write(path, config).expect("failed to write workflow governance config file");
 }
 
-#[allow(dead_code)]
 fn write_workflow_dual_review_config(path: &Path) {
     let config = r#"default_phase = "coding"
 
@@ -1375,15 +1088,6 @@ mod advanced {
         let shutdown = harness.inner.shutdown(6_199);
         assert_eq!(shutdown["result"]["ok"], true);
         harness.inner.wait_for_exit(Duration::from_secs(8));
-    }
-
-    #[test]
-    fn scenario_outcome_error_contains_keeps_error_expectation_path_alive() {
-        let expected = ScenarioOutcome::ErrorContains("blocked".to_string());
-        match expected {
-            ScenarioOutcome::ErrorContains(message) => assert_eq!(message, "blocked"),
-            ScenarioOutcome::Success => panic!("expected error outcome variant"),
-        }
     }
 
     // ── B16-R1: debug_panel.get / debug.panel.get ─────────────────────────────
@@ -2118,7 +1822,6 @@ fn rpc_chat_review_timeout_collision_reports_timeout_and_gate_outcome() {
     }
 }
 
-#[allow(dead_code)]
 fn rpc_chat_review_timeout_collision_body() {
     let temp = tempdir().expect("failed to create temp dir");
     let config_path = temp.path().join("config.toml");

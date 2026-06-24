@@ -124,7 +124,7 @@ fn parse_eml(raw: &str) -> (std::collections::HashMap<String, String>, String) {
                 let decoded = decode_mime_header(&current_header_value);
                 headers
                     .entry(hname.to_lowercase())
-                    .or_insert_with(String::new)
+                    .or_default()
                     .push_str(&decoded);
             }
             current_header_name = Some(name.trim().to_string());
@@ -136,7 +136,7 @@ fn parse_eml(raw: &str) -> (std::collections::HashMap<String, String>, String) {
         let decoded = decode_mime_header(&current_header_value);
         headers
             .entry(hname.to_lowercase())
-            .or_insert_with(String::new)
+            .or_default()
             .push_str(&decoded);
     }
 

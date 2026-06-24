@@ -78,7 +78,7 @@ fn parse_header(lines: &[&str]) -> StepHeader {
             // FILE_NAME('name','time',('author'),('org'),'pv','os','auth');
             if let Some(inner) = extract_parenthesized(trimmed) {
                 let args = split_step_arguments(&inner);
-                if let Some(v) = args.get(0).and_then(|s| extract_step_string(s)) {
+                if let Some(v) = args.first().and_then(|s| extract_step_string(s)) {
                     name = v;
                 }
                 if let Some(v) = args.get(1).and_then(|s| extract_step_string(s)) {

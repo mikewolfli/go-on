@@ -105,19 +105,6 @@ pub struct VotingOutcome {
     pub fusion_method: FusionMethod,
 }
 
-// ── VotingConfig ────────────────────────────────────────────────────────────
-
-/// Configuration for the voting system.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[allow(dead_code, reason = "Reserved for future voting configuration")]
-pub struct VotingConfig {
-    /// Whether to use response fusion (contradiction detection + merging).
-    /// When `true`, the Fusion strategy is preferred if available;
-    /// contradiction detection can still run even when `false`.
-    #[serde(default)]
-    pub use_fusion: bool,
-}
-
 // ── FusionEngine ────────────────────────────────────────────────────────────
 
 /// Engine for fusing multiple model responses into a single coherent output,
@@ -692,43 +679,6 @@ impl MultiModelVoter {
         }
     }
 
-    /// Set the minimum number of voters required.
-    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
-    pub fn with_min_voters(mut self, min: usize) -> Self {
-        self.min_voters = min;
-        self
-    }
-
-    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
-    /// Set the voting strategy.
-    pub fn with_strategy(mut self, strategy: VotingStrategy) -> Self {
-        self.strategy = strategy;
-        self
-    }
-
-    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
-    /// Set the per-model timeout in milliseconds.
-    pub fn with_timeout_ms(mut self, ms: u64) -> Self {
-        self.per_model_timeout_ms = ms;
-        self
-    }
-
-    #[allow(dead_code, reason = "Builder method — reserved for future config use")]
-    /// Add or update a weight for a specific model.
-    pub fn with_weight(mut self, model_name: &str, weight: f64) -> Self {
-        // Evict the oldest entry when at capacity (model not already tracked).
-        if !self.model_weights.contains_key(model_name)
-            && self.model_weights.len() >= self.max_models
-        {
-            // Remove an arbitrary entry since HashMap is unordered.
-            if let Some(key) = self.model_weights.keys().next().cloned() {
-                self.model_weights.remove(&key);
-            }
-        }
-        self.model_weights.insert(model_name.to_string(), weight);
-        self
-    }
-
     // ── Core voting method ──────────────────────────────────────────────
 
     /// Send `prompt` to every agent concurrently, collect results, and produce
@@ -739,7 +689,8 @@ impl MultiModelVoter {
     pub async fn vote(&self, prompt: &str, agents: &[Arc<dyn Agent>]) -> Result<VotingOutcome> {
         let start = Instant::now();
 
-        let votes = self.collect_votes(prompt, agents).await?;
+        let votes =
+            collect_votes(self.min_voters, self.per_model_timeout_ms, prompt, agents).await?;
 
         let total_duration_ms = start.elapsed().as_millis() as u64;
         let consensus = Self::consensus_score(&votes);
@@ -769,7 +720,8 @@ impl MultiModelVoter {
         agents: &[Arc<dyn Agent>],
     ) -> Result<VotingOutcome> {
         let start = Instant::now();
-        let votes = self.collect_votes(prompt, agents).await?;
+        let votes =
+            collect_votes(self.min_voters, self.per_model_timeout_ms, prompt, agents).await?;
         let total_duration_ms = start.elapsed().as_millis() as u64;
         let consensus = Self::consensus_score(&votes);
 
@@ -834,7 +786,8 @@ impl MultiModelVoter {
         prompt: &str,
         agents: &[Arc<dyn Agent>],
     ) -> Result<VotingOutcome> {
-        let responses = self.collect_votes(prompt, agents).await?;
+        let responses =
+            collect_votes(self.min_voters, self.per_model_timeout_ms, prompt, agents).await?;
         let engine = FusionEngine {
             fusion_model_enabled: self.fusion_agent.is_some(),
             model_weights: self.model_weights.clone(),
@@ -845,134 +798,6 @@ impl MultiModelVoter {
         } else {
             Ok(engine.fuse(responses))
         }
-    }
-
-    #[allow(dead_code, reason = "Reserved for future fusion-based voting")]
-    /// Vote with fusion and return detected contradictions separately.
-    ///
-    /// Returns a tuple of `(VotingOutcome, Vec<Contradiction>)` where the
-    /// contradictions are also available as a standalone list for convenience.
-    pub async fn vote_with_fusion_and_detect(
-        &self,
-        prompt: &str,
-        agents: &[Arc<dyn Agent>],
-    ) -> Result<(VotingOutcome, Vec<Contradiction>)> {
-        let outcome = self.vote_with_fusion(prompt, agents).await?;
-        let contradictions = FusionEngine::detect_contradictions(&outcome.all_votes);
-        Ok((outcome, contradictions))
-    }
-
-    #[allow(dead_code, reason = "Reserved: set optional fusion agent")]
-    /// Set the optional fusion agent for LLM-level synthesis.
-    /// When configured, `vote_with_fusion` will call the LLM to synthesize
-    /// responses when no clear majority exists.
-    pub fn with_fusion_agent(mut self, agent: Box<dyn Agent>) -> Self {
-        self.fusion_agent = Some(agent);
-        self
-    }
-
-    #[allow(dead_code, reason = "Reserved: internal vote collection")]
-    /// Internal helper: collect votes from all agents (same core as `vote`).
-    async fn collect_votes(
-        &self,
-        prompt: &str,
-        agents: &[Arc<dyn Agent>],
-    ) -> Result<Vec<ModelVoteResult>> {
-        if agents.is_empty() {
-            return Err(anyhow::anyhow!(tf("voter.no_agents_available", &[])));
-        }
-
-        if agents.len() < self.min_voters {
-            warn!(
-                "MultiModelVoter: only {} agent(s) available, need at least {} — proceeding anyway",
-                agents.len(),
-                self.min_voters
-            );
-        }
-
-        let deadline = std::time::Duration::from_millis(self.per_model_timeout_ms);
-        let mut handles = Vec::with_capacity(agents.len());
-
-        for (idx, agent_ref) in agents.iter().enumerate() {
-            let agent = Arc::clone(agent_ref);
-            let prompt = prompt.to_string();
-
-            let handle = tokio::spawn(async move {
-                let model_name = agent
-                    .default_model()
-                    .map(|m| m.name.clone())
-                    .unwrap_or_else(|| format!("agent-{}", idx));
-
-                let vote_start = Instant::now();
-
-                let response = tokio::time::timeout(deadline, async {
-                    let (tx, mut rx) = mpsc::channel::<String>(256);
-                    let sender = StreamingSender::new(tx);
-
-                    let messages = vec![Message {
-                        role: "user".to_string(),
-                        content: prompt.clone(),
-                    }];
-
-                    agent
-                        .chat(messages, None, None, sender)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("chat failed: {}", e))?;
-
-                    drop(agent);
-                    let mut buf = String::new();
-                    while let Some(token) = rx.recv().await {
-                        buf.push_str(&token);
-                    }
-                    Ok::<String, anyhow::Error>(buf)
-                })
-                .await;
-
-                let latency_ms = vote_start.elapsed().as_millis() as u64;
-
-                match response {
-                    Ok(Ok(text)) => Some(ModelVoteResult {
-                        model_name,
-                        response: text,
-                        confidence: 0.5,
-                        latency_ms,
-                    }),
-                    Ok(Err(e)) => {
-                        warn!(
-                            "MultiModelVoter: agent '{}' returned error: {}",
-                            model_name, e
-                        );
-                        None
-                    }
-                    Err(_elapsed) => {
-                        warn!(
-                            "MultiModelVoter: agent '{}' timed out after {}ms",
-                            model_name, latency_ms
-                        );
-                        None
-                    }
-                }
-            });
-
-            handles.push(handle);
-        }
-
-        let mut votes: Vec<ModelVoteResult> = Vec::with_capacity(agents.len());
-        for handle in handles {
-            match handle.await {
-                Ok(Some(vote)) => votes.push(vote),
-                Ok(None) => {}
-                Err(join_err) => {
-                    warn!("MultiModelVoter: spawned task panicked: {}", join_err);
-                }
-            }
-        }
-
-        if votes.is_empty() {
-            return Err(anyhow::anyhow!(tf("voter.all_models_failed", &[])));
-        }
-
-        Ok(votes)
     }
 
     /// Apply the configured voting strategy to a set of collected votes.
@@ -1267,6 +1092,113 @@ impl Clone for MultiModelVoter {
     }
 }
 
+/// Collect votes from all agents concurrently.
+///
+/// Each agent call is wrapped in `tokio::time::timeout`; models that exceed
+/// the deadline are silently dropped (logged at warn level).
+async fn collect_votes(
+    min_voters: usize,
+    per_model_timeout_ms: u64,
+    prompt: &str,
+    agents: &[Arc<dyn Agent>],
+) -> Result<Vec<ModelVoteResult>> {
+    if agents.is_empty() {
+        return Err(anyhow::anyhow!(tf("voter.no_agents_available", &[])));
+    }
+
+    if agents.len() < min_voters {
+        warn!(
+            "MultiModelVoter: only {} agent(s) available, need at least {} — proceeding anyway",
+            agents.len(),
+            min_voters
+        );
+    }
+
+    let deadline = std::time::Duration::from_millis(per_model_timeout_ms);
+    let mut handles = Vec::with_capacity(agents.len());
+
+    for (idx, agent_ref) in agents.iter().enumerate() {
+        let agent = Arc::clone(agent_ref);
+        let prompt = prompt.to_string();
+
+        let handle = tokio::spawn(async move {
+            let model_name = agent
+                .default_model()
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| format!("agent-{}", idx));
+
+            let vote_start = Instant::now();
+
+            let response = tokio::time::timeout(deadline, async {
+                let (tx, mut rx) = mpsc::channel::<String>(256);
+                let sender = StreamingSender::new(tx);
+
+                let messages = vec![Message {
+                    role: "user".to_string(),
+                    content: prompt.clone(),
+                }];
+
+                agent
+                    .chat(messages, None, None, sender)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("chat failed: {}", e))?;
+
+                drop(agent);
+                let mut buf = String::new();
+                while let Some(token) = rx.recv().await {
+                    buf.push_str(&token);
+                }
+                Ok::<String, anyhow::Error>(buf)
+            })
+            .await;
+
+            let latency_ms = vote_start.elapsed().as_millis() as u64;
+
+            match response {
+                Ok(Ok(text)) => Some(ModelVoteResult {
+                    model_name,
+                    response: text,
+                    confidence: 0.5,
+                    latency_ms,
+                }),
+                Ok(Err(e)) => {
+                    warn!(
+                        "MultiModelVoter: agent '{}' returned error: {}",
+                        model_name, e
+                    );
+                    None
+                }
+                Err(_elapsed) => {
+                    warn!(
+                        "MultiModelVoter: agent '{}' timed out after {}ms",
+                        model_name, latency_ms
+                    );
+                    None
+                }
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    let mut votes: Vec<ModelVoteResult> = Vec::with_capacity(agents.len());
+    for handle in handles {
+        match handle.await {
+            Ok(Some(vote)) => votes.push(vote),
+            Ok(None) => {}
+            Err(join_err) => {
+                warn!("MultiModelVoter: spawned task panicked: {}", join_err);
+            }
+        }
+    }
+
+    if votes.is_empty() {
+        return Err(anyhow::anyhow!(tf("voter.all_models_failed", &[])));
+    }
+
+    Ok(votes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1408,10 +1340,12 @@ mod tests {
             make_agent(2, "gemini", "no"),
         ];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(3)
-            .with_strategy(VotingStrategy::Majority)
-            .with_timeout_ms(5_000);
+        let voter = MultiModelVoter {
+            min_voters: 3,
+            strategy: VotingStrategy::Majority,
+            per_model_timeout_ms: 5_000,
+            ..MultiModelVoter::new()
+        };
 
         let outcome = voter.vote("test prompt", &agents).await.unwrap();
         assert_eq!(outcome.winning_response, "yes");
@@ -1427,10 +1361,12 @@ mod tests {
             make_agent(2, "gemini", "no"),
         ];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(3)
-            .with_strategy(VotingStrategy::Unanimous)
-            .with_timeout_ms(5_000);
+        let voter = MultiModelVoter {
+            min_voters: 3,
+            strategy: VotingStrategy::Unanimous,
+            per_model_timeout_ms: 5_000,
+            ..MultiModelVoter::new()
+        };
 
         let outcome = voter.vote("test prompt", &agents).await.unwrap();
         // Unanimous fails, falls back to majority → "yes" wins
@@ -1447,10 +1383,12 @@ mod tests {
             make_agent(2, "gemini", "answer C"),
         ];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(3)
-            .with_strategy(VotingStrategy::BestOfN)
-            .with_timeout_ms(5_000);
+        let voter = MultiModelVoter {
+            min_voters: 3,
+            strategy: VotingStrategy::BestOfN,
+            per_model_timeout_ms: 5_000,
+            ..MultiModelVoter::new()
+        };
 
         let outcome = voter.vote("test prompt", &agents).await.unwrap();
         assert_eq!(outcome.strategy_used, VotingStrategy::BestOfN);
@@ -1469,10 +1407,12 @@ mod tests {
         let agents: Vec<Arc<dyn Agent>> =
             vec![make_agent(0, "gpt", "yes"), make_failing_agent(1, "bad")];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(1)
-            .with_strategy(VotingStrategy::Majority)
-            .with_timeout_ms(5_000);
+        let voter = MultiModelVoter {
+            min_voters: 1,
+            strategy: VotingStrategy::Majority,
+            per_model_timeout_ms: 5_000,
+            ..MultiModelVoter::new()
+        };
 
         let outcome = voter.vote("test", &agents).await.unwrap();
         assert_eq!(outcome.winning_response, "yes");
@@ -1486,12 +1426,16 @@ mod tests {
             make_agent(1, "claude", "answer B"),
         ];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(2)
-            .with_strategy(VotingStrategy::Weighted)
-            .with_timeout_ms(5_000)
-            .with_weight("gpt", 2.0)
-            .with_weight("claude", 1.0);
+        let mut weights = HashMap::new();
+        weights.insert("gpt".to_string(), 2.0);
+        weights.insert("claude".to_string(), 1.0);
+        let voter = MultiModelVoter {
+            min_voters: 2,
+            strategy: VotingStrategy::Weighted,
+            per_model_timeout_ms: 5_000,
+            model_weights: weights,
+            ..MultiModelVoter::new()
+        };
 
         let outcome = voter.vote("test", &agents).await.unwrap();
         assert_eq!(outcome.strategy_used, VotingStrategy::Weighted);
@@ -1731,10 +1675,12 @@ mod tests {
             make_agent(2, "model-c", "London is the capital of France."),
         ];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(3)
-            .with_strategy(VotingStrategy::Fusion)
-            .with_timeout_ms(5_000);
+        let voter = MultiModelVoter {
+            min_voters: 3,
+            strategy: VotingStrategy::Fusion,
+            per_model_timeout_ms: 5_000,
+            ..MultiModelVoter::new()
+        };
 
         let outcome = voter.vote("test prompt", &agents).await.unwrap();
         assert_eq!(outcome.strategy_used, VotingStrategy::Fusion);
@@ -1753,9 +1699,11 @@ mod tests {
             make_agent(1, "model-b", "Option two is correct."),
         ];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(2)
-            .with_timeout_ms(5_000);
+        let voter = MultiModelVoter {
+            min_voters: 2,
+            per_model_timeout_ms: 5_000,
+            ..MultiModelVoter::new()
+        };
 
         let outcome = voter
             .vote_with_fusion("test prompt", &agents)
@@ -1768,18 +1716,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_vote_with_fusion_and_detect() {
+    async fn test_vote_returns_fusion_outcome() {
         let agents: Vec<Arc<dyn Agent>> = vec![
             make_agent(0, "model-a", "Climate change is real and caused by humans."),
             make_agent(1, "model-b", "Climate change is not real and is natural."),
         ];
 
-        let voter = MultiModelVoter::new()
-            .with_min_voters(2)
-            .with_timeout_ms(5_000);
+        let voter = MultiModelVoter {
+            min_voters: 2,
+            per_model_timeout_ms: 5_000,
+            ..MultiModelVoter::new()
+        };
 
-        let (outcome, _contradictions) = voter
-            .vote_with_fusion_and_detect("test prompt", &agents)
+        let outcome = voter
+            .vote_with_fusion("test prompt", &agents)
             .await
             .unwrap();
         assert_eq!(outcome.strategy_used, VotingStrategy::Fusion);

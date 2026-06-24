@@ -60,7 +60,7 @@ pub(crate) fn pre_check(
         None
     };
 
-    let mut payload = HashMap::new();
+    let mut payload = HashMap::with_capacity(4);
     payload.insert("task_id".to_string(), task_id.to_string());
     payload.insert("agent".to_string(), agent.to_string());
     payload.insert("phase".to_string(), "pre_check".to_string());
@@ -127,7 +127,7 @@ pub(crate) fn post_check(
         corrective_actions_for_summary(summary)
     };
 
-    let mut payload = HashMap::new();
+    let mut payload = HashMap::with_capacity(6);
     payload.insert("task_id".to_string(), task_id.to_string());
     payload.insert("agent".to_string(), agent.to_string());
     payload.insert("success".to_string(), success.to_string());

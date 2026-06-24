@@ -6,8 +6,9 @@ use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
 use super::*;
 use crate::acp::helpers::tool_governance::{
     record_tool_allowed, record_tool_budget_denied, record_tool_harness_sandbox_denied,
-    record_tool_policy_denied, record_tool_rbac_denied,
+    record_tool_rbac_denied,
 };
+use crate::governance::hardening::{task_budget_for_target, BudgetTracker, GovernanceAction};
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::skill_discovery::SkillDiscovery;
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
@@ -205,6 +206,89 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
                 "type": "object"
             }
         }),
+        json!({
+            "name": "workflow_execute",
+            "description": "Execute a workflow task with optional phase. The AI creates and runs an autonomous multi-step plan using available skills to accomplish the given task.",
+            "input_schema": {
+                "type": "object",
+                "required": ["task"],
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task to execute as a workflow"
+                    },
+                    "phase": {
+                        "type": "string",
+                        "description": "Optional phase for multi-phase workflows"
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "workflow_ask",
+            "description": "Ask the AI to complete a task using its full reasoning and available skills. The AI will autonomously determine the best approach using workflow orchestration.",
+            "input_schema": {
+                "type": "object",
+                "required": ["task"],
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task or question to process"
+                    },
+                    "auto_create_skills": {
+                        "type": "boolean",
+                        "description": "Whether to auto-create skills if needed (default: true)"
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "workflow_generate",
+            "description": "Generate a workflow plan for a given task without executing it. Returns the structured plan for review.",
+            "input_schema": {
+                "type": "object",
+                "required": ["task"],
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task to generate a workflow plan for"
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "import_skill",
+            "description": "Import a skill from a remote source (GitHub, URL, etc.). Returns the imported skill record with name, version, and metadata.",
+            "input_schema": {
+                "type": "object",
+                "required": ["source"],
+                "properties": {
+                    "source": {
+                        "type": "object",
+                        "description": "Source configuration for the skill import"
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "github_search_skills",
+            "description": "Search GitHub for go-on compatible skills by query. Returns matching repositories with stars, description, and topics.",
+            "input_schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query to find skills on GitHub"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (1-20, default 10)",
+                        "default": 10
+                    }
+                }
+            }
+        }),
     ];
 
     let registry = global_tool_registry();
@@ -309,7 +393,17 @@ pub(crate) async fn execute_mcp_tool_call(
     let result = async {
     if let Some(harness_bus) = server.governance_deps.harness_bus.as_ref() {
         let verdict = harness_bus.evaluator.check_tool_call(name, arguments);
-        if !verdict.allowed {
+        if verdict.require_review {
+            // Unknown tool — not in sandbox whitelist. The AI should ask
+            // the user for approval before using this tool (inline
+            // confirmation pattern, like zed chat / copilot chat).
+            record_tool_harness_sandbox_denied();
+            anyhow::bail!(
+                "tool '{}' is not in sandbox whitelist and requires user confirmation. \
+                 Ask the user for approval before using this tool.",
+                name,
+            );
+        } else if !verdict.allowed {
             record_tool_harness_sandbox_denied();
             anyhow::bail!(
                 "tool '{}' denied by harness sandbox policy (sandbox_allowed={})",
@@ -363,7 +457,6 @@ pub(crate) async fn execute_mcp_tool_call(
         }
     }
 
-    let policy = policy_bundle_for_target(server.runtime_config.deployment_target.as_deref());
     let budget_scope = budget_scope_key(name, arguments);
     let estimated_tokens = estimate_argument_tokens(arguments);
     let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());
@@ -391,24 +484,22 @@ pub(crate) async fn execute_mcp_tool_call(
         tracker.remaining_tokens()
     };
 
-    let action = governance_action_for_tool(name);
-    let decision = enforce_action(&policy, action);
-    if !decision.allowed {
-        record_tool_policy_denied();
-        anyhow::bail!(
-            "hardening policy denied tool '{}' (policy={}, sandbox={}): {}",
-            name,
-            decision.policy_name,
-            decision.sandbox_level,
-            decision.reason
-        );
-    }
+    // ── Redundant-hardening check removed ─────────────────────────────
+    // The HarnessBus sandbox check above (or the default governance fallback)
+    // already classifies every tool and calls SandboxPolicy::can_execute_*().
+    // The old `governance_action_for_tool()` + `enforce_action()` was a
+    // second, name-heuristic-based classification that duplicated the same
+    // SandboxPolicy calls — and could diverge from the authoritative
+    // per-tool mapping in evaluator.rs.  Removing this layer eliminates the
+    // redundant check and the potential for inconsistent classification.
+    //
+    // Budget tracking (wall-clock, tool-call-count, PUA token consumption)
+    // remains above and applies to all tools regardless of governance path.
+
     record_tool_allowed();
     info!(
-        "hardening allow tool={} policy={} sandbox={} budget_scope={} estimated_tokens={} remaining_tokens={}",
+        "hardening allow tool={} budget_scope={} estimated_tokens={} remaining_tokens={}",
         name,
-        decision.policy_name,
-        decision.sandbox_level,
         budget_scope,
         estimated_tokens,
         remaining_tokens
@@ -437,6 +528,7 @@ pub(crate) async fn execute_mcp_tool_call(
         "goon_metrics_errors_summary" => Ok(metrics_errors_summary_payload(server, arguments)),
         "goon_skill_update" => skill_update_payload(server, arguments),
         "goon_skill_version_list" => skill_version_list_payload(server, arguments),
+        "goon_skill_version_rollback" => skill_version_rollback_payload(server, arguments),
         "prompts_list" => {
             let lang = arguments
                 .get("lang")

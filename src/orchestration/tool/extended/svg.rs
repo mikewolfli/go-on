@@ -46,25 +46,22 @@ impl Tool for SvgReadTool {
         let mut node_count: usize = 0;
 
         for event in &mut parser {
-            match event {
-                Event::Tag(name, _, attributes) => {
-                    element_types.insert(name.to_string());
-                    node_count += 1;
+            if let Event::Tag(name, _, attributes) = event {
+                element_types.insert(name.to_string());
+                node_count += 1;
 
-                    // Capture SVG root element attributes
-                    if name == "svg" {
-                        if let Some(v) = attributes.get("width") {
-                            width = Some(v.to_string());
-                        }
-                        if let Some(v) = attributes.get("height") {
-                            height = Some(v.to_string());
-                        }
-                        if let Some(v) = attributes.get("viewBox") {
-                            view_box = Some(v.to_string());
-                        }
+                // Capture SVG root element attributes
+                if name == "svg" {
+                    if let Some(v) = attributes.get("width") {
+                        width = Some(v.to_string());
+                    }
+                    if let Some(v) = attributes.get("height") {
+                        height = Some(v.to_string());
+                    }
+                    if let Some(v) = attributes.get("viewBox") {
+                        view_box = Some(v.to_string());
                     }
                 }
-                _ => {}
             }
         }
 
@@ -227,7 +224,7 @@ fn parse_opt_f64(val: &serde_json::Value) -> Option<f64> {
 }
 
 #[cfg(feature = "drawing-svg")]
-fn parse_opt_str<'a>(val: &'a serde_json::Value) -> Option<&'a str> {
+fn parse_opt_str(val: &serde_json::Value) -> Option<&str> {
     val.as_str()
 }
 

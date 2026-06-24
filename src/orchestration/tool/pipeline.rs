@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::time::Instant;
 use tracing;
 
+use crate::governance::hardening::SandboxLevel;
 use crate::orchestration::tool::{ToolInput, ToolRegistry};
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,8 @@ pub struct ToolPipeline {
     pub steps: Vec<PipelineStep>,
     /// Error handling strategy applied across all steps.
     pub on_error: PipelineErrorStrategy,
+    /// Sandbox enforcement level (None = no governance checks).
+    pub sandbox_level: Option<SandboxLevel>,
 }
 
 // ---------------------------------------------------------------------------
@@ -83,10 +86,18 @@ impl ToolPipeline {
         let total_start = Instant::now();
         let mut step_results: Vec<PipelineStepResult> = Vec::new();
         let mut all_success = true;
+        let mut tool_calls_used: u32 = 0;
 
         for step in &self.steps {
-            let (results, should_continue) =
-                execute_step(registry, step, context, self.on_error).await;
+            let (results, should_continue) = execute_step(
+                registry,
+                step,
+                context,
+                self.on_error,
+                self.sandbox_level,
+                &mut tool_calls_used,
+            )
+            .await;
 
             let step_success = results.iter().all(|r| r.error.is_none());
             if !step_success {
@@ -112,15 +123,163 @@ impl ToolPipeline {
 // Internal step executor
 // ---------------------------------------------------------------------------
 
+/// Map a tool name to a governance action for pipeline sandbox checks.
+/// This mirrors the evaluator's tool-to-action mapping in a simplified form.
+fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
+    match tool_name {
+        // Read operations
+        "read_file" | "search_files" | "inspect_git_diff" | "list_directory" | "date_time"
+        | "skill_list" | "archive_inspect" | "jsonl_read" | "diagnostics" | "environment_info"
+        | "echo_skill" | "builtin.echo" | "goon_skill_version_list"
+        | "skill-finder" | "chat.execute"
+        | "acp_trace_get" | "acp_debug_panel_get"
+        | "goon_workflow_run_list" | "goon_workflow_run_get"
+        | "goon_metrics_window_query" | "goon_metrics_errors_summary"
+        | "goon_provider_capabilities" | "prompts_list" | "prompts_get"
+        | "workflow_execute" | "workflow_ask" | "workflow_generate"
+        | "import_skill"
+        // ── Diagnostic / environment tools ─────────────────────
+        | "semantic_search" => {
+            "read"
+        }
+        // Search operations
+        "grep" | "find_path" | "find_files" => "search",
+        // Write operations
+        "write_file"
+        | "apply_patch"
+        | "create_directory"
+        | "delete_path"
+        | "move_path"
+        | "copy_path"
+        | "file_move"
+        | "file_delete"
+        | "compress"
+        | "decompress"
+        | "archive_extract"
+        | "jsonl_write"
+        | "csv_write"
+        | "csv_transform"
+        | "toml_write"
+        | "yaml_write"
+        | "game_mod_install"
+        | "game_replay_recorder"
+        | "game_save_manager"
+        | "game_screen_capture"
+        | "goon_skill_update"
+        | "goon_skill_version_rollback"
+        | "goon_workflow_run_cancel"
+        | "goon_workflow_run_pause"
+        | "goon_workflow_run_resume"
+        | "image_generate"
+        | "image_resize"
+        | "skill-creator"
+        | "stl_generate"
+        | "svg_export"
+        | "svg_generate"
+        | "qrcode_generate"
+        | "write_docx"
+        | "write_excel"
+        | "write_ppt" => "write",
+        // Shell operations
+        "run_tests"
+        | "execute_command"
+        | "terminal"
+        | "bash"
+        | "cargo_test"
+        | "shell_exec"
+        | "cargo_check"
+        | "game_auto_grind"
+        | "game_keyboard_input"
+        | "game_launch"
+        | "game_mouse_input"
+        | "skill_execute" => "shell",
+        // Network operations
+        "http_request"
+        | "dns_lookup"
+        | "ping"
+        | "port_scan"
+        | "git"
+        | "github_search_skills"
+        | "rss_read"
+        | "game_monitor"
+        | "goon_provider_test_completion"
+        | "goon_provider_test_connection" => "network",
+        // Unknown — default to read (lowest risk)
+        _ => "read",
+    }
+}
+
+/// Check if a tool is allowed at the given sandbox level.
+fn check_tool_in_pipeline(
+    tool_name: &str,
+    sandbox_level: Option<SandboxLevel>,
+) -> Result<(), String> {
+    let Some(level) = sandbox_level else {
+        return Ok(()); // No sandbox enforcement
+    };
+    let action = pipeline_tool_to_action(tool_name);
+    if crate::governance::hardening::SandboxPolicy::check(level, action) {
+        Ok(())
+    } else {
+        Err(format!(
+            "tool '{}' denied by sandbox policy at level {:?} (action: {})",
+            tool_name, level, action
+        ))
+    }
+}
+
 /// Execute a single [`PipelineStep`] and return its results plus
 /// a flag indicating whether execution should continue.
+///
+/// Governance checks (sandbox + budget) are applied before executing the tool.
 async fn execute_step(
     registry: &ToolRegistry,
     step: &PipelineStep,
     _context: &Value,
     strategy: PipelineErrorStrategy,
+    sandbox_level: Option<SandboxLevel>,
+    tool_calls_used: &mut u32,
 ) -> (Vec<PipelineStepResult>, bool) {
     let PipelineStep { tool_name, input } = step;
+
+    // ── Sandbox governance check ──────────────────────────────────────────
+    if let Err(e) = check_tool_in_pipeline(tool_name, sandbox_level) {
+        tracing::warn!(
+            target: "tool_pipeline",
+            tool = %tool_name,
+            error = %e,
+            "pipeline step blocked by sandbox policy"
+        );
+        let result = PipelineStepResult {
+            tool_name: tool_name.to_string(),
+            output: None,
+            error: Some(e),
+            duration_ms: 0,
+        };
+        let should_continue = strategy == PipelineErrorStrategy::Continue;
+        return (vec![result], should_continue);
+    }
+
+    // ── Budget governance: max 256 tool calls per pipeline ────────────────
+    *tool_calls_used += 1;
+    if *tool_calls_used > 256 {
+        let result = PipelineStepResult {
+            tool_name: tool_name.to_string(),
+            output: None,
+            error: Some("pipeline budget exceeded: max 256 tool calls per pipeline".to_string()),
+            duration_ms: 0,
+        };
+        return (vec![result], false);
+    }
+
+    tracing::info!(
+        target: "tool_pipeline",
+        tool = %tool_name,
+        sandbox = ?sandbox_level,
+        tool_calls_used = *tool_calls_used,
+        "pipeline step — governance check passed"
+    );
+
     let result = run_single_tool(registry, tool_name, input).await;
     let should_continue = result.error.is_none() || strategy == PipelineErrorStrategy::Continue;
     (vec![result], should_continue)
@@ -243,6 +402,7 @@ mod tests {
                 input: json!({}),
             }],
             on_error: PipelineErrorStrategy::Continue,
+            sandbox_level: None,
         };
 
         let result = pipeline.execute(&registry, &json!({})).await;

@@ -134,10 +134,7 @@ pub(crate) fn assemble_agent_options(
             }
             tools
         };
-        let all_tools: Vec<Value> = skill_tools
-            .into_iter()
-            .chain(builtin_tools.into_iter())
-            .collect();
+        let all_tools: Vec<Value> = skill_tools.into_iter().chain(builtin_tools).collect();
         if !all_tools.is_empty() {
             base_agent_options.insert("tools".to_string(), json!(all_tools));
             base_agent_options.insert("tool_choice".to_string(), json!("auto"));

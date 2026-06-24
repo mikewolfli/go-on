@@ -48,23 +48,3 @@ impl I18n {
         }
     }
 }
-
-// Kept for backward compatibility. The string data was migrated to
-// static arrays in en.rs / zh_cn.rs / zh_tw.rs, but external consumers
-// of the crate may still use `tr!()` at call sites.
-//
-// F-GAP-58: The languages/en-US.json has 659 symbols but the GUI i18n only has ~30 strings.
-//           This gap should be addressed incrementally by adding GUI-localized strings
-//           for operational messages used by the backend.
-#[allow(unused_macros)]
-macro_rules! tr {
-    ($_en:expr, $en_val:expr, $_cn:expr, $cn_val:expr, $_tw:expr, $tw_val:expr) => {{
-        let mut m = std::collections::HashMap::new();
-        m.insert($crate::i18n::Lang::En, $en_val);
-        m.insert($crate::i18n::Lang::ZhCn, $cn_val);
-        m.insert($crate::i18n::Lang::ZhTw, $tw_val);
-        m
-    }};
-}
-#[allow(unused_imports)]
-pub(crate) use tr;

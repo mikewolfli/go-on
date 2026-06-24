@@ -1,4 +1,5 @@
 use super::*;
+use crate::governance::hardening::{AuditLogger, BudgetTracker};
 
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
 static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();

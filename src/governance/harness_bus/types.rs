@@ -392,6 +392,7 @@ pub struct Constraint {
 #[derive(Debug, Clone)]
 pub struct ToolVerdict {
     pub allowed: bool,
+    pub require_review: bool,
     pub idempotent: bool,
     pub budget_ok: bool,
     pub permitted: bool,

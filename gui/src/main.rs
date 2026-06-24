@@ -372,16 +372,10 @@ fn make_icon() -> egui::IconData {
     .clone()
 }
 
-/// The `has_app_icon` cfg flag is never set, so this always returns `None`.
-/// Keeping the function avoids changing call sites if the feature is added later.
-fn load_embedded_icon() -> Option<egui::IconData> {
-    None
-}
-
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
     auto_detect_proxy().await;
-    let icon = load_embedded_icon().unwrap_or_else(make_icon);
+    let icon = make_icon();
     let config = crate::config::load_app_config();
     let title = app::GoOnApp::detect_initial_window_title(&config);
     let build_options = |renderer: eframe::Renderer| eframe::NativeOptions {

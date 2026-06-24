@@ -24,6 +24,7 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
@@ -222,9 +223,9 @@ pub struct SecurityAdvisorAgent {
     /// In-memory alert buffer (for building the daily digest).
     alerts: Arc<Mutex<Vec<SecurityAlert>>>,
     /// Count of auto-generated patches.
-    patches_generated: Arc<Mutex<usize>>,
+    patches_generated: AtomicU64,
     /// Count of auto-applied patches.
-    patches_applied: Arc<Mutex<usize>>,
+    patches_applied: AtomicU64,
     /// Registered WebSocket senders for push alerts.
     ws_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<SecurityAlert>>>>,
     /// Timestamp of the last digest.
@@ -237,8 +238,8 @@ impl SecurityAdvisorAgent {
         Self {
             config,
             alerts: Arc::new(Mutex::new(Vec::new())),
-            patches_generated: Arc::new(Mutex::new(0)),
-            patches_applied: Arc::new(Mutex::new(0)),
+            patches_generated: AtomicU64::new(0),
+            patches_applied: AtomicU64::new(0),
             ws_senders: Arc::new(Mutex::new(Vec::new())),
             last_digest_time: Arc::new(Mutex::new(None)),
         }
@@ -380,16 +381,14 @@ impl SecurityAdvisorAgent {
             confidence,
         };
 
-        let mut count = self.patches_generated.lock().await;
-        *count += 1;
+        self.patches_generated.fetch_add(1, Ordering::Relaxed);
 
         Ok(patch)
     }
 
     /// Mark a patch as applied (increments the applied counter).
     pub async fn record_patch_applied(&self) {
-        let mut count = self.patches_applied.lock().await;
-        *count += 1;
+        self.patches_applied.fetch_add(1, Ordering::Relaxed);
     }
 
     // ── WebSocket alert push ────────────────────────────────────────────
@@ -554,8 +553,8 @@ impl SecurityAdvisorAgent {
 
         let recommendations = self.generate_recommendations(&alerts);
 
-        let patches_gen = *self.patches_generated.lock().await;
-        let patches_app = *self.patches_applied.lock().await;
+        let patches_gen = self.patches_generated.load(Ordering::Relaxed) as usize;
+        let patches_app = self.patches_applied.load(Ordering::Relaxed) as usize;
 
         let digest = SecurityDigest {
             date: now,
@@ -724,12 +723,12 @@ impl SecurityAdvisorAgent {
 
     /// Return the number of auto-generated patches.
     pub async fn patches_generated_count(&self) -> usize {
-        *self.patches_generated.lock().await
+        self.patches_generated.load(Ordering::Relaxed) as usize
     }
 
     /// Return the number of auto-applied patches.
     pub async fn patches_applied_count(&self) -> usize {
-        *self.patches_applied.lock().await
+        self.patches_applied.load(Ordering::Relaxed) as usize
     }
 
     /// Return the time of the last digest.
@@ -1030,14 +1029,10 @@ mod tests {
     #[test]
     fn test_patches_counters() {
         let advisor = SecurityAdvisorAgent::new(SecurityAdvisorConfig::default());
-        let mut patches_gen = advisor.patches_generated.blocking_lock();
-        let mut patches_app = advisor.patches_applied.blocking_lock();
-        *patches_gen = 5;
-        *patches_app = 3;
-        drop(patches_gen);
-        drop(patches_app);
+        advisor.patches_generated.store(5, Ordering::Relaxed);
+        advisor.patches_applied.store(3, Ordering::Relaxed);
 
-        assert_eq!(*advisor.patches_generated.blocking_lock(), 5);
-        assert_eq!(*advisor.patches_applied.blocking_lock(), 3);
+        assert_eq!(advisor.patches_generated.load(Ordering::Relaxed), 5);
+        assert_eq!(advisor.patches_applied.load(Ordering::Relaxed), 3);
     }
 }

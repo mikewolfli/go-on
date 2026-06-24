@@ -392,6 +392,10 @@ pub fn load_app_config() -> AppConfig {
         save_to_toml(&config);
     }
 
+    // Flush any pending macOS Keychain ACL updates in a single batch,
+    // so the user only gets prompted for their keychain password once.
+    crate::keyring_util::flush_pending_acl_updates();
+
     // Allow env var override of backend URL
     if let Ok(env_url) = std::env::var("GO_ON_BACKEND_URL") {
         let env_url = env_url.trim().to_string();

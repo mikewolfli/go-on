@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use tokio::time::interval;
 use tracing::{info, warn};
 
 use crate::i18n::runtime::tf;
-use crate::orchestration::skill_import::parse_skill_md;
+use crate::orchestration::skill_import::{parse_skill_md, SkillImportManifest};
 
 use super::execution::{
     extract_intent_tokens, name_similarity, normalize_name, semantic_similarity, PromptBasedSkill,
@@ -634,25 +634,17 @@ impl SkillRegistry {
                 }
             };
 
-            // ── Hot-reload: if skill already registered with same name AND the
-            // file is unchanged, skip. But if the file IS modified, we re-register
-            // (which replaces the old skill). We detect this by checking mtime
-            // above. If we get here, the file has changed (or is new).
-
-            // Skip if already registered — produce a clear warning about name conflicts
+            // ── Hot-reload check ──
+            // If we get here, the file's mtime has changed (or it's a new file).
+            // If the skill name is already registered, this is a hot-reload (update).
+            // Unregister the old version first so the new one can be registered below.
             if self.skills.contains_key(&manifest.name) {
-                let conflict_msg = format!(
-                    "Skill '{}' from '{}' conflicts with an already-registered skill. \
-                     Built-in skills and previously imported skills take precedence. \
-                     Rename the skill in '{}' to avoid the conflict.",
+                info!(
+                    "Hot-reloading skill '{}' from '{}' (file modified)",
                     manifest.name,
-                    md_path.display(),
                     md_path.display()
                 );
-                warn!("{}", conflict_msg);
-                errors.push(conflict_msg);
-                skipped += 1;
-                continue;
+                self.unregister(&manifest.name);
             }
 
             // Create PromptBasedSkill from the parsed manifest
@@ -709,6 +701,17 @@ impl SkillRegistry {
             errors,
         })
     }
+
+    /// Returns the known file mtimes for hot-reload tracking.
+    /// Used by the background refresh task to scan outside the write lock.
+    pub fn known_skill_mtimes(&self) -> HashMap<PathBuf, SystemTime> {
+        self.skill_file_mtimes.clone()
+    }
+
+    /// Returns the set of currently registered skill names.
+    pub fn known_skill_names(&self) -> HashSet<String> {
+        self.skills.keys().cloned().collect()
+    }
 }
 
 /// Returns the default path for Zed's agent skills directory (`~/.agents/skills`).
@@ -729,6 +732,113 @@ pub struct LocalSkillDiscoverySummary {
     pub skipped: usize,
     /// Any error messages encountered during discovery.
     pub errors: Vec<String>,
+}
+
+/// Internal parsed result from scanning a single SKILL.md/agent.md file.
+struct ParsedSkillFile {
+    md_path: PathBuf,
+    current_mtime: SystemTime,
+    manifest: SkillImportManifest,
+}
+
+/// Scan a directory and parse all SKILL.md/agent.md files that are new or
+/// have changed (based on `known_mtimes`). Returns the parsed results along
+/// with any error messages and the number of skipped (unchanged) files.
+///
+/// This function performs no registration — it is purely I/O + parsing,
+/// designed to be called outside a registry write lock.
+fn scan_skills_directory(
+    dir: &Path,
+    known_mtimes: &HashMap<PathBuf, SystemTime>,
+) -> (Vec<ParsedSkillFile>, Vec<String>, usize) {
+    let mut parsed: Vec<ParsedSkillFile> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut skipped = 0usize;
+
+    if !dir.exists() {
+        return (parsed, errors, 0);
+    }
+
+    let read_dir = match fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(e) => {
+            errors.push(format!("failed to read '{}': {}", dir.display(), e));
+            return (parsed, errors, 0);
+        }
+    };
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let skill_md_path = path.join("SKILL.md");
+        let agent_md_path = path.join("agent.md");
+
+        let md_path = if skill_md_path.exists() {
+            skill_md_path
+        } else if agent_md_path.exists() {
+            agent_md_path
+        } else {
+            skipped += 1;
+            continue;
+        };
+
+        let current_mtime = match fs::metadata(&md_path).and_then(|meta| meta.modified()) {
+            Ok(mtime) => mtime,
+            Err(e) => {
+                warn!(
+                    "Failed to read metadata for {}: {} — will re-parse",
+                    md_path.display(),
+                    e
+                );
+                SystemTime::UNIX_EPOCH
+            }
+        };
+
+        if let Some(prev_mtime) = known_mtimes.get(&md_path) {
+            if *prev_mtime == current_mtime {
+                skipped += 1;
+                continue;
+            }
+        }
+
+        let content = match fs::read(&md_path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to read {}: {}", md_path.display(), e);
+                errors.push(format!("{}: read error: {}", md_path.display(), e));
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let manifest = match parse_skill_md(&content) {
+            Ok(m) => m,
+            Err(e) => {
+                let err_msg = format!(
+                    "{}: invalid SKILL.md frontmatter — {}. \
+                     Ensure the file starts with '---' followed by valid YAML \
+                     with 'name:' and 'description:' fields.",
+                    md_path.display(),
+                    e
+                );
+                warn!("{}", err_msg);
+                errors.push(err_msg);
+                skipped += 1;
+                continue;
+            }
+        };
+
+        parsed.push(ParsedSkillFile {
+            md_path,
+            current_mtime,
+            manifest,
+        });
+    }
+
+    (parsed, errors, skipped)
 }
 
 /// Spawn a background tokio task that periodically rescans `~/.agents/skills/`
@@ -770,30 +880,101 @@ pub fn spawn_skill_refresh_task(
         ticker.tick().await;
         loop {
             ticker.tick().await;
+
+            // Phase 1: Read current known mtimes under a read lock, then drop it.
+            let known_mtimes = match registry.read() {
+                Ok(guard) => guard.known_skill_mtimes(),
+                Err(e) => {
+                    warn!(
+                        "Background skill refresh: failed to read-lock registry: {}",
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            // Phase 2: Scan the filesystem and parse changed files outside
+            // any lock. This avoids holding the write lock during I/O.
+            let (parsed_files, errors, _skipped) = scan_skills_directory(&dir, &known_mtimes);
+
+            for err in &errors {
+                warn!("Background skill refresh warning: {}", err);
+            }
+
+            if parsed_files.is_empty() {
+                continue;
+            }
+
+            // Phase 3: Briefly acquire the write lock to apply changes.
             match registry.write() {
-                Ok(mut reg) => match reg.discover_and_register_local_skills(Some(&dir)) {
-                    Ok(summary) => {
-                        if summary.registered > 0 {
+                Ok(mut guard) => {
+                    let mut registered = 0usize;
+                    for pf in parsed_files {
+                        // Hot-reload: unregister if the name is already taken
+                        if guard.known_skill_names().contains(&pf.manifest.name) {
                             info!(
-                                "Background skill refresh: registered {} new skill(s) from {}",
-                                summary.registered,
-                                dir.display()
+                                "Hot-reloading skill '{}' from '{}'",
+                                pf.manifest.name,
+                                pf.md_path.display()
                             );
+                            guard.unregister(&pf.manifest.name);
                         }
-                        if !summary.errors.is_empty() {
-                            for err in &summary.errors {
-                                warn!("Background skill refresh warning: {}", err);
+
+                        let prompt_text = pf
+                            .manifest
+                            .prompt_template
+                            .clone()
+                            .unwrap_or_else(|| pf.manifest.description.clone());
+
+                        let skill = PromptBasedSkill {
+                            name: pf.manifest.name.clone(),
+                            description: pf.manifest.description.clone(),
+                            prompt_template: prompt_text,
+                            input_schema: HashMap::new(),
+                            timeout_secs: 30,
+                            max_retries: 2,
+                        };
+
+                        match guard.register(Arc::new(skill)) {
+                            Ok(()) => {
+                                registered += 1;
+                                guard.skill_file_mtimes.insert(pf.md_path, pf.current_mtime);
+                                guard.prompt_skill_data.insert(
+                                    pf.manifest.name.clone(),
+                                    SavedPromptSkill {
+                                        name: pf.manifest.name.clone(),
+                                        description: pf.manifest.description,
+                                        prompt_template: pf
+                                            .manifest
+                                            .prompt_template
+                                            .unwrap_or_default(),
+                                        input_schema: HashMap::new(),
+                                        created_at: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs()
+                                            as i64,
+                                    },
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to register skill '{}' from {}: {}",
+                                    pf.manifest.name,
+                                    pf.md_path.display(),
+                                    e
+                                );
                             }
                         }
                     }
-                    Err(e) => {
-                        warn!(
-                            "Background skill refresh failed for '{}': {}",
-                            dir.display(),
-                            e
+                    if registered > 0 {
+                        info!(
+                            "Background skill refresh: registered {} new skill(s) from {}",
+                            registered,
+                            dir.display()
                         );
                     }
-                },
+                }
                 Err(e) => {
                     warn!(
                         "Background skill refresh: failed to write-lock registry: {}",

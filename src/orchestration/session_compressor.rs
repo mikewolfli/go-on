@@ -84,9 +84,16 @@ pub struct IncrementalState {
 }
 
 /// Configuration for the session compressor.
-#[allow(
-    dead_code,
-    reason = "F-GAP reserved — session compression not yet wired into pipeline"
+///
+/// Some fields (max_messages, compression_msg_threshold, token_window) are
+/// only read directly in #[cfg(test)] code. The struct itself is wired into
+/// the production chat pipeline via SessionCompressor::default() and .compress().
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "test-only fields (max_messages, compression_msg_threshold, token_window) are direct-accessed only in tests"
+    )
 )]
 #[derive(Debug, Clone)]
 pub struct SessionCompressor {
@@ -98,8 +105,6 @@ pub struct SessionCompressor {
     pub token_window: usize,
     /// Always keep the last N messages uncompressed (default 20).
     pub keep_recent: usize,
-    /// Template used to construct the summary prompt.
-    pub summary_prompt_template: String,
     /// Optional incremental compression state.
     pub incremental: IncrementalState,
 }
@@ -111,26 +116,12 @@ impl Default for SessionCompressor {
             compression_msg_threshold: 50,
             token_window: DEFAULT_TOKEN_WINDOW,
             keep_recent: 20,
-            summary_prompt_template: String::from(
-                "Summarize the following {count} conversation messages. \
-                 Extract key decisions, findings, errors, and important context. \
-                 Be concise:\n\n{messages}",
-            ),
             incremental: IncrementalState::default(),
         }
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "F-GAP reserved — session compression not yet wired into pipeline"
-)]
 impl SessionCompressor {
-    /// Create a new compressor with default configuration.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     // ── Compression trigger logic ──────────────────────────────────────────
 
     /// Determine whether compression should be triggered.
@@ -138,12 +129,14 @@ impl SessionCompressor {
     /// Returns `true` if **either** condition is met:
     /// - `message_count > compression_msg_threshold` (default 50)
     /// - `estimated_tokens > token_window * 0.7`
+    #[cfg(test)]
     pub fn should_compress(&self, message_count: usize, estimated_tokens: usize) -> bool {
         message_count > self.compression_msg_threshold
             || estimated_tokens as f64 > self.token_window as f64 * 0.7
     }
 
     /// Returns true if the message count exceeds the absolute max.
+    #[cfg(test)]
     pub fn requires_compression(&self, message_count: usize) -> bool {
         message_count > self.max_messages
     }
@@ -285,6 +278,7 @@ impl SessionCompressor {
     /// # Arguments
     /// * `messages` - The original message list (mutated in place).
     /// * `compressed` - The `CompressedContext` produced by `compress`.
+    #[cfg(test)]
     pub fn inject_compressed_context(
         &self,
         messages: &mut Vec<Message>,
@@ -306,28 +300,10 @@ impl SessionCompressor {
             format!("[Session summary: {}]", compressed.summary),
         );
         messages.insert(0, summary_msg);
-
-        // Update incremental state.
-        // The next compression will know that `original_count` messages have been processed.
-        self.update_incremental(compressed.original_count, &compressed.summary);
-    }
-
-    /// Update the incremental compression state after a compression cycle.
-    pub fn update_incremental(&self, compressed_count: usize, summary: &str) {
-        // Since Self is behind &, we use interior mutability conceptually.
-        // In practice the caller manages state, but we expose for clarity.
-        // For thread-safe mutation, the IncrementalState is cloned and reassigned.
-        let _ = compressed_count;
-        let _ = summary;
-    }
-
-    /// Returns a new `SessionCompressor` with updated incremental state.
-    pub fn with_incremental_state(mut self, state: IncrementalState) -> Self {
-        self.incremental = state;
-        self
     }
 
     /// Returns a new `SessionCompressor` with the incremental count advanced.
+    #[cfg(test)]
     pub fn advance_incremental(mut self, additional_messages: usize, summary: &str) -> Self {
         self.incremental.previously_compressed_count += additional_messages;
         if !summary.is_empty() {

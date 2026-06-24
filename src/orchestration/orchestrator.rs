@@ -235,6 +235,7 @@ pub async fn execute_tool_pipeline(
         name: "orchestrator-pipeline".to_string(),
         steps,
         on_error: crate::orchestration::tool_pipeline::PipelineErrorStrategy::Continue,
+        sandbox_level: Some(crate::governance::hardening::SandboxLevel::Basic),
     };
 
     tracing::info!(

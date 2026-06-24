@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::acp::r#impl::chat::{RiskAssessment, RiskVotePolicy};
 use crate::agent::Agent;
@@ -101,30 +101,50 @@ pub(crate) fn filter_agents_by_model(
 
     // Prefix-match filtering for specific model strings.
     if model_is_specific {
-        let agents_before = agents.clone();
         let model = model_str.as_deref().unwrap_or("");
         let model_lower = model.to_ascii_lowercase();
 
-        agents.retain(|(name, _)| {
-            let name_lower = name.to_ascii_lowercase();
+        // Track the original agent count before filtering.
+        // If filtering removes all agents, we restore the originals
+        // so the caller still has phase candidate agents to use.
+        let before = std::mem::take(agents);
 
-            if model_lower.starts_with(&name_lower) && model_lower.contains('/') {
-                // Qualified model ID like "siliconflow/deepseek-..." –
-                // only match if the agent name also appears after '/',
-                // or the agent name IS the full model string.
-                name_lower.starts_with(&model_lower)
-                    || model_lower.ends_with(&format!("/{}", name_lower))
-            } else {
-                model_lower.starts_with(&name_lower) || name_lower.starts_with(&model_lower)
-            }
-        });
+        agents.extend(
+            before
+                .iter()
+                .filter(|(name, _)| {
+                    let name_lower = name.to_ascii_lowercase();
+
+                    if model_lower.starts_with(&name_lower) && model_lower.contains('/') {
+                        // Qualified model ID like "siliconflow/deepseek-..." —
+                        // only match if the agent name also appears after '/',
+                        // or the agent name IS the full model string.
+                        name_lower.starts_with(&model_lower)
+                            || model_lower.ends_with(&format!("/{}", name_lower))
+                    } else {
+                        model_lower.starts_with(&name_lower) || name_lower.starts_with(&model_lower)
+                    }
+                })
+                .cloned(),
+        );
+
+        let removed_any = agents.len() < before.len();
 
         if agents.is_empty() {
+            // Restore original agents — no model matched, fall back to phase candidates.
+            // Clone is acceptable here since this is a rare fallback path.
+            agents.extend(before.iter().cloned());
             warn!(
                 model = %model,
                 "model filter did not match any agent, falling back to phase candidate agents"
             );
-            *agents = agents_before;
+        }
+
+        if removed_any && !agents.is_empty() {
+            debug!(
+                "filter_agents_by_model: removed {} agent(s)",
+                before.len() - agents.len()
+            );
         }
     }
 

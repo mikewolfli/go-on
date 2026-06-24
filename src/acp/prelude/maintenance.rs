@@ -3,10 +3,7 @@
 //! Tracks system maintenance cycles, including cleanup of expired entries,
 //! vacuum operations, and error reporting.
 
-use std::sync::Mutex as StdMutex;
-
 use serde::Serialize;
-use tracing::warn;
 
 use crate::acp::prelude::functions::now_ts;
 
@@ -50,7 +47,7 @@ pub struct MaintenanceSnapshot {
 /// Maintenance tracker for system maintenance
 #[derive(Debug)]
 pub struct MaintenanceTracker {
-    inner: StdMutex<MaintenanceSnapshot>,
+    snapshot: MaintenanceSnapshot,
 }
 
 impl Default for MaintenanceTracker {
@@ -64,7 +61,7 @@ impl MaintenanceTracker {
     pub fn new() -> Self {
         let now = now_ts();
         Self {
-            inner: StdMutex::new(MaintenanceSnapshot {
+            snapshot: MaintenanceSnapshot {
                 running: false,
                 cycles_total: 0,
                 last_started_at: None,
@@ -77,81 +74,55 @@ impl MaintenanceTracker {
                 tasks_completed: 0,
                 tasks_failed: 0,
                 maintenance_in_progress: false,
-            }),
+            },
         }
     }
 
     /// Get a snapshot of the maintenance state
     pub fn snapshot(&self) -> MaintenanceSnapshot {
-        self.inner
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+        self.snapshot.clone()
     }
 
     /// Begin maintenance
-    pub fn begin_maintenance(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.maintenance_in_progress = true;
+    pub fn begin_maintenance(&mut self) {
+        self.snapshot.maintenance_in_progress = true;
     }
 
     /// Note that maintenance has started
-    pub fn note_started(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.running = true;
-        guard.last_started_at = Some(now_ts());
-        guard.last_error = None;
+    pub fn note_started(&mut self) {
+        self.snapshot.running = true;
+        self.snapshot.last_started_at = Some(now_ts());
+        self.snapshot.last_error = None;
     }
 
     /// End maintenance
-    pub fn end_maintenance(&self) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.maintenance_in_progress = false;
-        guard.last_maintenance = now_ts();
-        guard.next_maintenance_due = guard.last_maintenance + guard.maintenance_interval;
+    pub fn end_maintenance(&mut self) {
+        self.snapshot.maintenance_in_progress = false;
+        self.snapshot.last_maintenance = now_ts();
+        self.snapshot.next_maintenance_due =
+            self.snapshot.last_maintenance + self.snapshot.maintenance_interval;
     }
 
     /// Note that maintenance has failed
-    pub fn note_failed(&self, error: &str) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.last_error = Some(error.to_string());
+    pub fn note_failed(&mut self, error: &str) {
+        self.snapshot.last_error = Some(error.to_string());
     }
 
     /// Record maintenance cycle completion
-    pub fn note_completed(&self, memory_removed: usize) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.running = false;
-        guard.last_completed_at = Some(now_ts());
-        guard.last_memory_expired_removed = memory_removed as u64;
-        guard.last_error = None;
-        guard.cycles_total += 1;
+    pub fn note_completed(&mut self, memory_removed: usize) {
+        self.snapshot.running = false;
+        self.snapshot.last_completed_at = Some(now_ts());
+        self.snapshot.last_memory_expired_removed = memory_removed as u64;
+        self.snapshot.last_error = None;
+        self.snapshot.cycles_total += 1;
     }
 
     /// Record health check result
-    pub fn record_health_check(&self, healthy: bool) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+    pub fn record_health_check(&mut self, healthy: bool) {
         if healthy {
-            guard.tasks_completed += 1;
+            self.snapshot.tasks_completed += 1;
         } else {
-            guard.tasks_failed += 1;
+            self.snapshot.tasks_failed += 1;
         }
     }
 }

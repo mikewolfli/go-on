@@ -40,52 +40,78 @@ use std::collections::BTreeMap;
 // ║  This adds the standard system partition groups to the keychain item's   ║
 // ║  ACL, allowing any process in those groups (including our headless       ║
 // ║  backend) to read the password without prompting.                        ║
+// ║                                                                          ║
+// ║  OPTIMIZATION: accounts are batched and flushed once via                     ║
+// ║  `flush_pending_acl_updates()` instead of running `security` once         ║
+// ║  per key. This avoids N keychain password dialogs (one per provider).    ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
 #[cfg(target_os = "macos")]
 mod platform {
     use anyhow::Result;
     use std::process::Command;
+    use std::sync::Mutex;
 
-    /// Configure the keychain item's ACL so ANY process (not just the creator)
-    /// can read the password without triggering the macOS permission dialog.
-    /// This is essential for the backend (a headless child process) to access
-    /// API keys stored in the login keychain.
-    ///
-    /// Matches by service name (`-d "go-on"`) because the `keyring` crate stores
-    /// the service as "go-on" but does NOT set a custom keychain "description" field.
-    /// Using `-D` (description) would therefore be a silent no-op.
-    pub(crate) fn ensure_item_accessible(account: &str) {
-        // `security set-key-partition-list` modifies the ACL partition list
-        // of a keychain item identified by service name (-d "go-on") AND
-        // account name (-a "{account}").  Using -a limits the operation to
-        // JUST the specific item, so each call only touches one keychain entry
-        // instead of ALL items with service="go-on".
-        // -S "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic"
-        //    adds the standard system partition groups that all macOS processes
-        //    (GUI and CLI) are automatically members of.
-        // Without this step, macOS Keychain Services will reject reads from
-        // the backend because it's not the process that originally created the item.
-        let _ = Command::new("security")
-            .args([
-                "set-key-partition-list",
-                "-S",
-                "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic",
-                "-k",
-                "", // empty keychain password (uses login keychain)
-                "-d",
-                "go-on",
-                "-a",
-                account,
-                "login.keychain",
-            ])
-            .output();
+    /// Thread-safe queue of accounts whose keychain ACL needs updating.
+    /// Batched and flushed by `flush_pending_acl_updates()` to avoid N keychain
+    /// password dialogs (one per `security` invocation).
+    static PENDING_ACL_ACCOUNTS: std::sync::LazyLock<Mutex<Vec<String>>> =
+        std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+
+    /// Queue an account for ACL update. The actual `security` command is deferred
+    /// until `flush_pending_acl_updates()` is called.
+    pub(crate) fn defer_ensure_item_accessible(account: &str) {
+        if let Ok(mut pending) = PENDING_ACL_ACCOUNTS.lock() {
+            if !pending.contains(&account.to_string()) {
+                pending.push(account.to_string());
+            }
+        }
+    }
+
+    /// Flush all queued ACL updates in a single `security` invocation.
+    /// This runs one command with all accounts as separate `-a` flags,
+    /// prompting the user for their keychain password only ONCE.
+    pub(crate) fn flush_pending_acl_updates() {
+        let accounts = {
+            let mut pending = match PENDING_ACL_ACCOUNTS.lock() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    eprintln!("[keyring_util] PENDING_ACL_ACCOUNTS lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            std::mem::take(&mut *pending)
+        };
+        if accounts.is_empty() {
+            return;
+        }
+
+        // Build a single `security set-key-partition-list` command with
+        // multiple `-a` flags, one per account. This modifies ACL on all
+        // queued keychain items in one invocation, requiring only ONE
+        // keychain password prompt.
+        let mut args: Vec<String> = vec![
+            "set-key-partition-list".into(),
+            "-S".into(),
+            "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic".into(),
+            "-k".into(),
+            String::new(), // empty keychain password (triggers dialog once)
+            "-d".into(),
+            "go-on".into(),
+        ];
+        for account in &accounts {
+            args.push("-a".into());
+            args.push(account.clone());
+        }
+        args.push("login.keychain".into());
+
+        let _ = Command::new("security").args(&args).output();
     }
 
     pub fn store_api_key(provider: &str, api_key: &str) -> Result<()> {
         let account = format!("{}_api_key", provider);
         let entry = keyring::Entry::new("go-on", &account)?;
         entry.set_password(api_key)?;
-        ensure_item_accessible(&account);
+        defer_ensure_item_accessible(&account);
         Ok(())
     }
 
@@ -93,7 +119,7 @@ mod platform {
         let account = format!("{}_secret_key", provider);
         let entry = keyring::Entry::new("go-on", &account)?;
         entry.set_password(secret_key)?;
-        ensure_item_accessible(&account);
+        defer_ensure_item_accessible(&account);
         Ok(())
     }
 
@@ -247,6 +273,18 @@ pub fn delete_secret_key(provider: &str) -> Result<()> {
     Ok(())
 }
 
+/// Flush all pending macOS Keychain ACL updates in a single batch.
+///
+/// On macOS, each `security set-key-partition-list` invocation can trigger a
+/// keychain password dialog. Batching all pending accounts into one command
+/// ensures the user only gets prompted once.
+///
+/// Safe to call on non-macOS platforms (no-op).
+pub fn flush_pending_acl_updates() {
+    #[cfg(target_os = "macos")]
+    platform::flush_pending_acl_updates();
+}
+
 /// Delete the github_copilot_token alias from the system keyring AND `.env` file.
 /// Used when removing a Copilot provider to clean up the alternative keyring entry
 /// that was created alongside copilot_api_key for backward compatibility.
@@ -266,7 +304,7 @@ pub fn store_copilot_token(token: &str) -> Result<()> {
     let entry = keyring::Entry::new("go-on", account)?;
     entry.set_password(token)?;
     #[cfg(target_os = "macos")]
-    platform::ensure_item_accessible(account);
+    platform::defer_ensure_item_accessible(account);
     // Also sync to .env
     if let Err(e) = sync_dotenv_key("GITHUB_COPILOT_TOKEN", token) {
         eprintln!("Warning: failed to sync Copilot token to .env: {}", e);

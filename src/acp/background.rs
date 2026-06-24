@@ -706,5 +706,19 @@ pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
     let _config = &server.runtime_config;
     // Verify agent registry is accessible
     let _agents = &server.model_deps.agent_registry;
+    // Verify core deps
+    if server.governance_deps.harness_bus.is_none() {
+        anyhow::bail!("health.check: harness_bus is not configured");
+    }
+    if server
+        .orchestration_deps
+        .skill_registry
+        .read()
+        .map(|r| r.list().len())
+        .unwrap_or(0)
+        == 0
+    {
+        tracing::warn!("health.check: skill registry is empty");
+    }
     Ok(())
 }

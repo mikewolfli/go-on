@@ -66,8 +66,6 @@ pub struct LockHandle {
     manager: ToolLockManager,
 }
 
-impl LockHandle {}
-
 impl Drop for LockHandle {
     fn drop(&mut self) {
         self.manager.release(&self.path, self.mode);

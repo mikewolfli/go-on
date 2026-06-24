@@ -182,7 +182,7 @@ fn a2s_query(addr: &str, timeout_secs: u64) -> Result<serde_json::Value> {
                 // We've got enough fields; stop collecting
                 break;
             }
-        } else if b >= 0x20 && b <= 0x7E {
+        } else if (0x20..=0x7E).contains(&b) {
             current.push(b);
         }
     }
@@ -880,7 +880,7 @@ impl Tool for GameReplayRecorderTool {
                 })),
                 error: None,
                 verification: Some("replay_recorded".to_string()),
-                audit_log: Some(format!("game_replay_recorder: ffmpeg unavailable")),
+                audit_log: Some("game_replay_recorder: ffmpeg unavailable".to_string()),
                 pua_report: Some(report),
             })
         }
@@ -1358,7 +1358,7 @@ impl Tool for GameSaveManagerTool {
             "backup" | "backup-saves" => {
                 let backup_dir = save_dir
                     .join("backups")
-                    .join(&format!("save-backup-{}", chrono_now()));
+                    .join(format!("save-backup-{}", chrono_now()));
                 std::fs::create_dir_all(&backup_dir)
                     .context("failed to create backup directory")?;
 

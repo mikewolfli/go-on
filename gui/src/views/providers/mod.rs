@@ -7,8 +7,6 @@
 //! - `render` — monolithic `show()` method, to be split into sub-modules
 
 pub mod catalog;
-pub mod editor;
-pub mod list;
 mod render;
 
 use crate::backend::{BackendClient, ProviderCapabilityModel};

@@ -33,7 +33,7 @@ let x = Ok(());
 4. **Validate all symbol pairs** before and after every edit: { } ( ) [ ] < >
 5. Code must be **fully implemented and compilable**
 6. Error handling must use Rust `Result`
-7. WASM compilation must be supported
+7. WASM compilation: not currently targeted; this project compiles for native (macOS/Linux/Windows).
 8. Follow project architecture and naming conventions
 9. Check Cargo.toml features before generating code
 10. Self-check for all forbidden patterns and fix before output

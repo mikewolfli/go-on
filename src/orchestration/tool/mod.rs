@@ -1182,6 +1182,36 @@ impl ToolRegistry {
             },
         );
 
+        // ── Diagnostics tool (no feature gate) ──────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DiagnosticsTool,
+            ToolCapabilityProfile {
+                capability: "project_diagnostics".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Environment info tool (no feature gate) ─────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::EnvironmentInfoTool,
+            ToolCapabilityProfile {
+                capability: "environment_discovery".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         // ── Game tools (feature-gated) ───────────────────────────────
         #[cfg(any(
             feature = "game-online",
@@ -2030,9 +2060,16 @@ impl Tool for SkillExecuteTool {
                     let skill = guard.get(skill_name).ok_or_else(|| {
                         anyhow::anyhow!("skill '{}' not found in registry", skill_name)
                     })?;
-                    // Use shared lazily-created runtime instead of building one every call.
-                    let rt = skill_runtime();
-                    rt.block_on(skill.execute(&skill_input))
+                    // Prefer the current tokio runtime handle to avoid a separate runtime.
+                    // If no runtime is active, fall back to the shared lazily-created one.
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        // Use block_in_place to move the blocking call off the
+                        // async worker thread, preventing worker starvation (principle #23).
+                        tokio::task::block_in_place(|| handle.block_on(skill.execute(&skill_input)))
+                    } else {
+                        let rt = skill_runtime();
+                        rt.block_on(skill.execute(&skill_input))
+                    }
                 }
                 Err(e) => Err(anyhow::anyhow!("skill registry lock poisoned: {}", e)),
             },

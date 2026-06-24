@@ -12,9 +12,12 @@ fn test_client_builder_defaults() {
         .build()
         .expect("building client with defaults should succeed");
 
-    // Verify the client is constructible; base_url is private so we
-    // just assert the builder doesn't panic or return an error.
-    let _ = client;
+    assert_eq!(
+        client.base_url(),
+        "http://localhost:8090",
+        "base_url should be set to the value passed to new()"
+    );
+    assert_eq!(client.max_retries(), 3, "default max_retries should be 3");
 }
 
 #[test]
@@ -24,7 +27,11 @@ fn test_client_builder_custom_timeout() {
         .build()
         .expect("building client with custom timeout should succeed");
 
-    let _ = client;
+    assert_eq!(
+        client.timeout(),
+        Some(std::time::Duration::from_secs(60)),
+        "custom timeout should be applied"
+    );
 }
 
 #[test]
@@ -35,7 +42,16 @@ fn test_client_builder_custom_retries() {
         .build()
         .expect("building client with custom retries should succeed");
 
-    let _ = client;
+    assert_eq!(
+        client.max_retries(),
+        5,
+        "custom max_retries should be applied"
+    );
+    assert_eq!(
+        client.retry_delay(),
+        std::time::Duration::from_secs(2),
+        "custom retry_delay should be applied"
+    );
 }
 
 #[test]
@@ -47,7 +63,26 @@ fn test_builder_chain_all_options() {
         .build()
         .expect("building client with all options should succeed");
 
-    let _ = client;
+    assert_eq!(
+        client.base_url(),
+        "http://localhost:8090",
+        "base_url should be preserved when chaining options"
+    );
+    assert_eq!(
+        client.timeout(),
+        Some(std::time::Duration::from_secs(15)),
+        "timeout should be set when chaining options"
+    );
+    assert_eq!(
+        client.max_retries(),
+        10,
+        "max_retries should be set when chaining options"
+    );
+    assert_eq!(
+        client.retry_delay(),
+        std::time::Duration::from_millis(500),
+        "retry_delay should be set when chaining options"
+    );
 }
 
 #[test]

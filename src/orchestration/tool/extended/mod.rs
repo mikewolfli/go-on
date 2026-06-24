@@ -15,12 +15,14 @@ pub mod compress;
 pub mod csv_utils;
 #[cfg(feature = "data-export")]
 pub mod data_serialization;
+pub mod diagnostics;
 #[cfg(feature = "document-docx")]
 pub mod docx;
 #[cfg(feature = "cad-dxf")]
 pub mod dxf_tool;
 #[cfg(feature = "document-email")]
 pub mod email;
+pub mod environment_info;
 pub mod filesystem;
 #[cfg(any(
     feature = "game-online",
@@ -89,12 +91,14 @@ pub use csv_utils::{CsvAnalyzeTool, CsvTransformTool};
 pub use data_serialization::{
     CsvReadTool, CsvWriteTool, TomlReadTool, TomlWriteTool, YamlReadTool, YamlWriteTool,
 };
+pub use diagnostics::DiagnosticsTool;
 #[cfg(feature = "document-docx")]
 pub use docx::ReadDocxTool;
 #[cfg(feature = "cad-dxf")]
 pub use dxf_tool::DxfReadTool;
 #[cfg(feature = "document-email")]
 pub use email::EmailParseTool;
+pub use environment_info::EnvironmentInfoTool;
 pub use filesystem::{FileDeleteTool, FileMoveTool, ListDirectoryTool};
 #[cfg(feature = "cam-gcode")]
 pub use gcode::GcodeReadTool;

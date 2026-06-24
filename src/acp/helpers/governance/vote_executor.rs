@@ -141,7 +141,8 @@ pub(crate) async fn execute_high_risk_vote(
         && agent_vote_candidates.len() >= min_vote_agents
         && response_text.is_empty()
     {
-        let mut vote_counts: HashMap<String, usize> = HashMap::new();
+        let mut vote_counts: HashMap<String, usize> =
+            HashMap::with_capacity(agent_vote_candidates.len());
         for candidate in &agent_vote_candidates {
             let key = normalize_vote_key(&candidate.response);
             let entry = vote_counts.entry(key).or_insert(0);
@@ -290,7 +291,8 @@ pub(crate) async fn execute_high_risk_vote(
             }
 
             if !escalation_ballots.is_empty() {
-                let mut escalation_counts: HashMap<String, usize> = HashMap::new();
+                let mut escalation_counts: HashMap<String, usize> =
+                    HashMap::with_capacity(escalation_ballots.len());
                 for ballot in &escalation_ballots {
                     let key = normalize_vote_key(&ballot.response);
                     let entry = escalation_counts.entry(key).or_insert(0);

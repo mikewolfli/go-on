@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 use tracing::warn;
 
 use super::*;
+use crate::governance::hardening::{AutonomousEditAuditEntry, GovernanceAction};
 use crate::mcp::MCP_VERSION;
 use crate::schema::{
     ImportedSkillRecordView, ModelsListResponse, PhaseResponse, ProtocolVersion,
@@ -1966,6 +1967,7 @@ fn governance_action_label(action: GovernanceAction) -> &'static str {
         GovernanceAction::Search => "search",
         GovernanceAction::Write => "write",
         GovernanceAction::Shell => "shell",
+        GovernanceAction::Network => "network",
     }
 }
 

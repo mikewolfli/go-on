@@ -168,15 +168,7 @@ impl FailurePrevention {
     /// Record failure for a service
     pub fn record_failure(&mut self, service_name: &str) {
         self.ensure_service_registered(service_name);
-        // Evict oldest request counts when at capacity.
-        if self.total_requests.len() >= MAX_REQUESTS
-            && !self.total_requests.contains_key(service_name)
-        {
-            if let Some(oldest) = self.total_requests.keys().next().cloned() {
-                self.total_requests.remove(&oldest);
-                self.successful_requests.remove(&oldest);
-            }
-        }
+        self.evict_oldest_request_entry(service_name);
         *self
             .total_requests
             .entry(service_name.to_string())
@@ -186,14 +178,7 @@ impl FailurePrevention {
 
     fn record_failure_with_latency(&mut self, service_name: &str, latency_ms: Option<u64>) {
         self.ensure_service_registered(service_name);
-        // Evict oldest entry when at capacity.
-        if self.failure_counts.len() >= MAX_FAILURES
-            && !self.failure_counts.contains_key(service_name)
-        {
-            if let Some(oldest) = self.failure_counts.keys().next().cloned() {
-                self.failure_counts.remove(&oldest);
-            }
-        }
+        evict_lru_entry(&mut self.failure_counts, MAX_FAILURES, service_name);
         let count = self
             .failure_counts
             .entry(service_name.to_string())
@@ -210,15 +195,7 @@ impl FailurePrevention {
     /// Record success and reset failure count
     pub fn record_success(&mut self, service_name: &str) {
         self.ensure_service_registered(service_name);
-        // Evict oldest request counts when at capacity.
-        if self.total_requests.len() >= MAX_REQUESTS
-            && !self.total_requests.contains_key(service_name)
-        {
-            if let Some(oldest) = self.total_requests.keys().next().cloned() {
-                self.total_requests.remove(&oldest);
-                self.successful_requests.remove(&oldest);
-            }
-        }
+        self.evict_oldest_request_entry(service_name);
         *self
             .total_requests
             .entry(service_name.to_string())
@@ -240,15 +217,7 @@ impl FailurePrevention {
 
     pub fn record_outcome(&mut self, service_name: &str, success: bool, latency_ms: u64) {
         self.ensure_service_registered(service_name);
-        // Evict oldest request counts when at capacity.
-        if self.total_requests.len() >= MAX_REQUESTS
-            && !self.total_requests.contains_key(service_name)
-        {
-            if let Some(oldest) = self.total_requests.keys().next().cloned() {
-                self.total_requests.remove(&oldest);
-                self.successful_requests.remove(&oldest);
-            }
-        }
+        self.evict_oldest_request_entry(service_name);
         *self
             .total_requests
             .entry(service_name.to_string())
@@ -267,14 +236,11 @@ impl FailurePrevention {
 
     /// Open circuit breaker for a service (predictive failure prevention)
     pub fn open_circuit(&mut self, service_name: &str) {
-        // Evict oldest entry when at capacity.
-        if self.circuit_breakers.len() >= MAX_CIRCUIT_BREAKERS
-            && !self.circuit_breakers.contains_key(service_name)
-        {
-            if let Some(oldest) = self.circuit_breakers.keys().next().cloned() {
-                self.circuit_breakers.remove(&oldest);
-            }
-        }
+        evict_lru_entry(
+            &mut self.circuit_breakers,
+            MAX_CIRCUIT_BREAKERS,
+            service_name,
+        );
         self.circuit_breakers
             .insert(service_name.to_string(), CircuitBreakerState::Open);
     }
@@ -289,7 +255,6 @@ impl FailurePrevention {
 
     /// Register service for health monitoring
     pub fn register_service(&mut self, name: &str) {
-        // Evict oldest service when at capacity.
         if self.health_monitors.len() >= MAX_HEALTH_MONITORS
             && !self.health_monitors.contains_key(name)
         {
@@ -307,7 +272,7 @@ impl FailurePrevention {
             success_rate: 1.0,
             error_rate: 0.0,
             avg_latency_ms: 100.0,
-            last_check_timestamp: 0u64,
+            last_check_timestamp: now_epoch_seconds(),
         };
         self.health_monitors.insert(name.to_string(), health);
         self.failure_counts.entry(name.to_string()).or_insert(0);
@@ -329,7 +294,7 @@ impl FailurePrevention {
             health.success_rate = success_rate;
             health.error_rate = error_rate;
             health.avg_latency_ms = latency_ms;
-            health.last_check_timestamp = 0u64;
+            health.last_check_timestamp = now_epoch_seconds();
 
             // Update status
             health.status = if error_rate > self.anomaly_thresholds.error_rate_threshold {
@@ -393,6 +358,19 @@ impl FailurePrevention {
         }
         recovered.sort();
         recovered
+    }
+
+    /// Evict the oldest entry from `total_requests` when at capacity.
+    fn evict_oldest_request_entry(&mut self, service_name: &str) {
+        evict_lru_entry(&mut self.total_requests, MAX_REQUESTS, service_name);
+        // Also evict from the sibling map for consistency.
+        if !self.successful_requests.contains_key(service_name)
+            && self.successful_requests.len() >= MAX_REQUESTS
+        {
+            if let Some(oldest) = self.successful_requests.keys().next().cloned() {
+                self.successful_requests.remove(&oldest);
+            }
+        }
     }
 
     fn ensure_service_registered(&mut self, name: &str) {
@@ -477,6 +455,16 @@ impl FailurePrevention {
             } else {
                 HealthStatus::Healthy
             };
+        }
+    }
+}
+
+/// Generic LRU eviction: remove oldest entry from `map` when at `max_capacity`
+/// and `new_key` is not already present.
+fn evict_lru_entry<V>(map: &mut HashMap<String, V>, max_capacity: usize, new_key: &str) {
+    if map.len() >= max_capacity && !map.contains_key(new_key) {
+        if let Some(oldest) = map.keys().next().cloned() {
+            map.remove(&oldest);
         }
     }
 }

@@ -8,7 +8,7 @@ use crate::i18n::{t, tf};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use crate::intelligence::now_ms;
 
@@ -192,16 +192,16 @@ pub struct ConsensusProfile {
 
 /// Multi-node consensus engine for distributed decision-making.
 ///
-/// Thread-safe, backed by `Arc<Mutex<…>>` for all mutable state.
+/// Thread-safe, backed by `Mutex<…>` for all mutable state.
 pub struct ConsensusEngine {
     /// Registered cluster nodes.
-    nodes: Arc<Mutex<HashMap<String, ConsensusNode>>>,
+    nodes: Mutex<HashMap<String, ConsensusNode>>,
     /// Historical and current consensus rounds.
-    rounds: Arc<Mutex<Vec<ConsensusRound>>>,
+    rounds: Mutex<Vec<ConsensusRound>>,
     /// Proposals associated with rounds.
-    proposals: Arc<Mutex<Vec<ConsensusProposal>>>,
+    proposals: Mutex<Vec<ConsensusProposal>>,
     /// Votes that have been cast.
-    votes: Arc<Mutex<Vec<ConsensusVote>>>,
+    votes: Mutex<Vec<ConsensusVote>>,
     /// Engine-level configuration.
     config: ConsensusConfig,
     /// Max nodes to retain before evicting oldest by last_heartbeat_ms.
@@ -213,10 +213,10 @@ impl ConsensusEngine {
     /// Default maximum nodes is 1000.
     pub fn new(config: ConsensusConfig) -> Self {
         Self {
-            nodes: Arc::new(Mutex::new(HashMap::new())),
-            rounds: Arc::new(Mutex::new(Vec::new())),
-            proposals: Arc::new(Mutex::new(Vec::new())),
-            votes: Arc::new(Mutex::new(Vec::new())),
+            nodes: Mutex::new(HashMap::new()),
+            rounds: Mutex::new(Vec::new()),
+            proposals: Mutex::new(Vec::new()),
+            votes: Mutex::new(Vec::new()),
             config,
             max_nodes: 1000,
         }

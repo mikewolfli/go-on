@@ -519,6 +519,7 @@ impl HarnessBus {
             }
             GovernanceAction::Write => !policy_bundle.require_approval_for_write,
             GovernanceAction::Shell => policy_bundle.enable_code_execution,
+            GovernanceAction::Network => policy_bundle.enable_code_execution,
         }
     }
 

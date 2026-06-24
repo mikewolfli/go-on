@@ -35,7 +35,6 @@ impl ToolRegistry {
         idempotency_key: Option<&str>,
         store: &IdempotencyStore,
     ) -> ToolCallResult {
-        let transaction_id: Option<String> = None;
         let start = Instant::now();
 
         // --- Idempotency check ---
@@ -79,7 +78,7 @@ impl ToolRegistry {
             status,
             idempotency_key: idempotency_key.map(|k| k.to_string()),
             idempotency_hit: false,
-            transaction_id,
+            transaction_id: None,
             output,
             duration_ms,
         };

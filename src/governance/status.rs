@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn test_known_tool_names_contains_all() {
+    fn test_known_tool_names_contains_basic_tools() {
         let names = known_tool_names();
         assert!(names.contains("read_file"));
         assert!(names.contains("bash"));

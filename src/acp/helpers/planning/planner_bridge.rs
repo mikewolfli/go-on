@@ -91,9 +91,18 @@ mod tests {
             routing_summary: json!({}),
         };
         let updated = apply_dag_order_to_workflow(&mut workflow, &bridge);
-        // Depending on the planner output, it may or may not update
-        // Just verify it doesn't panic
-        let _ = updated;
+        // Function should not panic; verify the workflow remains in a valid state.
+        assert!(
+            workflow.nodes.is_empty(),
+            "workflow with no nodes should remain empty after DAG ordering"
+        );
+        assert!(
+            workflow.edges.is_empty(),
+            "workflow with no edges should remain empty after DAG ordering"
+        );
+        // The return value indicates whether an execution order was applied.
+        // With the default planner bridge, this should succeed.
+        assert!(updated, "DAG order should be applied");
     }
 
     #[test]

@@ -106,7 +106,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["task"]
             })),
         },
-        "skill_creator" => McpTool {
+        "skill-creator" => McpTool {
             name: name.to_string(),
             description: Some(
                 "Create a new reusable skill from a prompt template (SKILL-CREATOR)".to_string(),
@@ -391,6 +391,18 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["skill_name"]
             })),
         },
+        "skill_list" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "List all registered skills with their name, description, and score. ".to_string()
+                    + "No arguments required — returns an array of skill descriptors.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            })),
+        },
         other => McpTool {
             name: other.to_string(),
             description: Some("Registered MCP tool".to_string()),
@@ -564,9 +576,32 @@ mod tests {
         "workflow_execute",
         "workflow_ask",
         "workflow_generate",
-        "skill_creator",
+        "skill-creator",
         "github_search_skills",
         "import_skill",
+        // Extended tools with full descriptors
+        "shell_exec",
+        "http_request",
+        "grep",
+        "find_files",
+        "git",
+        "list_directory",
+        "file_move",
+        "file_delete",
+        "cargo_check",
+        "cargo_test",
+        "compress",
+        "decompress",
+        "date_time",
+        "dns_lookup",
+        "ping",
+        "port_scan",
+        // Skill tools
+        "skill_execute",
+        "skill_list",
+        // Round 2 additions
+        "diagnostics",
+        "environment_info",
     ];
 
     // ── Known tool descriptors ───────────────────────────────────────
