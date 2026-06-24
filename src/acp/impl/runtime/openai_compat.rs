@@ -503,6 +503,25 @@ pub(crate) async fn handle_openai_chat_completions(
     });
 
     while let Some(frame) = rx.recv().await {
+        if frame.event == "error" {
+            // Forward error events from the chat pipeline
+            let err_msg = frame
+                .payload
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown pipeline error");
+            let payload = build_openai_chunk(
+                &request_id,
+                &model,
+                &format!("upstream model service error: {}", err_msg),
+                Some("stop"),
+            );
+            let _ = write_openai_sse_data(socket, &payload).await;
+            write_openai_sse_done(socket).await?;
+            record_outcome(false);
+            task.abort();
+            return Ok(());
+        }
         if frame.event != "chunk" {
             continue;
         }

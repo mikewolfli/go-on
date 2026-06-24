@@ -14,7 +14,7 @@ use tracing::warn;
 use super::http::http_trace_context;
 use super::protocol::parse_http_request;
 use super::sse::{write_sse_event, write_sse_headers};
-use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
+use crate::acp::r#impl::request::handle_request;
 use crate::acp::server::AcpServer;
 use crate::rpc_protocol::JsonRpcRequest;
 
@@ -190,8 +190,9 @@ async fn handle_tls_http_stream(
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         let trace = http_trace_context("chat.stream");
         let server_ref = Arc::clone(server);
+        let sse_tx = tx.clone();
         let task = tokio::spawn(async move {
-            crate::acp::r#impl::chat::process_chat_request(
+            if let Err(err) = crate::acp::r#impl::chat::process_chat_request(
                 server_ref.as_ref(),
                 &params,
                 Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
@@ -200,6 +201,16 @@ async fn handle_tls_http_stream(
                 None,
             )
             .await
+            {
+                let _ = sse_tx
+                    .send(crate::acp::r#impl::chat::streaming::StreamFrame {
+                        event: "error",
+                        payload: serde_json::json!({
+                            "error": err.to_string(),
+                        }),
+                    })
+                    .await;
+            }
         });
 
         while let Some(frame) = rx.recv().await {
@@ -211,27 +222,14 @@ async fn handle_tls_http_stream(
             }
         }
 
-        match task.await {
-            Ok(Ok(result)) => {
-                let result = inject_platform_profiles_if_absent(result, "chat");
-                write_sse_event(tls_stream, "result", &result).await?;
-            }
-            Ok(Err(err)) => {
-                write_sse_event(
-                    tls_stream,
-                    "error",
-                    &serde_json::json!({"message": err.to_string()}),
-                )
-                .await?;
-            }
-            Err(err) => {
-                write_sse_event(
-                    tls_stream,
-                    "error",
-                    &serde_json::json!({"message": format!("task panicked: {}", err)}),
-                )
-                .await?;
-            }
+        // The spawned task has already sent any error events via the SSE channel.
+        if let Err(join_err) = task.await {
+            write_sse_event(
+                tls_stream,
+                "error",
+                &serde_json::json!({"message": format!("task panicked: {}", join_err)}),
+            )
+            .await?;
         }
 
         let _ = tls_stream.shutdown().await;

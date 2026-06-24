@@ -650,16 +650,25 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.all_empty");
-        let err = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &params, None, &trace, None, None)
             .await
-            .expect_err("all empty outputs should fail with a specific error");
+            .expect("all empty outputs should return a graceful error response");
 
-        let err_msg = err.to_string();
+        let response_text = result
+            .get("response")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         assert!(
-            err_msg.contains("all candidate agents returned empty responses")
-                || err_msg.starts_with("error.chat."),
-            "error should explain empty responses, got: {}",
-            err_msg
+            response_text.contains("all candidate agents returned empty responses")
+                || response_text.starts_with("error.chat."),
+            "response should explain empty responses, got: {}",
+            response_text
+        );
+        // The error response should NOT be empty — the error message should
+        // be returned as the response text so the user sees actionable guidance.
+        assert!(
+            !response_text.is_empty(),
+            "error response should not be empty"
         );
     }
 

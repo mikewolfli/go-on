@@ -313,6 +313,13 @@ pub(crate) async fn run_agent_collecting(
                         .await?;
                     }
                 }
+                // If the agent produced only reasoning (no content), use the
+                // reasoning as the response text. This prevents models that
+                // exclusively emit reasoning_content (e.g., DeepSeek in
+                // thinking-only mode) from triggering empty_response errors.
+                if response.trim().is_empty() && !reasoning_buffer.trim().is_empty() {
+                    response = std::mem::take(&mut reasoning_buffer);
+                }
                 Ok::<(String, String, Option<String>), anyhow::Error>((
                     response,
                     reasoning_buffer,

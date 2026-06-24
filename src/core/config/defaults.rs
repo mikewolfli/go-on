@@ -533,7 +533,7 @@ mod adaptive {
 
             let cache = if self.minimal_config.enable_cache {
                 Some(CacheConfig {
-                    enabled: true,3
+                    enabled: true,
                     path: "sqlite3/acp_cache.sqlite3".to_string(),
                     default_ttl_seconds: 3600,
                     max_entries: 5000,
@@ -859,7 +859,6 @@ pub fn default_non_ai_config_toml() -> String {
     [
         "default_phase = \"coding\"",
         "model_selection_mode = \"adaptive\"",
-        "",3
         "[protocol]",
         "mode = \"auto\"",
         "",

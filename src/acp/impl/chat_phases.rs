@@ -702,7 +702,7 @@ pub(crate) async fn act_phase(
             )
             .await;
 
-        if let Some(_early_value) = handle_execution_errors(
+        if let Some(early_value) = handle_execution_errors(
             server,
             params,
             &resolve_out.phase_name,
@@ -723,6 +723,13 @@ pub(crate) async fn act_phase(
         )
         .await?
         {
+            // Use the error prompt as the response text so the user sees
+            // actionable guidance (e.g., quota exhaustion, switch agent, retry).
+            if let Some(prompt) = early_value.get("prompt").and_then(|v| v.as_str()) {
+                if response_text.trim().is_empty() {
+                    response_text = prompt.to_string();
+                }
+            }
             // ── Provenance recording (P2-12) ─────────────────────────────
             let success = !response_text.is_empty() && last_err.is_none();
             if let Some(ref ledger) = server.governance_deps.provenance_ledger {
@@ -1184,9 +1191,19 @@ async fn handle_execution_errors(
                 .map(|mut b| b.record_usage(_tenant_id, 0, 0));
         }
         if all_empty {
-            anyhow::bail!(tf("error.chat.all_agents_empty", &[("phase", phase_name)]));
+            return Ok(Some(json!({
+                "done": false, "mode": params.mode, "phase": phase_name, "phase_origin": phase_origin,
+                "requires_user_action": true, "action": "retry",
+                "prompt": tf("error.chat.all_agents_empty", &[("phase", phase_name)]),
+                "agent_attempts": agent_attempts,
+            })));
         }
-        anyhow::bail!(tf("error.chat.no_healthy_agent", &[("phase", phase_name)]));
+        return Ok(Some(json!({
+            "done": false, "mode": params.mode, "phase": phase_name, "phase_origin": phase_origin,
+            "requires_user_action": true, "action": "retry",
+            "prompt": tf("error.chat.no_healthy_agent", &[("phase", phase_name)]),
+            "agent_attempts": agent_attempts,
+        })));
     }
     if let Some(_err) = last_err {
         let all_quota = !agent_attempts.is_empty()

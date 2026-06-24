@@ -586,23 +586,20 @@ fn try_fast_extract_field(data: &str, key: &str, unescape: bool) -> Option<Strin
     let raw = &data[value_start..end];
     if unescape && raw.contains('\\') {
         let mut result = String::with_capacity(raw.len());
-        let rb = raw.as_bytes();
-        let mut i = 0;
-        while i < raw.len() {
-            if rb[i] == b'\\' && i + 1 < raw.len() {
-                match rb[i + 1] {
-                    b'"' => result.push('"'),
-                    b'n' => result.push('\n'),
-                    b'\\' => result.push('\\'),
-                    b't' => result.push('\t'),
-                    b'r' => result.push('\r'),
-                    b'/' => result.push('/'),
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('"') => result.push('"'),
+                    Some('n') => result.push('\n'),
+                    Some('\\') => result.push('\\'),
+                    Some('t') => result.push('\t'),
+                    Some('r') => result.push('\r'),
+                    Some('/') => result.push('/'),
                     _ => {}
                 }
-                i += 2;
             } else {
-                result.push(rb[i] as char);
-                i += 1;
+                result.push(c);
             }
         }
         return Some(result);

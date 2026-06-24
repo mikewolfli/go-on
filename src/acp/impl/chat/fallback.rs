@@ -298,13 +298,12 @@ pub(crate) async fn execute_fallback_agents(
                             crate::resilience::hyper_resilience::FailureMode::ResourceExhaustion,
                         )
                         .await;
-                    // BLUE56-B05: Record failure in HotFailover
+                    // BLUE56-B05: Record failure in HotFailover (global singleton)
                     {
-                        use crate::intelligence::hot_failover::HotFailover;
-                        let failover = HotFailover::new(
-                            crate::intelligence::hot_failover::HotFailoverConfig::default(),
-                        );
-                        failover.record_failure(&agent_name);
+                        use crate::intelligence::hot_failover::HOT_FAILOVER_INSTANCE;
+                        if let Ok(failover) = HOT_FAILOVER_INSTANCE.lock() {
+                            failover.record_failure(&agent_name);
+                        }
                     }
 
                     continue;

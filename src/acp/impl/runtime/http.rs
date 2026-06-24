@@ -495,8 +495,9 @@ async fn route_http_post(
                         user_session,
                     ));
                     let server_ref = Arc::clone(&server);
+                    let sse_tx = tx.clone();
                     let task = tokio::spawn(async move {
-                        crate::acp::r#impl::chat::process_chat_request(
+                        if let Err(err) = crate::acp::r#impl::chat::process_chat_request(
                             server_ref.as_ref(),
                             &params,
                             Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
@@ -505,6 +506,18 @@ async fn route_http_post(
                             ctx,
                         )
                         .await
+                        {
+                            // Send error event to the SSE stream so the GUI
+                            // can display the error instead of hanging.
+                            let _ = sse_tx
+                                .send(crate::acp::r#impl::chat::streaming::StreamFrame {
+                                    event: "error",
+                                    payload: serde_json::json!({
+                                        "error": err.to_string(),
+                                    }),
+                                })
+                                .await;
+                        }
                     });
 
                     // Add a 30-second overall timeout for the chat stream.
@@ -533,25 +546,14 @@ async fn route_http_post(
                         }
                     }
 
-                    match task.await {
-                        Ok(Ok(result)) => {
-                            let result = inject_platform_profiles_if_absent(result, "chat");
-                            write_sse_event(socket, "result", &result).await?
-                        }
-                        Ok(Err(err)) => {
-                            let payload = inject_platform_profiles_if_absent(
-                                serde_json::json!({"message": err.to_string()}),
-                                "chat",
-                            );
-                            write_sse_event(socket, "error", &payload).await?
-                        }
-                        Err(err) => {
-                            let payload = inject_platform_profiles_if_absent(
-                                serde_json::json!({"message": format!("chat task panicked: {err}")}),
-                                "chat",
-                            );
-                            write_sse_event(socket, "error", &payload).await?
-                        }
+                    // The spawned task has already sent any error events via the SSE channel.
+                    // Await the task to ensure it finishes, but errors are already handled.
+                    if let Err(join_err) = task.await {
+                        let payload = inject_platform_profiles_if_absent(
+                            serde_json::json!({"message": format!("chat task panicked: {join_err}")}),
+                            "chat",
+                        );
+                        let _ = write_sse_event(socket, "error", &payload).await;
                     }
                 }
                 "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
