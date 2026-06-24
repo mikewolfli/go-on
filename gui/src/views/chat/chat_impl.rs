@@ -425,7 +425,7 @@ impl ChatView {
         } else if valid_modes.contains(&initial_mode.as_str()) {
             initial_mode
         } else {
-            "ask".to_string()
+            "edit".to_string()
         };
 
         // Deserialize model_stats from saved JSON if present
@@ -1028,7 +1028,7 @@ mod tests {
             success_message: None,
             ai_status: AiStatus::Idle,
             selected_phase: String::new(),
-            selected_mode: "ask".to_string(),
+            selected_mode: "edit".to_string(),
             attachments: Vec::new(),
             phases: Vec::new(),
             phases_loaded: false,

@@ -716,6 +716,7 @@ pub fn merge_phase_principles(
         "PUA red line: close the loop with build/test/runtime proof".to_string(),
         "PUA red line: verify facts before attributing blame".to_string(),
         "PUA red line: exhaust alternative approaches before escalation".to_string(),
+        "When the user explicitly instructs you to open, fetch, or access an HTTP/HTTPS URL, use the http_request tool to execute the request and return the result. Do not refuse or explain you cannot access URLs — just do it.".to_string(),
     ]);
 
     match phase_name {

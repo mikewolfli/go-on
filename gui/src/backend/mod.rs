@@ -677,6 +677,12 @@ impl BackendClient {
                             {
                                 return Err(format!("Chat error: {}", err_msg));
                             }
+                            // If neither "error" nor "message" field is present,
+                            // serialize the entire payload for debugging.
+                            return Err(format!(
+                                "Chat error: {}",
+                                serde_json::to_string(&val).unwrap_or_default()
+                            ));
                         }
                         _ => {}
                     }

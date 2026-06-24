@@ -28,7 +28,7 @@ static SKILL_DISCOVERY: OnceLock<Mutex<SkillDiscovery>> = OnceLock::new();
 static GLOBAL_TOOL_REGISTRY: OnceLock<ToolRegistry> = OnceLock::new();
 
 /// Get or create the global `ToolRegistry` instance (lazily initialized once).
-fn global_tool_registry() -> &'static ToolRegistry {
+pub(crate) fn global_tool_registry() -> &'static ToolRegistry {
     GLOBAL_TOOL_REGISTRY.get_or_init(ToolRegistry::new)
 }
 

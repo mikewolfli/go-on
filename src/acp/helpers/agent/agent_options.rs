@@ -114,8 +114,32 @@ pub(crate) fn assemble_agent_options(
                 })
             })
             .collect();
-        if !skill_tools.is_empty() {
-            base_agent_options.insert("tools".to_string(), json!(skill_tools));
+        // Merge built-in tools (http_request, read_file, shell_exec, etc.)
+        // from the global ToolRegistry into the same tools array so the LLM
+        // can call them directly via OpenAI function-calling, matching the
+        // behavior of CLI chat ("/go-on -a").
+        let builtin_tools: Vec<Value> = {
+            let registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
+            let mut tools = Vec::with_capacity(registry.names().len());
+            for name in registry.names() {
+                let desc = crate::shared::tool_descriptors::tool_descriptor(name);
+                tools.push(json!({
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": desc.description,
+                        "parameters": desc.input_schema,
+                    }
+                }));
+            }
+            tools
+        };
+        let all_tools: Vec<Value> = skill_tools
+            .into_iter()
+            .chain(builtin_tools.into_iter())
+            .collect();
+        if !all_tools.is_empty() {
+            base_agent_options.insert("tools".to_string(), json!(all_tools));
             base_agent_options.insert("tool_choice".to_string(), json!("auto"));
         }
     }

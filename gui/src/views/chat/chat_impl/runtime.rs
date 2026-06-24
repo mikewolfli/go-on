@@ -663,8 +663,15 @@ impl ChatView {
                                                     .get("message")
                                                     .or_else(|| val.get("error"))
                                                     .and_then(|v| v.as_str())
-                                                    .unwrap_or("unknown stream error")
-                                                    .to_string();
+                                                    .map(|s| s.to_string())
+                                                    .unwrap_or_else(|| {
+                                                        // Fallback: serialize the whole payload for debugging
+                                                        format!(
+                                                            "stream error: {}",
+                                                            serde_json::to_string(&val)
+                                                                .unwrap_or_default()
+                                                        )
+                                                    });
                                                 send_pending(
                                                     &tx,
                                                     PendingResponse::Error {
