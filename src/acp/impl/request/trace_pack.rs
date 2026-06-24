@@ -2,7 +2,8 @@ use super::*;
 
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
 static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
-static TOOL_BUDGET_TRACKERS: OnceLock<StdMutex<HashMap<String, BudgetTracker>>> = OnceLock::new();
+static TOOL_BUDGET_TRACKERS: OnceLock<tokio::sync::Mutex<HashMap<String, BudgetTracker>>> =
+    OnceLock::new();
 static MCP_AUDIT_LOGGER: OnceLock<AuditLogger> = OnceLock::new();
 static PUA_FEEDBACK_COLLECTOR: OnceLock<PuaFeedbackCollector> = OnceLock::new();
 static PUA_RESPONSE_REPORTS: OnceLock<StdMutex<HashMap<String, String>>> = OnceLock::new();
@@ -19,8 +20,9 @@ pub(super) fn pua_response_reports() -> &'static StdMutex<HashMap<String, String
     PUA_RESPONSE_REPORTS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-pub(super) fn tool_budget_trackers() -> &'static StdMutex<HashMap<String, BudgetTracker>> {
-    TOOL_BUDGET_TRACKERS.get_or_init(|| StdMutex::new(HashMap::new()))
+pub(super) fn tool_budget_trackers() -> &'static tokio::sync::Mutex<HashMap<String, BudgetTracker>>
+{
+    TOOL_BUDGET_TRACKERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
 pub(super) fn mcp_audit_logger() -> &'static AuditLogger {

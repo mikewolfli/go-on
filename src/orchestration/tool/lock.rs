@@ -181,6 +181,49 @@ impl ToolLockManager {
         }
     }
 
+    /// Acquire a lock asynchronously — never blocks the tokio thread.
+    ///
+    /// Uses `tokio::time::sleep` for exponential backoff instead of
+    /// `std::thread::sleep`. Suitable for calling from async contexts
+    /// without spawning a blocking task.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AcquireError::Timeout`] if the lock cannot be acquired
+    /// within [`ACQUIRE_TIMEOUT`](Self::ACQUIRE_TIMEOUT).
+    pub async fn acquire_async(
+        &self,
+        path: &str,
+        mode: LockMode,
+    ) -> Result<LockHandle, AcquireError> {
+        // Fast path: try non-blocking first.
+        if let Some(handle) = self.try_acquire(path, mode) {
+            return Ok(handle);
+        }
+
+        let deadline = Instant::now() + Self::ACQUIRE_TIMEOUT;
+        let mut backoff_us = Self::BACKOFF_INITIAL_US;
+
+        loop {
+            if Instant::now() >= deadline {
+                return Err(AcquireError::Timeout {
+                    path: path.to_string(),
+                    mode,
+                    timeout_secs: Self::ACQUIRE_TIMEOUT.as_secs(),
+                });
+            }
+
+            // Exponential backoff with cap — async sleep, no thread blocking.
+            let sleep_us = backoff_us.min(Self::BACKOFF_MAX_MS * 1000);
+            tokio::time::sleep(Duration::from_micros(sleep_us)).await;
+            backoff_us = backoff_us.saturating_mul(2);
+
+            if let Some(handle) = self.try_acquire(path, mode) {
+                return Ok(handle);
+            }
+        }
+    }
+
     /// Recover from a poisoned mutex by taking ownership of the inner data.
     fn lock_table(&self) -> MutexGuard<'_, LockTable> {
         self.inner.lock().unwrap_or_else(|e: PoisonError<_>| {

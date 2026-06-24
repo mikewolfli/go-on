@@ -4,7 +4,6 @@
 //! Supports multiple backends: keyring (OS keychain), environment variables,
 //! and HashiCorp Vault (stub). Keys are auto-rotated on access when stale.
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -232,86 +231,6 @@ impl KeyRotator for MemoryRotator {
 
     async fn list_keys(&self) -> Result<Vec<KeyId>, SecretError> {
         Ok(self.keys.read().await.keys().cloned().collect())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// EnvRotator (environment variables)
-// ---------------------------------------------------------------------------
-
-/// Rotator backed by environment variables.
-#[allow(dead_code)] // F-GAP-49 — reserved secret rotation feature
-pub struct EnvRotator {
-    prefix: String,
-}
-
-#[allow(dead_code)] // F-GAP-49 — reserved secret rotation feature
-impl EnvRotator {
-    pub fn new(prefix: String) -> Self {
-        Self { prefix }
-    }
-
-    fn env_key(&self, key_id: &str) -> String {
-        format!(
-            "{}_{}",
-            self.prefix,
-            key_id.to_uppercase().replace('-', "_")
-        )
-    }
-}
-
-#[async_trait::async_trait]
-impl KeyRotator for EnvRotator {
-    async fn generate_key(
-        &self,
-        key_id: &str,
-        algorithm: SecretAlgorithm,
-    ) -> Result<SecretEntry, SecretError> {
-        use rand::Rng;
-        let mut key = vec![0u8; 32];
-        rand::rng().fill_bytes(&mut key);
-
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&key);
-        std::env::set_var(self.env_key(key_id), encoded);
-
-        let entry = SecretEntry::new(key_id.to_string(), key, algorithm, None);
-        debug!(key = %key_id, "Stored in environment variable");
-        Ok(entry)
-    }
-
-    async fn store_key(&self, entry: &SecretEntry) -> Result<(), SecretError> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&entry.key_bytes);
-        std::env::set_var(self.env_key(&entry.key_id), encoded);
-        Ok(())
-    }
-
-    async fn retrieve_key(&self, key_id: &str) -> Result<Option<SecretEntry>, SecretError> {
-        let env_key = self.env_key(key_id);
-        match std::env::var(&env_key) {
-            Ok(encoded) => {
-                let key_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(&encoded)
-                    .map_err(|e| SecretError::EncodingError(e.to_string()))?;
-                Ok(Some(SecretEntry::new(
-                    key_id.to_string(),
-                    key_bytes,
-                    SecretAlgorithm::Generic,
-                    None,
-                )))
-            }
-            Err(_) => Ok(None),
-        }
-    }
-
-    async fn delete_key(&self, key_id: &str) -> Result<(), SecretError> {
-        std::env::remove_var(self.env_key(key_id));
-        info!(key = %key_id, "Deleted from environment");
-        Ok(())
-    }
-
-    async fn list_keys(&self) -> Result<Vec<KeyId>, SecretError> {
-        // Environment variables don't support listing by prefix easily.
-        Ok(Vec::new())
     }
 }
 
@@ -987,19 +906,6 @@ impl SecretManager {
         }
         count
     }
-}
-
-/// Securely remove a key from the store by zeroing its bytes before dropping (S-FIX10).
-#[allow(dead_code)] // F-GAP reserved
-pub fn secure_remove(store: &mut HashMap<String, Vec<u8>>, key: &str) {
-    if let Some(value) = store.get_mut(key) {
-        for byte in value.iter_mut() {
-            unsafe {
-                std::ptr::write_volatile(byte, 0u8);
-            }
-        }
-    }
-    store.remove(key);
 }
 
 // ---------------------------------------------------------------------------

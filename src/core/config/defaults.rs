@@ -29,7 +29,7 @@ mod default_functions {
 
     // ── Cache defaults ──────────────────────────────────────────
     pub fn default_cache_path() -> String {
-        "acp_cache.sqlite3".to_string()
+        "sqlite3/acp_cache.sqlite3".to_string()
     }
     pub fn default_cache_ttl_seconds() -> u64 {
         3600
@@ -43,7 +43,7 @@ mod default_functions {
         true
     }
     pub fn default_vector_path() -> String {
-        "acp_vector.sqlite3".to_string()
+        "sqlite3/acp_vector.sqlite3".to_string()
     }
     pub fn default_vector_dimensions() -> usize {
         192
@@ -533,8 +533,8 @@ mod adaptive {
 
             let cache = if self.minimal_config.enable_cache {
                 Some(CacheConfig {
-                    enabled: true,
-                    path: "acp_cache.sqlite3".to_string(),
+                    enabled: true,3
+                    path: "sqlite3/acp_cache.sqlite3".to_string(),
                     default_ttl_seconds: 3600,
                     max_entries: 5000,
                     connection_string: None,
@@ -547,7 +547,7 @@ mod adaptive {
                 Some(VectorConfig {
                     enabled: true,
                     auto_mode: true,
-                    path: "acp_vector.sqlite3".to_string(),
+                    path: "sqlite3/acp_vector.sqlite3".to_string(),
                     connection_string: None,
                     dimensions: 192,
                     min_query_chars: 80,
@@ -859,20 +859,20 @@ pub fn default_non_ai_config_toml() -> String {
     [
         "default_phase = \"coding\"",
         "model_selection_mode = \"adaptive\"",
-        "",
+        "",3
         "[protocol]",
         "mode = \"auto\"",
         "",
         "[cache]",
         "enabled = true",
-        "path = \"acp_cache.sqlite3\"",
+        "path = \"sqlite3/acp_cache.sqlite3\"",
         "default_ttl_seconds = 3600",
         "max_entries = 5000",
         "",
         "[vector]",
         "enabled = true",
         "auto_mode = true",
-        "path = \"acp_vector.sqlite3\"",
+        "path = \"sqlite3/acp_vector.sqlite3\"",
         "dimensions = 192",
         "min_query_chars = 80",
         "top_k = 2",

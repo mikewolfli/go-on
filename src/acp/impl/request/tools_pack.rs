@@ -25,6 +25,13 @@ pub(crate) static SHARED_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(
 /// Global `SkillDiscovery` engine, lazily initialized on first `skill-finder` call.
 static SKILL_DISCOVERY: OnceLock<Mutex<SkillDiscovery>> = OnceLock::new();
 
+static GLOBAL_TOOL_REGISTRY: OnceLock<ToolRegistry> = OnceLock::new();
+
+/// Get or create the global `ToolRegistry` instance (lazily initialized once).
+fn global_tool_registry() -> &'static ToolRegistry {
+    GLOBAL_TOOL_REGISTRY.get_or_init(ToolRegistry::new)
+}
+
 /// Get or create the global `SkillDiscovery` instance.
 pub(crate) fn skill_discovery() -> &'static Mutex<SkillDiscovery> {
     SKILL_DISCOVERY.get_or_init(|| Mutex::new(SkillDiscovery::new()))
@@ -42,7 +49,10 @@ pub(super) fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
 }
 
 pub(super) fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportStore> {
-    SkillImportStore::load(skill_import_policy(server))
+    SkillImportStore::load(
+        skill_import_policy(server),
+        server.orchestration_deps.skill_registry.clone(),
+    )
 }
 
 pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Value> {
@@ -197,7 +207,7 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
         }),
     ];
 
-    let registry = ToolRegistry::new();
+    let registry = global_tool_registry();
     let mut builtins = registry.names();
     builtins.sort_unstable();
     tools.extend(builtins.into_iter().map(|name| {
@@ -335,20 +345,22 @@ pub(crate) async fn execute_mcp_tool_call(
         }
     }
 
-    // BLUE56-C05: ChaosEngine fault injection check
-    static CHAOS: LazyLock<crate::resilience::chaos::ChaosEngine> = LazyLock::new(|| {
-        let engine = crate::resilience::chaos::ChaosEngine::new();
-        // Enabled via environment variable
-        engine.set_enabled(std::env::var("GO_ON_CHAOS_ENABLED").as_deref() == Ok("1"));
-        engine
-    });
-    if let Some(fault_type) = CHAOS.check_fault(name) {
-        tracing::warn!(
-            target: "chaos",
-            tool = %name,
-            fault = ?fault_type,
-            "chaos engine would inject fault"
-        );
+    // BLUE56-C05: ChaosEngine fault injection check (only when chaos-testing feature enabled)
+    #[cfg(feature = "chaos-testing")]
+    {
+        static CHAOS: LazyLock<crate::resilience::chaos::ChaosEngine> = LazyLock::new(|| {
+            let engine = crate::resilience::chaos::ChaosEngine::new();
+            engine.set_enabled(std::env::var("GO_ON_CHAOS_ENABLED").as_deref() == Ok("1"));
+            engine
+        });
+        if let Some(fault_type) = CHAOS.check_fault(name) {
+            tracing::warn!(
+                target: "chaos",
+                tool = %name,
+                fault = ?fault_type,
+                "chaos engine would inject fault"
+            );
+        }
     }
 
     let policy = policy_bundle_for_target(server.runtime_config.deployment_target.as_deref());
@@ -356,9 +368,7 @@ pub(crate) async fn execute_mcp_tool_call(
     let estimated_tokens = estimate_argument_tokens(arguments);
     let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());
     let remaining_tokens = {
-        let mut trackers = tool_budget_trackers()
-            .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock tool budget tracker: {e}"))?;
+        let mut trackers = tool_budget_trackers().lock().await;
         let tracker = trackers.entry(budget_scope.clone()).or_insert_with(|| {
             BudgetTracker::new(task_budget_for_target(
                 server.runtime_config.deployment_target.as_deref(),
@@ -456,64 +466,33 @@ pub(crate) async fn execute_mcp_tool_call(
                 .unwrap_or(5)
                 .min(20) as usize;
 
-            let mut results: Vec<Value> = Vec::new();
-            let registry = server
-                .orchestration_deps
-                .skill_registry
-                .read()
-                .unwrap_or_else(|poisoned| {
-                    tracing::warn!("lock poisoned, recovering");
-                    poisoned.into_inner()
-                });
-            for skill in registry.list().iter().take(top_k) {
-                let score = registry.score_of(&skill.name).unwrap_or(0.5);
-                // Simple TF-like match: score higher when query tokens appear in
-                // the skill name or description.
-                let query_lower = query.to_ascii_lowercase();
-                let name_lower = skill.name.to_ascii_lowercase();
-                let desc_lower = skill.description.to_ascii_lowercase();
-                let match_score = if query_lower.is_empty() {
-                    0.0
-                } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower) {
-                    // Boost for direct substring matches
-                    (score * 0.7 + 0.3).clamp(0.0, 1.0)
-                } else {
-                    // Try word-level matching
-                    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-                    let name_words: Vec<&str> = name_lower.split_whitespace().collect();
-                    let desc_words: Vec<&str> = desc_lower.split_whitespace().collect();
-                    let all_words: Vec<&str> = name_words
-                        .iter()
-                        .chain(desc_words.iter())
-                        .copied()
-                        .collect();
-                    let matches = query_words.iter().filter(|w| all_words.contains(w)).count();
-                    if matches > 0 {
-                        let ratio = matches as f64 / query_words.len() as f64;
-                        (score * 0.5 + ratio * 0.5).clamp(0.0, 1.0)
-                    } else {
-                        score * 0.3 // Low match = low relevance
-                    }
-                };
-                results.push(json!({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "score": (match_score * 100.0).round() / 100.0,
-                    "input_schema": skill.input_schema,
-                    "total_calls": skill.total_calls,
-                    "success_calls": skill.success_calls,
-                    "failure_calls": skill.failure_calls,
-                    "average_latency_ms": skill.average_latency_ms,
-                }));
-            }
-            // Sort by score descending
-            results.sort_by(|a, b| {
-                b.get("score")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0)
-                    .partial_cmp(&a.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            let results: Vec<Value> = {
+                // Use SkillDiscovery with SkillIndex for token-based similarity search.
+                let mut discovery = skill_discovery().lock().unwrap_or_else(|e| e.into_inner());
+                let registry = server
+                    .orchestration_deps
+                    .skill_registry
+                    .read()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                let scored = discovery.discover(query, top_k, &registry);
+                drop(registry);
+                scored
+                    .into_iter()
+                    .map(|s| json!({
+                        "name": s.name,
+                        "description": s.description,
+                        "score": s.score,
+                        "input_schema": s.input_schema,
+                        "total_calls": s.total_calls,
+                        "success_calls": s.success_calls,
+                        "failure_calls": s.failure_calls,
+                        "average_latency_ms": s.average_latency_ms,
+                    }))
+                    .collect()
+            };
             Ok(json!({
                 "ok": true,
                 "query": query,
@@ -528,7 +507,10 @@ pub(crate) async fn execute_mcp_tool_call(
             if !policy.enabled {
                 anyhow::bail!("skill import is disabled by security policy");
             }
-            let mut store = SkillImportStore::load(policy)?;
+            let mut store = SkillImportStore::load(
+                policy,
+                server.orchestration_deps.skill_registry.clone(),
+            )?;
             match store.import_skill(request).await {
                 Ok(record) => {
                     store.save()?;
@@ -616,10 +598,12 @@ pub(crate) async fn execute_mcp_tool_call(
             }))
         }
         _ => {
-            let registry = ToolRegistry::new();
+            let registry = global_tool_registry();
             if let Some(tool) = registry.get(name) {
                 validate_tool_arguments(name, arguments)?;
-                let result = tool.run(&ToolInput {
+                // Use spawn_blocking to avoid blocking the tokio runtime thread
+                // with synchronous tool execution (e.g. shell_exec may take 60s).
+                let input = ToolInput {
                     task_id: format!("mcp-tool-{name}"),
                     phase: "mcp".to_string(),
                     agent_role: "tool".to_string(),
@@ -628,7 +612,10 @@ pub(crate) async fn execute_mcp_tool_call(
                     evidence: None,
                     payload: arguments.clone(),
                     allowed_base_dir: None,
-                })?;
+                };
+                let result = tokio::task::spawn_blocking(move || tool.run(&input))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("tool execution panicked: {e}"))??;
                 return Ok(serde_json::to_value(result)?);
             }
 
@@ -902,41 +889,5 @@ mod tests {
             governance_action_for_tool("read_file"),
             crate::governance::hardening::GovernanceAction::Read
         );
-    }
-
-    // ── skill-finder matching (extracted logic) ────────────────────────
-
-    #[test]
-    fn skill_finder_empty_query_returns_zero_score() {
-        let query_lower = "";
-        let _name_lower = "code_review";
-        let _desc_lower = "review code changes";
-        let score: f64 = 0.5;
-
-        let match_score: f64 = if query_lower.is_empty() {
-            0.0
-        } else {
-            score * 0.3
-        };
-
-        assert!(f64::abs(match_score) < 1e-6f64);
-    }
-
-    #[test]
-    fn skill_finder_direct_match_gets_boost() {
-        let query_lower = "code";
-        let name_lower = "code_review";
-        let desc_lower = "review code changes";
-        let score: f64 = 0.5;
-
-        let match_score = if query_lower.is_empty() {
-            0.0
-        } else if name_lower.contains(query_lower) || desc_lower.contains(query_lower) {
-            (score * 0.7 + 0.3).clamp(0.0, 1.0)
-        } else {
-            score * 0.3
-        };
-
-        assert!((match_score - 0.65).abs() < 1e-6);
     }
 }

@@ -215,18 +215,6 @@ impl Skill for PromptBasedSkill {
     }
 }
 
-impl PromptBasedSkill {
-    /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
-    /// Not called internally but kept as a public utility for consumers.
-    #[allow(
-        dead_code,
-        reason = "Public API — reserved for external registry wiring (F-GAP-49)"
-    )]
-    pub fn boxed(self) -> Arc<dyn Skill> {
-        Arc::new(self)
-    }
-}
-
 /// A `PromptSkillAgent` that delegates prompt execution to an `Agent` in the
 /// registry. This bridges the skill system with the configured LLM provider
 /// to enable real LLM-based skill execution.

@@ -25,9 +25,10 @@ skills_enabled = true   # true = load builtin skills on startup (default)
 
 ## Builtin Skills
 
-| Name           | Description                                          |
-|----------------|------------------------------------------------------|
-| `builtin.echo` | Returns the input value unchanged (smoke-test skill) |
+| Name                  | Description                                                    |
+|-----------------------|----------------------------------------------------------------|
+| `builtin.echo`        | Returns the input value unchanged (smoke-test skill)           |
+| `skill-creator`       | Creates new prompt-based skills from structured definitions    |
 
 ---
 
@@ -44,6 +45,34 @@ follow these rules:
 | Schema         | `input_schema()` must return a JSON **object** (`{…}`)       |
 
 ---
+
+## Skill Tools
+
+Skill management is exposed to AI models through two built-in tools:
+
+| Tool | Description |
+|------|-------------|
+| `skill_list` | Lists all registered skills with name, description, and score |
+| `skill_execute` | Executes a registered skill by name with the given input |
+| `skill-finder` | Searches for skills by natural language query using token-based similarity |
+| `skill-creator` | Creates new prompt-based skills from a template |
+| `import_skill` | Imports a skill from a remote URL or GitHub repository |
+| `github_search_skills` | Searches GitHub for skill repositories |
+
+## Local Skill Discovery
+
+Place a `SKILL.md` file in `~/.agents/skills/<skill-name>/` with YAML frontmatter:
+
+```markdown
+---
+name: my-skill
+description: A description of what this skill does
+---
+
+Instructions for the skill go here.
+```
+
+Skills are automatically discovered when go-on starts. The `spawn_skill_refresh_task` background task periodically rescans the directory for new skills.
 
 ## Implementing a Custom Skill
 

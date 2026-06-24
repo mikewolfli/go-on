@@ -15,9 +15,3 @@ static GLOBAL_PLUGIN_REGISTRY: std::sync::OnceLock<PluginRegistry> = std::sync::
 pub fn register_plugin_registry(registry: PluginRegistry) {
     let _ = GLOBAL_PLUGIN_REGISTRY.set(registry);
 }
-
-/// Get a reference to the global PluginRegistry, if one has been registered.
-#[allow(dead_code)] // F-GAP-12 — reserved for global plugin registry access
-pub fn global_plugin_registry() -> Option<&'static PluginRegistry> {
-    GLOBAL_PLUGIN_REGISTRY.get()
-}

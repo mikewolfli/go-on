@@ -340,30 +340,6 @@ impl ReconnectHint {
 }
 
 // ---------------------------------------------------------------------------
-// HeartbeatPing / HeartbeatPong
-// ---------------------------------------------------------------------------
-
-/// Message sent from the hub to a connection to check liveness.
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HeartbeatPing {
-    /// Monotonically increasing ping sequence number.
-    pub seq: u64,
-    /// Server timestamp (Unix seconds).
-    pub timestamp: u64,
-}
-
-/// Expected response from a connection acknowledging a heartbeat ping.
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HeartbeatPong {
-    /// Echoed ping sequence number.
-    pub seq: u64,
-    /// Client timestamp (Unix seconds).
-    pub timestamp: u64,
-}
-
-// ---------------------------------------------------------------------------
 // WebSocketHub
 // ---------------------------------------------------------------------------
 
@@ -893,7 +869,7 @@ impl WebSocketHub {
 
     /// Record a pong response from a connection, verifying the sequence number.
     ///
-    /// Call this when a [`HeartbeatPong`] message is received from the client.
+    /// Call this when a pong message is received from the client.
     /// Returns `true` if the seq matched and the connection is considered alive,
     /// `false` if the connection is unknown or the seq was mismatched.
     pub async fn record_pong(&self, connection_id: &str, seq: u64) -> bool {

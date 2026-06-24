@@ -2,8 +2,8 @@
 //! Mirrors `agent-client-protocol-schema` v0.13.2 `src/v1/agent.rs`.
 
 use crate::schema::{
-    content::ContentBlock, Implementation, Meta, ProtocolVersion, SessionConfigGroupId,
-    SessionConfigId, SessionConfigValueId, SessionId, SessionModeId,
+    Implementation, Meta, ProtocolVersion, SessionConfigGroupId, SessionConfigId,
+    SessionConfigValueId, SessionId, SessionModeId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -130,16 +130,6 @@ pub struct LoadSessionResponse {
 }
 
 // ── Prompt ────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct PromptRequest {
-    pub session_id: SessionId,
-    pub prompt: Vec<ContentBlock>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -288,17 +278,6 @@ pub struct SessionConfigOption {
     pub category: Option<SessionConfigOptionCategory>,
     #[serde(flatten)]
     pub kind: SessionConfigKind,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct SetSessionConfigOptionRequest {
-    pub session_id: SessionId,
-    pub config_id: SessionConfigId,
-    pub value: SessionConfigValueId,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }

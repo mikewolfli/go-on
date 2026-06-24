@@ -2,10 +2,7 @@ use go_on::i18n::{current_language, init_i18n, set_language, t, tf, Language};
 
 fn run_tests() {
     // 初始化i18n系统
-    let languages_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("languages");
+    let languages_dir = std::env::temp_dir().join("go-on-i18n-test");
     if let Err(e) = init_i18n(languages_dir) {
         eprintln!("Failed to initialize i18n: {}", e);
         return;

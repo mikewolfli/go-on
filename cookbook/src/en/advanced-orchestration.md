@@ -10,15 +10,9 @@ The DAG (Directed Acyclic Graph) Execution Engine is responsible for scheduling 
 
 ### Topological Execution
 
-The engine computes a topological ordering of all nodes in the DAG before execution begins. Nodes with no dependencies (root nodes) are scheduled first, and a node is only dispatched once all its predecessors have completed successfully.
+The engine computes a topological ordering of all nodes in the DAG before execution begins using Kahn's algorithm. Nodes with no dependencies (root nodes) are scheduled first, and a node is only dispatched once all its predecessors have completed successfully.
 
-```rust
-// Conceptual topological order
-let order = topological_sort(&dag)?;
-for level in order.levels() {
-    execute_parallel(level).await?;
-}
-```
+The `CoreDag<T>` type provides the generic DAG implementation. For tool execution, `execute_tool_dag()` auto-selects between flat parallel fan-out and plan-respecting level-by-level execution based on whether an `ExecutionPlan` is provided.
 
 ### Dependency Management
 
@@ -41,21 +35,7 @@ Level 3: [E, F, G]     ← depend on D, run in parallel
 
 ### Cycle Detection
 
-Before execution begins, the engine performs a full cycle detection pass using depth-first search (DFS) with a recursion stack. If a cycle is detected, the entire DAG execution is aborted with a clear error identifying the conflicting edges.
-
-```rust
-fn detect_cycle(graph: &Graph) -> Result<(), Vec<Edge>> {
-    let mut visited = HashSet::new();
-    let mut stack = HashSet::new();
-    // DFS with back-edge detection
-    for node in graph.nodes() {
-        if has_back_edge(node, &mut visited, &mut stack, graph) {
-            return Err(extract_cycle_edges(graph));
-        }
-    }
-    Ok(())
-}
-```
+The engine performs cycle detection using Kahn's topological sort. If the sorted result contains fewer nodes than the total, a cycle exists. The DAG execution falls back to flat parallel fan-out when a cycle is detected.
 
 ---
 
@@ -75,9 +55,13 @@ FullAutoFlow is a fully autonomous 5-stage pipeline that takes a high-level user
 
 ### Skill-Aware Task Decomposition
 
-During the **Prepare** stage, FullAutoFlow decomposes the high-level goal into sub-tasks using the available skill registry. Each sub-task is matched to a skill that can fulfill it. The decomposition strategy considers:
+During the **Discover** stage, FullAutoFlow decomposes the high-level goal into sub-tasks using the available skill registry via `discover_skills()`. Each sub-task is matched to a skill using token-based similarity scoring (name overlap 35%, description overlap 40%, runtime success rate 25%). Results are cached by goal text for repeated queries.
 
-- **Skill cardinality**: whether a skill handles one task or many.
+The decomposition strategy considers:
+
+- **Token similarity**: weighted composite score of name, description, and runtime performance
+- **Dynamic threshold**: `ThresholdLearner` adjusts the minimum match score based on historical outcomes
+- **Fast-path cache**: SHA-256 fingerprinted routes bypass parsing/discovery for known task types
 - **Input/output compatibility**: whether the output of one skill can feed into another.
 - **Execution constraints**: timeout, memory, or provider requirements declared by the skill.
 

@@ -18,7 +18,8 @@
 //! - Stores transaction state in the existing WAL mechanism
 
 // F-GAP-51: entire module reserved for future 2PC integration
-#![allow(dead_code)]
+// Only compiled during tests since this is scaffolded for future use.
+#![cfg(test)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -32,7 +33,6 @@ use tracing::{error, info, warn};
 // ---------------------------------------------------------------------------
 
 /// Status of a distributed transaction.
-#[allow(dead_code)] // F-GAP-51
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DistributedTxStatus {
     /// Transaction has been created but not yet started.
@@ -53,6 +53,7 @@ pub enum DistributedTxStatus {
 
 impl DistributedTxStatus {
     /// Returns `true` if this status is a terminal (end) state.
+    #[cfg(test)]
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Committed | Self::Aborted | Self::Indeterminate)
     }
@@ -77,7 +78,6 @@ impl DistributedTxStatus {
 // ---------------------------------------------------------------------------
 
 /// A participant in a distributed transaction.
-#[allow(dead_code)] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionParticipant {
     /// Unique identifier for this participant.
@@ -95,7 +95,6 @@ pub struct TransactionParticipant {
 // ---------------------------------------------------------------------------
 
 /// A distributed transaction managed via two-phase commit.
-#[allow(dead_code)] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedTransaction {
     /// Unique transaction ID.
@@ -149,15 +148,6 @@ impl DistributedTransaction {
         let yes = self.participants.iter().filter(|p| p.voted_yes).count();
         let total = self.participants.len();
         (yes, total)
-    }
-
-    /// Count participants by their acknowledge status.
-    #[cfg(test)]
-    #[allow(dead_code, reason = "F-GAP-49 — reserved for future use")]
-    pub fn count_acknowledgements(&self) -> (usize, usize) {
-        let acked = self.participants.iter().filter(|p| p.acknowledged).count();
-        let total = self.participants.len();
-        (acked, total)
     }
 }
 
@@ -435,19 +425,8 @@ impl TwoPhaseCoordinator {
         tx
     }
 
-    /// Look up a transaction — first checks active, then completed.
-    pub async fn get_status(&self, tx_id: &str) -> Option<DistributedTransaction> {
-        let active = self.active_transactions.read().await.get(tx_id).cloned();
-        if active.is_some() {
-            return active;
-        }
-        drop(active);
-        self.get_completed_transactions()
-            .into_iter()
-            .find(|tx| tx.tx_id == tx_id)
-    }
-
     /// Get a transaction by ID from the active set.
+    #[cfg(test)]
     pub async fn get_transaction(&self, tx_id: &str) -> Option<DistributedTransaction> {
         self.active_transactions.read().await.get(tx_id).cloned()
     }

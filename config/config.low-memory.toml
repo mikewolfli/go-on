@@ -19,14 +19,14 @@ model_selection_mode = "adaptive"
 
 [cache]
 enabled = true
-path = "acp_cache.sqlite3"
+path = "sqlite3/acp_cache.sqlite3"
 default_ttl_seconds = 600         # 10 min cache TTL (reduced from 1800)
 max_entries = 500                  # Absolute minimum (reduced from 2000)
 
 [vector]
 enabled = true
 auto_mode = false                  # Manual mode for predictable behavior
-path = "acp_vector.sqlite3"
+path = "sqlite3/acp_vector.sqlite3"
 dimensions = 128                   # Low dimensions
 min_query_chars = 200              # Fewer vector searches
 top_k = 1                         # Minimum results

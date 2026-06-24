@@ -14,8 +14,8 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.3.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1962-brightgreen)]()
-[![Providers](https://img.shields.io/badge/providers-35+-9cf)]()
+[![Tests](https://img.shields.io/badge/tests-2114-brightgreen)]()
+[![Providers](https://img.shields.io/badge/providers-41-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 [![LOC](https://img.shields.io/badge/code-265K-blue)]()
 
@@ -81,7 +81,7 @@ cargo run -- --protocol-mode mcp_stdio
 - **多模型投票** — 高风险决策的并发智能体投票（多数/加权/一致/融合）
 
 ### AI 供应商支持（35+ 家）
-OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · 文心 · 西湖
+OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · 文心 · 西湖
 
 OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Function Call。
 
@@ -92,9 +92,9 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
 ### 工具系统
-- **16+ 个内置工具** — 读写文件、代码搜索、补丁应用、测试运行、Git Diff、Shell 执行、HTTP 请求、数据库查询、grep、find、git、cargo、npm、docker、pip
+- **39 个内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/find/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
-- **工具事务** — 幂等键去重、WAL 持久化、补偿操作、两阶段提交（2PC）
+- **工具事务** — 幂等键去重、WAL 持久化、补偿操作
 - **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
 - **原生函数调用** — OpenAI/Anthropic tool_choice、Gemini functionCall、DeepSeek tools 参数
 
@@ -207,7 +207,7 @@ npm run compile
 
 | 指标 | 数值 |
 |:-----|:-----|
-| Rust 后端代码行数 | ~226K（443 个模块）|
+| Rust 后端代码行数 | ~234K（494 个模块）|
 | GUI（EGUI）代码行数 | ~22K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
 | SDK（Rust + Python）代码行数 | ~1.2K |
@@ -233,7 +233,7 @@ cargo build --no-default-features --features multi-users-server,backend-postgres
 
 | 配置 | `cargo clippy -D warnings` | 测试状态 |
 |:-----|:--------------------------:|:--------:|
-| `local` | ✅ **零警告** | ✅ **2252 通过，0 失败，0 忽略** |
+| `local` | ✅ **零警告** | ✅ **2114 通过，0 失败，0 忽略** |
 | `simple-server` | ✅ **零警告** | ✅ **全部通过** |
 | `multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
 | `full` | ✅ **零警告** | ✅ **全部通过** |

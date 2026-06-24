@@ -8,9 +8,9 @@
 
 ## Version
 
-- Core runtime: **1.1.0**
-- GUI desktop: **1.1.0**
-- VS Code addon: **1.1.0**
+- Core runtime: **1.3.0**
+- GUI desktop: **1.3.0**
+- VS Code addon: **1.3.0**
 
 ## GUI Desktop App
 
@@ -29,7 +29,7 @@ Key features:
 
 ## Build Profiles
 
-Three build profiles support different deployment scenarios, plus a `full` for CI:
+Four build profiles support different deployment scenarios:
 
 | Profile | Backend | Use Case | Build Command |
 |:--------|:--------|:---------|:--------------|
@@ -42,12 +42,12 @@ Three build profiles support different deployment scenarios, plus a `full` for C
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **local** | ✅ **Zero warnings** | **2252** |
+| **local** | ✅ **Zero warnings** | **2114** |
 | **simple-server** | ✅ **Zero warnings** | **all pass** |
 | **full** | ✅ **Zero warnings** | **all pass** |
 | **multi-users-server** | ✅ **Zero warnings** | **all pass** |
 
-All 2252 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
+All 2114 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
 
 ## Runtime Protocol Modes
 

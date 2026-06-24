@@ -7,24 +7,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use thiserror::Error;
-
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)] // F-GAP-49 — reserved prompt injection feature
-#[derive(Debug, Error)]
-pub enum InjectionError {
-    #[error("detection failed: {0}")]
-    DetectionFailed(String),
-
-    #[error("model check unavailable: {0}")]
-    ModelUnavailable(String),
-
-    #[error("invalid pattern: {0}")]
-    InvalidPattern(String),
-}
 
 // ---------------------------------------------------------------------------
 // InjectionCategory

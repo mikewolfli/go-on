@@ -15,7 +15,6 @@
 
 /// Default probability of a simulated recovery failure during drills.
 /// Set to 0.1 (10%) to model real-world chaos where not all recoveries succeed.
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 pub const RECOVERY_FAILURE_RATE: f64 = 0.1;
 
 use serde::{Deserialize, Serialize};
@@ -100,7 +99,6 @@ fn default_probability() -> f64 {
 // ---------------------------------------------------------------------------
 
 /// A complete chaos drill scenario combining multiple fault injections.
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrillScenario {
     /// Name of the scenario for reporting.
@@ -116,7 +114,6 @@ pub struct DrillScenario {
     pub timeout_secs: u64,
 }
 
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 fn default_timeout_secs() -> u64 {
     60
 }
@@ -126,7 +123,6 @@ fn default_timeout_secs() -> u64 {
 // ---------------------------------------------------------------------------
 
 /// Outcome of a single fault injection during a drill.
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InjectionResult {
     pub fault_type: FaultType,
@@ -138,7 +134,6 @@ pub struct InjectionResult {
 }
 
 /// Overall result of a chaos drill scenario.
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrillResult {
     pub scenario_name: String,
@@ -199,7 +194,6 @@ impl ChaosEngine {
     }
 
     /// Register fault injections for a scenario.
-    #[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
     pub fn load_scenario(&self, scenario: &DrillScenario) {
         let mut injections = self.injections.write().unwrap_or_else(|poisoned| {
             warn!("chaos injections lock poisoned, recovering");
@@ -216,7 +210,6 @@ impl ChaosEngine {
 
     /// Run all drills in the scenario asynchronously and return a `DrillResult`.
     /// This is the main entry point for running chaos drill scenarios.
-    #[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
     pub async fn run_drills(&self, scenario: &DrillScenario) -> DrillResult {
         let start = std::time::Instant::now();
         self.set_enabled(true);
@@ -271,7 +264,6 @@ impl ChaosEngine {
     }
 
     /// Clear all registered fault injections and reset injection counts.
-    #[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
     pub fn clear(&self) {
         let mut injections = self.injections.write().unwrap_or_else(|poisoned| {
             warn!("chaos injections lock poisoned, recovering");
@@ -351,7 +343,6 @@ impl Default for ChaosEngine {
 // Built-in scenarios
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 pub fn network_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "network_resilience".to_string(),
@@ -385,7 +376,6 @@ pub fn network_resilience_scenario() -> DrillScenario {
     }
 }
 
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 pub fn storage_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "storage_resilience".to_string(),
@@ -419,7 +409,6 @@ pub fn storage_resilience_scenario() -> DrillScenario {
     }
 }
 
-#[allow(dead_code)] // reserved — wired when chaos-testing feature is enabled
 pub fn resource_exhaustion_scenario() -> DrillScenario {
     DrillScenario {
         name: "resource_exhaustion".to_string(),

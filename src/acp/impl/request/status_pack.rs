@@ -397,10 +397,12 @@ pub(super) async fn handle_release_readiness(
         sla_success_rate >= 0.90 && sla_p95_latency_ms <= 1200.0 && observability_gate;
     let skill_import_policy =
         crate::orchestration::skill_import::SkillImportPolicy::from_runtime(&server.runtime_config);
-    let imported_skill_records =
-        crate::orchestration::skill_import::SkillImportStore::load(skill_import_policy.clone())
-            .map(|store| store.list())
-            .unwrap_or_default();
+    let imported_skill_records = crate::orchestration::skill_import::SkillImportStore::load(
+        skill_import_policy.clone(),
+        server.orchestration_deps.skill_registry.clone(),
+    )
+    .map(|store| store.list())
+    .unwrap_or_default();
     let imported_skill_total = imported_skill_records.len();
     let imported_skill_enabled_total = imported_skill_records
         .iter()

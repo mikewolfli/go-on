@@ -95,13 +95,11 @@ impl ToolRecommender {
     }
 
     /// Register a task pattern for keyword‑based matching.
-    #[allow(dead_code)] // F-GAP-17 — reserved for tool recommender integration
     pub fn add_pattern(&mut self, pattern: TaskToolPattern) {
         self.task_patterns.push(pattern);
     }
 
     /// Update (or insert) usage stats for a tool after a call completes.
-    #[allow(dead_code)] // F-GAP-17 — reserved for tool recommender integration
     pub fn record_usage(
         &mut self,
         tool_name: &str,
@@ -311,33 +309,8 @@ impl Default for ToolRecommender {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Build a recommender with default search/write patterns.
-#[cfg(test)]
-#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-                    // F-GAP-49 — reserved for future use
-pub(crate) fn default_recommender() -> ToolRecommender {
-    let mut rec = ToolRecommender::new();
-    rec.add_pattern(TaskToolPattern {
-        keywords: vec!["search".to_string(), "find".to_string(), "grep".to_string()],
-        tools: vec!["grep".to_string(), "read_file".to_string()],
-        weight: 1.0,
-    });
-    rec.add_pattern(TaskToolPattern {
-        keywords: vec![
-            "write".to_string(),
-            "create".to_string(),
-            "edit".to_string(),
-        ],
-        tools: vec!["write_file".to_string(), "edit_file".to_string()],
-        weight: 1.0,
-    });
-    rec
-}
-
 /// Format a single recommendation for display.
 #[cfg(test)]
-#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-                    // F-GAP-49 — reserved for future use
 pub fn format_recommendation(rec: &ToolRecommendation) -> String {
     format!(
         "{} (score={:.3}): {}",
@@ -347,8 +320,6 @@ pub fn format_recommendation(rec: &ToolRecommendation) -> String {
 
 /// Look up usage stats for a tool, returning a reference.
 #[cfg(test)]
-#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-                    // F-GAP-49 — reserved for future use
 pub fn get_tool_stats<'a>(
     recommender: &'a ToolRecommender,
     tool_name: &str,

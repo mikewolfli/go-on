@@ -415,13 +415,6 @@ impl QualityCompassPolicy {
             config: None,
         }
     }
-
-    /// Returns a reference to the parsed config, if any.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn config(&self) -> Option<&serde_json::Value> {
-        self.config.as_ref()
-    }
 }
 
 impl ReloadablePolicy for QualityCompassPolicy {
@@ -526,13 +519,6 @@ impl SandboxPolicyReloadable {
             checksum: None,
             config: None,
         }
-    }
-
-    /// Returns a reference to the parsed config, if any.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn config(&self) -> Option<&serde_json::Value> {
-        self.config.as_ref()
     }
 }
 

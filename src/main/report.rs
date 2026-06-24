@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use crate::config::{AppConfig, ConfigWarning, ConfigWarningSeverity};
 use crate::i18n::runtime::tf;
 use crate::reinforcement::RuntimeHealthcheckReport;
@@ -26,23 +24,6 @@ pub(crate) fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bo
             warning.code,
             warning.message
         );
-    }
-}
-
-// Reserved for future config-driven path resolution during bootstrap.
-#[allow(dead_code)] // F-GAP-49 — reserved for config path resolution
-pub(crate) fn resolve_config_relative_path(
-    config_path: &std::path::Path,
-    raw_path: &str,
-) -> PathBuf {
-    let candidate = PathBuf::from(raw_path);
-    if candidate.is_absolute() {
-        candidate
-    } else {
-        config_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join(candidate)
     }
 }
 

@@ -18,8 +18,8 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.3.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1962-brightgreen)]()
-[![Providers](https://img.shields.io/badge/providers-35+-9cf)]()
+[![Tests](https://img.shields.io/badge/tests-2114-brightgreen)]()
+[![Providers](https://img.shields.io/badge/providers-41-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 [![LOC](https://img.shields.io/badge/code-265K-blue)]()
 
@@ -84,8 +84,8 @@ Default health endpoint: `http://127.0.0.1:8090/health`
 - **Fast path cache** — SHA-256 fingerprint, TTL/LRU eviction, 4-tier caching (intent/skill/env/route)
 - **Multi-model voter** — Concurrent agent voting for high-stakes decisions (majority/weighted/unanimous/fusion)
 
-### AI Provider Support (35+)
-OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · Wenxin · Xihu
+### AI Provider Support (41)
+OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · Wenxin · Xihu
 
 Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Groq, and xAI Grok.
 
@@ -96,9 +96,9 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
 
 ### Tool System
-- **16+ built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/db_query/grep/find/git/cargo/npm/docker/pip
+- **39 built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/find/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **Tool pipeline** — serial/parallel/conditional execution with error handling
-- **Tool transactions** — idempotency keys, WAL persistence, compensation actions, two-phase commit (2PC)
+- **Tool transactions** — idempotency keys, WAL persistence, compensation actions
 - **Dynamic tool recommendation** — pattern + recency + co-occurrence based suggestions
 - **Native function calling** — OpenAI/Anthropic tool_choice, Gemini functionCall, DeepSeek tools
 
@@ -211,7 +211,7 @@ npm run compile
 
 | Metric | Value |
 |:-------|:------|
-| Rust backend LOC | ~226K (443 modules) |
+| Rust backend LOC | ~234K (494 modules) |
 | GUI (EGUI) LOC | ~22K |
 | VS Code addon (TypeScript) LOC | ~17K |
 | SDK (Rust + Python) LOC | ~1.2K |
@@ -237,7 +237,7 @@ cargo build --no-default-features --features multi-users-server,backend-postgres
 
 | Profile | `cargo clippy -D warnings` | Test Status |
 |:--------|:--------------------------:|:-----------:|
-| `local` | ✅ **Zero warnings** | ✅ **all pass, 0 fail, 0 ignored** |
+| `local` | ✅ **Zero warnings** | ✅ **2114 pass, 0 fail, 0 ignored** |
 | `simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `full` | ✅ **Zero warnings** | ✅ **all pass** |

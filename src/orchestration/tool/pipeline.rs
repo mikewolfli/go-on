@@ -1,7 +1,6 @@
-//! Tool pipeline for composing and executing multi-step tool workflows.
+//! Tool pipeline for composing and executing sequential tool workflows.
 //!
-//! Builds on the tool registry to support sequential, parallel, and
-//! conditional tool execution with configurable error handling strategies.
+//! Builds on the tool registry to execute steps sequentially.
 
 use serde_json::Value;
 use std::time::Instant;
@@ -14,9 +13,11 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 // ---------------------------------------------------------------------------
 
 /// A single step in a tool execution pipeline.
-pub enum PipelineStep {
-    /// Single tool execution.
-    Single { tool_name: String, input: Value },
+pub struct PipelineStep {
+    /// Name of the tool to execute.
+    pub tool_name: String,
+    /// Input payload for the tool.
+    pub input: Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ pub enum PipelineStep {
 /// Determines behaviour when a pipeline step fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineErrorStrategy {
-    /// Continue executing remaining steps despite the error.
+    /// Continue executing remaining steps despite an error.
     Continue,
 }
 
@@ -37,7 +38,7 @@ pub enum PipelineErrorStrategy {
 /// A named, executable pipeline of tool steps with an error strategy.
 pub struct ToolPipeline {
     /// Human-readable name for observability.
-    pub _name: String,
+    pub name: String,
     /// Steps that make up this pipeline.
     pub steps: Vec<PipelineStep>,
     /// Error handling strategy applied across all steps.
@@ -77,10 +78,7 @@ pub struct PipelineStepResult {
 // ---------------------------------------------------------------------------
 
 impl ToolPipeline {
-    /// Execute all pipeline steps against the given tool registry.
-    ///
-    /// Walks the pipeline DAG respecting sequence, parallel, and conditional
-    /// semantics.  The `context` value is available for conditional evaluations.
+    /// Execute all pipeline steps sequentially against the given tool registry.
     pub async fn execute(&self, registry: &ToolRegistry, context: &Value) -> PipelineResult {
         let total_start = Instant::now();
         let mut step_results: Vec<PipelineStepResult> = Vec::new();
@@ -114,7 +112,7 @@ impl ToolPipeline {
 // Internal step executor
 // ---------------------------------------------------------------------------
 
-/// Recursively execute a single [`PipelineStep`] and return its results plus
+/// Execute a single [`PipelineStep`] and return its results plus
 /// a flag indicating whether execution should continue.
 async fn execute_step(
     registry: &ToolRegistry,
@@ -122,14 +120,10 @@ async fn execute_step(
     _context: &Value,
     strategy: PipelineErrorStrategy,
 ) -> (Vec<PipelineStepResult>, bool) {
-    match step {
-        PipelineStep::Single { tool_name, input } => {
-            let result = run_single_tool(registry, tool_name, input).await;
-            let should_continue =
-                result.error.is_none() || strategy == PipelineErrorStrategy::Continue;
-            (vec![result], should_continue)
-        }
-    }
+    let PipelineStep { tool_name, input } = step;
+    let result = run_single_tool(registry, tool_name, input).await;
+    let should_continue = result.error.is_none() || strategy == PipelineErrorStrategy::Continue;
+    (vec![result], should_continue)
 }
 
 /// Execute a single tool and record the result.
@@ -209,9 +203,9 @@ async fn run_single_tool(
 // Tests
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -219,7 +213,6 @@ mod tests {
     use crate::orchestration::tool::{Tool, ToolInput, ToolOutput, ToolRegistry};
     use serde_json::json;
 
-    /// A tool that succeeds and echoes its input as output.
     struct EchoTool;
 
     impl Tool for EchoTool {
@@ -238,57 +231,14 @@ mod tests {
         }
     }
 
-    /// A tool that always fails.
-    #[allow(dead_code)]
-    struct FailTool;
-
-    impl Tool for FailTool {
-        fn name(&self) -> &'static str {
-            "fail"
-        }
-        fn run(&self, _input: &ToolInput) -> anyhow::Result<ToolOutput> {
-            Ok(ToolOutput {
-                success: false,
-                result: None,
-                error: Some("intentional failure".to_string()),
-                verification: None,
-                audit_log: None,
-                pua_report: None,
-            })
-        }
-    }
-
-    #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-                        // F-GAP-49 — reserved for future use
-    fn dummy_input() -> ToolInput {
-        ToolInput {
-            task_id: "pipeline-test".to_string(),
-            phase: "test".to_string(),
-            agent_role: "tester".to_string(),
-            objective: "test".to_string(),
-            constraints: None,
-            evidence: None,
-            payload: json!({}),
-            allowed_base_dir: None,
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Pipeline execute helper
-    // -----------------------------------------------------------------------
-
-    // -----------------------------------------------------------------------
-    // Tests
-    // -----------------------------------------------------------------------
-
     #[tokio::test]
     async fn single_step_pipeline_succeeds() {
         let mut registry = ToolRegistry::new_empty();
         registry.register(EchoTool);
 
         let pipeline = ToolPipeline {
-            _name: "test-single".to_string(),
-            steps: vec![PipelineStep::Single {
+            name: "test-single".to_string(),
+            steps: vec![PipelineStep {
                 tool_name: "echo".to_string(),
                 input: json!({}),
             }],

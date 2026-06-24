@@ -79,73 +79,17 @@ impl PluginState {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// PluginContext / PluginResult — lifecycle event payloads
-// ---------------------------------------------------------------------------
-
-/// Context passed to plugin lifecycle hooks.
-#[allow(dead_code)] // used by Plugin trait lifecycle hooks
-#[derive(Debug, Clone)]
-pub struct PluginContext {
-    pub agent_name: String,
-    pub task_id: String,
-    pub session_id: Option<String>,
-}
-
-/// Result returned by an agent execution, passed to plugin completion hooks.
-#[allow(dead_code)] // used by Plugin trait lifecycle hooks
-#[derive(Debug, Clone)]
-pub struct PluginResult {
-    pub success: bool,
-    pub error: Option<String>,
-    pub duration_ms: u64,
-    pub tool_call_count: u64,
-}
-
-// ---------------------------------------------------------------------------
 // Plugin trait
 // ---------------------------------------------------------------------------
 
 /// Core trait that all plugins must implement.
 #[async_trait]
-#[allow(dead_code)] // F-GAP-12 — lifecycle hooks reserved for agent execution integration
 pub trait Plugin: Send + Sync {
     /// Get the plugin manifest.
     fn manifest(&self) -> &PluginManifest;
 
-    /// Initialize the plugin. Called once when the plugin is loaded.
-    async fn initialize(&mut self) -> anyhow::Result<()>;
-
-    /// Shutdown the plugin. Called when the plugin is unloaded.
-    async fn shutdown(&mut self) -> anyhow::Result<()>;
-
     /// Get the current plugin state.
     fn state(&self) -> PluginState;
-
-    // ── Lifecycle hooks (all have default no-op impls) ────────────────────
-
-    /// Called when an agent starts executing a task.
-    fn on_agent_start(&self, _ctx: &PluginContext) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Called when an agent completes a task (success or failure).
-    fn on_agent_complete(
-        &self,
-        _ctx: &PluginContext,
-        _result: &PluginResult,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Called before a tool is executed. Return `false` to block the call.
-    fn on_tool_execute(&self, _tool_name: &str) -> anyhow::Result<bool> {
-        Ok(true)
-    }
-
-    /// Called when an error occurs during agent execution.
-    fn on_error(&self, _ctx: &PluginContext, _error: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,47 +122,8 @@ impl Plugin for TelemetryPlugin {
         &self.manifest
     }
 
-    async fn initialize(&mut self) -> anyhow::Result<()> {
-        self.state = PluginState::Active;
-        tracing::info!(target: "plugin", "{} initialized", self.manifest.name);
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> anyhow::Result<()> {
-        self.state = PluginState::Unloaded;
-        tracing::info!(target: "plugin", "{} shut down", self.manifest.name);
-        Ok(())
-    }
-
     fn state(&self) -> PluginState {
         self.state
-    }
-
-    fn on_agent_start(&self, ctx: &PluginContext) -> anyhow::Result<()> {
-        tracing::info!(
-            target: "plugin",
-            event = "agent_start",
-            agent = %ctx.agent_name,
-            task = %ctx.task_id,
-            session = %ctx.session_id.as_deref().unwrap_or("none"),
-            "Agent started"
-        );
-        Ok(())
-    }
-
-    fn on_agent_complete(&self, ctx: &PluginContext, result: &PluginResult) -> anyhow::Result<()> {
-        tracing::info!(
-            target: "plugin",
-            event = "agent_complete",
-            agent = %ctx.agent_name,
-            task = %ctx.task_id,
-            success = %result.success,
-            duration_ms = %result.duration_ms,
-            tool_calls = %result.tool_call_count,
-            error = %result.error.as_deref().unwrap_or("none"),
-            "Agent completed"
-        );
-        Ok(())
     }
 }
 
@@ -228,10 +133,7 @@ impl Plugin for TelemetryPlugin {
 
 /// A plugin that records agent execution metrics via `tracing::info!`.
 ///
-/// Registered under the ID `builtin:skill` at startup. Provides
-/// implementations of `on_agent_start`, `on_agent_complete`, and
-/// `on_tool_execute` to emit structured metrics that can be consumed
-/// by observability pipelines.
+/// Registered under the ID `builtin:skill` at startup.
 pub struct MetricsPlugin {
     manifest: PluginManifest,
     state: PluginState,
@@ -252,68 +154,8 @@ impl Plugin for MetricsPlugin {
         &self.manifest
     }
 
-    async fn initialize(&mut self) -> anyhow::Result<()> {
-        self.state = PluginState::Active;
-        tracing::info!(target: "plugin", "{} initialized", self.manifest.name);
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> anyhow::Result<()> {
-        self.state = PluginState::Unloaded;
-        tracing::info!(target: "plugin", "{} shut down", self.manifest.name);
-        Ok(())
-    }
-
     fn state(&self) -> PluginState {
         self.state
-    }
-
-    fn on_agent_start(&self, ctx: &PluginContext) -> anyhow::Result<()> {
-        tracing::info!(
-            target: "plugin",
-            metric = "agent_start_count",
-            agent = %ctx.agent_name,
-            value = 1u64,
-            "[METRIC] agent_start_count"
-        );
-        Ok(())
-    }
-
-    fn on_agent_complete(&self, ctx: &PluginContext, result: &PluginResult) -> anyhow::Result<()> {
-        tracing::info!(
-            target: "plugin",
-            metric = "agent_complete_count",
-            agent = %ctx.agent_name,
-            success = %result.success,
-            value = 1u64,
-            "[METRIC] agent_complete_count"
-        );
-        tracing::info!(
-            target: "plugin",
-            metric = "agent_duration_ms_total",
-            agent = %ctx.agent_name,
-            value = %result.duration_ms,
-            "[METRIC] agent_duration_ms_total"
-        );
-        tracing::info!(
-            target: "plugin",
-            metric = "agent_tool_calls_total",
-            agent = %ctx.agent_name,
-            value = %result.tool_call_count,
-            "[METRIC] agent_tool_calls_total"
-        );
-        Ok(())
-    }
-
-    fn on_tool_execute(&self, tool_name: &str) -> anyhow::Result<bool> {
-        tracing::info!(
-            target: "plugin",
-            metric = "tool_execute_count",
-            tool = %tool_name,
-            value = 1u64,
-            "[METRIC] tool_execute_count"
-        );
-        Ok(true)
     }
 }
 
@@ -374,18 +216,6 @@ impl NoOpPlugin {
 impl Plugin for NoOpPlugin {
     fn manifest(&self) -> &PluginManifest {
         &self.manifest
-    }
-
-    async fn initialize(&mut self) -> anyhow::Result<()> {
-        self.state = PluginState::Active;
-        tracing::info!("{} initialized", self.manifest.name);
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> anyhow::Result<()> {
-        self.state = PluginState::Unloaded;
-        tracing::info!("{} shut down", self.manifest.name);
-        Ok(())
     }
 
     fn state(&self) -> PluginState {
@@ -498,12 +328,10 @@ impl Default for PluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct TestPlugin {
         manifest: PluginManifest,
         state: PluginState,
-        initialized: AtomicBool,
     }
 
     impl TestPlugin {
@@ -520,24 +348,13 @@ mod tests {
                     dependencies: HashMap::new(),
                 },
                 state: PluginState::Registered,
-                initialized: AtomicBool::new(false),
             }
         }
     }
 
-    #[async_trait]
     impl Plugin for TestPlugin {
         fn manifest(&self) -> &PluginManifest {
             &self.manifest
-        }
-        async fn initialize(&mut self) -> anyhow::Result<()> {
-            self.initialized.store(true, Ordering::Relaxed);
-            self.state = PluginState::Active;
-            Ok(())
-        }
-        async fn shutdown(&mut self) -> anyhow::Result<()> {
-            self.state = PluginState::Unloaded;
-            Ok(())
         }
         fn state(&self) -> PluginState {
             self.state

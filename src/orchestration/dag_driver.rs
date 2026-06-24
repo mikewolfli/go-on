@@ -1,16 +1,13 @@
-//! Deprecated wrapper around [`crate::orchestration::core_dag::CoreDag<T>`].
-//!
-//! Provides `build_tool_execution_dag`, `execute_tool_dag`, and
-//! `dag_trace_to_observability` — legacy functions that use
-//! [`CoreDag`](crate::orchestration::core_dag::CoreDag) plus
-//! [`ExecutionGraph`](crate::orchestration::execution_graph::ExecutionGraph)
-//! integration. New code should use `CoreDag<T>` directly.
-//!
-//! # Deprecated
-//! Use [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
-
-#![cfg_attr(not(test), deprecated(note = "Use core_dag::CoreDag instead"))]
-
+/// Tool execution DAG — orchestrates tool calls with parallel fan-out
+/// and plan-topology execution levels.
+///
+/// Provides `build_tool_execution_dag`, `execute_tool_dag`, and helpers
+/// that execute tool calls in parallel (flat fan-out) or respecting
+/// plan dependency topology (level-by-level execution).
+///
+/// Uses [`CoreDag`](CoreDag) internally for plan-level execution ordering.
+/// Prefer `execute_tool_dag` for new code; it auto-selects the optimal
+/// execution strategy based on whether an [`ExecutionPlan`] is provided.
 use std::sync::Arc;
 
 use crate::i18n::runtime::tf;
@@ -382,7 +379,6 @@ pub use crate::orchestration::core_dag::dag_trace_to_observability;
 
 #[cfg(test)]
 mod tests {
-    #![allow(deprecated)]
     use super::*;
 
     #[test]

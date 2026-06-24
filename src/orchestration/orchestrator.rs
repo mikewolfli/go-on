@@ -228,11 +228,11 @@ pub async fn execute_tool_pipeline(
 ) -> PipelineResult {
     let steps: Vec<PipelineStep> = tool_steps
         .into_iter()
-        .map(|(tool_name, input)| PipelineStep::Single { tool_name, input })
+        .map(|(tool_name, input)| PipelineStep { tool_name, input })
         .collect();
 
     let pipeline = ToolPipeline {
-        _name: "orchestrator-pipeline".to_string(),
+        name: "orchestrator-pipeline".to_string(),
         steps,
         on_error: crate::orchestration::tool_pipeline::PipelineErrorStrategy::Continue,
     };

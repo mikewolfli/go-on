@@ -34,7 +34,6 @@ pub use report::{AutoExecutionReport, ExecutionStep, SkillMatch};
 use std::sync::{Arc, Mutex, RwLock as StdRwLock};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::orchestration::complexity_estimator::ComplexityEstimator;
@@ -42,7 +41,6 @@ use crate::orchestration::fast_path_cache::{
     EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
 };
 use crate::orchestration::skill::SkillRegistry;
-use crate::orchestration::skill_import::SkillImportPolicy;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::threshold_learner::ThresholdLearner;
 use crate::orchestration::tool::ToolRegistry;
@@ -281,19 +279,14 @@ impl FullAutoFlow {
     /// `enable_skill_market()` before `run()` for external skill discovery.
     pub fn enable_skill_market(&mut self) {
         let cache_dir = std::env::temp_dir().join("go-on-skill-market");
-        let import_policy = SkillImportPolicy {
-            enabled: true,
-            allowed_sources: vec!["*".to_string()],
-            require_sha256: false,
-            allow_floating_ref: true,
-            cache_dir: cache_dir.to_string_lossy().to_string(),
-        };
-        self.skill_market = Some(SkillMarketRegistry::new(
-            "https://marketplace.go-on.dev",
-            cache_dir,
-            Arc::new(RwLock::new(SkillRegistry::default())),
-            import_policy,
-        ));
+        self.skill_market = Some(
+            SkillMarketRegistry::new(
+                "https://marketplace.go-on.dev",
+                cache_dir,
+                self.skill_registry.clone(),
+            )
+            .expect("failed to create skill market registry"),
+        );
         tracing::info!("Skill marketplace enabled for discovery phase");
     }
 }
@@ -365,8 +358,8 @@ mod tests {
 
         let failing_skill = FixedSkill {
             name: "flakey_tool".to_string(),
-            desc: "A skill that always fails for testing purposes".to_string(),
-            output: serde_json::Value::Null,
+            desc: "Unreliable tool for testing failure handling".to_string(),
+            output: serde_json::json!({}),
             fail: true,
         };
         reg.register(Arc::new(failing_skill)).unwrap();

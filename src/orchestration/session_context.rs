@@ -41,79 +41,6 @@ pub enum ConceptCategory {
     Unknown,
 }
 
-impl ConceptCategory {}
-
-// ---------------------------------------------------------------------------
-// MessageImportanceScore
-// ---------------------------------------------------------------------------
-
-/// Scoring factors for intelligent message retention.
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // F-GAP-09 — reserved for message retention scoring
-pub struct MessageImportanceScore {
-    /// Is this an anchor message (first/last)?
-    pub is_anchor: bool,
-    /// Contains tool execution results?
-    pub has_tool_result: bool,
-    /// Contains a code block?
-    pub has_code_block: bool,
-    /// Contains a decision or conclusion?
-    pub has_decision: bool,
-    /// Contains file path references?
-    pub has_file_path: bool,
-    /// Contains an error or warning?
-    pub has_error: bool,
-    /// How many key concepts reference this message.
-    pub concept_density: u32,
-    /// Combined score (0-100).
-    pub combined_score: u32,
-}
-
-impl MessageImportanceScore {
-    pub fn compute(
-        is_anchor: bool,
-        has_tool_result: bool,
-        has_code_block: bool,
-        has_decision: bool,
-        has_file_path: bool,
-        has_error: bool,
-        concept_density: u32,
-    ) -> Self {
-        let mut score = 0u32;
-        if is_anchor {
-            score += 25;
-        }
-        if has_tool_result {
-            score += 20;
-        }
-        if has_code_block {
-            score += 15;
-        }
-        if has_decision {
-            score += 20;
-        }
-        if has_file_path {
-            score += 10;
-        }
-        if has_error {
-            score += 15;
-        }
-        score += (concept_density * 5).min(25);
-        let combined_score = score.min(100);
-
-        Self {
-            is_anchor,
-            has_tool_result,
-            has_code_block,
-            has_decision,
-            has_file_path,
-            has_error,
-            concept_density,
-            combined_score,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // ContextWindowBudget
 // ---------------------------------------------------------------------------
@@ -156,7 +83,6 @@ impl ContextWindowBudget {
 
 /// A lightweight context marker inserted when conversation is trimmed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-09 — reserved for continuity marker integration
 pub struct ContinuityMarker {
     /// Summary of what was trimmed.
     pub summary: String,
@@ -256,15 +182,7 @@ impl SessionContextManager {
     }
 
     /// Compute importance score for a message at the given index.
-    pub fn score_message(
-        &self,
-        index: usize,
-        total: usize,
-        content: &str,
-        role: &str,
-    ) -> MessageImportanceScore {
-        let is_anchor = index == 0 || index == total - 1;
-        let has_tool_result = role == "tool" || content.contains("[Tool result");
+    pub fn score_message(&self, index: usize, _total: usize, content: &str, _role: &str) -> u32 {
         let has_code_block = content.contains("```");
         let has_decision = self.decisions.iter().any(|(_, i)| *i == index);
         let has_file_path = self.file_paths.iter().any(|fp| content.contains(fp));
@@ -275,15 +193,21 @@ impl SessionContextManager {
             .filter(|c| content.contains(&c.text))
             .count() as u32;
 
-        MessageImportanceScore::compute(
-            is_anchor,
-            has_tool_result,
-            has_code_block,
-            has_decision,
-            has_file_path,
-            has_error,
-            concept_density,
-        )
+        let mut score = 0u32;
+        if has_code_block {
+            score += 15;
+        }
+        if has_decision {
+            score += 20;
+        }
+        if has_file_path {
+            score += 10;
+        }
+        if has_error {
+            score += 15;
+        }
+        score += (concept_density * 5).min(25);
+        score.min(100)
     }
 
     /// Select which messages to retain when trimming is needed.
@@ -306,7 +230,7 @@ impl SessionContextManager {
             );
         }
 
-        let mut scored: Vec<(usize, MessageImportanceScore)> = messages
+        let mut scored: Vec<(usize, u32)> = messages
             .iter()
             .enumerate()
             .map(|(i, (role, content))| {
@@ -316,7 +240,7 @@ impl SessionContextManager {
             .collect();
 
         // Sort by combined score descending
-        scored.sort_by_key(|(_, score)| std::cmp::Reverse(score.combined_score));
+        scored.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
 
         // Always include first and last
         let mut retained: HashSet<usize> = HashSet::new();
@@ -401,12 +325,6 @@ impl SessionContextManager {
     pub fn decision_count(&self) -> usize {
         self.decisions.len()
     }
-
-    /// Get the file paths referenced.
-    #[allow(dead_code)] // F-GAP-09 — reserved for context management diagnostics
-    pub fn file_paths(&self) -> &HashSet<String> {
-        &self.file_paths
-    }
 }
 
 impl Default for SessionContextManager {
@@ -420,15 +338,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_importance_score_anchor() {
-        let score = MessageImportanceScore::compute(true, false, false, false, false, false, 0);
-        assert_eq!(score.combined_score, 25);
-    }
-
-    #[test]
-    fn test_importance_score_max() {
-        let score = MessageImportanceScore::compute(true, true, true, true, true, true, 5);
-        assert_eq!(score.combined_score, 100);
+    fn test_importance_score_message_direct() {
+        let mgr = SessionContextManager::default();
+        // No concepts, no decisions, no code blocks, no file paths -> score of 0
+        let score = mgr.score_message(0, 10, "hello world", "user");
+        assert_eq!(score, 0);
+        // Contains a code block -> score 15
+        let score2 = mgr.score_message(0, 10, "hello ```code``` world", "assistant");
+        assert_eq!(score2, 15);
     }
 
     #[test]
@@ -488,14 +405,14 @@ mod tests {
     }
 
     #[test]
-    fn test_message_scoring_different_roles() {
+    fn test_message_scoring_different_content() {
         let mut mgr = SessionContextManager::default();
         mgr.record_message("Fix src/main.rs", "user");
-        let score1 = mgr.score_message(0, 5, "Fix src/main.rs", "user");
-        let score2 = mgr.score_message(0, 5, "[Tool result: success]", "tool");
+        let score_with_file = mgr.score_message(0, 5, "Fix src/main.rs", "user");
+        let score_plain = mgr.score_message(0, 5, "hello", "user");
         assert!(
-            score2.combined_score >= score1.combined_score,
-            "tool result messages should score higher or equal"
+            score_with_file > score_plain,
+            "messages with file paths should score higher"
         );
     }
 }

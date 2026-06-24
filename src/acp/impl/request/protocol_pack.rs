@@ -1298,7 +1298,10 @@ fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
 }
 
 fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportStore> {
-    SkillImportStore::load(skill_import_policy(server))
+    SkillImportStore::load(
+        skill_import_policy(server),
+        server.orchestration_deps.skill_registry.clone(),
+    )
 }
 
 fn normalize_imported_record(record: ImportedSkillRecord) -> Value {
@@ -1432,55 +1435,6 @@ pub(super) async fn handle_skill_import(
     };
     store.save()?;
     let imported_name = imported.name.clone();
-
-    // If the imported manifest carries a prompt_template (e.g. from SKILL.md),
-    // also register it as a prompt-based skill in the SkillRegistry so that
-    // the skill is actually executable (not just manifest-backed).
-    if let Ok(manifest_value) = load_skill_manifest(&imported.manifest_path) {
-        if let Some(prompt_template) = manifest_value
-            .get("prompt_template")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string())
-        {
-            let skill_name = manifest_value
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or(&imported.name)
-                .to_string();
-            let skill_description = manifest_value
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let input_schema = manifest_value
-                .get("input_schema")
-                .and_then(|v| v.as_object())
-                .map(|obj| {
-                    obj.iter()
-                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                        .collect::<std::collections::HashMap<String, String>>()
-                })
-                .unwrap_or_default();
-            match server.orchestration_deps.skill_registry.write() {
-                Ok(mut registry) => {
-                    if let Err(e) = registry.create_skill_from_prompt(
-                        &skill_name,
-                        &skill_description,
-                        &prompt_template,
-                        input_schema,
-                    ) {
-                        warn!("SKILL.md prompt-skill registration skipped: {}", e);
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "SKILL.md prompt-skill registration skipped (lock error): {}",
-                        e
-                    );
-                }
-            }
-        }
-    }
 
     record_skill_admin_audit(
         "import",

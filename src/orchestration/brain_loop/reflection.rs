@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::orchestration::core_dag::TaskContext;
@@ -440,19 +440,4 @@ impl DeepReasoningEngine {
 
         response
     }
-}
-
-// ---------------------------------------------------------------------------
-// Reflection
-// ---------------------------------------------------------------------------
-
-/// A reflection produced after analysing a plan + result pair.
-// Reserved for future BrainLoop integration.
-#[allow(dead_code)] // F-GAP-49 — reserved for BrainLoop reflection integration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Reflection {
-    pub score: f64,
-    pub issues: Vec<String>,
-    pub improvements: Vec<String>,
-    pub converged: bool,
 }

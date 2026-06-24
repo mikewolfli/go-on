@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -247,42 +246,4 @@ async fn test_mcp_tool_call_timeout_returns_timeout_error() {
         .expect("request should return response envelope");
     let error = response.error.expect("timeout should return error");
     assert_eq!(error.code, super::error_codes::REQUEST_TIMEOUT);
-}
-
-#[test]
-fn test_notify_resource_changed_no_subscribers() {
-    let server = build_server();
-    server.notify_resource_changed("go-on://test/resource");
-}
-
-#[test]
-fn test_notify_resource_changed_with_subscriber_notifies() {
-    let server = build_server();
-    {
-        let mut subs = server
-            .resource_subscriptions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        subs.insert(
-            "go-on://test/subscribed".to_string(),
-            HashSet::from_iter(["subscriber-1".to_string()]),
-        );
-    }
-    server.notify_resource_changed("go-on://test/subscribed");
-}
-
-#[test]
-fn test_notify_resource_changed_non_subscribed() {
-    let server = build_server();
-    {
-        let mut subs = server
-            .resource_subscriptions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        subs.insert(
-            "go-on://test/other".to_string(),
-            HashSet::from_iter(["sub-2".to_string()]),
-        );
-    }
-    server.notify_resource_changed("go-on://test/unrelated");
 }

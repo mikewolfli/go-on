@@ -154,19 +154,6 @@ impl ProtocolNegotiator {
         ProtocolVersion::select_highest_common(client_versions)
     }
 
-    /// Negotiate protocol with a client hint and client-supported versions.
-    ///
-    /// This is a convenience wrapper around [`negotiate`] that accepts
-    /// a `&[ProtocolVersion]` directly instead of `Option<&[ProtocolVersion]>`.
-    #[allow(dead_code)] // Public API for test consumers
-    pub fn negotiate_with_versions(
-        &mut self,
-        client_hint: Option<&str>,
-        client_versions: &[ProtocolVersion],
-    ) -> NegotiatedProtocol {
-        self.negotiate(client_hint, Some(client_versions))
-    }
-
     /// Attempt fallback to next protocol in the chain
     pub fn try_fallback(&mut self) -> Option<ProtocolMode> {
         let fallback = self.active.fallback()?;
@@ -337,7 +324,7 @@ mod tests {
     fn test_negotiate_with_versions_selects_highest_common() {
         let mut negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
         let client_versions = vec![ProtocolVersion::V1, ProtocolVersion::V3];
-        let result = negotiator.negotiate_with_versions(Some("acp_http"), &client_versions);
+        let result = negotiator.negotiate(Some("acp_http"), Some(&client_versions));
         // Highest common between server {1,2,3} and client {1,3} is V3
         assert_eq!(result.protocol_version, ProtocolVersion::V3);
         assert_eq!(result.client_versions, Some(vec![1, 3]));
@@ -348,7 +335,7 @@ mod tests {
         let mut negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
         // Client only supports V999, which server doesn't have
         let client_versions = vec![ProtocolVersion::from_u16(999)];
-        let result = negotiator.negotiate_with_versions(Some("acp_http"), &client_versions);
+        let result = negotiator.negotiate(Some("acp_http"), Some(&client_versions));
         // Falls back to LATEST for backward compatibility
         assert_eq!(result.protocol_version, ProtocolVersion::LATEST);
     }

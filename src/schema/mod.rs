@@ -84,7 +84,7 @@ impl ProtocolVersion {
     }
 
     /// Create a version from a raw numeric value.
-    #[allow(dead_code)] // F-GAP: reserved for protocol version discovery
+    #[cfg(test)]
     pub fn from_u16(v: u16) -> Self {
         Self(v)
     }
@@ -140,16 +140,6 @@ pub struct EnvVariable {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-#[allow(dead_code)] // F-GAP-49 — reserved schema feature
-impl EnvVariable {
-    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            value: value.into(),
-            meta: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -158,16 +148,6 @@ pub struct HttpHeader {
     pub value: String,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
-}
-#[allow(dead_code, reason = "Public API surface for HttpHeader consumers")]
-impl HttpHeader {
-    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            value: value.into(),
-            meta: None,
-        }
-    }
 }
 
 // Session ID types used across agent/client modules

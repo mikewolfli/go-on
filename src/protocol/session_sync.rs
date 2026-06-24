@@ -336,7 +336,6 @@ impl Default for SessionRegistry {
 // activated, formerly F-GAP-51
 impl SessionRegistry {
     /// Create an empty registry.
-    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),

@@ -13,12 +13,11 @@
 //! - Integrates with `DiscoveryCenter` for skill recommendations
 
 use crate::orchestration::skill::SkillRegistry;
-use crate::orchestration::skill_import::SkillImportPolicy;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -132,11 +131,8 @@ pub struct SkillMarketRegistry {
     /// Local installations.
     installations: Arc<RwLock<Vec<SkillInstallation>>>,
     /// Reference to the local skill registry.
-    _skill_registry: Arc<RwLock<SkillRegistry>>,
-    /// Import policy for security.
-    _import_policy: SkillImportPolicy,
-    /// HTTP client for fetching remote resources.
-    _http_client: reqwest::Client,
+    skill_registry: Arc<StdRwLock<SkillRegistry>>,
+    // import_policy reserved for future import validation
 }
 
 impl SkillMarketRegistry {
@@ -144,39 +140,78 @@ impl SkillMarketRegistry {
     pub fn new(
         registry_url: &str,
         cache_dir: PathBuf,
-        skill_registry: Arc<RwLock<SkillRegistry>>,
-        import_policy: SkillImportPolicy,
-    ) -> Self {
-        Self {
+        skill_registry: Arc<StdRwLock<SkillRegistry>>,
+    ) -> Result<Self> {
+        Ok(Self {
             registry_url: registry_url.to_string(),
             skills: Arc::new(RwLock::new(Vec::new())),
             cache_dir,
             installations: Arc::new(RwLock::new(Vec::new())),
-            _skill_registry: skill_registry,
-            _import_policy: import_policy,
-            _http_client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .user_agent("go-on-skill-market/1.0")
-                .build()
-                .expect("failed to create HTTP client"),
-        }
+            skill_registry,
+        })
     }
 
     /// Fetch the latest skill listings from the remote registry.
     pub async fn refresh(&self) -> Result<usize> {
-        // In a production implementation, this would fetch from a remote registry API.
-        // For now, we provide built-in sample skills.
-        let builtin_skills = Self::builtin_skills();
-        let count = builtin_skills.len();
+        // Try fetching remote skills from the registry API endpoint.
+        let remote_result = self.fetch_remote_skills().await;
 
+        let skills_list = match remote_result {
+            Ok(remote_skills) if !remote_skills.is_empty() => {
+                info!(
+                    "Fetched {} skills from remote registry {}",
+                    remote_skills.len(),
+                    self.registry_url
+                );
+                remote_skills
+            }
+            _ => {
+                // Fall back to built-in sample skills
+                let builtin = Self::builtin_skills();
+                info!(
+                    "Using {} built-in skills (remote fetch failed or returned empty)",
+                    builtin.len()
+                );
+                builtin
+            }
+        };
+
+        let count = skills_list.len();
         let mut skills = self.skills.write().await;
-        *skills = builtin_skills;
+        *skills = skills_list;
 
         info!(
             "Skill marketplace refreshed: {} skills available from {}",
             count, self.registry_url
         );
         Ok(count)
+    }
+
+    /// Fetch skills from the remote registry API.
+    async fn fetch_remote_skills(&self) -> Result<Vec<SkillMarketItem>> {
+        let url = format!("{}/api/v1/skills", self.registry_url.trim_end_matches('/'));
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .user_agent("go-on-skill-market/1.0")
+            .build()
+            .context("failed to create HTTP client for remote fetch")?;
+
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .context("failed to fetch skills from remote registry")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("registry returned status {}", response.status());
+        }
+
+        let skills: Vec<SkillMarketItem> = response
+            .json()
+            .await
+            .context("failed to parse remote skill listings")?;
+
+        Ok(skills)
     }
 
     /// Get all available skills.
@@ -276,6 +311,29 @@ impl SkillMarketRegistry {
         };
 
         self.installations.write().await.push(installation.clone());
+
+        // Register into the local skill registry
+        {
+            let mut registry = self
+                .skill_registry
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            let skill = crate::orchestration::skill::PromptBasedSkill {
+                name: item.name.clone(),
+                description: item.description.clone(),
+                prompt_template: format!("You are the '{}' skill. {}", item.name, item.description),
+                input_schema: HashMap::new(),
+                timeout_secs: 120,
+                max_retries: 2,
+            };
+            if let Err(e) = registry.register(Arc::new(skill)) {
+                info!(
+                    "Failed to register '{}' into skill registry: {}",
+                    item.name, e
+                );
+            }
+        }
+
         info!(
             "Skill '{}' v{} installed successfully",
             item.name, item.version
@@ -470,20 +528,9 @@ mod tests {
             .expect("create temp dir")
             .path()
             .to_path_buf();
-        let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
-        let import_policy = SkillImportPolicy {
-            enabled: true,
-            allowed_sources: vec!["*".to_string()],
-            require_sha256: false,
-            allow_floating_ref: true,
-            cache_dir: cache_dir.to_string_lossy().to_string(),
-        };
-        SkillMarketRegistry::new(
-            "https://skills.go-on.dev",
-            cache_dir,
-            skill_registry,
-            import_policy,
-        )
+        let skill_registry = Arc::new(StdRwLock::new(SkillRegistry::default()));
+        SkillMarketRegistry::new("https://skills.go-on.dev", cache_dir, skill_registry)
+            .expect("test registry creation should succeed")
     }
 
     #[tokio::test]

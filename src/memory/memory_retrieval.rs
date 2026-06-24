@@ -41,21 +41,6 @@ pub enum LinkType {
     Custom(String),
 }
 
-impl LinkType {
-    /// Return a human-readable label for this link type.
-    #[allow(dead_code)] // Public API for test consumers
-    pub fn label(&self) -> &str {
-        match self {
-            LinkType::Similar => "similar",
-            LinkType::Continuation => "continuation",
-            LinkType::Supports => "supports",
-            LinkType::Contradicts => "contradicts",
-            LinkType::DerivedFrom => "derived_from",
-            LinkType::Custom(_) => "custom",
-        }
-    }
-}
-
 /// A directed link between two memory entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryLink {

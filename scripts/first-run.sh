@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# ROOT_DIR should point to the project root, not the scripts/ subdirectory.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OS_NAME="$(uname -s || echo unknown)"
 
 if [[ "$OS_NAME" != "Darwin" ]]; then
@@ -23,9 +25,9 @@ fi
 # 1) root contains backend/ and optional *.app
 # 2) script is inside backend/ folder
 BACKEND_BIN=""
-if [[ -x "$ROOT_DIR/backend/go-on" ]]; then
-  BACKEND_BIN="$ROOT_DIR/backend/go-on"
-elif [[ -x "$ROOT_DIR/go-on" ]]; then
+if [[ -x "$ROOT_DIR/target/release/go-on" ]]; then
+  BACKEND_BIN="$ROOT_DIR/target/release/go-on"
+elif [[ -x "$ROOT_DIR/target/debug/go-on" ]]; then
   BACKEND_BIN="$ROOT_DIR/go-on"
 fi
 

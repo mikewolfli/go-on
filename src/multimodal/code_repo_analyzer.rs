@@ -34,10 +34,6 @@ use tracing::info;
 /// Marker prefix in chat input that triggers repository analysis.
 pub const REPO_PREFIX: &str = "repo:";
 
-/// Default clone directory name under temp.
-#[allow(dead_code)] // F-GAP-49 — reserved for repo analysis constants
-const CLONE_DIR_PREFIX: &str = "go-on-repo-";
-
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------

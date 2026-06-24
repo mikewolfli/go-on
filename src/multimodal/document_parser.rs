@@ -780,12 +780,6 @@ impl DocumentParser {
         Ok(content)
     }
 
-    #[cfg(not(feature = "document-html"))]
-    #[allow(dead_code)] // F-GAP-49 — reserved for conditional HTML parsing
-    fn parse_html_str(&self, _html_str: &str) -> Result<ParsedContent, DocumentParserError> {
-        Err(DocumentParserError::feature_disabled("HTML"))
-    }
-
     // =======================================================================
     // Markdown backend  (feature = "document-markdown", crate: comrak)
     // =======================================================================
@@ -923,12 +917,6 @@ impl DocumentParser {
             .insert("parser".to_string(), "comrak+scraper".to_string());
 
         Ok(content)
-    }
-
-    #[cfg(not(feature = "document-markdown"))]
-    #[allow(dead_code)] // F-GAP-49 — reserved for conditional markdown parsing
-    fn parse_markdown_str(&self, _md_str: &str) -> Result<ParsedContent, DocumentParserError> {
-        Err(DocumentParserError::feature_disabled("Markdown"))
     }
 
     // =======================================================================

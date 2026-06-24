@@ -168,9 +168,7 @@ multi-users-server = [
 ]
 
 # Office / Document / Data tools
-charting = ["dep:plotters"]
-data-collection = ["dep:serialport"]
-image-extra = ["dep:imageproc"]
+# (charting, data-collection, image-extra — reserved for future use, not yet implemented)
 
 # Full-feature profile for local development and CI testing
 # Includes EVERY feature for maximum coverage
@@ -207,8 +205,7 @@ full = [
     "cam-gcode",
     "gis-gpx",
     "vault",
-    "charting",
-    "image-extra",
+    # (charting, data-collection, image-extra — reserved, not yet implemented)
     "game-online",
     "game-process",
     "game-screen",
@@ -314,17 +311,6 @@ comrak = { version = "0.52", optional = true }
 calamine = { version = "0.26", optional = true }
 rust_xlsxwriter = { version = "0.82", optional = true }
 quick-xml = { version = "0.37", features = ["serialize"], optional = true }
-
-# ── Office / Document tools ──────────────────────────────────────────
-# plotters: Charts and data visualisation
-plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series"], optional = true }
-
-# ── Data collection / I/O ──────────────────────────────────────────────
-# serialport: Serial port communication for data acquisition
-serialport = { version = "4", features = ["serde"], optional = true }
-
-# ── Image processing extras ────────────────────────────────────────────
-imageproc = { version = "0.25", optional = true }
 
 zip = "2"
 tar = "0.4"

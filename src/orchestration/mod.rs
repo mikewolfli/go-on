@@ -15,17 +15,9 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor
     feature = "multi-users-server"
 ))]
 pub mod council; // F-GAP-15
+pub mod dag_driver; // Tool execution DAG — orchestrates tool calls with parallel fan-out and plan-topology
 pub mod diagnostic_feedback; // F-GAP-51: Reserved for full diagnostic integration
-                             // DAG modules — all deprecated in favor of `core_dag`.
-                             // New code should use `crate::orchestration::core_dag` directly.
-#[doc = "Deprecated legacy DAG driver — use [`core_dag`] instead."]
-// BLUE42 / BLUE64: Remove in next major version — use core_dag instead
-// Note: #[allow(deprecated)] is intentionally NOT used here — the inner
-// `#![deprecated]` on dag_driver only fires when the module is *accessed*,
-// not at its declaration site.
-pub mod dag_driver;
-#[allow(unused_imports)]
-pub use core_dag::TaskContext; // GAP-B50-05 (migrated from dag_executor to core_dag)
+                             // pub use core_dag::TaskContext; — unused re-export, callers use crate::orchestration::core_dag::TaskContext directly
 pub mod distributed_tx; // BLUE45 item 4: Two-Phase Commit (2PC) over multiple nodes
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
@@ -66,7 +58,6 @@ pub use tool::extended as tool_extended;
 pub use tool::lock as tool_lock;
 pub use tool::pipeline as tool_pipeline;
 pub use tool::recommender as tool_recommender;
-#[allow(unused_imports)]
-pub use tool::transaction as tool_transaction;
+// pub use tool::transaction as tool_transaction; — unused re-export, types imported directly from tool::transaction::types
 pub mod workflow_optimizer;
 pub mod workflow_registry;

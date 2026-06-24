@@ -4,5 +4,7 @@
 //! multi-level circuit breaking, cascading degradation handling,
 //! and automated self-healing capabilities.
 
+/// Chaos engineering fault injection — only compiled when `chaos-testing` feature is enabled.
+#[cfg(feature = "chaos-testing")]
 pub mod chaos;
 pub mod hyper_resilience;

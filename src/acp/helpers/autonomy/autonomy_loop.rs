@@ -771,9 +771,6 @@ pub async fn run_autonomy_loop(
                 }
 
                 let tool_results: Vec<(String, LoopDecision)> = if config.use_dag_execution {
-                    // F-GAP-42: Legacy dag_driver — pending migration to core_dag
-                    #[cfg_attr(not(test), expect(deprecated))]
-                    // F-GAP-42 — pending migration to core_dag
                     let (nodes, dag_trace_data) =
                         crate::orchestration::dag_driver::execute_tool_dag(
                             Arc::clone(registry),

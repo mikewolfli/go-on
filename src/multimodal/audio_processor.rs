@@ -681,31 +681,16 @@ impl AudioProcessor {
 // Standalone helper: convenience transcription without a full AudioProcessor
 // ---------------------------------------------------------------------------
 
-/// One-shot convenience: transcribe audio bytes with the given backend and
-/// format. Uses default configuration for the chosen backend.
-///
-/// ```ignore
-/// let audio = std::fs::read("speech.wav").unwrap();
-/// let result = go_on::multimodal::audio_processor::transcribe(
-///     &audio,
-///     go_on::multimodal::audio_processor::AudioFormat::Wav,
-///     go_on::multimodal::audio_processor::SttBackend::OpenAIWhisper,
-/// );
-/// ```
-#[allow(dead_code)] // F-GAP-49 — reserved for audio transcription API
-pub fn transcribe(
-    audio: &[u8],
-    format: AudioFormat,
-    backend: SttBackend,
-) -> Result<Transcription, AudioProcessorError> {
-    let config = AudioProcessorConfig {
-        backend,
-        ..Default::default()
-    };
-    let processor = AudioProcessor::new(config);
-    processor.transcribe(audio, format)
-}
-
+// One-shot convenience: transcribe audio bytes with the given backend and
+// format. Uses default configuration for the chosen backend.
+//
+// ```ignore
+// let audio = std::fs::read("speech.wav").unwrap();
+// let result = go_on::multimodal::audio_processor::transcribe(
+//     &audio,
+//     go_on::multimodal::audio_processor::AudioFormat::Wav,
+//     go_on::multimodal::audio_processor::SttBackend::OpenAIWhisper,
+// );
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -918,8 +903,12 @@ mod tests {
 
     #[test]
     fn test_transcribe_convenience_fn() {
-        let result = transcribe(b"test", AudioFormat::Wav, SttBackend::OpenAIWhisper);
-        // Will fail with missing key; just check it returns an error.
+        let processor = AudioProcessor::new(AudioProcessorConfig {
+            backend: SttBackend::OpenAIWhisper,
+            ..Default::default()
+        });
+        let result = processor.transcribe(b"test", AudioFormat::Wav);
+        // Will fail with missing API key; just check it returns an error.
         assert!(result.is_err());
     }
 }

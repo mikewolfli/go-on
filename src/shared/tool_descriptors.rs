@@ -176,6 +176,221 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["source"]
             })),
         },
+        // ── Extended tools with full descriptors ────────────────
+        "shell_exec" => McpTool {
+            name: name.to_string(),
+            description: Some("Execute a shell command with timeout. Returns stdout, stderr, and exit code.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (default: 30000)", "default": 30000},
+                    "directory": {"type": "string", "description": "Working directory (default: current)"}
+                },
+                "required": ["command"]
+            })),
+        },
+        "http_request" => McpTool {
+            name: name.to_string(),
+            description: Some("Make an HTTP request to a URL. Supports GET, POST, PUT, DELETE, PATCH, HEAD.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"], "description": "HTTP method", "default": "GET"},
+                    "url": {"type": "string", "description": "Request URL"},
+                    "headers": {"type": "object", "description": "Optional HTTP headers as key-value pairs"},
+                    "body": {"type": "string", "description": "Request body (for POST/PUT/PATCH)"},
+                    "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds", "default": 30000}
+                },
+                "required": ["url"]
+            })),
+        },
+        "grep" => McpTool {
+            name: name.to_string(),
+            description: Some("Search file contents using a regular expression pattern. Returns matching lines with file paths.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                    "include": {"type": "string", "description": "Optional glob pattern to filter files (e.g. '**/*.rs')"},
+                    "directory": {"type": "string", "description": "Search directory (default: current)"}
+                },
+                "required": ["pattern"]
+            })),
+        },
+        "find_files" => McpTool {
+            name: name.to_string(),
+            description: Some("Find files matching a glob pattern. Returns list of matching file paths.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern (e.g. '**/*.rs', '*.toml')"},
+                    "directory": {"type": "string", "description": "Search directory (default: current)"}
+                },
+                "required": ["pattern"]
+            })),
+        },
+        "git" => McpTool {
+            name: name.to_string(),
+            description: Some("Execute git commands (status, diff, log, add, commit, etc.). Returns command output.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "subcommand": {"type": "string", "description": "Git subcommand (e.g. 'status', 'diff', 'log', 'add', 'commit')"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Additional arguments for the git command"},
+                    "directory": {"type": "string", "description": "Git repository directory (default: current)"}
+                },
+                "required": ["subcommand"]
+            })),
+        },
+        "list_directory" => McpTool {
+            name: name.to_string(),
+            description: Some("List files and directories in a given path.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path to list"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "file_move" => McpTool {
+            name: name.to_string(),
+            description: Some("Move or rename a file or directory.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Source path"},
+                    "destination": {"type": "string", "description": "Destination path"}
+                },
+                "required": ["source", "destination"]
+            })),
+        },
+        "file_delete" => McpTool {
+            name: name.to_string(),
+            description: Some("Delete a file (requires explicit confirmation).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to delete"},
+                    "confirm": {"type": "boolean", "description": "Must be true to confirm deletion"}
+                },
+                "required": ["path", "confirm"]
+            })),
+        },
+        "cargo_check" => McpTool {
+            name: name.to_string(),
+            description: Some("Run 'cargo check' in a Rust project directory to verify compilation without producing artifacts.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Project directory containing Cargo.toml"},
+                    "features": {"type": "string", "description": "Optional feature flags (e.g. '--features local')"}
+                },
+                "required": []
+            })),
+        },
+        "cargo_test" => McpTool {
+            name: name.to_string(),
+            description: Some("Run 'cargo test' in a Rust project directory.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Project directory containing Cargo.toml"},
+                    "filter": {"type": "string", "description": "Optional test name filter (alphanumeric only)"},
+                    "features": {"type": "string", "description": "Optional feature flags"}
+                },
+                "required": []
+            })),
+        },
+        "compress" => McpTool {
+            name: name.to_string(),
+            description: Some("Compress a file or directory into a compressed archive (zip/tar.gz).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Source file or directory path"},
+                    "destination": {"type": "string", "description": "Output archive path"},
+                    "format": {"type": "string", "enum": ["zip", "tar.gz"], "description": "Archive format", "default": "zip"}
+                },
+                "required": ["source", "destination"]
+            })),
+        },
+        "decompress" => McpTool {
+            name: name.to_string(),
+            description: Some("Decompress an archive file (zip/tar.gz/tar.bz2).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Archive file path"},
+                    "destination": {"type": "string", "description": "Output directory (default: current)"}
+                },
+                "required": ["source"]
+            })),
+        },
+        "date_time" => McpTool {
+            name: name.to_string(),
+            description: Some("Get current date/time, or convert between timezones / formats.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "format": {"type": "string", "description": "Output format (e.g. 'iso', 'unix', 'rfc2822')", "default": "iso"},
+                    "timezone": {"type": "string", "description": "Target timezone (e.g. 'UTC', 'Asia/Shanghai')"}
+                },
+                "required": []
+            })),
+        },
+        "dns_lookup" => McpTool {
+            name: name.to_string(),
+            description: Some("Perform a DNS lookup for a hostname, returning IP addresses.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "hostname": {"type": "string", "description": "Hostname to look up"}
+                },
+                "required": ["hostname"]
+            })),
+        },
+        "ping" => McpTool {
+            name: name.to_string(),
+            description: Some("Ping a host to check network reachability.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "host": {"type": "string", "description": "Hostname or IP address to ping"},
+                    "count": {"type": "integer", "description": "Number of ping packets", "default": 4}
+                },
+                "required": ["host"]
+            })),
+        },
+        "port_scan" => McpTool {
+            name: name.to_string(),
+            description: Some("Scan a range of TCP ports on a host.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "host": {"type": "string", "description": "Hostname or IP address"},
+                    "ports": {"type": "string", "description": "Port range (e.g. '80,443' or '1-1024')"},
+                    "timeout_ms": {"type": "integer", "description": "Timeout per port", "default": 1000}
+                },
+                "required": ["host"]
+            })),
+        },
+        "skill_execute" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Execute a registered skill by name with the given input. ".to_string()
+                    + "Skills are reusable prompt templates or programmatic capabilities. ",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "skill_name": {"type": "string", "description": "Name of the skill to execute"},
+                    "input": {"type": "object", "description": "Input parameters for the skill"}
+                },
+                "required": ["skill_name"]
+            })),
+        },
         other => McpTool {
             name: other.to_string(),
             description: Some("Registered MCP tool".to_string()),
@@ -238,6 +453,95 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
             if tool_input.get("task").is_none() =>
         {
             return Err(anyhow::anyhow!("{} tool requires 'task' field", tool_name));
+        }
+        // ── Extended tool validation ────────────────────────
+        "shell_exec" => {
+            tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("shell_exec requires arguments.command"))?;
+        }
+        "http_request" => {
+            tool_input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("http_request requires arguments.url"))?;
+        }
+        "grep" => {
+            tool_input
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("grep requires arguments.pattern"))?;
+        }
+        "find_files" => {
+            tool_input
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("find_files requires arguments.pattern"))?;
+        }
+        "list_directory" => {
+            tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("list_directory requires arguments.path"))?;
+        }
+        "file_move" => {
+            tool_input
+                .get("source")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("file_move requires arguments.source"))?;
+            tool_input
+                .get("destination")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("file_move requires arguments.destination"))?;
+        }
+        "file_delete" => {
+            tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("file_delete requires arguments.path"))?;
+            tool_input
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("file_delete requires arguments.confirm (boolean)")
+                })?;
+        }
+        "git" => {
+            tool_input
+                .get("subcommand")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("git requires arguments.subcommand"))?;
+        }
+        "compress" | "decompress" => {
+            tool_input
+                .get("source")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("{} requires arguments.source", tool_name))?;
+        }
+        "dns_lookup" => {
+            tool_input
+                .get("hostname")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("dns_lookup requires arguments.hostname"))?;
+        }
+        "ping" => {
+            tool_input
+                .get("host")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("ping requires arguments.host"))?;
+        }
+        "port_scan" => {
+            tool_input
+                .get("host")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("port_scan requires arguments.host"))?;
+        }
+        "skill_execute" => {
+            tool_input
+                .get("skill_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("skill_execute requires arguments.skill_name"))?;
         }
         "workflow_execute" | "workflow_ask" | "workflow_generate" => {}
         _ => {}

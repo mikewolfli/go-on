@@ -234,7 +234,7 @@ impl TaskScheduler {
     ///
     /// Returns a `SemaphorePermit` that must be held while the task
     /// is executing. Drop the permit to release the slot.
-    #[allow(dead_code)] // async API — try_acquire_permit wired in submit
+    #[cfg(test)]
     pub async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
         self.concurrency_limiter
             .clone()
@@ -255,7 +255,7 @@ impl TaskScheduler {
     ///
     /// If no per-role limiter exists for this role, one is created
     /// with the configured `max_workers_per_role` permits.
-    #[allow(dead_code)] // async API — reserved for external consumers
+    #[cfg(test)]
     pub async fn acquire_role_permit(
         &self,
         role: &str,

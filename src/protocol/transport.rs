@@ -226,8 +226,6 @@ pub struct TransportProfile {
 #[derive(Debug, Clone)]
 struct QueuedMessage {
     message: TransportMessage,
-    #[allow(dead_code)] // F-GAP-10 — reserved for future multi-channel transport wiring
-    status: DeliveryStatus,
     retries_remaining: u32,
     enqueued_ms: u64,
 }
@@ -403,7 +401,6 @@ impl MultiChannelTransport {
         let max_retries = channel.config.max_retries;
         let queued = QueuedMessage {
             message: message.clone(),
-            status: DeliveryStatus::Pending,
             retries_remaining: max_retries,
             enqueued_ms: now,
         };
@@ -480,7 +477,6 @@ impl MultiChannelTransport {
             // Keep the rest in the queue (for ack-based removal, we need them)
             remaining.push(QueuedMessage {
                 message: msg,
-                status: DeliveryStatus::InFlight,
                 retries_remaining: qm.retries_remaining,
                 enqueued_ms: qm.enqueued_ms,
             });
@@ -629,7 +625,6 @@ impl MultiChannelTransport {
         let now = Self::now_ms();
         let queued = QueuedMessage {
             message: msg.clone(),
-            status: DeliveryStatus::Pending,
             retries_remaining: target.config.max_retries,
             enqueued_ms: now,
         };
@@ -976,7 +971,6 @@ mod tests {
             };
             channel.queue.push(QueuedMessage {
                 message: old_msg,
-                status: DeliveryStatus::Pending,
                 retries_remaining: 3,
                 enqueued_ms: 1000,
             });

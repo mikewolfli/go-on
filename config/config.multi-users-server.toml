@@ -18,7 +18,7 @@ model_selection_mode = "adaptive"
 #   cache.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_cache"
 [cache]
 enabled = true
-path = "acp_cache.sqlite3"
+path = "sqlite3/acp_cache.sqlite3"
 default_ttl_seconds = 3600
 max_entries = 50000
 
@@ -28,7 +28,7 @@ max_entries = 50000
 [vector]
 enabled = true
 auto_mode = false
-path = "acp_vector.sqlite3"
+path = "sqlite3/acp_vector.sqlite3"
 dimensions = 768
 min_query_chars = 80
 top_k = 10

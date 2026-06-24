@@ -58,7 +58,7 @@ fn default_autotune_high_precision() -> f32 {
     0.75
 }
 fn default_autotune_state_path() -> String {
-    "acp_autotune_state.json".to_string()
+    "sqlite3/acp_autotune_state.json".to_string()
 }
 fn default_autotune_cooldown_windows() -> usize {
     2

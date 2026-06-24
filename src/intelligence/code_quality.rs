@@ -34,6 +34,7 @@ pub struct CodeQualityReport {
 
 impl CodeQualityReport {
     /// Returns true if no issues were found.
+    #[cfg(test)]
     pub fn is_clean(&self) -> bool {
         self.issues.is_empty()
     }

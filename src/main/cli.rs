@@ -5,10 +5,7 @@ use clap::{ArgAction, Parser, Subcommand};
 
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
-
 use crate::orchestration::skill::SkillRegistry;
-use crate::orchestration::skill_import::SkillImportPolicy;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::shared::protocol_mode::{ProtocolMode, ProtocolModeError};
 
@@ -223,25 +220,15 @@ pub enum SkillCommand {
 /// and performing the requested action.
 pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
     // Create a minimal SkillRegistry for local/imported skills
-    let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
+    let skill_registry = Arc::new(std::sync::RwLock::new(SkillRegistry::default()));
 
     // Create a minimal SkillMarketRegistry for marketplace skills
-    let import_policy = SkillImportPolicy {
-        enabled: true,
-        allowed_sources: vec!["*".to_string()],
-        require_sha256: false,
-        allow_floating_ref: true,
-        cache_dir: std::env::temp_dir()
-            .join("go-on-skill-market")
-            .to_string_lossy()
-            .to_string(),
-    };
     let market_registry = SkillMarketRegistry::new(
         "https://marketplace.go-on.dev",
         std::env::temp_dir().join("go-on-skill-market"),
         skill_registry.clone(),
-        import_policy,
-    );
+    )
+    .expect("failed to create skill market registry");
 
     match cmd {
         SkillCommand::List { tag } => {
@@ -290,7 +277,10 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
         }
         SkillCommand::ListImported => {
             // List skills registered in the local SkillRegistry
-            let descriptors = skill_registry.read().await.list();
+            let descriptors = skill_registry
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .list();
             eprintln!("Registered skills ({}):", descriptors.len());
             for desc in &descriptors {
                 eprintln!(
@@ -303,7 +293,7 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
         }
         SkillCommand::Info { name } => {
-            let registry = skill_registry.read().await;
+            let registry = skill_registry.read().unwrap_or_else(|e| e.into_inner());
             match registry.descriptor(&name) {
                 Some(desc) => {
                     eprintln!("Skill: {}", desc.name);
@@ -321,7 +311,7 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
         }
         SkillCommand::Refresh => {
-            let mut registry = skill_registry.write().await;
+            let mut registry = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             match registry.discover_and_register_local_skills(None) {
                 Ok(summary) => {
                     eprintln!(
@@ -340,7 +330,7 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
         }
         SkillCommand::Remove { name } => {
-            let mut registry = skill_registry.write().await;
+            let mut registry = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             if registry.unregister(&name) {
                 eprintln!("Skill '{}' removed from registry", name);
             } else {

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -12,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::RuntimeConfig;
 use crate::i18n::runtime::tf;
+use crate::orchestration::skill::SkillRegistry;
 
 const SKILL_IMPORT_CONNECT_TIMEOUT_SECS: u64 = 10;
 const SKILL_IMPORT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -111,10 +113,14 @@ pub struct SkillImportStore {
     root_dir: PathBuf,
     index_path: PathBuf,
     records: HashMap<String, ImportedSkillRecord>,
+    skill_registry: Arc<RwLock<SkillRegistry>>,
 }
 
 impl SkillImportStore {
-    pub fn load(policy: SkillImportPolicy) -> Result<Self> {
+    pub fn load(
+        policy: SkillImportPolicy,
+        skill_registry: Arc<RwLock<SkillRegistry>>,
+    ) -> Result<Self> {
         let root_dir = PathBuf::from(&policy.cache_dir);
         let index_path = root_dir.join("index.json");
         let mut records = HashMap::new();
@@ -132,6 +138,7 @@ impl SkillImportStore {
             root_dir,
             index_path,
             records,
+            skill_registry,
         })
     }
 
@@ -227,7 +234,7 @@ impl SkillImportStore {
         let record = ImportedSkillRecord {
             name: manifest.name.clone(),
             version: manifest.version,
-            description: manifest.description,
+            description: manifest.description.clone(),
             source: fetched.source,
             source_ref: fetched.source_ref,
             sha256: computed_sha,
@@ -247,6 +254,41 @@ impl SkillImportStore {
 
         // Persist the updated index immediately.
         self.save()?;
+
+        // Register as a prompt-based skill in the runtime SkillRegistry.
+        // This makes the imported skill immediately executable by the skill engine.
+        if let Some(prompt_template) = &manifest.prompt_template {
+            let input_schema = match &manifest.input_schema {
+                Value::Object(map) => map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect::<HashMap<String, String>>(),
+                _ => HashMap::new(),
+            };
+            match self.skill_registry.write() {
+                Ok(mut registry) => {
+                    if let Err(e) = registry.create_skill_from_prompt(
+                        &manifest.name,
+                        &manifest.description,
+                        prompt_template,
+                        input_schema,
+                    ) {
+                        tracing::warn!(
+                            "failed to register imported skill '{}': {}",
+                            manifest.name,
+                            e
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "failed to acquire skill_registry lock for '{}': {}",
+                        manifest.name,
+                        e
+                    );
+                }
+            }
+        }
 
         Ok(record)
     }
@@ -812,7 +854,8 @@ mod tests {
             allow_floating_ref: false,
             cache_dir: root.join("cache").display().to_string(),
         };
-        let mut store = SkillImportStore::load(policy).unwrap();
+        let registry = Arc::new(RwLock::new(SkillRegistry::default()));
+        let mut store = SkillImportStore::load(policy, registry).unwrap();
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
@@ -855,7 +898,8 @@ mod tests {
             allow_floating_ref: false,
             cache_dir: root.join("cache").display().to_string(),
         };
-        let mut store = SkillImportStore::load(policy).unwrap();
+        let registry = Arc::new(RwLock::new(SkillRegistry::default()));
+        let mut store = SkillImportStore::load(policy, registry.clone()).unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -872,7 +916,7 @@ mod tests {
         assert!(!imported.enabled);
 
         store.save().unwrap();
-        let reloaded = SkillImportStore::load(store.policy.clone()).unwrap();
+        let reloaded = SkillImportStore::load(store.policy.clone(), registry).unwrap();
         assert_eq!(reloaded.list().len(), 1);
     }
 }

@@ -40,7 +40,12 @@ static SKILL_REGISTRY: OnceLock<Arc<RwLock<SkillRegistry>>> = OnceLock::new();
 /// registry-aware tools. Call this once during server startup after the skill
 /// registry has been initialized.
 pub fn set_skill_registry(registry: Arc<RwLock<SkillRegistry>>) {
-    let _ = SKILL_REGISTRY.set(registry);
+    if SKILL_REGISTRY.set(registry).is_err() {
+        tracing::warn!(
+            target: "tool",
+            "set_skill_registry called more than once — ignoring duplicate"
+        );
+    }
 }
 
 use std::process::Command;
@@ -1204,6 +1209,21 @@ impl ToolRegistry {
             },
         );
 
+        // ── Skill execution tool (always compiled, no feature gate) ────
+        registry.register_with_profile(
+            SkillExecuteTool,
+            ToolCapabilityProfile {
+                capability: "skill_execute".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 120_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         registry
     }
 
@@ -1509,13 +1529,13 @@ impl Tool for ReadFileTool {
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
         let validated_path = sanitize_path(input, path)?;
 
-        // Acquire a read lock to prevent concurrent writes on the same file.
-        let _lock = tool_lock_manager()
-            .acquire(
-                &validated_path.to_string_lossy(),
-                crate::orchestration::tool_lock::LockMode::Read,
-            )
-            .map_err(|e| anyhow::anyhow!("failed to acquire read lock: {e}"))?;
+        // Non-blocking try_acquire read lock to prevent concurrent writes.
+        // If lock is contended, read proceeds without lock — the OS file
+        // system provides coherence for concurrent reads.
+        let _lock = tool_lock_manager().try_acquire(
+            &validated_path.to_string_lossy(),
+            crate::orchestration::tool_lock::LockMode::Read,
+        );
 
         let content = std::fs::read_to_string(&validated_path)?;
         let elapsed = start.elapsed().as_millis() as u64;
@@ -1559,13 +1579,20 @@ impl Tool for WriteFileTool {
         let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
         let path_buf = sanitize_path_for_write(input, path)?;
 
-        // Acquire an exclusive write lock to prevent concurrent reads/writes on the same file.
+        // Non-blocking try_acquire write lock.
+        // If lock is already held by another operation, return a transient
+        // error so the TAO loop can retry.
         let _lock = tool_lock_manager()
-            .acquire(
+            .try_acquire(
                 &path_buf.to_string_lossy(),
                 crate::orchestration::tool_lock::LockMode::Write,
             )
-            .map_err(|e| anyhow::anyhow!("failed to acquire write lock: {e}"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "write lock contended for '{}' — another tool is modifying this file",
+                    path_buf.display()
+                )
+            })?;
 
         if let Some(parent) = path_buf.parent() {
             if !parent.as_os_str().is_empty() {
@@ -1948,6 +1975,105 @@ impl Tool for SkillListTool {
             audit_log: Some(format!("Listed {} skill(s)", skills.len())),
             pua_report: Some(tool_execution_report("skill_list", Some("skills_listed"))),
         })
+    }
+}
+
+// ── SkillExecuteTool ──────────────────────────────────────────────────────────
+
+/// Tool that executes a registered skill by name with provided input.
+///
+/// Requires a `SkillRegistry` to have been set via `set_skill_registry()`.
+/// Returns an error if no registry or the skill is not found.
+pub struct SkillExecuteTool;
+
+/// Shared tokio runtime for skill execution — lazily created once.
+static SKILL_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn skill_runtime() -> &'static tokio::runtime::Runtime {
+    SKILL_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build shared skill runtime")
+    })
+}
+
+impl Tool for SkillExecuteTool {
+    fn name(&self) -> &'static str {
+        "skill_execute"
+    }
+
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = 0u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
+        let payload = &input.payload;
+        let skill_name = payload
+            .get("skill_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("skill_execute requires 'skill_name' argument"))?;
+        let skill_input = payload
+            .get("input")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+
+        let result = match SKILL_REGISTRY.get() {
+            Some(registry) => match registry.read() {
+                Ok(guard) => {
+                    let skill = guard.get(skill_name).ok_or_else(|| {
+                        anyhow::anyhow!("skill '{}' not found in registry", skill_name)
+                    })?;
+                    // Use shared lazily-created runtime instead of building one every call.
+                    let rt = skill_runtime();
+                    rt.block_on(skill.execute(&skill_input))
+                }
+                Err(e) => Err(anyhow::anyhow!("skill registry lock poisoned: {}", e)),
+            },
+            None => Err(anyhow::anyhow!(
+                "no skill registry configured — call set_skill_registry() first"
+            )),
+        };
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+
+        match result {
+            Ok(value) => {
+                span.record("success", true);
+                Ok(ToolOutput {
+                    success: true,
+                    result: Some(serde_json::json!({
+                        "skill": skill_name,
+                        "output": value,
+                    })),
+                    error: None,
+                    verification: Some("skill_executed".to_string()),
+                    audit_log: Some(format!("Executed skill '{}'", skill_name)),
+                    pua_report: Some(tool_execution_report(
+                        "skill_execute",
+                        Some("skill_executed"),
+                    )),
+                })
+            }
+            Err(e) => {
+                span.record("success", false);
+                Ok(ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(format!("skill '{}' execution failed: {}", skill_name, e)),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                })
+            }
+        }
     }
 }
 

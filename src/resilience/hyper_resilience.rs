@@ -48,7 +48,6 @@ pub enum ResilienceLevel {
 
 /// Failure mode classification used by the engine to categorise events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-27 — reserved for future hyper-resilience wiring
 pub enum FailureMode {
     NodeFailure,
     NetworkPartition,

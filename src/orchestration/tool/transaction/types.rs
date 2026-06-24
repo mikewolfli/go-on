@@ -66,15 +66,6 @@ pub fn store_idempotency_conflict_rate(rate: f64) {
     *guard = Some(rate);
 }
 
-/// Read the latest idempotency conflict rate.
-#[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
-pub fn read_idempotency_conflict_rate() -> Option<f64> {
-    LATEST_IDEMPOTENCY_CONFLICT_RATE
-        .lock()
-        .ok()
-        .and_then(|guard| *guard)
-}
-
 // ---------------------------------------------------------------------------
 // IdempotencyStore
 // ---------------------------------------------------------------------------
@@ -230,20 +221,6 @@ impl CompensateAction {
             retry_on_timeout: false,
         }
     }
-
-    /// Set the timeout for this compensation action.
-    #[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
-    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
-        self.timeout_ms = timeout_ms;
-        self
-    }
-
-    /// Enable retry-on-timeout for this compensation action.
-    #[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
-    pub fn with_retry_on_timeout(mut self) -> Self {
-        self.retry_on_timeout = true;
-        self
-    }
 }
 
 impl std::fmt::Debug for CompensateAction {
@@ -318,13 +295,6 @@ impl TransactionScope {
         self.completed_tools.push(tool_name.clone());
         self.compensate_actions
             .push(CompensateAction::new(tool_name, compensate_fn));
-    }
-
-    /// Register a completed tool with a custom `CompensateAction`.
-    #[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
-    pub fn register_action(&mut self, action: CompensateAction) {
-        self.completed_tools.push(action.tool_name.clone());
-        self.compensate_actions.push(action);
     }
 
     /// Roll back all completed tools by invoking their compensation actions
