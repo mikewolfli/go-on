@@ -493,7 +493,7 @@ impl HarnessBus {
     /// This ensures a single source of truth for sandbox enforcement.
     pub fn enforce_action(&self, action: &GovernanceAction, policy_bundle: &PolicyBundle) -> bool {
         match action {
-            GovernanceAction::Read | GovernanceAction::Search => {
+            GovernanceAction::Read => {
                 let level = self
                     .evaluator
                     .sandbox_level
@@ -502,12 +502,18 @@ impl HarnessBus {
                         tracing::warn!("[harness_bus] lock poisoned, recovering");
                         poisoned.into_inner()
                     });
-                let op = match action {
-                    GovernanceAction::Read => "read",
-                    GovernanceAction::Search => "search",
-                    _ => unreachable!(),
-                };
-                crate::governance::hardening::SandboxPolicy::check(*level, op)
+                crate::governance::hardening::SandboxPolicy::check(*level, "read")
+            }
+            GovernanceAction::Search => {
+                let level = self
+                    .evaluator
+                    .sandbox_level
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("[harness_bus] lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                crate::governance::hardening::SandboxPolicy::check(*level, "search")
             }
             GovernanceAction::Write => !policy_bundle.require_approval_for_write,
             GovernanceAction::Shell => policy_bundle.enable_code_execution,

@@ -21,42 +21,29 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
-use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 use tokio::time::sleep;
 
 pub mod common;
+use common::binary_path;
+use common::find_free_port;
+use common::suite_mutex;
 use common::CrossProcessLock;
 
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
 
-fn binary_path() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_go-on")
-        .map(PathBuf::from)
-        .expect("CARGO_BIN_EXE_go-on is not set; run via `cargo test`")
-}
-
-fn suite_guard() -> &'static Mutex<()> {
-    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    GUARD.get_or_init(|| Mutex::new(()))
-}
-
 #[allow(clippy::await_holding_lock)]
 fn lock_suite_guard() -> std::sync::MutexGuard<'static, ()> {
-    suite_guard().lock().unwrap_or_else(|err| err.into_inner())
+    suite_mutex().lock().unwrap_or_else(|err| err.into_inner())
 }
 
 fn ephemeral_bind_addr() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind ephemeral port");
-    let port = listener.local_addr().expect("missing local addr").port();
-    drop(listener);
-    format!("127.0.0.1:{port}")
+    format!("127.0.0.1:{}", find_free_port())
 }
 
 fn write_local_echo_config(path: &Path) {

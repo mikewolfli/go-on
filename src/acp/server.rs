@@ -676,16 +676,14 @@ impl AcpServer {
 
     /// Begin shutdown process
     pub fn begin_shutdown(&self) {
-        if let Ok(mut guard) = self.resilience.lifecycle_state.write() {
-            guard.begin_shutdown();
-        } else {
-            tracing::warn!("lifecycle_state poisoned during shutdown; recovering");
-            self.resilience
-                .lifecycle_state
-                .write()
-                .unwrap_or_else(|p| p.into_inner())
-                .begin_shutdown();
-        }
+        self.resilience
+            .lifecycle_state
+            .write()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("lifecycle_state poisoned during shutdown; recovering state");
+                poisoned.into_inner()
+            })
+            .begin_shutdown();
     }
 
     /// Get maintenance tracker reference

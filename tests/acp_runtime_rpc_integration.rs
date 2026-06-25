@@ -24,7 +24,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -33,7 +33,7 @@ use serial_test::serial;
 use tempfile::tempdir;
 
 pub mod common;
-use common::CrossProcessLock;
+use common::{binary_path, find_free_port, suite_mutex, CrossProcessLock};
 
 const LOCK_NAME: &str = "acp-rpc";
 
@@ -89,12 +89,9 @@ struct RpcHarness {
     _suite_guard: MutexGuard<'static, ()>,
 }
 
-// Keep the in-process suite guard as well – it serialises threads *within*
-// the binary, which is cheaper than the file lock for intra-binary ordering.
-static RPC_SUITE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-
+/// Convenience wrapper around the shared suite mutex.
 fn suite_guard() -> &'static Mutex<()> {
-    RPC_SUITE_GUARD.get_or_init(|| Mutex::new(()))
+    suite_mutex()
 }
 
 impl RpcHarness {
@@ -176,7 +173,7 @@ impl RpcHarness {
         let _ = self.child.kill();
         let _ = self.child.wait();
 
-        let mut child = Command::new(binary_path())
+        let mut child = Command::new(common::binary_path())
             .arg("--config")
             .arg(&self.config_path)
             .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
@@ -490,12 +487,6 @@ impl AdvancedRpcHarness {
             })
             .collect()
     }
-}
-
-fn binary_path() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_go-on")
-        .map(PathBuf::from)
-        .expect("CARGO_BIN_EXE_go-on is not set")
 }
 
 fn write_test_config(path: &Path, maintenance: u64, health: u64, shutdown: u64) {
@@ -844,13 +835,6 @@ fallback = true
     );
 
     fs::write(path, config).expect("failed to write auto protocol coexistence config file");
-}
-
-fn find_free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    port
 }
 
 fn http_request(

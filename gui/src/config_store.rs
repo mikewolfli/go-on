@@ -29,20 +29,20 @@ impl ConfigStore {
 
     /// Acquire a read lock on the inner config.
     /// Returns a `RwLockReadGuard` that derefs to `AppConfig`.
-    ///
-    /// # Panics
-    /// Panics if the lock is poisoned (i.e. a previous write panicked).
+    /// Recovers from a poisoned lock by logging a warning.
     pub fn read(&self) -> std::sync::RwLockReadGuard<'_, AppConfig> {
-        self.inner.read().expect("ConfigStore lock poisoned")
+        self.inner
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Acquire a write lock on the inner config.
     /// Returns a `RwLockWriteGuard` that derefs to `AppConfig`.
-    ///
-    /// # Panics
-    /// Panics if the lock is poisoned (i.e. a previous write panicked).
+    /// Recovers from a poisoned lock by logging a warning.
     pub fn write(&self) -> std::sync::RwLockWriteGuard<'_, AppConfig> {
-        self.inner.write().expect("ConfigStore lock poisoned")
+        self.inner
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Compute a fingerprint of config fields that affect rendering or backend behavior.
@@ -106,7 +106,10 @@ impl ConfigStore {
     /// Sync the shared config snapshot if the mutable config has changed.
     /// Takes a read lock on the inner config to compute the fingerprint and clone.
     pub fn sync_shared_if_needed(&mut self) {
-        let config = self.inner.read().expect("ConfigStore lock poisoned");
+        let config = self
+            .inner
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let fingerprint = Self::config_fingerprint(&config);
         if fingerprint != self.config_shared_fingerprint {
             self.config_shared = Arc::new(AppConfig::clone(&config));

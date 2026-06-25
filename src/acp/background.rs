@@ -128,6 +128,8 @@ where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(async move {
+        // We must spawn future in a separate task to catch panics.
+        // JoinHandle<Result<()>> from spawn captures panics as Err.
         let handle = tokio::spawn(future);
         if let Err(e) = handle.await {
             tracing::error!(

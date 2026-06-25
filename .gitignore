@@ -7,6 +7,12 @@ config.toml
 *.sqlite3-shm
 acp_autotune_state*.json
 *.log
+
+# Runtime data files (auto-generated)
+*.ndjson
+config/acp_cache.sqlite3
+config/acp_vector.sqlite3
+config/audit_chain.ndjson
 tmp_basic_test_config.toml
 tmp_provider_fail_config.toml
 tmp_provider_fail_config2.toml
@@ -77,6 +83,7 @@ artifacts/
 snapshots/
 
 # OS generated files
+nul
 .DS_Store
 .DS_Store?
 ._*

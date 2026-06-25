@@ -39,25 +39,39 @@ impl Tool for ShellExecTool {
         // stdin input from payload["stdin"] as a string
         let stdin_input = input.payload["stdin"].as_str().map(|s| s.to_string());
 
-        // Prefer GNU `timeout` when available, but keep a portable fallback for
-        // environments like macOS where `timeout` is not installed by default.
+        // Determine the shell to use: cmd.exe on Windows, sh on Unix.
+        let (shell, shell_arg) = if cfg!(target_os = "windows") {
+            ("cmd.exe", "/C")
+        } else {
+            // Prefer GNU `timeout` when available, but keep a portable fallback for
+            // environments like macOS where `timeout` is not installed by default.
+            // On Windows, timeout.exe is a different tool, so we use the Rust-level fallback.
+            ("sh", "-c")
+        };
+
         let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
         let max_timeout = std::cmp::min(timeout_secs, 300); // Cap at 5 minutes
 
-        let timeout_available = Command::new("timeout")
-            .arg("1")
-            .arg("sh")
-            .arg("-c")
-            .arg("true")
-            .output()
-            .map(|out| out.status.success())
-            .unwrap_or(false);
-
-        let output = if timeout_available {
-            let mut cmd = Command::new("timeout");
-            cmd.arg(format!("{}", max_timeout))
+        // Only check for GNU timeout on non-Windows. On Windows, always use
+        // thread-based kill approach.
+        let use_gnu_timeout = if cfg!(target_os = "windows") {
+            false
+        } else {
+            Command::new("timeout")
+                .arg("1")
                 .arg("sh")
                 .arg("-c")
+                .arg("true")
+                .output()
+                .map(|out| out.status.success())
+                .unwrap_or(false)
+        };
+
+        let output = if use_gnu_timeout {
+            let mut cmd = Command::new("timeout");
+            cmd.arg(format!("{}", max_timeout))
+                .arg(shell)
+                .arg(shell_arg)
                 .arg(command)
                 .current_dir(&current_dir)
                 .stdin(if stdin_input.is_some() {
@@ -86,8 +100,8 @@ impl Tool for ShellExecTool {
         } else {
             // Rust-level timeout fallback: spawn the child process, then use a
             // separate thread to enforce the timeout by killing the process.
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c")
+            let mut cmd = Command::new(shell);
+            cmd.arg(shell_arg)
                 .arg(command)
                 .current_dir(&current_dir)
                 .stdin(if stdin_input.is_some() {
@@ -120,14 +134,23 @@ impl Tool for ShellExecTool {
             let handle = std::thread::spawn(move || {
                 std::thread::sleep(kill_after);
                 killed_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                // Kill the child process tree
-                let _ = Command::new("kill").arg("--").arg(pid.to_string()).output();
-                // Also try fallback signals
-                let _ = Command::new("kill")
-                    .arg("-9")
-                    .arg("--")
-                    .arg(pid.to_string())
-                    .output();
+                if cfg!(target_os = "windows") {
+                    // Windows: use taskkill to terminate the process tree
+                    let _ = Command::new("taskkill")
+                        .arg("/F")
+                        .arg("/T")
+                        .arg("/PID")
+                        .arg(pid.to_string())
+                        .output();
+                } else {
+                    // Unix: send SIGTERM then SIGKILL
+                    let _ = Command::new("kill").arg("--").arg(pid.to_string()).output();
+                    let _ = Command::new("kill")
+                        .arg("-9")
+                        .arg("--")
+                        .arg(pid.to_string())
+                        .output();
+                }
             });
 
             let result = child.wait_with_output();

@@ -26,11 +26,7 @@ FUTURE4 增量目标是引入"自进化闭环"：
 |---|---|---|
 | 方案发现 | 人工选择为主 | 自动检索并评估 Hugging Face / GitHub 方案 |
 | 方案匹配 | 规则驱动初步匹配 | 场景-能力-成本-风险四维匹配引擎 |
-<<<<<<< Updated upstream
-| 子AI 构建 | 固定角色代理 | 按任务画像自动生成可训练子 AI |
-=======
 | 子AI 构建 | 固定角色代理 | 按任务画像自动生成可训练子AI |
->>>>>>> Stashed changes
 | 训练管线 | 手工调优 | 数据集自动构建 + 可控训练/微调流水线 |
 | 自动接入 | 手工配置接入 | 插件化自动接入 + A/B + 回滚 |
 | 强化学习 | 离线指标反馈为主 | 在线/离线混合强化学习与策略演化 |
@@ -59,17 +55,10 @@ FUTURE4 增量目标是引入"自进化闭环"：
 
 ---
 
-<<<<<<< Updated upstream
-## 执行路线（分阶段执行）
-
-### P0 边界与治理冻结（先约束后自动化）
-- [x] 冻结自动进化边界：哪些能力可自动，哪些必须人工审批
-=======
 ## 执行路线（分阶段）
 
 ### P0 边界与治理冻结（先约束后自动化）
 - [x] 冻结自动进化边界：哪些能力可自动，哪些必须人工审校
->>>>>>> Stashed changes
 - [x] 定义外部来源可信度模型（官方源、社区源、未知源）
 - [x] 定义红线策略：禁止高风险自动执行（如无审查写入生产）
 
@@ -80,11 +69,7 @@ FUTURE4 增量目标是引入"自进化闭环"：
 
 ### P2 子AI 工厂与契约
 - [x] 建立 Sub-AI 模板：planner、coder、reviewer、researcher、trainer
-<<<<<<< Updated upstream
-- [x] 自动生成子 AI 配置（工具权限、上下文窗口、预算）
-=======
 - [x] 自动生成子AI 配置（工具权限、上下文窗口、预算）
->>>>>>> Stashed changes
 - [x] 子AI 输出强制 schema（artifact、evidence、confidence、risk）
 
 ### P3 数据构建与训练编排
@@ -95,11 +80,7 @@ FUTURE4 增量目标是引入"自进化闭环"：
 ### P4 自动接入与灰度发布
 - [x] 子AI 训练完成后自动注册到运行时注册表
 - [x] 支持 A/B 与 Canary（按租户/场景/流量切分）
-<<<<<<< Updated upstream
-- [x] 自动回滚触发：质量衰退、成本超阈、风险告警
-=======
 - [x] 自动回滚触发：质量倒退、成本超阈、风险告警
->>>>>>> Stashed changes
 
 ### P5 强化学习与能力扩展
 - [x] 定义奖励函数：任务完成度、审查通过率、成本与时延
@@ -107,11 +88,7 @@ FUTURE4 增量目标是引入"自进化闭环"：
 - [x] 能力图谱自动扩展：新增能力必须通过 eval gate + safety gate
 
 ### P6 评测、审计与合规
-<<<<<<< Updated upstream
-- [x] 建立多维评测：正确性、稳定性、可解释性、成本、风险
-=======
 - [x] 建立多维度评测：正确性、稳定性、可解释性、成本、风险
->>>>>>> Stashed changes
 - [x] 建立来源与训练全链路审计（可追责、可回溯）
 - [x] 输出合规报告：许可证、数据使用、模型来源、变更记录
 
@@ -128,11 +105,7 @@ FUTURE4 增量目标是引入"自进化闭环"：
 |---|---|---|
 | 方案发现 | 自动检索外部方案并归档 | 候选方案含来源、许可证、风险评估 |
 | 方案匹配 | 按场景自动排名选择 | Top-K 方案在基准任务优于基线 |
-<<<<<<< Updated upstream
-| 子AI 构建 | 自动生成并接入角色代理 | 新子 AI 可独立执行并输出合规 artifact |
-=======
 | 子AI 构建 | 自动生成并接入角色代理 | 新子AI 可独立执行并输出合规 artifact |
->>>>>>> Stashed changes
 | 自动训练 | 可恢复、可追踪、可回滚 | 训练产物有版本、日志、评测报告 |
 | 自动接入 | 灰度发布与熔断回滚 | 质量下降时自动撤回 |
 | 强化学习 | 可控策略改进 | 关键指标持续改善且无安全倒退 |
@@ -174,8 +147,6 @@ FUTURE4 增量目标是引入"自进化闭环"：
 - R2（2~3 周）：P2 + P3
 - R3（2~3 周）：P4 + P5
 - R4（1~2 周）：P6 + P7
-<<<<<<< Updated upstream
-=======
 I need to fix the garbled Chinese text in `/home/mikeli/workspace/go-on/docs/design/FUTURE4.MD`.
 
 The file contains UTF-8 Chinese text where some bytes have been corrupted to `0x3f` (`?`). The file structure is identical to FUTURE3.MD which has correct Chinese text.
@@ -188,4 +159,3 @@ Please:
 The file title should be: `FUTURE4 — 自进化全能助手升级路线图（自动匹配方案 + 子AI自训练接入）`
 
 Use context clues from the garbled text and FUTURE3.MD structure to reconstruct the correct Chinese. Write the complete corrected file.
->>>>>>> Stashed changes

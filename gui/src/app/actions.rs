@@ -336,7 +336,7 @@ impl GoOnApp {
         if is_addr_listening(&bind_addr) {
             // Port is still in use — could be a dying process from a restart.
             // Try a brief pause and re-check; if still in use, kill it.
-            eprintln!(
+            tracing::info!(
                 "backend: detected existing listener at {}; waiting for release...",
                 bind_addr
             );
@@ -358,7 +358,7 @@ impl GoOnApp {
                         if let Ok(pid_str) = String::from_utf8(output.stdout) {
                             for pid in pid_str.trim().lines() {
                                 if let Ok(pid_num) = pid.trim().parse::<i32>() {
-                                    eprintln!("backend: force-killing stale PID {}", pid_num);
+                                    tracing::warn!("backend: force-killing stale PID {}", pid_num);
                                     let _ = std::process::Command::new("kill")
                                         .args(["-9", &pid_num.to_string()])
                                         .output();
@@ -447,23 +447,25 @@ impl GoOnApp {
                         cmd.stderr(log_file);
                     }
                     Err(e) => {
-                        eprintln!("Failed to create backend.log: {e}; stderr will go to parent");
+                        tracing::warn!(
+                            "Failed to create backend.log: {e}; stderr will go to parent"
+                        );
                         cmd.stderr(std::process::Stdio::inherit());
                     }
                 }
                 match cmd.spawn() {
                     Ok(child) => {
-                        eprintln!("go-on backend started (PID: {})", child.id());
+                        tracing::info!("go-on backend started (PID: {})", child.id());
                         (BackendClient::new(&config.backend_url), Some(child), false)
                     }
                     Err(e) => {
-                        eprintln!("warning: failed to start backend: {}", e);
+                        tracing::warn!("warning: failed to start backend: {}", e);
                         (BackendClient::new(&config.backend_url), None, false)
                     }
                 }
             }
             None => {
-                eprintln!("warning: go-on backend binary not found");
+                tracing::warn!("warning: go-on backend binary not found");
                 (BackendClient::new(&config.backend_url), None, false)
             }
         }
@@ -588,9 +590,9 @@ impl GoOnApp {
             .unzip();
 
         if provider_lines.is_empty() && !config.providers.is_empty() {
-            eprintln!("WARNING: No providers have valid API keys. Generated config.toml will have no agents.");
+            tracing::warn!("WARNING: No providers have valid API keys. Generated config.toml will have no agents.");
         } else if provider_lines.is_empty() {
-            eprintln!("INFO: No providers configured. Generated config.toml will be minimal.");
+            tracing::info!("INFO: No providers configured. Generated config.toml will be minimal.");
         }
 
         let agent_section = if provider_lines.is_empty() {
@@ -723,11 +725,11 @@ state_path = "acp_autotune_state.json"
                     tmp.persist(path)?;
                     Ok(())
                 })() {
-                    Ok(_) => eprintln!("backend: wrote config.toml to {}", path.display()),
-                    Err(e) => eprintln!("backend: failed to write config.toml: {}", e),
+                    Ok(_) => tracing::info!("backend: wrote config.toml to {}", path.display()),
+                    Err(e) => tracing::warn!("backend: failed to write config.toml: {}", e),
                 }
             }
-            Err(e) => eprintln!("backend: failed to write config.toml: {}", e),
+            Err(e) => tracing::warn!("backend: failed to write config.toml: {}", e),
         }
 
         // ===== Section: Zed Config =====
@@ -777,14 +779,16 @@ top_k = 2
                             tmp.persist(zed_path)?;
                             Ok(())
                         })() {
-                            Ok(_) => eprintln!(
+                            Ok(_) => tracing::info!(
                                 "backend: wrote zed-config.toml to {}",
                                 zed_path.display()
                             ),
-                            Err(e) => eprintln!("backend: failed to write zed-config.toml: {}", e),
+                            Err(e) => {
+                                tracing::warn!("backend: failed to write zed-config.toml: {}", e)
+                            }
                         }
                     }
-                    Err(e) => eprintln!("backend: failed to write zed-config.toml: {}", e),
+                    Err(e) => tracing::warn!("backend: failed to write zed-config.toml: {}", e),
                 }
             }
         }
@@ -805,14 +809,14 @@ top_k = 2
 
         // Kill old process
         if let Some(mut child) = self.connection.backend_child.take() {
-            eprintln!("Restarting backend (old PID: {})...", child.id());
+            tracing::info!("Restarting backend (old PID: {})...", child.id());
             let _ = child.kill();
             // Don't block UI thread waiting for backend to exit.
             // Spawn a background thread to reap the zombie.
             let pid = child.id();
             std::thread::spawn(move || {
                 let _ = child.wait();
-                eprintln!("go-on backend (PID: {}) fully stopped", pid);
+                tracing::info!("go-on backend (PID: {}) fully stopped", pid);
             });
         }
         // Schedule non-blocking cooldown so the old process can release the port
@@ -835,7 +839,7 @@ top_k = 2
         self.views.chat_view.reset_loaded_state();
         // Reset providers loaded state so models are re-fetched
         self.views.providers_view.reset_loaded_state();
-        eprintln!("Backend restart scheduled (cooldown 300ms)...");
+        tracing::info!("Backend restart scheduled (cooldown 300ms)...");
     }
 
     /// Spawn the new backend process after the restart cooldown has elapsed.
@@ -853,7 +857,7 @@ top_k = 2
         self.connection.backend_child = child;
         self.connection.backend_reused_external = reused_external;
         self.crash.restart_cooldown_until = None;
-        eprintln!("Backend restarted after cooldown");
+        tracing::info!("Backend restarted after cooldown");
     }
 
     // ── Constructor ──────────────────────────────────────────────────────
@@ -1014,23 +1018,28 @@ top_k = 2
         while let Ok(event) = rx.try_recv() {
             match event {
                 StateSyncEvent::ConfigReloaded { .. } => {
+                    #[cfg(debug_assertions)]
                     eprintln!("[state-sync] Config reloaded; refreshing backend data");
                     requested_refresh = true;
                 }
                 StateSyncEvent::ModelsChanged { .. } => {
+                    #[cfg(debug_assertions)]
                     eprintln!("[state-sync] Models changed; refreshing providers");
                     requested_refresh = true;
                 }
                 StateSyncEvent::AgentsChanged { added, removed } => {
                     if !added.is_empty() {
+                        #[cfg(debug_assertions)]
                         eprintln!("[state-sync] Agents added: {:?}", added);
                     }
                     if !removed.is_empty() {
+                        #[cfg(debug_assertions)]
                         eprintln!("[state-sync] Agents removed: {:?}", removed);
                     }
                     requested_refresh = true;
                 }
                 StateSyncEvent::BackendRestarting { reason, .. } => {
+                    #[cfg(debug_assertions)]
                     eprintln!("[state-sync] Backend restarting: {}", reason);
                     self.connection.consecutive_poll_failures = 10;
                     self.connection.last_refresh = std::time::Instant::now()
@@ -1062,7 +1071,7 @@ top_k = 2
             received_any = true;
             processed += 1;
             if processed > 128 {
-                eprintln!(
+                tracing::warn!(
                     "poll_backend_updates: discarding {} queued updates (processing limit)",
                     processed
                 );

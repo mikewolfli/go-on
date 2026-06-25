@@ -25,19 +25,19 @@ jobs:
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
-            profile_features: profile-local,backend-sqlite
+            profile_features: local,backend-sqlite
           - os: ubuntu-latest
             platform: linux-x64-multi-users
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
-            profile_features: profile-multi-users-server,backend-postgres
+            profile_features: multi-users-server,backend-postgres
           - os: ubuntu-latest
             platform: linux-x64-simple-server
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
-            profile_features: profile-simple-server,backend-sqlite
+            profile_features: simple-server,backend-sqlite
           - os: macos-latest
             platform: macos-arm64
             backend_bin: go-on
@@ -126,7 +126,7 @@ jobs:
           cp "gui/target/release/${{ matrix.gui_bin }}" "$PKG/"
           cp "gui/icon.ico" "$PKG/"
           cp -r RULES "$PKG/backend/rules"
-          cp -r languages "$PKG/backend/"
+          cp -r config/languages "$PKG/backend/languages"
           cp -r prompts "$PKG/"
           cp -r prompts "$PKG/backend/prompts"
           cp config/config.toml "$PKG/backend/"

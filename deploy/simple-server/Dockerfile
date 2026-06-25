@@ -15,7 +15,7 @@ COPY Cargo.toml Cargo.lock* ./
 COPY config/ config/
 COPY contracts/ contracts/
 COPY RULES/ RULES/
-COPY languages/ languages/
+COPY config/languages/ languages/
 COPY prompts/ prompts/
 COPY src/ src/
 

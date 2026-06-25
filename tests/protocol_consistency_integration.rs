@@ -10,15 +10,19 @@
 ///   - Error responses omit the `result` field; success responses omit `error`.
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tempfile::tempdir;
+
+pub mod common;
+use common::binary_path;
+use common::suite_mutex;
 
 // ---------------------------------------------------------------------------
 // Harness — reused across both protocol modes.
@@ -31,16 +35,8 @@ struct Harness {
     _guard: MutexGuard<'static, ()>,
 }
 
-static SUITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
 fn suite_lock() -> &'static Mutex<()> {
-    SUITE_LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn binary_path() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_go-on")
-        .map(PathBuf::from)
-        .expect("CARGO_BIN_EXE_go-on is not set; run via `cargo test`")
+    suite_mutex()
 }
 
 fn write_mode_config(path: &Path, protocol_mode: &str) {

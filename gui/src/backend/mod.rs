@@ -65,12 +65,12 @@ impl BackendClient {
             .tcp_keepalive(Some(Duration::from_secs(30)))
             .build()
             .unwrap_or_else(|e| {
-                eprintln!("Failed to build quick HTTP client: {e}; retrying with builder");
+                tracing::warn!("Failed to build quick HTTP client: {e}; retrying with builder");
                 reqwest::Client::builder()
                     .timeout(Duration::from_secs(5))
                     .build()
                     .unwrap_or_else(|e| {
-                        eprintln!("Failed to build HTTP client on retry: {e}; using default");
+                        tracing::warn!("Failed to build HTTP client on retry: {e}; using default");
                         reqwest::Client::new()
                     })
             });
@@ -79,12 +79,12 @@ impl BackendClient {
             .tcp_keepalive(Some(Duration::from_secs(45)))
             .build()
             .unwrap_or_else(|e| {
-                eprintln!("Failed to build long HTTP client: {e}; retrying with builder");
+                tracing::warn!("Failed to build long HTTP client: {e}; retrying with builder");
                 reqwest::Client::builder()
                     .timeout(Duration::from_secs(180))
                     .build()
                     .unwrap_or_else(|e| {
-                        eprintln!("Failed to build HTTP client on retry: {e}; using default");
+                        tracing::warn!("Failed to build HTTP client on retry: {e}; using default");
                         reqwest::Client::new()
                     })
             });
@@ -126,7 +126,7 @@ impl BackendClient {
         {
             Ok(result) => result,
             Err(_elapsed) => {
-                eprintln!(
+                tracing::warn!(
                     "[fetch_models] models.list timed out after 500ms, returning stale cache"
                 );
                 self.stale_models_flag.store(true, Ordering::SeqCst);
@@ -429,11 +429,12 @@ impl BackendClient {
                             .unwrap_or(3); // fall back to LATEST
 
                             let ep = Self::endpoint_for_version(version);
+                            #[cfg(debug_assertions)]
                             eprintln!("protocol negotiation: version={}, endpoint={}", version, ep);
                             (ep.to_string(), version)
                         }
                         Err(parse_err) => {
-                            eprintln!(
+                            tracing::warn!(
                             "protocol version parse failed: {}, defaulting to /v1/chat/completions",
                             parse_err
                         );
@@ -442,14 +443,14 @@ impl BackendClient {
                     }
                 }
                 Ok(resp) => {
-                    eprintln!(
+                    tracing::warn!(
                     "protocol version discovery returned: {}, defaulting to /v1/chat/completions",
                     resp.status()
                 );
                     ("/v1/chat/completions".to_string(), 3)
                 }
                 Err(e) => {
-                    eprintln!(
+                    tracing::warn!(
                         "protocol version discovery failed: {}, defaulting to /v1/chat/completions",
                         e
                     );

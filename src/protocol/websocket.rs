@@ -178,7 +178,10 @@ impl WsSender {
     /// (enforced by `max_messages_per_sec`). Returns `true` if the message may
     /// be forwarded, `false` if the limit has been exceeded.
     pub fn check_rate_limit(&self, max_per_sec: u64) -> bool {
-        let mut state = self.rate_limit.lock().expect("rate_limit lock");
+        let mut state = self.rate_limit.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("rate_limit lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         let now = Instant::now();
         if now.duration_since(state.window_start).as_secs() >= 1 {
             state.msg_count = 0;
@@ -205,7 +208,10 @@ impl WsSender {
         if self
             .last_heartbeat
             .lock()
-            .expect("last_heartbeat lock")
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("last_heartbeat lock poisoned, recovering");
+                poisoned.into_inner()
+            })
             .elapsed()
             .as_secs()
             >= DECAY_THRESHOLD_SECS
@@ -231,7 +237,10 @@ impl WsSender {
     pub fn record_pong(&self, seq: u64) -> bool {
         let current_seq = self.heartbeat_seq.load(Ordering::Relaxed);
         if seq == current_seq {
-            let mut hb = self.last_heartbeat.lock().expect("last_heartbeat lock");
+            let mut hb = self.last_heartbeat.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("last_heartbeat lock poisoned, recovering");
+                poisoned.into_inner()
+            });
             self.missed_pongs.store(0, Ordering::Release);
             let elapsed = hb.elapsed();
             *hb = Instant::now();
@@ -488,7 +497,10 @@ impl WebSocketHub {
                 for (conn_id, sender) in conns.iter_mut() {
                     // Stamp the seq so record_pong can verify it later.
                     sender.heartbeat_seq.store(current_seq, Ordering::Release);
-                    *sender.last_heartbeat.lock().expect("last_heartbeat lock") = Instant::now();
+                    *sender.last_heartbeat.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("last_heartbeat lock poisoned, recovering");
+                        poisoned.into_inner()
+                    }) = Instant::now();
 
                     if !sender.send(ping.clone()) {
                         debug!(connection_id = %conn_id, "connection channel closed, removing");

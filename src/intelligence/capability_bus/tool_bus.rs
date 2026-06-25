@@ -468,7 +468,7 @@ impl ToolBus {
 pub fn import_remote_skill(tool_bus: &ToolBus, endpoint: &str, skill_name: &str) -> Result<()> {
     use crate::orchestration::skill_import::RemoteSkill;
 
-    let remote = RemoteSkill::new(endpoint, skill_name)?;
+    let remote = RemoteSkill::new(endpoint, skill_name, None, None)?;
 
     let skill: Arc<dyn crate::orchestration::skill::Skill> = Arc::new(remote);
     tool_bus

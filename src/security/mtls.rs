@@ -249,10 +249,8 @@ impl MtlsAcceptor {
     }
 
     /// Builder-pattern: enable or disable client certificate verification.
-    #[allow(
-        dead_code,
-        reason = "Builder method — wired from ACP HTTP server under multi-users-server feature"
-    )]
+    /// Called from `run_acp_http_server` under `#[cfg(feature = "multi-users-server")]`.
+    #[allow(dead_code)]
     pub fn with_client_cert(mut self, enabled: bool) -> Self {
         self.require_client_cert = enabled;
         self
@@ -260,10 +258,8 @@ impl MtlsAcceptor {
 
     /// Builder-pattern: restrict mTLS to client certificates whose Common Name
     /// appears in the given list. An empty list disables CN filtering.
-    #[allow(
-        dead_code,
-        reason = "Builder method — wired from ACP HTTP server under multi-users-server feature"
-    )]
+    /// Called from `run_acp_http_server` under `#[cfg(feature = "multi-users-server")]`.
+    #[allow(dead_code)]
     pub fn with_allowed_cns(mut self, allowed: Vec<String>) -> Self {
         self.allowed_cn_list = allowed;
         self

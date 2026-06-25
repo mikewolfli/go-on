@@ -285,14 +285,15 @@ pub fn load_app_config() -> AppConfig {
 
         // If config has key but keyring doesn't → write to keyring
         if !config_key.is_empty() && config_key != REDACTED_API_KEY && keyring_key.is_none() {
-            eprintln!(
+            tracing::info!(
                 "load_config: keyring missing '{}', copying from config",
                 provider_name
             );
             if let Err(e) = crate::keyring_util::store_api_key(provider_name, &config_key) {
-                eprintln!(
+                tracing::warn!(
                     "keyring: failed to store key for '{}': {}",
-                    provider_name, e
+                    provider_name,
+                    e
                 );
             }
         }
@@ -307,7 +308,7 @@ pub fn load_app_config() -> AppConfig {
                 {
                     p.api_key = kk.clone();
                     changed = true;
-                    eprintln!(
+                    tracing::info!(
                         "load_config: config missing '{}', copying from keyring",
                         provider_name
                     );
@@ -321,7 +322,7 @@ pub fn load_app_config() -> AppConfig {
                         label: String::new(),
                     });
                     changed = true;
-                    eprintln!(
+                    tracing::info!(
                         "load_config: added '{}' to config from keyring",
                         provider_name
                     );
@@ -343,14 +344,15 @@ pub fn load_app_config() -> AppConfig {
             && config_secret != REDACTED_API_KEY
             && keyring_secret.is_none()
         {
-            eprintln!(
+            tracing::info!(
                 "load_config: keyring missing secret_key for '{}', copying from config",
                 provider_name
             );
             if let Err(e) = crate::keyring_util::store_secret_key(provider_name, &config_secret) {
-                eprintln!(
+                tracing::warn!(
                     "keyring: failed to store secret_key for '{}': {}",
-                    provider_name, e
+                    provider_name,
+                    e
                 );
             }
         }
@@ -365,7 +367,7 @@ pub fn load_app_config() -> AppConfig {
                 {
                     p.secret_key = ks.clone();
                     changed = true;
-                    eprintln!(
+                    tracing::info!(
                         "load_config: config missing secret_key for '{}', copying from keyring",
                         provider_name
                     );
@@ -379,7 +381,7 @@ pub fn load_app_config() -> AppConfig {
                         label: String::new(),
                     });
                     changed = true;
-                    eprintln!(
+                    tracing::info!(
                         "load_config: added '{}' to config from keyring (with secret_key)",
                         provider_name
                     );
@@ -458,7 +460,7 @@ pub fn save_to_toml(config: &AppConfig) -> bool {
     let path = app_config_toml_path();
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!(
+            tracing::warn!(
                 "Failed to create config directory {}: {e}",
                 parent.display()
             );
@@ -476,12 +478,12 @@ pub fn save_to_toml(config: &AppConfig) -> bool {
         Ok(content) => match std::fs::write(&path, &content) {
             Ok(_) => true,
             Err(e) => {
-                eprintln!("Failed to write TOML config to {}: {e}", path.display());
+                tracing::warn!("Failed to write TOML config to {}: {e}", path.display());
                 false
             }
         },
         Err(e) => {
-            eprintln!("Failed to serialize config to TOML: {e}");
+            tracing::warn!("Failed to serialize config to TOML: {e}");
             false
         }
     }
@@ -503,11 +505,11 @@ pub fn load_from_toml() -> AppConfig {
 
     // Fall back to JSON with deprecation warning
     if json_path.exists() {
-        eprintln!(
+        tracing::warn!(
             "DEPRECATION WARNING: Loading config from JSON format ({}). ",
             json_path.display()
         );
-        eprintln!(
+        tracing::warn!(
             "The JSON format is deprecated. Config will be migrated to TOML ({}).",
             toml_path.display()
         );
@@ -534,8 +536,8 @@ fn load_app_config_inner(path: Option<&PathBuf>) -> AppConfig {
 
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     if content.trim().is_empty() {
-        eprintln!(
-            "WARNING: Config file exists at {} but is empty, using defaults",
+        tracing::info!(
+            "Config file exists at {} but is empty, using defaults",
             path.display()
         );
         return AppConfig::default();
@@ -547,8 +549,8 @@ fn load_app_config_inner(path: Option<&PathBuf>) -> AppConfig {
         match toml::from_str(&content) {
             Ok(cfg) => Some(cfg),
             Err(e) => {
-                eprintln!(
-                    "ERROR: Failed to parse TOML config file at {}: {e}",
+                tracing::warn!(
+                    "Failed to parse TOML config file at {}: {e}",
                     path.display()
                 );
                 None
@@ -558,8 +560,8 @@ fn load_app_config_inner(path: Option<&PathBuf>) -> AppConfig {
         match serde_json::from_str(&content) {
             Ok(cfg) => Some(cfg),
             Err(e) => {
-                eprintln!(
-                    "ERROR: Failed to parse JSON config file at {}: {e}",
+                tracing::warn!(
+                    "Failed to parse JSON config file at {}: {e}",
                     path.display()
                 );
                 None
@@ -573,7 +575,7 @@ fn load_app_config_inner(path: Option<&PathBuf>) -> AppConfig {
             cfg
         }
         None => {
-            eprintln!("Attempting recovery from backup...");
+            tracing::info!("Attempting recovery from backup...");
             let bak_path = if ext == "toml" {
                 path.with_extension("toml.bak")
             } else {
@@ -586,14 +588,14 @@ fn load_app_config_inner(path: Option<&PathBuf>) -> AppConfig {
                     serde_json::from_str(&bak).ok()
                 };
                 if let Some(cfg) = recovered {
-                    eprintln!("Recovered config from backup.");
+                    tracing::info!("Recovered config from backup.");
                     let _ = std::fs::write(&path, &bak);
                     return cfg;
                 } else {
-                    eprintln!("Backup also corrupted. Starting with default config.");
+                    tracing::warn!("Backup also corrupted. Starting with default config.");
                 }
             } else {
-                eprintln!("No backup found. Starting with default config.");
+                tracing::info!("No backup found. Starting with default config.");
             }
             AppConfig::default()
         }

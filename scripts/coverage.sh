@@ -76,13 +76,13 @@ if [ "$USE_LLVM_COV" = true ]; then
 
         if [ "$RUN_UNIT" = true ] && [ "$RUN_INTEGRATION" = true ]; then
             echo "Running: cargo llvm-cov --all-targets $COV_FLAGS --lcov --output-path ${PROFILE_OUT}.info $COV_OPTS"
-            cargo llvm-cov --all-targets "$COV_FLAGS" --lcov --output-path "${PROFILE_OUT}.info" $COV_OPTS || OVERALL_EXIT=$?
+            cargo llvm-cov --all-targets $COV_FLAGS --lcov --output-path "${PROFILE_OUT}.info" $COV_OPTS || OVERALL_EXIT=$?
         elif [ "$RUN_UNIT" = true ]; then
             echo "Running: cargo llvm-cov --lib $COV_FLAGS --lcov --output-path ${PROFILE_OUT}.info $COV_OPTS"
-            cargo llvm-cov --lib "$COV_FLAGS" --lcov --output-path "${PROFILE_OUT}.info" $COV_OPTS || OVERALL_EXIT=$?
+            cargo llvm-cov --lib $COV_FLAGS --lcov --output-path "${PROFILE_OUT}.info" $COV_OPTS || OVERALL_EXIT=$?
         elif [ "$RUN_INTEGRATION" = true ]; then
             echo "Running: cargo llvm-cov --test '*' $COV_FLAGS --lcov --output-path ${PROFILE_OUT}.info $COV_OPTS"
-            cargo llvm-cov --test '*' "$COV_FLAGS" --lcov --output-path "${PROFILE_OUT}.info" $COV_OPTS || OVERALL_EXIT=$?
+            cargo llvm-cov --test '*' $COV_FLAGS --lcov --output-path "${PROFILE_OUT}.info" $COV_OPTS || OVERALL_EXIT=$?
         fi
         echo ""
     done

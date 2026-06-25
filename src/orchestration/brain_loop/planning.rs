@@ -242,9 +242,11 @@ impl BrainLoop {
         };
 
         // Append the new steps, each receiving the merged context.
+        // Assign the merged context (if any) to all new steps.
+        let merged = merged_context;
         for mut step in new_steps {
-            if merged_context.is_some() {
-                step.context = merged_context.clone();
+            if let Some(ref ctx) = merged {
+                step.context = Some(ctx.clone());
             }
             plan.steps.push(step);
         }

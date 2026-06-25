@@ -95,9 +95,10 @@ for endpoint in health governance capabilities initialize chat; do
         values=$(grep -E '^[0-9]+\.[0-9]+$' "$file" | sort -n | tr '\n' ' ')
         count=$(echo "$values" | wc -w)
         if [ "$count" -gt 0 ]; then
-            p50=$(echo "$values" | awk '{print $int('"$count"'*0.5)}')
-            p95=$(echo "$values" | awk '{print $int('"$count"'*0.95)}')
-            p99=$(echo "$values" | awk '{print $int('"$count"'*0.99)}')
+            vals=($values)
+            p50=$(echo "$values" | awk -v n="$count" '{vals[NR]=$1} END {print vals[int(n*0.5)]}')
+            p95=$(echo "$values" | awk -v n="$count" '{vals[NR]=$1} END {print vals[int(n*0.95)]}')
+            p99=$(echo "$values" | awk -v n="$count" '{vals[NR]=$1} END {print vals[int(n*0.99)]}')
             echo "$endpoint | ${p50}s | ${p95}s | ${p99}s | $count"
         else
             echo "$endpoint | N/A | N/A | N/A | 0"

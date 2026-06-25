@@ -16,30 +16,23 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 pub mod common;
+use common::binary_path;
+use common::suite_mutex;
 use common::CrossProcessLock;
 
 const LOCK_NAME: &str = "streaming-bench";
 
-static BENCH_SUITE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-
 fn suite_guard() -> &'static Mutex<()> {
-    BENCH_SUITE_GUARD.get_or_init(|| Mutex::new(()))
-}
-
-fn binary_path() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_go-on")
-        .map(PathBuf::from)
-        .expect("CARGO_BIN_EXE_go-on is not set")
+    suite_mutex()
 }
 
 // ---------------------------------------------------------------------------

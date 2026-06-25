@@ -23,4 +23,5 @@ This directory contains a production ingress template for Stage C release readin
 
 ## Backend pairing
 
-Use `config.production.toml` so backend keeps `entry_auth_enabled=true` and `production_strict=true`.
+Use `config.simple-server.toml` so backend keeps `entry_auth_enabled=true` and `production_strict=true`.
+Production-ready settings are also available in `deploy/simple-server/` and `deploy/multi-users-server/`.

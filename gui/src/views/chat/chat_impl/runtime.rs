@@ -370,9 +370,10 @@ impl ChatView {
                                         .get("message")
                                         .and_then(|m| m.as_str())
                                         .unwrap_or("unknown workflow error");
-                                    eprintln!(
+                                    tracing::warn!(
                                         "[Gen] Workflow generation {} returned error: {}",
-                                        generation_id, error_msg
+                                        generation_id,
+                                        error_msg
                                     );
                                     send_pending(
                                         &tx,
@@ -387,6 +388,7 @@ impl ChatView {
                                         value.get("result").unwrap_or(&value),
                                     )
                                     .unwrap_or_default();
+                                    #[cfg(debug_assertions)]
                                     eprintln!(
                                         "[Gen] Workflow generation {} completed",
                                         generation_id
@@ -406,7 +408,7 @@ impl ChatView {
                                     .await;
                                 }
                             } else {
-                                eprintln!(
+                                tracing::warn!(
                                     "[Gen] Workflow generation {} - JSON parse failed",
                                     generation_id
                                 );
@@ -421,7 +423,11 @@ impl ChatView {
                             }
                         }
                         Err(e) => {
-                            eprintln!("[Gen] Workflow generation {} failed: {}", generation_id, e);
+                            tracing::warn!(
+                                "[Gen] Workflow generation {} failed: {}",
+                                generation_id,
+                                e
+                            );
                             send_pending(
                                 &tx,
                                 PendingResponse::Error {
@@ -683,6 +689,7 @@ impl ChatView {
                                                 return;
                                             }
                                             _ => {
+                                                #[cfg(debug_assertions)]
                                                 eprintln!(
                                                     "[SSE] Unknown event type: {}",
                                                     event_type
@@ -714,7 +721,7 @@ impl ChatView {
                                         }
                                     }
                                     Err(e) => {
-                                        eprintln!("[SSE] Parse error: {}", e);
+                                        tracing::warn!("[SSE] Parse error: {}", e);
                                         sse_parse_error_count =
                                             sse_parse_error_count.saturating_add(1);
                                     }
@@ -744,6 +751,7 @@ impl ChatView {
                                 .unwrap_or(true),
                             final_agent.as_deref().unwrap_or("unknown")
                         );
+                        #[cfg(debug_assertions)]
                         eprintln!(
                             "[Gen] Generation {} completed ({})",
                             generation_id, status_log
@@ -755,7 +763,7 @@ impl ChatView {
                                 "[SSE] {} JSON parse error(s) occurred during streaming",
                                 sse_parse_error_count
                             );
-                            eprintln!("{}", warn_msg);
+                            tracing::warn!("{}", warn_msg);
                             send_pending(&tx, PendingResponse::UiMessage(warn_msg)).await;
                         }
 
@@ -774,9 +782,10 @@ impl ChatView {
                         .await;
                     }
                     Err(err) => {
-                        eprintln!(
+                        tracing::warn!(
                             "[Gen] Generation {} stream request failed (attempting fallback): {}",
-                            generation_id, err
+                            generation_id,
+                            err
                         );
                         let fallback = backend_clone
                             .chat_with_options(

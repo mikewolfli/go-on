@@ -8,9 +8,6 @@
 pub struct PluginInfo {
     /// Unique plugin identifier.
     pub id: String,
-    /// Human-readable name.
-    #[allow(dead_code)]
-    pub name: String,
     /// Current state label (e.g. "registered", "active").
     pub state_label: &'static str,
 }

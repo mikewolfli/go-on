@@ -99,6 +99,7 @@ impl BackendClient {
                     let retryable = Self::is_retryable_transport_error(&err);
                     if attempt < attempts && retryable {
                         let backoff = Self::retry_backoff(attempt);
+                        #[cfg(debug_assertions)]
                         eprintln!(
                             "[RPC] Attempt {}/{} transport error (retryable={}): {}, backing off {:?}",
                             attempt,
@@ -137,6 +138,7 @@ impl BackendClient {
                     // Retry on ANY body read error regardless of status code
                     if attempt < attempts {
                         let backoff = Self::retry_backoff(attempt);
+                        #[cfg(debug_assertions)]
                         eprintln!("[RPC] Attempt {}: Body read error, retrying", attempt);
                         tokio::time::sleep(backoff).await;
                         continue;
@@ -154,6 +156,7 @@ impl BackendClient {
                 last_err = format!("HTTP status error {}: {}", status.as_u16(), detail);
                 if attempt < attempts && Self::is_retryable_status(status) {
                     let backoff = Self::retry_backoff(attempt);
+                    #[cfg(debug_assertions)]
                     eprintln!(
                         "[RPC] Attempt {}: Status {} (retryable), backing off {:?}",
                         attempt,
@@ -178,6 +181,7 @@ impl BackendClient {
                     // Retry on JSON parse errors as they might be transient
                     if attempt < attempts {
                         let backoff = Self::retry_backoff(attempt);
+                        #[cfg(debug_assertions)]
                         eprintln!("[RPC] Attempt {}: JSON parse failed, retrying", attempt);
                         tokio::time::sleep(backoff).await;
                         continue;
@@ -195,6 +199,7 @@ impl BackendClient {
                 let code = rpc_err.get("code").and_then(|v| v.as_i64());
                 if attempt < attempts && code.is_some_and(Self::is_retryable_rpc_error_code) {
                     let backoff = Self::retry_backoff(attempt);
+                    #[cfg(debug_assertions)]
                     eprintln!(
                         "[RPC] Attempt {}: RPC error code {:?} (retryable), backing off {:?}",
                         attempt, code, backoff

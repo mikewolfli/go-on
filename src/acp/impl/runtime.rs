@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::signal;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::acp::background::start_background_tasks;
 use crate::acp::r#impl::io::send_error;
@@ -134,7 +134,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
                     stream.recv().await;
                 }
                 Err(e) => {
-                    warn!("failed to register SIGTERM handler: {e}; graceful shutdown via SIGTERM disabled");
+                    tracing::warn!("failed to register SIGTERM handler: {e}; graceful shutdown via SIGTERM disabled");
                     std::future::pending::<()>().await;
                 }
             }
@@ -240,9 +240,8 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
         .artifact_ledger
         .lock()
         .map(|guard| guard.clone())
-        .unwrap_or_else(|_| {
-            crate::reinforcement::ArtifactLedger::new(
-                _server.config_path.as_deref().map(std::path::Path::new),
-            )
+        .unwrap_or_else(|poisoned| {
+            tracing::warn!("artifact_ledger lock poisoned — recovering inner state");
+            poisoned.into_inner().clone()
         })
 }

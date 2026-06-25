@@ -20,10 +20,10 @@
 
 | 模块名 | 文件 | 行数 | 功能 | 状态 |
 |--------|------|------|------|------|
-| TaskRouter | src/task_router.rs | 450+ | 智能任务路由+自动角色分配 | ✅ |
-| AdaptiveModelSelector | src/adaptive_selector.rs | 320+ | 自适应模型选择+性能学习 | ✅ |
-| TaskDecomposer | src/task_decomposer.rs | 380+ | 自动任务分解+依赖分析 | ✅ |
-| WorkflowOptimizer | src/workflow_optimizer.rs | 400+ | 工作流优化+执行优化+故障预测 | ✅ |
+| TaskRouter | src/orchestration/task_router.rs | 450+ | 智能任务路由+自动角色分配 | ✅ |
+| AdaptiveModelSelector | src/intelligence/adaptive_selector.rs | 320+ | 自适应模型选择+性能学习 | ✅ |
+| TaskDecomposer | src/orchestration/task_decomposer.rs | 380+ | 自动任务分解+依赖分析 | ✅ |
+| WorkflowOptimizer | src/orchestration/workflow_optimizer.rs | 400+ | 工作流优化+执行优化+故障预测 | ✅ |
 | AdvancedModules | src/advanced_modules.rs | 800+ | 参数优化+资源分配+诊断+学习 | ✅ |
 
 **总代码量:** 2,350+ 行新增
@@ -42,7 +42,7 @@
 ## 🎯 实现的10个增强功能
 
 ### 1️⃣ TaskRouter - 智能任务路由
-**优先级:** 🔥 最高 | **文件:** src/task_router.rs
+**优先级:** 🔥 最高 | **文件:** src/orchestration/task_router.rs
 
 ✅ **已实现特性:**
 - 任务特征自动分析 (8个维度)
@@ -59,7 +59,7 @@
 ---
 
 ### 2️⃣ AdaptiveModelSelector - 自适应模型选择
-**优先级:** 🔥 最高 | **文件:** src/adaptive_selector.rs
+**优先级:** 🔥 最高 | **文件:** src/intelligence/adaptive_selector.rs
 
 ✅ **已实现特性:**
 - 模型性能跟踪 (成功率/延迟/成本)
@@ -80,7 +80,7 @@
 ---
 
 ### 3️⃣ TaskDecomposer - 自动任务分解
-**优先级:** 🔥 最高 | **文件:** src/task_decomposer.rs
+**优先级:** 🔥 最高 | **文件:** src/orchestration/task_decomposer.rs
 
 ✅ **已实现特性:**
 - Bug修复分解策略 (诊断→修复→验证)
@@ -101,7 +101,7 @@
 ---
 
 ### 4️⃣ WorkflowOptimizer - 动态工作流优化
-**优先级:** 💪 高 | **文件:** src/workflow_optimizer.rs (Part 1)
+**优先级:** 💪 高 | **文件:** src/orchestration/workflow_optimizer.rs (Part 1)
 
 ✅ **已实现特性:**
 - 执行指标跟踪 (成功率/延迟/成本)
@@ -121,7 +121,7 @@
 ---
 
 ### 5️⃣ ExecutionOptimizer - 执行并行化优化
-**优先级:** 💪 高 | **文件:** src/workflow_optimizer.rs (Part 2)
+**优先级:** 💪 高 | **文件:** src/orchestration/workflow_optimizer.rs (Part 2)
 
 ✅ **已实现特性:**
 - 关键路径分析 (CPM算法)
@@ -139,7 +139,7 @@
 ---
 
 ### 6️⃣ PredictiveFailureHandler - 预测性故障处理
-**优先级:** 💪 高 | **文件:** src/workflow_optimizer.rs (Part 3)
+**优先级:** 💪 高 | **文件:** src/orchestration/workflow_optimizer.rs (Part 3)
 
 ✅ **已实现特性:**
 - 任务风险评估 (4个维度)
@@ -366,10 +366,10 @@ Month 6:  +70% 性能 (完整学习周期)
 
 ### 新增文件
 ```
-src/task_router.rs                   - TaskRouter实现 (450行)
-src/adaptive_selector.rs             - AdaptiveModelSelector实现 (320行)
-src/task_decomposer.rs               - TaskDecomposer实现 (380行)
-src/workflow_optimizer.rs            - WorkflowOptimizer等实现 (400行)
+src/orchestration/task_router.rs                   - TaskRouter实现 (450行)
+src/intelligence/adaptive_selector.rs             - AdaptiveModelSelector实现 (320行)
+src/orchestration/task_decomposer.rs               - TaskDecomposer实现 (380行)
+src/orchestration/workflow_optimizer.rs            - WorkflowOptimizer等实现 (400行)
 src/advanced_modules.rs              - 参数/资源/诊断/学习等 (800行)
 ```
 

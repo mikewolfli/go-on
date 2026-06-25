@@ -95,7 +95,7 @@ impl Skill for PromptBasedSkill {
                 };
                 resolved = resolved.replace(&key_brace, &val_str);
                 // Also support {{key}} format for template engines
-                let key_double_brace = format!("{{{{{} }}}}", key);
+                let key_double_brace = format!("{{{{{}}}}}", key);
                 resolved = resolved.replace(&key_double_brace, &val_str);
             }
             resolved
@@ -255,77 +255,6 @@ impl PromptSkillAgent for ChatBasedSkillAgent {
         }
 
         Ok(response)
-    }
-}
-
-/// A skill composed from two other skills (pipeline: A → B).
-#[derive(Debug, Clone)]
-pub struct ComposedSkill {
-    pub name: String,
-    pub description: String,
-    pub skill_a: String,
-    pub skill_b: String,
-    /// Reference to the SkillRegistry that holds skill_a and skill_b.
-    /// Used at execute time to look up and delegate to the actual skills.
-    pub registry: Arc<RwLock<SkillRegistry>>,
-}
-
-#[async_trait]
-impl Skill for ComposedSkill {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({"type": "object"})
-    }
-
-    async fn execute(&self, input: &Value) -> Result<Value> {
-        // Look up skill_a from the registry and execute it with the given input.
-        // Use a separate function or explicit scope to ensure MutexGuard is dropped
-        // before the .await (MutexGuard is not Send).
-        let skill_a_clone = {
-            let registry = self
-                .registry
-                .read()
-                .map_err(|e| anyhow::anyhow!("Failed to read skill registry: {}", e))?;
-            registry
-                .get(&self.skill_a)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Composed skill '{}' not found: {}", self.name, self.skill_a)
-                })?
-                .clone()
-        }; // RwLockReadGuard dropped here
-        let result_a = skill_a_clone.execute(input).await?;
-
-        // Look up skill_b and execute with skill_a's output as input
-        let skill_b_clone = {
-            let registry = self
-                .registry
-                .read()
-                .map_err(|e| anyhow::anyhow!("Failed to read skill registry: {}", e))?;
-            registry
-                .get(&self.skill_b)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Composed skill '{}' not found: {}", self.name, self.skill_b)
-                })?
-                .clone()
-        }; // RwLockReadGuard dropped here
-        let result_b = skill_b_clone.execute(&result_a).await?;
-
-        Ok(json!({
-            "success": true,
-            "summary": format!("Composed skill '{}' ({} \u{2192} {}) executed", self.name, self.skill_a, self.skill_b),
-            "pipeline": [
-                {"skill": self.skill_a, "output": result_a},
-                {"skill": self.skill_b, "output": result_b}
-            ],
-            "result": result_b
-        }))
     }
 }
 

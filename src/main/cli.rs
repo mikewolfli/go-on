@@ -228,7 +228,7 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
         std::env::temp_dir().join("go-on-skill-market"),
         skill_registry.clone(),
     )
-    .expect("failed to create skill market registry");
+    .map_err(|e| anyhow::anyhow!("failed to create skill market registry: {}", e))?;
 
     match cmd {
         SkillCommand::List { tag } => {
@@ -238,37 +238,37 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
                 Some(ref t) => market_registry.list_skills_by_tag(t).await,
                 None => market_registry.list_skills().await,
             };
-            eprintln!(
+            println!(
                 "Available skills ({} total, {} matching):",
                 count,
                 skills.len()
             );
             for skill in &skills {
                 let tags = skill.tags.join(", ");
-                eprintln!(
+                println!(
                     "  {:<20} v{:<8} [{:>5.1}]  {:<40} tags: {}",
                     skill.name, skill.version, skill.rating, skill.description, tags,
                 );
             }
             if skills.is_empty() {
-                eprintln!(
+                println!(
                     "  (no skills found{})",
                     tag.map_or(String::new(), |t| format!(" for tag '{}'", t))
                 );
             }
         }
         SkillCommand::Import { source } => {
-            eprintln!("Importing skill from: {}", source);
+            println!("Importing skill from: {}", source);
             // Refresh the marketplace to populate built-in skills
             market_registry.refresh().await?;
             // Attempt to install from the marketplace by name
             match market_registry.install_skill(&source).await {
                 Ok(installation) => {
-                    eprintln!(
+                    println!(
                         "Skill '{}' v{} imported successfully",
                         installation.name, installation.version
                     );
-                    eprintln!("  Installed at: {}", installation.installed_path.display());
+                    println!("  Installed at: {}", installation.installed_path.display());
                 }
                 Err(e) => {
                     anyhow::bail!("Failed to import skill '{}': {}", source, e);
@@ -281,29 +281,29 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .list();
-            eprintln!("Registered skills ({}):", descriptors.len());
+            println!("Registered skills ({}):", descriptors.len());
             for desc in &descriptors {
-                eprintln!(
+                println!(
                     "  {:<20}  score: {:>5.2}  calls: {}  {}",
                     desc.name, desc.score, desc.total_calls, desc.description,
                 );
             }
             if descriptors.is_empty() {
-                eprintln!("  (no skills registered)");
+                println!("  (no skills registered)");
             }
         }
         SkillCommand::Info { name } => {
             let registry = skill_registry.read().unwrap_or_else(|e| e.into_inner());
             match registry.descriptor(&name) {
                 Some(desc) => {
-                    eprintln!("Skill: {}", desc.name);
-                    eprintln!("  Description: {}", desc.description);
-                    eprintln!("  Score: {:.2}", desc.score);
-                    eprintln!("  Total calls: {}", desc.total_calls);
-                    eprintln!("  Successful calls: {}", desc.success_calls);
-                    eprintln!("  Failed calls: {}", desc.failure_calls);
-                    eprintln!("  Avg latency: {:.1} ms", desc.average_latency_ms);
-                    eprintln!("  Input schema: {}", desc.input_schema);
+                    println!("Skill: {}", desc.name);
+                    println!("  Description: {}", desc.description);
+                    println!("  Score: {:.2}", desc.score);
+                    println!("  Total calls: {}", desc.total_calls);
+                    println!("  Successful calls: {}", desc.success_calls);
+                    println!("  Failed calls: {}", desc.failure_calls);
+                    println!("  Avg latency: {:.1} ms", desc.average_latency_ms);
+                    println!("  Input schema: {}", desc.input_schema);
                 }
                 None => {
                     anyhow::bail!("skill '{}' not found in registry", name);
@@ -314,14 +314,14 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             let mut registry = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             match registry.discover_and_register_local_skills(None) {
                 Ok(summary) => {
-                    eprintln!(
+                    println!(
                         "Skill refresh complete: {} registered, {} skipped, {} errors",
                         summary.registered,
                         summary.skipped,
                         summary.errors.len()
                     );
                     for err in &summary.errors {
-                        eprintln!("  Error: {}", err);
+                        println!("  Error: {}", err);
                     }
                 }
                 Err(e) => {
@@ -332,7 +332,7 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
         SkillCommand::Remove { name } => {
             let mut registry = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             if registry.unregister(&name) {
-                eprintln!("Skill '{}' removed from registry", name);
+                println!("Skill '{}' removed from registry", name);
             } else {
                 anyhow::bail!("skill '{}' not found in registry", name);
             }

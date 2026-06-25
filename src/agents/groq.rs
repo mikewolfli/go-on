@@ -209,6 +209,10 @@ impl Agent for GroqAgent {
         ]
     }
 
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
     fn supports_model_override(&self) -> bool {
         true
     }

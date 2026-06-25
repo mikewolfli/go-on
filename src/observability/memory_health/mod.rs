@@ -377,7 +377,6 @@ fn query_windows_memory() -> SystemMemoryInfo {
                 if fields.len() >= 3 {
                     let total_kb = fields[1].trim().parse::<u64>().unwrap_or(0);
                     let free_kb = fields[2].trim().parse::<u64>().unwrap_or(0);
-                    let page_size = 4096u64;
                     return SystemMemoryInfo {
                         total_bytes: total_kb * 1024,
                         free_bytes: free_kb * 1024,

@@ -25,12 +25,18 @@ use super::chaos::{ChaosEngine, FaultType};
 
 /// Acquire a write lock on a Mutex.
 fn lock_mutex<T>(mtx: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mtx.lock().expect("hyper_resilience mutex poisoned")
+    mtx.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("hyper_resilience mutex poisoned, recovering");
+        poisoned.into_inner()
+    })
 }
 
 /// Acquire a read lock on a RwLock.
 fn read_lock<T>(rw: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
-    rw.read().expect("hyper_resilience rwlock poisoned")
+    rw.read().unwrap_or_else(|poisoned| {
+        tracing::warn!("hyper_resilience rwlock poisoned, recovering");
+        poisoned.into_inner()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -907,7 +913,10 @@ impl HyperResilienceEngine {
                 );
             }
         });
-        *self.health_check_handle.lock().expect("handle poisoned") = Some(handle);
+        *self.health_check_handle.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("health_check_handle lock poisoned, recovering");
+            poisoned.into_inner()
+        }) = Some(handle);
     }
 
     /// Stop background health checks by signalling the cancellation token.

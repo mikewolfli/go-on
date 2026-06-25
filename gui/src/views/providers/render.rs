@@ -449,8 +449,7 @@ impl ProvidersView {
                                         let push_secret_key = secret_key.clone();
                                         let push_model = model.clone();
                                         if push_model.is_empty() || push_model == "auto" {
-                                            // Get the model from config if exists
-                                            let _ = config.providers.iter().find(|p| p.name == name).map(|p| p.model.clone());
+                                            // Model will be resolved by the backend
                                         }
                                         let ctx_clone = ctx.clone();
                                         let ok_fmt = format!(

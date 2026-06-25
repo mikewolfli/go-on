@@ -6,48 +6,46 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OS_NAME="$(uname -s || echo unknown)"
 
-if [[ "$OS_NAME" != "Darwin" ]]; then
-  echo "No macOS trust bootstrap needed on $OS_NAME."
-  exit 0
-fi
-
-UNBLOCK_SCRIPT="$ROOT_DIR/macos-gui-unblock.sh"
-if [[ ! -x "$UNBLOCK_SCRIPT" ]]; then
-  if [[ -f "$UNBLOCK_SCRIPT" ]]; then
-    chmod +x "$UNBLOCK_SCRIPT" || true
-  else
-    echo "macOS unblock helper not found: $UNBLOCK_SCRIPT"
-    exit 1
+# ── macOS-specific: Gatekeeper unblock ──────────────────────────────────
+if [[ "$OS_NAME" == "Darwin" ]]; then
+  UNBLOCK_SCRIPT="$ROOT_DIR/macos-gui-unblock.sh"
+  if [[ ! -x "$UNBLOCK_SCRIPT" ]]; then
+    if [[ -f "$UNBLOCK_SCRIPT" ]]; then
+      chmod +x "$UNBLOCK_SCRIPT" || true
+    else
+      echo "macOS unblock helper not found: $UNBLOCK_SCRIPT"
+      exit 1
+    fi
   fi
+
+  # Support both package layouts:
+  # 1) root contains backend/ and optional *.app
+  # 2) script is inside backend/ folder
+  BACKEND_BIN=""
+  if [[ -x "$ROOT_DIR/target/release/go-on" ]]; then
+    BACKEND_BIN="$ROOT_DIR/target/release/go-on"
+  elif [[ -x "$ROOT_DIR/target/debug/go-on" ]]; then
+    BACKEND_BIN="$ROOT_DIR/target/debug/go-on"
+  fi
+
+  if [[ -n "$BACKEND_BIN" ]]; then
+    "$UNBLOCK_SCRIPT" --copy "$BACKEND_BIN"
+  fi
+
+  APP_BUNDLE="$(find "$ROOT_DIR" -maxdepth 2 -type d -name "*.app" | head -1 || true)"
+  if [[ -n "$APP_BUNDLE" ]]; then
+    "$UNBLOCK_SCRIPT" --copy "$APP_BUNDLE"
+  fi
+
+  echo "macOS first-run trust bootstrap completed."
+else
+  echo "Skipping macOS-specific unblock (OS: $OS_NAME)."
 fi
 
-# Support both package layouts:
-# 1) root contains backend/ and optional *.app
-# 2) script is inside backend/ folder
-BACKEND_BIN=""
-if [[ -x "$ROOT_DIR/target/release/go-on" ]]; then
-  BACKEND_BIN="$ROOT_DIR/target/release/go-on"
-elif [[ -x "$ROOT_DIR/target/debug/go-on" ]]; then
-  BACKEND_BIN="$ROOT_DIR/go-on"
-fi
-
-if [[ -n "$BACKEND_BIN" ]]; then
-  "$UNBLOCK_SCRIPT" --copy "$BACKEND_BIN"
-fi
-
-APP_BUNDLE="$(find "$ROOT_DIR" -maxdepth 2 -type d -name "*.app" | head -1 || true)"
-if [[ -n "$APP_BUNDLE" ]]; then
-  "$UNBLOCK_SCRIPT" --copy "$APP_BUNDLE"
-fi
-
-# Run skills environment setup if available.
+# ── Run skills environment setup (all platforms) ────────────────────────
 SKILLS_SETUP="$ROOT_DIR/scripts/skills-setup.sh"
 if [[ -x "$SKILLS_SETUP" ]]; then
   echo "Skills environment setup..."
-  # Install language toolchains as needed:
-  #   ./scripts/skills-setup.sh rust
-  #   ./scripts/skills-setup.sh node
-  #   ./scripts/skills-setup.sh python
   "$SKILLS_SETUP" rust
   "$SKILLS_SETUP" node
   "$SKILLS_SETUP" python
@@ -56,7 +54,7 @@ else
   echo "Skills setup script not found at $SKILLS_SETUP — skipping."
 fi
 
-# Create agent skills directory for SKILL.md auto-discovery.
+# ── Create agent skills directory for SKILL.md auto-discovery (all platforms) ─
 AGENT_SKILLS_DIR="$HOME/.agents/skills"
 if [ ! -d "$AGENT_SKILLS_DIR" ]; then
   mkdir -p "$AGENT_SKILLS_DIR"
@@ -90,4 +88,4 @@ EOF
   echo "Created example skill at $EXAMPLE_SKILL"
 fi
 
-echo "macOS first-run trust bootstrap finished."
+echo "first-run setup finished."

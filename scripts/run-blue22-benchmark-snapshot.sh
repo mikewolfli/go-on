@@ -44,7 +44,8 @@ CHECK_RC=0
 (cd "$ROOT_DIR" && cargo check --all-targets) >"$CHECK_LOG" 2>&1 || CHECK_RC=$?
 
 RPC_RESULT="$(run_and_capture "acp-runtime-rpc-integration" "cargo test --test acp_runtime_rpc_integration")"
-CONTRACT_RESULT="$(run_and_capture "step2-three-endpoint-contract" "cargo test --test step2_three_endpoint_contract")"
+# step2_three_endpoint_contract was renamed; use the equivalent e2e contract tests
+CONTRACT_RESULT="$(run_and_capture "step2-three-endpoint-contract" "cargo test --test e2e_contract_tests")"
 
 rpc_passed="$(printf '%s\n' "$RPC_RESULT" | grep '"passed"' | head -1 | sed -E 's/.*: ([0-9]+).*/\1/')"
 rpc_failed="$(printf '%s\n' "$RPC_RESULT" | grep '"failed"' | head -1 | sed -E 's/.*: ([0-9]+).*/\1/')"

@@ -245,18 +245,33 @@ impl SkillImportStore {
 
         // If the manifest declares an MCP endpoint, validate that a RemoteSkill
         // can be constructed for it (connection is not made at import time).
-        if let Some(endpoint) = &manifest.endpoint {
-            let _remote = RemoteSkill::new(endpoint, &manifest.name)
-                .context("failed to validate RemoteSkill endpoint")?;
-        }
+        // The constructed skill is saved for potential registration below when
+        // there is no prompt_template (endpoint-only skills).
+        let remote_skill: Option<RemoteSkill> = if let Some(endpoint) = &manifest.endpoint {
+            Some(
+                RemoteSkill::new(
+                    endpoint,
+                    &manifest.name,
+                    Some(&manifest.description),
+                    Some(manifest.input_schema.clone()),
+                )
+                .context("failed to validate RemoteSkill endpoint")?,
+            )
+        } else {
+            None
+        };
 
         self.records.insert(record.name.clone(), record.clone());
 
         // Persist the updated index immediately.
         self.save()?;
 
-        // Register as a prompt-based skill in the runtime SkillRegistry.
-        // This makes the imported skill immediately executable by the skill engine.
+        // Register the skill in the runtime SkillRegistry so it is immediately
+        // executable by the skill engine.
+        //
+        // Two registration paths:
+        //   - prompt_template present → register as a PromptBasedSkill
+        //   - endpoint present (no prompt_template) → register as a RemoteSkill
         if let Some(prompt_template) = &manifest.prompt_template {
             let input_schema = match &manifest.input_schema {
                 Value::Object(map) => map
@@ -275,6 +290,27 @@ impl SkillImportStore {
                     ) {
                         tracing::warn!(
                             "failed to register imported skill '{}': {}",
+                            manifest.name,
+                            e
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "failed to acquire skill_registry lock for '{}': {}",
+                        manifest.name,
+                        e
+                    );
+                }
+            }
+        } else if let Some(remote) = remote_skill {
+            // Endpoint-only skill: register as a RemoteSkill
+            match self.skill_registry.write() {
+                Ok(mut registry) => {
+                    let skill: Arc<dyn crate::orchestration::skill::Skill> = Arc::new(remote);
+                    if let Err(e) = registry.register(skill) {
+                        tracing::warn!(
+                            "failed to register remote imported skill '{}': {}",
                             manifest.name,
                             e
                         );
@@ -714,7 +750,16 @@ impl RemoteSkill {
     ///
     /// The endpoint should point to an MCP-compatible server that exposes
     /// a `/tools/call` endpoint accepting `{"name": "...", "arguments": {...}}`.
-    pub fn new(endpoint: &str, skill_name: &str) -> Result<Self> {
+    ///
+    /// `description` and `input_schema` override the defaults when provided.
+    /// When `None`, a default description ("Remote MCP skill at ...") and a
+    /// generic JSON object schema are used.
+    pub fn new(
+        endpoint: &str,
+        skill_name: &str,
+        description: Option<&str>,
+        input_schema: Option<Value>,
+    ) -> Result<Self> {
         let connect_timeout = Duration::from_secs(SKILL_IMPORT_CONNECT_TIMEOUT_SECS);
         let request_timeout = Duration::from_secs(SKILL_IMPORT_REQUEST_TIMEOUT_SECS);
         let client = Client::builder()
@@ -725,8 +770,10 @@ impl RemoteSkill {
 
         Ok(Self {
             name: skill_name.to_string(),
-            description: format!("Remote MCP skill at {}", endpoint),
-            input_schema: json!({"type": "object"}),
+            description: description
+                .unwrap_or(&format!("Remote MCP skill at {}", endpoint))
+                .to_string(),
+            input_schema: input_schema.unwrap_or_else(|| json!({"type": "object"})),
             endpoint: endpoint.trim_end_matches('/').to_string(),
             client,
         })

@@ -5,16 +5,17 @@
 ///
 /// These tests use the same RpcHarness pattern as acp_runtime_rpc_integration.
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 pub mod common;
+use common::binary_path;
+use common::suite_mutex;
 use common::CrossProcessLock;
 
 const LOCK_NAME: &str = "e2e-integration";
@@ -35,18 +36,9 @@ struct E2eHarness {
     _cross_process_lock: CrossProcessLock,
 }
 
-// Keep the in-process suite guard as well – it serialises threads *within*
-// the binary, which is cheaper than the file lock for intra-binary ordering.
-static E2E_SUITE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-
+/// Convenience wrapper around the shared suite mutex.
 fn suite_guard() -> &'static Mutex<()> {
-    E2E_SUITE_GUARD.get_or_init(|| Mutex::new(()))
-}
-
-fn binary_path() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_go-on")
-        .map(PathBuf::from)
-        .expect("CARGO_BIN_EXE_go-on is not set")
+    suite_mutex()
 }
 
 impl E2eHarness {

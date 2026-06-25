@@ -223,7 +223,9 @@ full = [
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
 backend-postgres = ["dep:postgres", "dep:pgvector"]
 
-# Legacy aliases (kept for backward compatibility)
+# Legacy aliases (kept for backward compatibility, no #[cfg] references in source)
+# DEPRECATED — use `local` / `multi-users-server` directly.
+# Will be removed in a future breaking release.
 local-acp-sqlite = ["local"]
 server-mcp-postgres = ["multi-users-server"]
 
@@ -325,8 +327,6 @@ windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win
 
 [dev-dependencies]
 # ── Note: Contract tests live in tests/contract_tests/ ──────────────────
-tempfile.workspace = true
-fs2 = "0.4"
 serial_test = "3"
 temp-env = "0.3"
 

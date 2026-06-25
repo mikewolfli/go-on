@@ -247,8 +247,10 @@ pub(crate) async fn start_server(
 
     // ── ProtocolNegotiator ───────────────────────────────────────────
     // Create negotiator with the resolved mode and log the negotiated result.
-    let negotiator_mode = NegProtocolMode::from_str(dispatch_mode)
-        .unwrap_or_else(|e| panic!("fatal: invalid dispatch mode '{}': {:?}", dispatch_mode, e));
+    let negotiator_mode = NegProtocolMode::from_str(dispatch_mode).unwrap_or_else(|e| {
+        tracing::error!("fatal: invalid dispatch mode '{}': {:?}", dispatch_mode, e);
+        std::process::exit(1);
+    });
     let mut negotiator = ProtocolNegotiator::new(negotiator_mode);
     let negotiated = negotiator.negotiate(None, None);
     info!(

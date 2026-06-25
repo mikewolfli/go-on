@@ -175,7 +175,8 @@ impl BrainLoop {
         })?;
         Ok(step
             .context
-            .clone()
+            .as_ref()
+            .cloned()
             .unwrap_or_else(|| TaskContext::new("empty-after-execute".to_string())))
     }
 }

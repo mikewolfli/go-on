@@ -12,13 +12,13 @@ Comprehensive code review and fixing for the `go-on` project covering:
 ### Issues Identified & Fixed: 8 Categories
 
 #### 1. **Mode Runtime Implementations** ✅
-- **Files**: `src/mode.rs`
+- **Files**: `src/orchestration/mode.rs`
 - **Issue**: Several mode types had empty/incomplete implementations
 - **Status**: All mode runtime logics implemented
 - **Verification**: `cargo check` - PASSED
 
 #### 2. **MCP Protocol Tools** ✅
-- **Files**: `src/mcp.rs`
+- **Files**: `src/mcp/`
 - **Issue**: Tool registration and execution handlers incomplete
 - **Status**: All MCP tool handlers fully implemented
 - **Verification**: `cargo check` - PASSED
@@ -36,7 +36,7 @@ Comprehensive code review and fixing for the `go-on` project covering:
 - **Verification**: `cargo check` - PASSED
 
 #### 5. **Optimization Logic** ✅
-- **Files**: `src/cost_optimizer.rs`, `src/speed_optimizer.rs`, `src/reliability_optimizer.rs`
+- **Files**: `(removed - functionality absorbed into orchestration)`, `(removed - functionality absorbed into orchestration)`, `(removed - functionality absorbed into orchestration)`
 - **Issue**: Optimizer implementations incomplete
 - **Status**: All optimization strategies fully implemented
 - **Verification**: `cargo check` - PASSED
@@ -172,13 +172,13 @@ Comprehensive code review and fixing for the `go-on` project covering:
 
 ### Rust Project
 ```
-src/mode.rs                    (5+ implementations)
-src/mcp.rs                     (3+ implementations)
+src/orchestration/mode.rs                    (5+ implementations)
+src/mcp/                     (3+ implementations)
 src/main.rs                    (4+ implementations)
 src/roles.rs                   (3+ implementations)
-src/cost_optimizer.rs          (2+ implementations)
-src/speed_optimizer.rs         (2+ implementations)
-src/reliability_optimizer.rs   (2+ implementations)
+(removed - functionality absorbed into orchestration)          (2+ implementations)
+(removed - functionality absorbed into orchestration)         (2+ implementations)
+(removed - functionality absorbed into orchestration)   (2+ implementations)
 src/evaluation.rs              (2+ implementations)
 src/task_graph.rs              (2+ implementations)
 tests/acp_runtime_rpc_integration.rs (3+ implementations)

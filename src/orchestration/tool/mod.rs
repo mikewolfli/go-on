@@ -12,7 +12,7 @@ pub mod pipeline;
 pub mod recommender;
 use crate::governance::pua::{tool_execution_report, PuaExecutionReport};
 use crate::i18n::runtime::{t, tf};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,7 +48,6 @@ pub fn set_skill_registry(registry: Arc<RwLock<SkillRegistry>>) {
 
 use std::process::Command;
 use std::time::Instant;
-use tempfile::NamedTempFile;
 use tracing::{debug, info, warn};
 
 /// Tool input envelope
@@ -1330,7 +1329,7 @@ impl ToolRegistry {
             self.tools
                 .iter()
                 .find(|t| t.name() == canonical)
-                .map(|b| Arc::clone(b))
+                .map(Arc::clone)
         } else {
             None
         }
@@ -1881,22 +1880,25 @@ impl Tool for ApplyPatchTool {
         let check_only = input.payload["check"].as_bool().unwrap_or(false);
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         let sanitized_dir = sanitize_path(input, current_dir)?;
-        let mut patch_file =
-            NamedTempFile::new().context("failed to create temp file for patch")?;
-        let patch_path = patch_file.path().to_path_buf();
-        patch_file
-            .write_all(patch.as_bytes())
-            .context("failed to write patch to temp file")?;
         let mut command = Command::new("git");
         command.arg("apply");
         if check_only {
             command.arg("--check");
         }
+        // Pipe patch via stdin to avoid Windows \\?\ long-path prefix issues
+        // that arise when using tempfile (git apply can't open \\?\ prefixed paths).
+        command.arg("-");
         debug!(directory = %current_dir, check_only = %check_only, "tool: running git apply");
-        let output = command
-            .arg(&patch_path)
-            .current_dir(&sanitized_dir)
-            .output()?;
+        command.current_dir(&sanitized_dir);
+        command.stdin(std::process::Stdio::piped());
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        let mut child = command.spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin.write_all(patch.as_bytes())?;
+        }
+        let output = child.wait_with_output()?;
         let success = output.status.success();
         if !success {
             warn!(
@@ -2391,14 +2393,6 @@ fn collect_matching_files(
 // - Tool succeeds and output verification passes
 // - All tool candidates exhausted (retry + fallback limits reached)
 // - Maximum iteration count reached
-
-/// Stage label for a single Think-Act-Observe iteration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoopStage {
-    Think,
-    Act,
-    Observe,
-}
 
 /// Outcome of a single Observe phase.
 #[derive(Debug, Clone)]
@@ -3001,6 +2995,8 @@ mod tests {
         run_git(dir, &["init"]);
         run_git(dir, &["config", "user.email", "copilot@example.com"]);
         run_git(dir, &["config", "user.name", "Copilot Test"]);
+        // Disable autocrlf to ensure consistent patch format across platforms
+        run_git(dir, &["config", "core.autocrlf", "false"]);
     }
 
     fn run_git(dir: &Path, args: &[&str]) -> String {

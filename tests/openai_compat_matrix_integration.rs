@@ -1,6 +1,5 @@
 use std::fs;
-use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -10,6 +9,8 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 pub mod common;
+use common::binary_path;
+use common::find_free_port;
 use common::CrossProcessLock;
 
 struct HttpHarness {
@@ -54,17 +55,8 @@ impl Drop for HttpHarness {
     }
 }
 
-fn binary_path() -> PathBuf {
-    std::env::var("CARGO_BIN_EXE_go-on")
-        .map(PathBuf::from)
-        .expect("CARGO_BIN_EXE_go-on is not set")
-}
-
 fn ephemeral_bind_addr() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind ephemeral port");
-    let port = listener.local_addr().expect("missing local addr").port();
-    drop(listener);
-    format!("127.0.0.1:{port}")
+    format!("127.0.0.1:{}", find_free_port())
 }
 
 fn write_http_test_config(path: &Path) {

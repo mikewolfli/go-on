@@ -36,6 +36,250 @@ pub(crate) struct Inner {
     pub(crate) plan_counter: u64,
 }
 
+/// Snapshot of fault tolerance state for persistence operations.
+/// Cloned under the async lock before entering `spawn_blocking` to avoid
+/// holding the lock across blocking I/O.
+struct FaultToleranceSnapshot {
+    faults: HashMap<String, FaultEvent>,
+    recovery_plans: HashMap<String, RecoveryPlan>,
+    isolation_groups: HashMap<String, IsolationGroup>,
+    heartbeats: HashMap<String, HeartbeatRecord>,
+}
+
+/// Persist snapshot to SQLite. Runs inside `spawn_blocking` — never call from
+/// async context directly.
+#[cfg(feature = "backend-sqlite")]
+fn persist_sqlite(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to create parent dir {}: {}",
+                parent.display(),
+                e
+            );
+        }
+    }
+
+    let conn = match rusqlite::Connection::open(path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(
+                "FaultToleranceEngine: failed to open SQLite DB at {}: {}",
+                path.display(),
+                e
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS faults (
+            id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            fault_type TEXT NOT NULL,
+            severity INTEGER NOT NULL,
+            description TEXT NOT NULL,
+            detected_ms INTEGER NOT NULL,
+            resolved_ms INTEGER,
+            recovered INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS recovery_plans (
+            plan_id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            actions TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_ms INTEGER NOT NULL,
+            completed_ms INTEGER,
+            result TEXT
+        );
+        CREATE TABLE IF NOT EXISTS isolation_groups (
+            group_id TEXT PRIMARY KEY,
+            nodes TEXT NOT NULL,
+            isolation_level TEXT NOT NULL,
+            created_ms INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS heartbeat_records (
+            node_id TEXT PRIMARY KEY,
+            last_heartbeat_ms INTEGER NOT NULL,
+            missed_beats INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL
+        );",
+    ) {
+        tracing::warn!("FaultToleranceEngine: failed to create tables: {}", e);
+        return;
+    }
+
+    // Clear existing data for idempotent save
+    for table in &[
+        "faults",
+        "recovery_plans",
+        "isolation_groups",
+        "heartbeat_records",
+    ] {
+        if let Err(e) = conn.execute(&format!("DELETE FROM {}", table), []) {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to clear table {}: {}",
+                table,
+                e
+            );
+        }
+    }
+
+    // Insert faults
+    for fault in snapshot.faults.values() {
+        if let Err(e) = conn.execute(
+            "INSERT INTO faults (id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                fault.id,
+                fault.node_id,
+                format!("{:?}", fault.fault_type),
+                fault.severity as i64,
+                fault.description,
+                fault.detected_ms as i64,
+                fault.resolved_ms.map(|v| v as i64),
+                fault.recovered as i64,
+            ],
+        ) {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to insert fault {}: {}", fault.id, e
+            );
+        }
+    }
+
+    // Insert recovery plans
+    for plan in snapshot.recovery_plans.values() {
+        let actions_json = match serde_json::to_string(&plan.actions) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(
+                    "FaultToleranceEngine: failed to serialize plan {} actions: {}",
+                    plan.plan_id,
+                    e
+                );
+                continue;
+            }
+        };
+        if let Err(e) = conn.execute(
+            "INSERT INTO recovery_plans (plan_id, node_id, actions, state, created_ms, completed_ms, result)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                plan.plan_id,
+                plan.node_id,
+                actions_json,
+                format!("{:?}", plan.state),
+                plan.created_ms as i64,
+                plan.completed_ms.map(|v| v as i64),
+                plan.result,
+            ],
+        ) {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to insert plan {}: {}", plan.plan_id, e
+            );
+        }
+    }
+
+    // Insert isolation groups
+    for group in snapshot.isolation_groups.values() {
+        let nodes_json = match serde_json::to_string(&group.nodes) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(
+                    "FaultToleranceEngine: failed to serialize group {} nodes: {}",
+                    group.group_id,
+                    e
+                );
+                continue;
+            }
+        };
+        if let Err(e) = conn.execute(
+            "INSERT INTO isolation_groups (group_id, nodes, isolation_level, created_ms)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                group.group_id,
+                nodes_json,
+                format!("{:?}", group.isolation_level),
+                group.created_ms as i64,
+            ],
+        ) {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to insert group {}: {}",
+                group.group_id,
+                e
+            );
+        }
+    }
+
+    // Insert heartbeat records
+    for hb in snapshot.heartbeats.values() {
+        if let Err(e) = conn.execute(
+            "INSERT OR REPLACE INTO heartbeat_records (node_id, last_heartbeat_ms, missed_beats, status)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                hb.node_id,
+                hb.last_heartbeat_ms as i64,
+                hb.missed_beats as i64,
+                format!("{:?}", hb.status),
+            ],
+        ) {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to insert heartbeat {}: {}", hb.node_id, e
+            );
+        }
+    }
+
+    tracing::info!(
+        "FaultToleranceEngine: saved {} faults, {} plans, {} groups, {} heartbeats to DB",
+        snapshot.faults.len(),
+        snapshot.recovery_plans.len(),
+        snapshot.isolation_groups.len(),
+        snapshot.heartbeats.len()
+    );
+}
+
+/// Persist snapshot as JSON. Runs inside `spawn_blocking` — never call from
+/// async context directly.
+#[cfg(not(feature = "backend-sqlite"))]
+fn persist_json(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to create parent dir {}: {}",
+                parent.display(),
+                e
+            );
+        }
+    }
+
+    match serde_json::to_string_pretty(snapshot) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(path, json) {
+                tracing::warn!(
+                    "FaultToleranceEngine: failed to write JSON to {}: {}",
+                    path.display(),
+                    e
+                );
+            } else {
+                tracing::info!(
+                    target: "fault_tolerance",
+                    faults = snapshot.faults.len(),
+                    plans = snapshot.recovery_plans.len(),
+                    groups = snapshot.isolation_groups.len(),
+                    heartbeats = snapshot.heartbeats.len(),
+                    "persisted fault tolerance state to JSON file"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to serialize state as JSON: {}",
+                e
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -225,134 +469,31 @@ impl FaultToleranceEngine {
 
     /// Try to persist fault tolerance state. Uses SQLite when the
     /// `backend-sqlite` feature is enabled, otherwise falls back to a JSON file.
+    ///
+    /// All synchronous I/O (rusqlite, filesystem) is wrapped in `spawn_blocking`
+    /// to avoid blocking the async runtime.
     async fn try_persist_state(&self) {
         #[cfg(feature = "backend-sqlite")]
         {
             let cache_path = std::path::PathBuf::from("target")
                 .join("go-on")
                 .join("fault_tolerance.db");
-            if let Some(parent) = cache_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            // Open connection before the await point (rusqlite::Connection is !Sync)
-            if let Ok(conn) = rusqlite::Connection::open(&cache_path) {
-                // Create tables before the await point
-                let _ = conn.execute_batch(
-                    "CREATE TABLE IF NOT EXISTS faults (
-                        id TEXT PRIMARY KEY,
-                        node_id TEXT NOT NULL,
-                        fault_type TEXT NOT NULL,
-                        severity INTEGER NOT NULL,
-                        description TEXT NOT NULL,
-                        detected_ms INTEGER NOT NULL,
-                        resolved_ms INTEGER,
-                        recovered INTEGER NOT NULL DEFAULT 0
-                    );
-                    CREATE TABLE IF NOT EXISTS recovery_plans (
-                        plan_id TEXT PRIMARY KEY,
-                        node_id TEXT NOT NULL,
-                        actions TEXT NOT NULL,
-                        state TEXT NOT NULL,
-                        created_ms INTEGER NOT NULL,
-                        completed_ms INTEGER,
-                        result TEXT
-                    );
-                    CREATE TABLE IF NOT EXISTS isolation_groups (
-                        group_id TEXT PRIMARY KEY,
-                        nodes TEXT NOT NULL,
-                        isolation_level TEXT NOT NULL,
-                        created_ms INTEGER NOT NULL
-                    );
-                    CREATE TABLE IF NOT EXISTS heartbeat_records (
-                        node_id TEXT PRIMARY KEY,
-                        last_heartbeat_ms INTEGER NOT NULL,
-                        missed_beats INTEGER NOT NULL DEFAULT 0,
-                        status TEXT NOT NULL
-                    );",
-                );
 
-                let inner = self.inner.write().await;
-
-                // Clear existing data for idempotent save
-                let _ = conn.execute("DELETE FROM faults", []);
-                let _ = conn.execute("DELETE FROM recovery_plans", []);
-                let _ = conn.execute("DELETE FROM isolation_groups", []);
-                let _ = conn.execute("DELETE FROM heartbeat_records", []);
-
-                // Insert faults
-                for fault in inner.faults.values() {
-                    let _ = conn.execute(
-                        "INSERT INTO faults (id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        rusqlite::params![
-                            fault.id,
-                            fault.node_id,
-                            format!("{:?}", fault.fault_type),
-                            fault.severity as i64,
-                            fault.description,
-                            fault.detected_ms as i64,
-                            fault.resolved_ms.map(|v| v as i64),
-                            fault.recovered as i64,
-                        ],
-                    );
+            // Clone data under the async lock, then release it before blocking I/O
+            let snapshot = {
+                let inner = self.inner.read().await;
+                FaultToleranceSnapshot {
+                    faults: inner.faults.clone(),
+                    recovery_plans: inner.recovery_plans.clone(),
+                    isolation_groups: inner.isolation_groups.clone(),
+                    heartbeats: inner.heartbeats.clone(),
                 }
+            };
 
-                // Insert recovery plans
-                for plan in inner.recovery_plans.values() {
-                    if let Ok(actions_json) = serde_json::to_string(&plan.actions) {
-                        let _ = conn.execute(
-                            "INSERT INTO recovery_plans (plan_id, node_id, actions, state, created_ms, completed_ms, result)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                            rusqlite::params![
-                                plan.plan_id,
-                                plan.node_id,
-                                actions_json,
-                                format!("{:?}", plan.state),
-                                plan.created_ms as i64,
-                                plan.completed_ms.map(|v| v as i64),
-                                plan.result,
-                            ],
-                        );
-                    }
-                }
-
-                // Insert isolation groups
-                for group in inner.isolation_groups.values() {
-                    if let Ok(nodes_json) = serde_json::to_string(&group.nodes) {
-                        let _ = conn.execute(
-                            "INSERT INTO isolation_groups (group_id, nodes, isolation_level, created_ms)
-                             VALUES (?1, ?2, ?3, ?4)",
-                            rusqlite::params![
-                                group.group_id,
-                                nodes_json,
-                                format!("{:?}", group.isolation_level),
-                                group.created_ms as i64,
-                            ],
-                        );
-                    }
-                }
-
-                // Insert heartbeat records
-                for hb in inner.heartbeats.values() {
-                    let _ = conn.execute(
-                        "INSERT OR REPLACE INTO heartbeat_records (node_id, last_heartbeat_ms, missed_beats, status)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        rusqlite::params![
-                            hb.node_id,
-                            hb.last_heartbeat_ms as i64,
-                            hb.missed_beats as i64,
-                            format!("{:?}", hb.status),
-                        ],
-                    );
-                }
-
-                tracing::info!(
-                    "FaultToleranceEngine: saved {} faults, {} plans, {} groups, {} heartbeats to DB",
-                    inner.faults.len(),
-                    inner.recovery_plans.len(),
-                    inner.isolation_groups.len(),
-                    inner.heartbeats.len()
-                );
+            if let Err(e) =
+                tokio::task::spawn_blocking(move || persist_sqlite(&cache_path, &snapshot)).await
+            {
+                tracing::error!("FaultToleranceEngine: persist task panicked: {}", e);
             }
         }
         #[cfg(not(feature = "backend-sqlite"))]
@@ -360,20 +501,22 @@ impl FaultToleranceEngine {
             let cache_path = std::path::PathBuf::from("target")
                 .join("go-on")
                 .join("fault_tolerance.json");
-            if let Some(parent) = cache_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let inner = self.inner.read().await;
-            if let Ok(json) = serde_json::to_string_pretty(&*inner) {
-                let _ = std::fs::write(&cache_path, json);
-                tracing::info!(
-                    target: "fault_tolerance",
-                    faults = inner.faults.len(),
-                    plans = inner.recovery_plans.len(),
-                    groups = inner.isolation_groups.len(),
-                    heartbeats = inner.heartbeats.len(),
-                    "persisted fault tolerance state to JSON file"
-                );
+
+            // Clone data under the async lock, then release it before blocking I/O
+            let snapshot = {
+                let inner = self.inner.read().await;
+                FaultToleranceSnapshot {
+                    faults: inner.faults.clone(),
+                    recovery_plans: inner.recovery_plans.clone(),
+                    isolation_groups: inner.isolation_groups.clone(),
+                    heartbeats: inner.heartbeats.clone(),
+                }
+            };
+
+            if let Err(e) =
+                tokio::task::spawn_blocking(move || persist_json(&cache_path, &snapshot)).await
+            {
+                tracing::error!("FaultToleranceEngine: persist task panicked: {}", e);
             }
         }
     }

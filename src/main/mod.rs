@@ -194,22 +194,18 @@ async fn run() -> Result<()> {
     let plugin_infos = vec![
         PluginInfo {
             id: "builtin:tool".to_string(),
-            name: "Telemetry Plugin".to_string(),
             state_label: "registered",
         },
         PluginInfo {
             id: "builtin:skill".to_string(),
-            name: "Metrics Plugin".to_string(),
             state_label: "registered",
         },
         PluginInfo {
             id: "builtin:mode".to_string(),
-            name: "Mode Plugin".to_string(),
             state_label: "registered",
         },
         PluginInfo {
             id: "builtin:policy".to_string(),
-            name: "Policy Plugin".to_string(),
             state_label: "registered",
         },
     ];

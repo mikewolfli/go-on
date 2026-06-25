@@ -20,10 +20,6 @@ use std::sync::{Arc, Mutex};
 /// Used in bootstrap.rs (skill_count), orchestration/provider_impl.rs (impl),
 /// and re-exported from `lib.rs` for the public API.
 /// Reserved for future expansion of the provider interface.
-#[allow(
-    dead_code,
-    reason = "F-GAP reserved — trait used via bootstrap on select feature sets"
-)]
 pub trait OrchestrationProvider: Send + Sync {
     /// Return the number of registered skills (for diagnostics / profiling).
     fn skill_count(&self) -> usize;
@@ -32,10 +28,6 @@ pub trait OrchestrationProvider: Send + Sync {
 /// Default implementation of `OrchestrationProvider`.
 ///
 /// Maintains an in-memory registry of skills.
-#[allow(
-    dead_code,
-    reason = "F-GAP reserved — used via bootstrap on select feature sets"
-)]
 pub struct DefaultOrchestrationProvider {
     skills: Mutex<HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>,
 }

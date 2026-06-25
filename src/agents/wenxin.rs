@@ -245,7 +245,7 @@ impl Agent for WenxinAgent {
                 id: "ERNIE-4.5-8K".to_string(),
                 name: "ERNIE 4.5 8K".to_string(),
                 description: "Baidu ERNIE 4.5 flagship model (8K context)".to_string(),
-                is_default: true,
+                is_default: true, // Wenxin's first listed model is always the default
                 capabilities: vec!["chat".to_string(), "function_calling".to_string()],
                 context_window: Some(8192),
             },

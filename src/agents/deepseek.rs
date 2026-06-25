@@ -116,15 +116,9 @@ impl DeepSeekAgent {
             }
         }
 
-        if payload.get("user").is_some() {
-            payload
-                .as_object_mut()
-                .expect("B48: payload object")
-                .remove("user");
-        }
-
-        // DeepSeek marks these as deprecated/no-op; drop to avoid stale semantics.
         if let Some(obj) = payload.as_object_mut() {
+            obj.remove("user");
+            // DeepSeek marks these as deprecated/no-op; drop to avoid stale semantics.
             obj.remove("frequency_penalty");
             obj.remove("presence_penalty");
         }

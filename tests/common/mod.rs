@@ -109,3 +109,46 @@ impl Drop for CrossProcessLock {
         let _ = fs::remove_file(&self.lock_path);
     }
 }
+
+/// Find an available TCP port on localhost.
+pub fn find_free_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("find_free_port: bind failed");
+    listener
+        .local_addr()
+        .expect("find_free_port: local_addr failed")
+        .port()
+}
+
+/// Path to the compiled go-on binary.
+pub fn binary_path() -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("target/debug/go-on");
+    if !path.exists() {
+        path.set_file_name("go-on");
+        let alt = std::env::current_dir().unwrap_or_default().join("go-on");
+        if alt.exists() {
+            return alt;
+        }
+        if cfg!(target_os = "windows") {
+            path.set_extension("exe");
+        }
+    }
+    path
+}
+
+/// Suite-level mutex for serializing test execution.
+pub fn suite_mutex() -> &'static std::sync::Mutex<()> {
+    static SUITE_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    SUITE_MUTEX.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+/// Guard that drops a child process on scope exit.
+pub struct ChildGuard(pub std::process::Child);
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Ok(None) = self.0.try_wait() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}

@@ -10,7 +10,7 @@ echo ""
 
 # ── Profiles to validate ─────────────────────────────────────────────────────
 PROFILES=(
-  "profile-local,backend-sqlite:config.local.toml"
+  "profile-local,backend-sqlite:config.toml"
   "profile-multi-users-server,backend-postgres:config.multi-users-server.toml"
   "profile-simple-server,backend-sqlite:config.simple-server.toml"
 )

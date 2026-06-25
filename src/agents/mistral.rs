@@ -157,6 +157,10 @@ impl Agent for MistralAgent {
         ]
     }
 
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

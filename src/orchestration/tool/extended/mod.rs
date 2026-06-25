@@ -178,7 +178,7 @@ mod tests {
         let tool = ShellExecTool;
         let input = tool_input(serde_json::json!({
             "command": "echo hello",
-            "timeout_ms": 10000,
+            "timeout_ms": 30000,
         }));
         let output = tool.run(&input).expect("shell_exec should run");
         // Accept both success and timeout — shell execution depends on
