@@ -26,16 +26,35 @@ impl CapabilityBus {
             .evaluator
             .check_tool_call(tool_name, &input.payload);
         if !tool_verdict.is_allowed() {
+            // Build detailed deny reason for clear AI feedback
+            let mut reasons = Vec::new();
+            if !tool_verdict.allowed && tool_verdict.require_review {
+                reasons.push("requires user review (not in sandbox allowlist)");
+            } else if !tool_verdict.allowed {
+                reasons.push("sandbox level too restrictive");
+            }
+            if !tool_verdict.budget_ok {
+                reasons.push("rate limit / budget exceeded");
+            }
+            if !tool_verdict.permitted {
+                reasons.push("RBAC permission denied");
+            }
+            let detail = if reasons.is_empty() {
+                "HarnessBus denied".to_string()
+            } else {
+                reasons.join("; ")
+            };
             self.record_event(
                 "action",
                 None,
                 None,
                 "blocked",
-                Self::build_action_blocked_detail(tool_name, "HarnessBus denied"),
+                Self::build_action_blocked_detail(tool_name, &detail),
             );
             return Err(anyhow::anyhow!(
-                "Tool call '{}' denied by HarnessBus policy",
-                tool_name
+                "Tool call '{}' denied: {}",
+                tool_name,
+                detail
             ));
         }
 

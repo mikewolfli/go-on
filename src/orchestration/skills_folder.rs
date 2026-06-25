@@ -12,7 +12,7 @@
 //! Results are searchable via `skill-finder`.
 
 #[cfg(test)]
-mod implementation {
+pub mod implementation {
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -132,17 +132,17 @@ mod tests {
     }
 
     #[test]
-    fn test_search_empty_when_no_skills() {
+    fn test_index_not_empty_when_skills_exist() {
         let dir = create_skills_dir();
         let index = SkillsFolderIndex::new(Some(dir.path()));
         assert!(!index.is_empty());
     }
 
     #[test]
-    fn test_search_empty_query() {
+    fn test_index_finds_two_sources() {
         let dir = create_skills_dir();
         let index = SkillsFolderIndex::new(Some(dir.path()));
-        assert!(!index.is_empty());
+        assert_eq!(index.source_count(), 2);
     }
 
     #[test]

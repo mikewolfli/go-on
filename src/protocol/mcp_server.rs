@@ -480,7 +480,7 @@ impl McpHttpServer {
     ///
     /// This is a builder-style method that consumes `self` and returns
     /// the updated server. Call it after construction:
-    /// ```ignore
+    /// ```text
     /// let server = McpHttpServer::new(...).with_tls_acceptor(acceptor);
     /// ```
     pub fn with_tls_acceptor(mut self, acceptor: tokio_rustls::TlsAcceptor) -> Self {

@@ -333,7 +333,7 @@ pub(crate) fn models_for_provider(provider: &str) -> &'static [&'static str] {
     }
 }
 
-fn provider_requires_secret(provider: &str) -> bool {
+pub(crate) fn provider_requires_secret(provider: &str) -> bool {
     matches!(provider.to_lowercase().as_str(), "wenxin" | "qianfan")
 }
 

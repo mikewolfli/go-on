@@ -3,7 +3,7 @@ pub mod audit;
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
 pub mod bulkhead; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
-pub mod cache_warming;
+                  // pub mod cache_warming; // Inlined into orchestrator.rs
 pub mod capabilities_registry;
 pub mod capability_signals; // BLUE41: Structured capability decision data
 pub mod complexity_estimator;
@@ -18,7 +18,7 @@ pub mod council; // F-GAP-15
 pub mod dag_driver; // Tool execution DAG — orchestrates tool calls with parallel fan-out and plan-topology
 pub mod diagnostic_feedback; // F-GAP-51: Reserved for full diagnostic integration
                              // pub use core_dag::TaskContext; — unused re-export, callers use crate::orchestration::core_dag::TaskContext directly
-pub mod distributed_tx; // BLUE45 item 4: Two-Phase Commit (2PC) over multiple nodes
+                             // pub mod distributed_tx; — removed: test-only scaffold, zero production references
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod flow_with_models;
@@ -32,7 +32,7 @@ pub mod orchestrator;
 pub mod planner_embedding; // BLUE47 Step 7: Embedding-based task classification
 pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG
 pub mod planner_executor;
-pub mod plugin_system;
+// pub mod plugin_system; // Inlined into capabilities_registry.rs
 pub mod promotion_plugin;
 pub mod prompt_layers;
 pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
@@ -45,6 +45,9 @@ pub mod skill;
 pub mod skill_discovery;
 pub mod skill_import;
 pub mod skill_market;
+// Skills folder scanner — test-only utility for indexing skill source URLs.
+// Production skill discovery is handled by `skill_discovery` and `skill_import`.
+#[cfg(test)]
 pub mod skills_folder;
 pub mod startup_context;
 pub mod task_decomposer;

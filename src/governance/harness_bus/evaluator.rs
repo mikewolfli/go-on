@@ -478,6 +478,7 @@ impl PolicyEvaluator {
             | "date_time"
             | "skill_list"
             | "skill-finder"
+            // chat.execute is an ACP protocol entry point (no ToolRegistry impl)
             | "chat.execute"
             | "acp_trace_get"
             | "acp_debug_panel_get"
@@ -492,12 +493,9 @@ impl PolicyEvaluator {
             | "workflow_ask"
             | "workflow_generate"
             | "import_skill"
-            | "skill_execute"
-            | "cargo_check"
             | "archive_inspect"
             | "jsonl_read"
-            // ── Diagnostic / environment tools ─────────────────────
-            | "diagnostics"
+            // ── Environment info tool (safe at ALL sandbox levels) ─
             | "environment_info"
             // ── Skill query / echo tools (safe at ALL sandbox levels) ─
             | "echo_skill"
@@ -528,7 +526,6 @@ impl PolicyEvaluator {
             | "gpx_read"
             // ── Image / Drawing readers ────────────────────────
             | "image_analyze"
-            | "image_convert"
             | "svg_read"
             // ── Data readers ──────────────────────────────────
             | "csv_read"
@@ -543,7 +540,12 @@ impl PolicyEvaluator {
             | "game_matchmaking"
             | "game_achievements"
             | "game_mod_list"
-            | "game_coaching_assistant" => SandboxPolicy::can_execute_read_file(level),
+            | "game_coaching_assistant"
+            // ── Compilation check (read-only, may invoke compiler) ─
+            | "cargo_check"
+            | "diagnostics"
+            // ── Skill execution ──────────────────────────────────
+            | "skill_execute" => SandboxPolicy::can_execute_read_file(level),
             // ── Game process / automation (shell) — requires unrestricted ─
             "game_launch"
             | "game_keyboard_input"
@@ -573,7 +575,7 @@ impl PolicyEvaluator {
             "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path"
             | "copy_path" | "file_move" | "file_delete" | "compress" | "decompress"
             | "archive_extract" | "jsonl_write"
-            // ── Skill admin tools (write operations) ───────────────────
+            // ── Image write tools (includes aliases) ─────────────────
             | "goon_skill_update"
             | "goon_skill_version_rollback"
             | "skill-creator"
@@ -587,6 +589,7 @@ impl PolicyEvaluator {
             | "toml_write"
             | "yaml_write"
             // ── Image write tools ─────────────────────────────────────
+            | "image_convert"
             | "image_resize"
             | "image_generate"
             // ── Drawing / SVG write tools ─────────────────────────────
@@ -600,7 +603,7 @@ impl PolicyEvaluator {
             | "write_docx"
             | "write_ppt"
             | "write_excel" => SandboxPolicy::can_execute_write(level),
-            // ── Shell / Execution tools ────────────────────────────
+            // ── Shell / Execution tools (restricted at Basic+) ─────────
             "run_tests" | "execute_command" | "terminal" | "bash" | "cargo_test" | "shell_exec" => {
                 SandboxPolicy::can_execute_shell(level)
             }
@@ -711,11 +714,14 @@ impl PolicyEvaluator {
     /// applies an explicit fallback policy based on the active sandbox level).
     fn check_permission(&self, tool: &str, _args: &Value) -> bool {
         let action = match tool {
-            "write_file" | "apply_patch" | "create_directory" | "delete_path" => {
-                GovernanceAction::Write
+            "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path"
+            | "copy_path" | "file_move" | "file_delete" => GovernanceAction::Write,
+            "run_tests" | "execute_command" | "terminal" | "bash" | "shell_exec" | "cargo_test" => {
+                GovernanceAction::Shell
             }
-            "run_tests" | "execute_command" | "terminal" => GovernanceAction::Shell,
-            "search" | "find" | "grep" | "semantic_search" => GovernanceAction::Search,
+            "search" | "find" | "grep" | "semantic_search" | "find_path" | "find_files" => {
+                GovernanceAction::Search
+            }
             _ => GovernanceAction::Read,
         };
 

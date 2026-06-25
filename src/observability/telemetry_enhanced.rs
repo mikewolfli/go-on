@@ -33,7 +33,7 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```text
 //! // This module is internal; doctests would need crate path.
 //! use go_on::observability::telemetry_enhanced::{TelemetryConfig, init_telemetry};
 //!

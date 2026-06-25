@@ -487,9 +487,13 @@ impl HarnessBus {
     }
 
     /// PolicyBundle compliance check for a GovernanceAction.
+    ///
+    /// Delegates to `SandboxPolicy::check` for sandbox-level actions (Read, Search)
+    /// and uses PolicyBundle for code-execution / write-approval actions.
+    /// This ensures a single source of truth for sandbox enforcement.
     pub fn enforce_action(&self, action: &GovernanceAction, policy_bundle: &PolicyBundle) -> bool {
         match action {
-            GovernanceAction::Read => {
+            GovernanceAction::Read | GovernanceAction::Search => {
                 let level = self
                     .evaluator
                     .sandbox_level
@@ -498,24 +502,12 @@ impl HarnessBus {
                         tracing::warn!("[harness_bus] lock poisoned, recovering");
                         poisoned.into_inner()
                     });
-                if *level == SandboxLevel::Isolated {
-                    return false;
-                }
-                true
-            }
-            GovernanceAction::Search => {
-                let level = self
-                    .evaluator
-                    .sandbox_level
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        tracing::warn!("[harness_bus] lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
-                if *level == SandboxLevel::Strict || *level == SandboxLevel::Isolated {
-                    return false;
-                }
-                true
+                let op = match action {
+                    GovernanceAction::Read => "read",
+                    GovernanceAction::Search => "search",
+                    _ => unreachable!(),
+                };
+                crate::governance::hardening::SandboxPolicy::check(*level, op)
             }
             GovernanceAction::Write => !policy_bundle.require_approval_for_write,
             GovernanceAction::Shell => policy_bundle.enable_code_execution,

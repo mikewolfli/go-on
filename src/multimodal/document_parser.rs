@@ -175,7 +175,7 @@ impl Table {
 /// Document-parser dispatcher.
 ///
 /// Usage:
-/// ```ignore
+/// ```text
 /// let parser = go_on::multimodal::DocumentParser::default();
 /// let result = parser.parse("report.pdf");
 /// println!("{}", result.text_content);
@@ -183,7 +183,7 @@ impl Table {
 ///
 /// The parser can be configured with a custom `max_text_length` to cap the
 /// extracted text content length:
-/// ```ignore
+/// ```
 /// let parser = go_on::multimodal::DocumentParser {
 ///     max_text_length: 5_000_000,  // 5 MB
 /// };

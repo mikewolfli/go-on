@@ -712,6 +712,13 @@ impl SkillRegistry {
     pub fn known_skill_names(&self) -> HashSet<String> {
         self.skills.keys().cloned().collect()
     }
+
+    /// Returns a map of prompt-based skill data (skills created via
+    /// `create_skill_from_prompt`). Used to merge GUI-created skills
+    /// into the imported skill list.
+    pub fn prompt_skill_data(&self) -> HashMap<String, SavedPromptSkill> {
+        self.prompt_skill_data.clone()
+    }
 }
 
 /// Returns the default path for Zed's agent skills directory (`~/.agents/skills`).

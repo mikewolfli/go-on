@@ -15,6 +15,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+// NOTE: Intentionally using std::sync::Mutex (not tokio::sync::Mutex).
+// Every lock() is released (via scope drop) before any .await point.
+// See docs/log/log-20260625-1.md §Remaining Non-Issues.
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};

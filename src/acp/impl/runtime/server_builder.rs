@@ -131,6 +131,9 @@ pub async fn new_acp_server(
         shared
     };
 
+    // NOTE: Intentionally using std::sync::Mutex (not tokio::sync::Mutex).
+    // This is a startup-time-only construction; the mutex is never in a hot path.
+    // See docs/log/log-20260625-1.md §Remaining Non-Issues.
     let workflow_registry = Arc::new(std::sync::Mutex::new(
         crate::orchestration::workflow_registry::WorkflowRegistry::new(),
     ));

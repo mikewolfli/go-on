@@ -4,6 +4,7 @@
 //! Supports multiple backends: keyring (OS keychain), environment variables,
 //! and HashiCorp Vault (stub). Keys are auto-rotated on access when stale.
 
+#[cfg(feature = "vault")]
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

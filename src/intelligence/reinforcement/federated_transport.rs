@@ -26,7 +26,7 @@
 //! ```
 //!
 //! Create `build.rs` at the workspace root with:
-//! ```ignore
+//! ```text
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     tonic_build::compile_protos("proto/federated.proto")?;
 //!     Ok(())
@@ -266,7 +266,7 @@ pub trait FederatedTransport: Send + Sync + std::fmt::Debug {
 ///
 /// Setup: see module-level documentation for proto compilation instructions.
 ///
-/// ```ignore
+/// ```text
 /// // Example usage:
 /// use tonic::transport::Endpoint;
 /// use go_on::intelligence::reinforcement::federated_transport::*;
@@ -306,7 +306,7 @@ impl GrpcFederatedTransport {
 
     /// Connect to a peer gRPC endpoint.
     ///
-    /// ```ignore
+    /// ```text
     /// use tonic::transport::Endpoint;
     /// let channel = Endpoint::from_static("http://10.0.0.1:50051")
     ///     .connect()
@@ -504,7 +504,7 @@ impl FederatedTransport for InProcessTransport {
 ///
 /// # Example (when tonic is available)
 ///
-/// ```ignore
+/// ```text
 /// use go_on::intelligence::reinforcement::federated::FederatedLearning;
 /// use go_on::intelligence::reinforcement::federated_transport::FederatedServer;
 ///
@@ -548,7 +548,7 @@ impl FederatedServer {
     ///
     /// This blocks the current task. Spawn it onto a runtime:
     ///
-    /// ```ignore
+    /// ```text
     /// tokio::spawn(async move { server.serve().await });
     /// ```
     pub async fn serve(&self) -> Result<()> {

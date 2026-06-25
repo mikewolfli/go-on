@@ -10,6 +10,9 @@ use tracing::info;
 use crate::orchestration::skill::SkillRegistry;
 
 /// Configuration for the bootstrap process.
+///
+/// Used by [`perform_bootstrap`] during application startup and constructed
+/// in `main/mod.rs`. Reserved for future expansion of init-time parameters.
 #[derive(Debug, Clone)]
 pub struct BootstrapConfig {
     pub enable_telemetry: bool,

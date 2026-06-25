@@ -70,6 +70,27 @@ pub struct SkillsView {
     security_last_load: Instant,
 }
 
+fn cmp_semver(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_parts: Vec<&str> = a.split('.').collect();
+    let b_parts: Vec<&str> = b.split('.').collect();
+    let max_len = a_parts.len().max(b_parts.len());
+    for i in 0..max_len {
+        let a_val = a_parts
+            .get(i)
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        let b_val = b_parts
+            .get(i)
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        match a_val.cmp(&b_val) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    a_parts.len().cmp(&b_parts.len())
+}
+
 impl SkillsView {
     pub fn new() -> Self {
         let (pending_tx, pending_rx) = mpsc::sync_channel(256);
@@ -1005,18 +1026,14 @@ impl SkillsView {
                                             err: None,
                                         });
                                     } else {
-                                        versions.sort_by(|a, b| {
-                                            // Parse version numbers for sort; unparseable versions sort to the beginning
-                                            let a_num = a.parse::<i64>().unwrap_or(0);
-                                            let b_num = b.parse::<i64>().unwrap_or(0);
-                                            b_num.cmp(&a_num).then_with(|| b.cmp(a))
-                                        });
+                                        versions.sort_by(|a, b| cmp_semver(b, a).then_with(|| b.cmp(a)));
                                         send_update(&tx, SkillsUpdate::Versions {
                                             skill_name,
                                             versions,
                                             err: None,
                                         });
                                     }
+
                                 }
                                 ctx_clone.request_repaint();
                             });
@@ -1236,12 +1253,7 @@ impl SkillsView {
                                                 }
                                             }
                                         }
-                                        versions.sort_by(|a, b| {
-                                            // Parse version numbers for sort; unparseable versions sort to the beginning
-                                            let a_num = a.parse::<i64>().unwrap_or(0);
-                                            let b_num = b.parse::<i64>().unwrap_or(0);
-                                            b_num.cmp(&a_num).then_with(|| b.cmp(a))
-                                        });
+                                        versions.sort_by(|a, b| cmp_semver(b, a).then_with(|| b.cmp(a)));
                                         send_update(&tx, SkillsUpdate::Versions {
                                             skill_name: skill_name.clone(),
                                             versions,

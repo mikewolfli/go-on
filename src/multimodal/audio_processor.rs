@@ -275,7 +275,7 @@ impl Default for AudioProcessorConfig {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// use go_on::multimodal::audio_processor::{
 ///     AudioProcessor, AudioProcessorConfig, AudioFormat, SttBackend,
 /// };
@@ -397,20 +397,8 @@ impl AudioProcessor {
             )
         })?;
 
-        // Real implementation using whisper-rs or candle:
-        //
-        //   let model_bytes = std::fs::read(model_path)
-        //       .map_err(AudioProcessorError::from_io)?;
-        //   let whisper = whisper_rs::Whisper::from_bytes(&model_bytes)
-        //       .map_err(|e| AudioProcessorError::Other(e.to_string()))?;
-        //   let mut state = whisper.create_state()
-        //       .map_err(|e| AudioProcessorError::Other(e.to_string()))?;
-        //   // Convert audio bytes to f32 samples...
-        //   // state.full(..., &samples)?;
-        //   // let n = state.full_n_segments()?;
-        //   // for i in 0..n { ... }
-        //
-        // For now, load the model path to validate it exists.
+        // Validate model path exists before proceeding.
+        // A real whisper-rs or candle backend would load the model here.
 
         if !std::path::Path::new(model_path).exists() {
             return Err(AudioProcessorError::Other(format!(
@@ -436,13 +424,8 @@ impl AudioProcessor {
                 .collect()
         };
 
-        // Real implementation using whisper-rs or candle:
-        //
-        //   let whisper = whisper_rs::Whisper::from_bytes(&model_bytes)?;
-        //   let mut state = whisper.create_state()?;
-        //   state.full(..., &samples)?;
-        //   for i in 0..state.full_n_segments()? { ... }
-        //
+        // PCM samples are ready. Loading a real whisper-rs or candle model
+        // and calling state.full() would go here.
         // For now, run a simulated pipeline that records processing stats
         // but returns no transcribed text (since no real model is loaded).
 
@@ -527,16 +510,8 @@ impl AudioProcessor {
             )
         })?;
 
-        // Real implementation using the vosk-rs crate:
-        //
-        //   let model = vosk::Model::new(model_path)
-        //       .map_err(|e| AudioProcessorError::Other(e.to_string()))?;
-        //   let mut recognizer = vosk::Recognizer::new(&model, sample_rate)
-        //       .map_err(|e| AudioProcessorError::Other(e.to_string()))?;
-        //   recognizer.accept_waveform(audio)
-        //       .map_err(|e| AudioProcessorError::Other(e.to_string()))?;
-        //   let result: serde_json::Value = serde_json::from_str(&recognizer.result())?;
-        //   let text = result["text"].as_str().unwrap_or("").to_string();
+        // Validate model path exists before proceeding.
+        // A real vosk-rs backend would load the model and run recognition here.
 
         if !std::path::Path::new(model_path).exists() {
             return Err(AudioProcessorError::Other(format!(

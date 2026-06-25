@@ -17,17 +17,12 @@ pub mod propose;
 pub mod validate;
 
 // ── Re-exports for backward compatibility ─────────────────────────────────
-#[allow(unused_imports)]
-pub use apply::EvolutionLoopError;
-#[allow(unused_imports)]
 pub use observe::{
-    AlertManagerTriggerSource, DiagnosticTriggerSource, EvolutionTrigger,
-    MetacognitiveTriggerSource, MetricsPoint, MetricsSnapshot, PubsubTriggerSource,
-    RegressionDirection, TickTriggerSource, TriggerSource,
+    DiagnosticTriggerSource, EvolutionTrigger, MetacognitiveTriggerSource, MetricsPoint,
+    MetricsSnapshot, PubsubTriggerSource, RegressionDirection, TickTriggerSource, TriggerSource,
 };
 pub use propose::Analysis;
-#[allow(unused_imports)]
-pub use validate::{Approval, ApprovalMode, ApprovalStatus};
+pub use validate::{Approval, ApprovalMode};
 
 use std::collections::HashMap;
 use std::path::PathBuf;

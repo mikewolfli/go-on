@@ -18,13 +18,6 @@
 - Do not delete or modify unrelated code
 - Do not blindly rely on tool output; always manually validate syntax
 
-**Common mistakes:**
-```rust
-fn foo() { todo!() }
-fn bar() {}
-let x = Ok(());
-```
-
 ---
 ## 2. MANDATORY BEHAVIOR
 1. All tasks must be listed **completely, in detail, with no truncation**
@@ -44,5 +37,39 @@ let x = Ok(());
 - Immediately fix any unclosed symbols, placeholders, or fake implementations
 
 ---
+## 3. SKILL SYSTEM USAGE
+
+The project includes a complete Skill system for agent capabilities. Skills can be listed, executed, and managed via tools.
+
+### Available Skill Tools
+- `skill_list` — Lists all registered skills with their name, description, score, and input_schema
+- `skill_execute` — Executes a registered skill by name with provided input parameters
+
+### Skill File Format (SKILL.md)
+Skills are defined as Markdown files with YAML frontmatter in `~/.agents/skills/`:
+```markdown
+---
+name: my-skill
+description: Description of what this skill does
+version: 1.0.0
+---
+Execute the following task with the given input: {{input}}
+```
+
+### Skill Locations
+- Built-in skills are registered automatically at startup
+- User skills are discovered from `~/.agents/skills/` (scanned every 60s)
+- Skills can also be created programmatically via `skill-creator` tool
+
+### Skill Scoring System
+Skills are scored (0.0–1.0) based on:
+- Success rate (higher is better)
+- Average latency (lower is better)
+- Skills with score < 0.55 are deprioritized
+
+### Creating New Skills
+To create a new skill, place a valid SKILL.md file in `~/.agents/skills/` or use the `skill-creator` meta-tool which takes a name, description, and prompt template.
+
+---
 **Purpose:**
-This document applies to all Rust projects in the ZED editor, ensuring AI-generated code is safe, standardized, and maintainable.
+This document applies to all Rust projects in the ZED editor, ensuring AI-generated code is safe, standardized, and maintainable. The skill system enables AI agents to discover and execute reusable capabilities.

@@ -33,15 +33,10 @@ const CHAT_STREAM_ENDPOINT: &str = "/chat/stream";
 ///
 /// # Example
 ///
-/// ```ignore
-/// use std::time::Duration;
+/// ```text
 /// use go_on_sdk::GoOnClientBuilder;
 ///
 /// let client = GoOnClientBuilder::new("http://127.0.0.1:8090")
-///     .with_timeout(Duration::from_secs(15))
-///     .with_max_retries(5)
-///     .build()
-///     .expect("failed to build client");
 /// ```
 pub struct GoOnClientBuilder {
     base_url: String,
@@ -120,8 +115,7 @@ impl GoOnClient {
     /// Create a new client targeting the go-on HTTP endpoint.
     /// Uses `max_retries: 3` and `retry_delay: 1s` (aligned with Builder defaults).
     ///
-    /// Example:
-    /// ```ignore
+    /// ```text
     /// let client = GoOnClient::new("http://127.0.0.1:8090");
     /// ```
     pub fn new(base_url: impl Into<String>) -> Self {
@@ -169,9 +163,8 @@ impl GoOnClient {
     /// The outer `Result` covers the initial HTTP handshake; the inner ones
     /// cover per-chunk parse errors.
     ///
-    /// ```ignore
+    /// ```text
     /// use go_on_sdk::{ChatMessage, ChatRequest};
-    /// use tokio_stream::StreamExt;
     ///
     /// let request = ChatRequest {
     ///     messages: vec![ChatMessage {

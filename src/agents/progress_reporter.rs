@@ -20,7 +20,7 @@ pub const TOKEN_PROGRESS_PREFIX: &str = "__progress__:";
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let mut reporter = ProgressReporter::new(sender, 10);
 /// reporter.report_phase(TOKEN_PHASE_PLANNING);
 /// for i in 1..=10 {

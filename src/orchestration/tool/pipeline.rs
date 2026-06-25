@@ -125,9 +125,13 @@ impl ToolPipeline {
 
 /// Map a tool name to a governance action for pipeline sandbox checks.
 /// This mirrors the evaluator's tool-to-action mapping in a simplified form.
+///
+/// # Security audit
+/// All tools registered in `ToolRegistry::new()` must be mapped here.
+/// Unknown tools default to "read" (lowest risk) but log a warning.
 fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
     match tool_name {
-        // Read operations
+        // ── Read operations (read-only file/content access) ──
         "read_file" | "search_files" | "inspect_git_diff" | "list_directory" | "date_time"
         | "skill_list" | "archive_inspect" | "jsonl_read" | "diagnostics" | "environment_info"
         | "echo_skill" | "builtin.echo" | "goon_skill_version_list"
@@ -138,13 +142,21 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "goon_provider_capabilities" | "prompts_list" | "prompts_get"
         | "workflow_execute" | "workflow_ask" | "workflow_generate"
         | "import_skill"
-        // ── Diagnostic / environment tools ─────────────────────
-        | "semantic_search" => {
-            "read"
-        }
-        // Search operations
+        | "semantic_search"
+        // ── CAD read tools (read-only 3d/2d format parsing) ──
+        | "dxf_read" | "stl_read" | "obj_read" | "step_read" | "ply_read" | "iges_read"
+        | "gltf_read" | "svg_read" | "obj_model_read" | "gcode_read" | "gpx_read" | "geo_util"
+        // ── Image read/analyze tools ──
+        | "image_analyze"
+        // ── Document read tools ──
+        | "read_docx" | "read_excel" | "read_pdf" | "read_ppt"
+        | "email_parse" | "csv_read" | "csv_analyze" | "toml_read" | "yaml_read"
+        | "web_scrape" | "invoice_parse" | "rss_read" | "sqlite_query" => "read",
+
+        // ── Search operations ──
         "grep" | "find_path" | "find_files" => "search",
-        // Write operations
+
+        // ── Write operations (file creation/modification) ──
         "write_file"
         | "apply_patch"
         | "create_directory"
@@ -172,6 +184,7 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "goon_workflow_run_resume"
         | "image_generate"
         | "image_resize"
+        | "image_convert"
         | "skill-creator"
         | "stl_generate"
         | "svg_export"
@@ -179,8 +192,15 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "qrcode_generate"
         | "write_docx"
         | "write_excel"
-        | "write_ppt" => "write",
-        // Shell operations
+        | "write_ppt"
+        | "pdf_merge" | "pdf_split"
+        | "cad_convert"
+        | "game_auto_grind"
+        | "game_keyboard_input"
+        | "game_mouse_input"
+        | "game_state_modify" => "write",
+
+        // ── Shell operations (command/code execution) ──
         "run_tests"
         | "execute_command"
         | "terminal"
@@ -188,24 +208,31 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "cargo_test"
         | "shell_exec"
         | "cargo_check"
-        | "game_auto_grind"
-        | "game_keyboard_input"
         | "game_launch"
-        | "game_mouse_input"
         | "skill_execute" => "shell",
-        // Network operations
+
+        // ── Network operations (outbound) ──
         "http_request"
         | "dns_lookup"
         | "ping"
         | "port_scan"
         | "git"
         | "github_search_skills"
-        | "rss_read"
         | "game_monitor"
+        | "game_online_status"
         | "goon_provider_test_completion"
         | "goon_provider_test_connection" => "network",
-        // Unknown — default to read (lowest risk)
-        _ => "read",
+
+        // Unknown — default to read (lowest risk), log warning for security audit
+        _ => {
+            tracing::warn!(
+                target: "tool_pipeline",
+                tool = %tool_name,
+                "pipeline_tool_to_action: unknown tool '{}', defaulting to 'read' action — audit needed",
+                tool_name,
+            );
+            "read"
+        }
     }
 }
 
@@ -218,12 +245,16 @@ fn check_tool_in_pipeline(
         return Ok(()); // No sandbox enforcement
     };
     let action = pipeline_tool_to_action(tool_name);
-    if crate::governance::hardening::SandboxPolicy::check(level, action) {
+    let result = crate::governance::hardening::SandboxPolicy::check_with_feedback(level, action);
+    if result.allowed {
         Ok(())
     } else {
+        let hint = result
+            .hint
+            .unwrap_or("Try a different tool or adjust sandbox level in config.");
         Err(format!(
-            "tool '{}' denied by sandbox policy at level {:?} (action: {})",
-            tool_name, level, action
+            "tool '{}' denied by sandbox policy at level '{}' (action: '{}'). {}. Hint: {}",
+            tool_name, level, action, result.reason, hint
         ))
     }
 }

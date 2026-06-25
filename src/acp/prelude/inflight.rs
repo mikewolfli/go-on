@@ -5,6 +5,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+// NOTE: Intentionally using std::sync::Mutex (not tokio::sync::Mutex).
+// All methods (try_enter, leave, snapshot) are synchronous and never hold the
+// lock across .await points. std::sync::Mutex is faster for short counter
+// operations — tokio::sync::Mutex would add overhead with zero benefit.
+// See docs/log/log-20260625-1.md §Remaining Non-Issues.
 use std::sync::Mutex as StdMutex;
 
 use tracing::warn;

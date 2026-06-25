@@ -13,7 +13,7 @@
 //!
 //! Usage
 //! -----
-//! ```rust,ignore
+//! ```text
 //! let config = SecurityGovernorConfig::default();
 //! let governor = SecurityGovernor::new(config);
 //! governor.register_policy(my_policy);

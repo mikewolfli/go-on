@@ -62,6 +62,8 @@ impl ProvidersView {
                                         self.new_secret_key.clear();
                                         self.new_model = "auto".to_string();
                                         self.copilot_token_stored = false;
+                                        self.copilot_device_state = None;
+                                        self.copilot_status.clear();
                                     }
                                 }
                             });

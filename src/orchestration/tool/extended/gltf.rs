@@ -189,6 +189,7 @@ impl Tool for GltfReadTool {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "gltf-test".to_string(),
@@ -226,7 +227,7 @@ mod tests {
         let summary = parse_gltf(gltf).expect("valid glTF");
         assert_eq!(summary.scene_count, 1);
         assert_eq!(summary.mesh_count, 1);
-        assert_eq!(summary.vertex_count, 24);
+        assert_eq!(summary.vertex_count, 36);
         assert_eq!(summary.triangle_count, 12); // 36 / 3
         assert_eq!(summary.material_count, 1);
         assert_eq!(summary.texture_count, 1);

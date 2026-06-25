@@ -9,7 +9,7 @@ use crate::observability::performance::PerformanceMetrics;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let perf = observability::bridge_runtime_to_performance(&runtime_metrics);
 /// println!("Total ops: {}", perf.total_ops);
 /// ```

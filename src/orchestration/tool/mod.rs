@@ -10,8 +10,6 @@ pub mod lock;
 pub mod native;
 pub mod pipeline;
 pub mod recommender;
-pub mod transaction;
-
 use crate::governance::pua::{tool_execution_report, PuaExecutionReport};
 use crate::i18n::runtime::{t, tf};
 use anyhow::{Context, Result};
@@ -132,8 +130,11 @@ pub trait Tool: Send + Sync + 'static {
 
 /// Tool registry
 pub struct ToolRegistry {
-    tools: Vec<Box<dyn Tool>>,
+    tools: Vec<Arc<dyn Tool>>,
     profiles: HashMap<&'static str, ToolCapabilityProfile>,
+    /// Alias map: alias → canonical tool name.
+    /// Allows looking up tools by alternative names (e.g. "terminal" → "shell_exec").
+    aliases: HashMap<&'static str, &'static str>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -142,6 +143,7 @@ impl std::fmt::Debug for ToolRegistry {
         f.debug_struct("ToolRegistry")
             .field("tools", &tool_names)
             .field("profiles", &self.profiles)
+            .field("aliases", &self.aliases)
             .finish()
     }
 }
@@ -152,6 +154,7 @@ impl ToolRegistry {
         Self {
             tools: Vec::new(),
             profiles: HashMap::new(),
+            aliases: HashMap::new(),
         }
     }
 
@@ -1254,6 +1257,20 @@ impl ToolRegistry {
             },
         );
 
+        // ── Backward-compatibility aliases ───────────────────────
+        // These names exist in the governance evaluator's allowlist but
+        // were never registered as standalone Tool implementations.
+        // Each alias maps to an existing tool with the same functionality.
+        registry.register_alias("create_directory", "write_file");
+        registry.register_alias("delete_path", "file_delete");
+        registry.register_alias("move_path", "file_move");
+        registry.register_alias("copy_path", "write_file");
+        registry.register_alias("execute_command", "shell_exec");
+        registry.register_alias("terminal", "shell_exec");
+        registry.register_alias("bash", "shell_exec");
+        registry.register_alias("find_path", "find_files");
+        registry.register_alias("semantic_search", "grep");
+
         registry
     }
 
@@ -1280,24 +1297,70 @@ impl ToolRegistry {
     ) {
         let name = tool.name();
         self.profiles.insert(name, profile);
-        self.tools.push(Box::new(tool));
+        self.tools.push(Arc::new(tool));
     }
 
-    /// Get a tool by name.
+    /// Get a tool by name (with alias resolution).
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools
-            .iter()
-            .find(|t| t.name() == name)
-            .map(|b| b.as_ref())
+        // Direct lookup first
+        if let Some(tool) = self.tools.iter().find(|t| t.name() == name) {
+            return Some(tool.as_ref());
+        }
+        // Alias resolution: look up the canonical name and find that tool
+        if let Some(&canonical) = self.aliases.get(name) {
+            self.tools
+                .iter()
+                .find(|t| t.name() == canonical)
+                .map(|b| b.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// Get a tool by name (with alias resolution), returning an `Arc` for async usage.
+    /// The returned `Arc` can be used to call `run_async` on the tool.
+    pub fn get_arc(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        // Direct lookup first
+        if let Some(tool) = self.tools.iter().find(|t| t.name() == name) {
+            return Some(Arc::clone(tool));
+        }
+        // Alias resolution: look up the canonical name and find that tool
+        if let Some(&canonical) = self.aliases.get(name) {
+            self.tools
+                .iter()
+                .find(|t| t.name() == canonical)
+                .map(|b| Arc::clone(b))
+        } else {
+            None
+        }
     }
 
     pub fn names(&self) -> Vec<&'static str> {
         self.tools.iter().map(|tool| tool.name()).collect()
     }
 
+    /// Return all tool names including aliases.
+    pub fn all_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&str> = self.tools.iter().map(|tool| tool.name()).collect();
+        names.extend(self.aliases.keys().copied());
+        names
+    }
+
+    /// Register an alias for a tool. When `alias` is looked up via `get()`,
+    /// the tool registered under `canonical` name will be returned.
+    ///
+    /// This enables backward compatibility with legacy tool names that exist
+    /// in the governance evaluator allowlist (e.g. "terminal" → "shell_exec").
+    pub fn register_alias(&mut self, alias: &'static str, canonical: &'static str) {
+        self.aliases.insert(alias, canonical);
+    }
+
+    /// Get the profile for a tool by name (with alias resolution).
+    /// If `name` is an alias, returns the canonical tool's profile.
     pub fn profile(&self, name: &str) -> Option<&ToolCapabilityProfile> {
-        self.profiles.get(name)
+        let canonical = self.aliases.get(name).copied().unwrap_or(name);
+        self.profiles.get(canonical)
     }
 
     pub fn capability_matrix(&self) -> serde_json::Value {
@@ -1358,6 +1421,95 @@ impl ToolRegistry {
         for fallback_name in fallback_chain {
             if let Some(fallback_tool) = self.get(&fallback_name) {
                 let mut fallback_result = fallback_tool.run(input)?;
+                if fallback_result.success {
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    fallback_result.audit_log = Some(format!(
+                        "primary '{}' failed, fallback '{}' succeeded",
+                        name, fallback_name
+                    ));
+                    tracing::info!(
+                        target: "tool_execution",
+                        primary = %name,
+                        fallback = %fallback_name,
+                        latency_ms = elapsed,
+                        success = true,
+                        fallback_used = true,
+                        "fallback tool executed successfully"
+                    );
+                    record_tool_execution(
+                        "tool_execution_total",
+                        name,
+                        true,
+                        elapsed,
+                        serde_json::to_string(&input.payload).ok().map(|s| s.len()),
+                    );
+                    return Ok(fallback_result);
+                }
+                primary_result = fallback_result;
+            }
+        }
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        tracing::warn!(
+            target: "tool_execution",
+            tool = %name,
+            latency_ms = elapsed,
+            success = false,
+            fallback_used = !self.profile(name).map(|p| p.fallback_chain.is_empty()).unwrap_or(true),
+            "tool execution failed after all fallbacks"
+        );
+        record_tool_execution(
+            "tool_execution_total",
+            name,
+            false,
+            elapsed,
+            serde_json::to_string(&input.payload).ok().map(|s| s.len()),
+        );
+        Ok(primary_result)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
+    pub async fn run_with_fallback_async(
+        &self,
+        name: &str,
+        input: &ToolInput,
+    ) -> Result<ToolOutput> {
+        let start = std::time::Instant::now();
+
+        let Some(primary) = self.get_arc(name) else {
+            let elapsed = start.elapsed().as_millis() as u64;
+            tracing::warn!(target: "tool_execution", tool = %name, latency_ms = elapsed, "tool not found");
+            anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
+        };
+
+        let mut primary_result = primary.run_async(input.clone()).await?;
+        if primary_result.success {
+            let elapsed = start.elapsed().as_millis() as u64;
+            tracing::debug!(
+                target: "tool_execution",
+                tool = %name,
+                latency_ms = elapsed,
+                success = true,
+                "tool executed successfully"
+            );
+            record_tool_execution(
+                "tool_execution_total",
+                name,
+                true,
+                elapsed,
+                serde_json::to_string(&input.payload).ok().map(|s| s.len()),
+            );
+            return Ok(primary_result);
+        }
+
+        let fallback_chain = self
+            .profile(name)
+            .map(|profile| profile.fallback_chain.clone())
+            .unwrap_or_default();
+
+        for fallback_name in fallback_chain {
+            if let Some(fallback_tool) = self.get_arc(&fallback_name) {
+                let mut fallback_result = fallback_tool.run_async(input.clone()).await?;
                 if fallback_result.success {
                     let elapsed = start.elapsed().as_millis() as u64;
                     fallback_result.audit_log = Some(format!(
@@ -1789,6 +1941,11 @@ impl Tool for ApplyPatchTool {
     }
 }
 
+/// Hardcoded allowlist of test commands for the `run_tests` tool.
+///
+/// Only commands in this list can be executed via the `run_tests` tool.
+/// This prevents arbitrary command execution through the test runner.
+/// To extend this list, modify `ALLOWED_TEST_COMMANDS` in this file.
 const ALLOWED_TEST_COMMANDS: &[&str] = &[
     "cargo", "npm", "yarn", "pnpm", "make", "go", "python", "pytest", "mvn", "gradle", "git",
 ];
@@ -1813,9 +1970,11 @@ impl Tool for RunTestsTool {
 
         let command_name = input.payload["command"].as_str().unwrap_or("cargo");
         if !ALLOWED_TEST_COMMANDS.contains(&command_name) {
+            let allowed = ALLOWED_TEST_COMMANDS.join(", ");
             anyhow::bail!(
-                "{}",
-                tf("error.command_not_allowed", &[("command", command_name)])
+                "{} — allowed commands: {}",
+                tf("error.command_not_allowed", &[("command", command_name)]),
+                allowed,
             );
         }
         let args = input.payload["args"]
@@ -1985,6 +2144,11 @@ impl Tool for SkillListTool {
                                 "name": d.name,
                                 "description": d.description,
                                 "score": d.score,
+                                "input_schema": d.input_schema,
+                                "total_calls": d.total_calls,
+                                "success_calls": d.success_calls,
+                                "failure_calls": d.failure_calls,
+                                "average_latency_ms": d.average_latency_ms,
                             })
                         })
                         .collect::<Vec<_>>()
@@ -2016,6 +2180,16 @@ impl Tool for SkillListTool {
 /// Returns an error if no registry or the skill is not found.
 pub struct SkillExecuteTool;
 
+/// Shared static Arc for SkillExecuteTool — avoids allocating a new Arc on every call.
+static SKILL_EXECUTE_TOOL: std::sync::OnceLock<std::sync::Arc<SkillExecuteTool>> =
+    std::sync::OnceLock::new();
+
+fn skill_execute_arc() -> std::sync::Arc<SkillExecuteTool> {
+    SKILL_EXECUTE_TOOL
+        .get_or_init(|| std::sync::Arc::new(SkillExecuteTool))
+        .clone()
+}
+
 /// Shared tokio runtime for skill execution — lazily created once.
 static SKILL_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
@@ -2033,84 +2207,148 @@ impl Tool for SkillExecuteTool {
         "skill_execute"
     }
 
-    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let span = tracing::info_span!(
-            "tool.run",
-            tool = self.name(),
-            input_size = 0u64,
-            latency_ms = 0u64,
-            success = false,
-        );
-        let _guard = span.enter();
-        let start = Instant::now();
+    /// Async execution: look up the skill from the registry (via spawn_blocking to
+    /// avoid holding the async runtime on a RwLock read), then await
+    /// `skill.execute(...)` directly. This avoids violating principle #23
+    /// (no block_in_place + block_on in hot paths).
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let span = tracing::info_span!(
+                "tool.run",
+                tool = self.name(),
+                input_size = 0u64,
+                latency_ms = 0u64,
+                success = false,
+            );
+            let _guard = span.enter();
+            let start = Instant::now();
 
-        let payload = &input.payload;
-        let skill_name = payload
-            .get("skill_name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("skill_execute requires 'skill_name' argument"))?;
-        let skill_input = payload
-            .get("input")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
+            // ── Step 1: Extract skill name from payload ──
+            let payload = &input.payload;
+            let skill_name = payload
+                .get("skill_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("skill_execute requires 'skill_name' argument"))?
+                .to_string();
+            let skill_input = payload
+                .get("input")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
 
-        let result = match SKILL_REGISTRY.get() {
-            Some(registry) => match registry.read() {
-                Ok(guard) => {
-                    let skill = guard.get(skill_name).ok_or_else(|| {
-                        anyhow::anyhow!("skill '{}' not found in registry", skill_name)
-                    })?;
-                    // Prefer the current tokio runtime handle to avoid a separate runtime.
-                    // If no runtime is active, fall back to the shared lazily-created one.
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        // Use block_in_place to move the blocking call off the
-                        // async worker thread, preventing worker starvation (principle #23).
-                        tokio::task::block_in_place(|| handle.block_on(skill.execute(&skill_input)))
-                    } else {
-                        let rt = skill_runtime();
-                        rt.block_on(skill.execute(&skill_input))
-                    }
+            // ── Step 2: Look up skill in registry (async-safe via spawn_blocking) ──
+            let skill = match SKILL_REGISTRY.get() {
+                Some(registry) => {
+                    let registry = Arc::clone(registry);
+                    let skill_name = skill_name.clone();
+                    let skill_input_val = skill_input.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let guard = registry
+                            .read()
+                            .map_err(|e| anyhow::anyhow!("skill registry lock failed: {}", e))?;
+                        // Try exact match first, then fuzzy match
+                        guard
+                            .get(&skill_name)
+                            .or_else(|| {
+                                let fuzzy =
+                                    guard.best_match_with_input(&skill_name, &skill_input_val)?;
+                                tracing::info!(
+                                    "skill_execute: fuzzy-matched '{}' -> '{}'",
+                                    skill_name,
+                                    fuzzy
+                                );
+                                guard.get(&fuzzy)
+                            })
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "skill '{}' not found in registry (no fuzzy match either). \
+                                     Use 'skill_list' tool first to see available skills.",
+                                    skill_name
+                                )
+                            })
+                    })
+                    .await
+                    .map_err(|e| anyhow::anyhow!("skill registry lock task failed: {}", e))??
                 }
-                Err(e) => Err(anyhow::anyhow!("skill registry lock poisoned: {}", e)),
-            },
-            None => Err(anyhow::anyhow!(
-                "no skill registry configured — call set_skill_registry() first"
-            )),
-        };
+                None => {
+                    return Ok(ToolOutput {
+                        success: false,
+                        result: None,
+                        error: Some(
+                            "no skill registry configured — call set_skill_registry() first"
+                                .to_string(),
+                        ),
+                        verification: None,
+                        audit_log: None,
+                        pua_report: None,
+                    });
+                }
+            };
 
-        let elapsed = start.elapsed().as_millis() as u64;
-        span.record("latency_ms", elapsed);
+            // ── Step 3: Execute the skill (truly async) ──
+            let exec_start = Instant::now();
+            let result = skill.execute(&skill_input).await;
+            let exec_elapsed = exec_start.elapsed();
 
-        match result {
-            Ok(value) => {
-                span.record("success", true);
-                Ok(ToolOutput {
-                    success: true,
-                    result: Some(serde_json::json!({
-                        "skill": skill_name,
-                        "output": value,
-                    })),
-                    error: None,
-                    verification: Some("skill_executed".to_string()),
-                    audit_log: Some(format!("Executed skill '{}'", skill_name)),
-                    pua_report: Some(tool_execution_report(
-                        "skill_execute",
-                        Some("skill_executed"),
-                    )),
+            // Record outcome in registry (async-safe via spawn_blocking)
+            let elapsed = start.elapsed().as_millis() as u64;
+            let outcome_success = result.is_ok();
+            if let Some(registry) = SKILL_REGISTRY.get() {
+                let registry = Arc::clone(registry);
+                let s_name = skill_name.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Ok(mut guard) = registry.write() {
+                        guard.record_outcome(&s_name, outcome_success, exec_elapsed);
+                    }
                 })
+                .await
+                .ok();
             }
-            Err(e) => {
-                span.record("success", false);
-                Ok(ToolOutput {
-                    success: false,
-                    result: None,
-                    error: Some(format!("skill '{}' execution failed: {}", skill_name, e)),
-                    verification: None,
-                    audit_log: None,
-                    pua_report: None,
-                })
+            span.record("latency_ms", elapsed);
+
+            match result {
+                Ok(value) => {
+                    span.record("success", true);
+                    Ok(ToolOutput {
+                        success: true,
+                        result: Some(serde_json::json!({
+                            "skill": skill_name,
+                            "output": value,
+                        })),
+                        error: None,
+                        verification: Some("skill_executed".to_string()),
+                        audit_log: Some(format!("Executed skill '{}'", skill_name)),
+                        pua_report: Some(tool_execution_report(
+                            "skill_execute",
+                            Some("skill_executed"),
+                        )),
+                    })
+                }
+                Err(e) => {
+                    span.record("success", false);
+                    Ok(ToolOutput {
+                        success: false,
+                        result: None,
+                        error: Some(format!("skill '{}' execution failed: {}", skill_name, e)),
+                        verification: None,
+                        audit_log: None,
+                        pua_report: None,
+                    })
+                }
             }
-        }
+        })
+    }
+
+    /// Sync fallback: bridges to `run_async` via the dedicated skill runtime.
+    /// Never uses `block_in_place` so it won't block tokio worker threads.
+    /// Async callers should always use `run_async` directly for optimal performance.
+    /// Uses a cached static Arc to avoid allocating a new Arc on every call.
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let input = input.clone();
+        let rt = skill_runtime();
+        rt.block_on(skill_execute_arc().run_async(input))
     }
 }
 
@@ -2334,6 +2572,215 @@ pub fn execute_loop(
                     })
                 },
             )
+        };
+        let act_duration_ms = act_start.elapsed().as_millis() as u64;
+
+        trace.iterations.push(LoopIteration {
+            stage: "act".to_string(),
+            tool: tr.tool.clone(),
+            success: output.success,
+            duration_ms: act_duration_ms,
+            detail: if output.success {
+                "execution ok".to_string()
+            } else {
+                output
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "unknown error".to_string())
+            },
+        });
+
+        // ── Observe ──────────────────────────────────────────────
+        let observe_decision = observe(
+            &output,
+            &tr.tool,
+            &mut retry_counts,
+            config,
+            |tool, reason| {
+                trace.iterations.push(LoopIteration {
+                    stage: "observe".to_string(),
+                    tool,
+                    success: false,
+                    duration_ms: 0,
+                    detail: reason,
+                });
+            },
+        );
+
+        match observe_decision {
+            LoopDecision::Continue => {
+                // Move to next iteration
+                trace.iterations.push(LoopIteration {
+                    stage: "think".to_string(),
+                    tool: tr.tool.clone(),
+                    success: true,
+                    duration_ms: 0,
+                    detail: "output ok, continuing".to_string(),
+                });
+                continue;
+            }
+            LoopDecision::Retry { tool, reason } => {
+                trace.iterations.push(LoopIteration {
+                    stage: "think".to_string(),
+                    tool: tool.clone(),
+                    success: false,
+                    duration_ms: 0,
+                    detail: format!("retry: {}", reason),
+                });
+                continue;
+            }
+            LoopDecision::SwitchTool { from, to, reason } => {
+                debug!(from, to, reason, "TAO: switching tool");
+                trace.iterations.push(LoopIteration {
+                    stage: "think".to_string(),
+                    tool: from,
+                    success: false,
+                    duration_ms: 0,
+                    detail: format!("switch to '{}': {}", to, reason),
+                });
+                continue;
+            }
+            LoopDecision::Complete(output) => {
+                trace.final_decision = "success".to_string();
+                trace.total_duration_ms = start.elapsed().as_millis() as u64;
+                info!(
+                    task,
+                    tool = tr.tool,
+                    iterations = iteration + 1,
+                    "TAO: completed"
+                );
+                return (LoopDecision::Complete(output), trace);
+            }
+            LoopDecision::Failed {
+                reason,
+                last_output,
+            } => {
+                trace.final_decision = "failed".to_string();
+                trace.total_duration_ms = start.elapsed().as_millis() as u64;
+                warn!(task, reason, "TAO: failed");
+                return (
+                    LoopDecision::Failed {
+                        reason,
+                        last_output,
+                    },
+                    trace,
+                );
+            }
+            LoopDecision::Escalate { reason, output } => {
+                trace.final_decision = "escalated".to_string();
+                trace.total_duration_ms = start.elapsed().as_millis() as u64;
+                warn!(task, reason, "TAO: escalated");
+                return (LoopDecision::Escalate { reason, output }, trace);
+            }
+        }
+    }
+
+    // Exhausted maximum iterations.
+    let decision = LoopDecision::Failed {
+        reason: format!("max iterations ({}) reached", config.max_iterations),
+        last_output: None,
+    };
+    trace.final_decision = "failed_max_iterations".to_string();
+    trace.total_duration_ms = start.elapsed().as_millis() as u64;
+    warn!(
+        task,
+        max_iterations = config.max_iterations,
+        "TAO: max iterations reached"
+    );
+    (decision, trace)
+}
+
+/// Async version of `execute_loop`.
+///
+/// Has the exact same Think → Act → Observe logic as the synchronous version,
+/// but executes tools via `run_with_fallback_async().await` instead of
+/// `run_with_fallback()`, so it does not block the async runtime.
+pub async fn execute_loop_async(
+    task: &str,
+    registry: &ToolRegistry,
+    input: &ToolInput,
+    preferred_tools: &[String],
+    config: &LoopConfig,
+) -> (LoopDecision, LoopTrace) {
+    let start = std::time::Instant::now();
+    let mut trace = LoopTrace {
+        iterations: Vec::new(),
+        final_decision: String::new(),
+        total_duration_ms: 0,
+    };
+
+    // Build the candidate list with retry bookkeeping.
+    let tool_candidates: Vec<String> = if preferred_tools.is_empty() {
+        registry.names().iter().map(|&n| n.to_string()).collect()
+    } else {
+        preferred_tools.to_vec()
+    };
+    let mut retry_counts: HashMap<String, u32> = HashMap::new();
+
+    for iteration in 0..config.max_iterations {
+        // ── Think ────────────────────────────────────────────────
+        // Select the best tool candidate based on retry history.
+        let think_result = think(task, &tool_candidates, &retry_counts, config);
+
+        let Some(tr) = think_result else {
+            let decision = LoopDecision::Failed {
+                reason: "no available tool candidates after think phase".to_string(),
+                last_output: None,
+            };
+            trace.final_decision = "failed_no_candidates".to_string();
+            trace.total_duration_ms = start.elapsed().as_millis() as u64;
+            warn!(task, iteration, "TAO: no candidates – failed");
+            return (decision, trace);
+        };
+
+        trace.iterations.push(LoopIteration {
+            stage: "think".to_string(),
+            tool: tr.tool.clone(),
+            success: true,
+            duration_ms: 0,
+            detail: format!(
+                "confidence={:.2}, rationale={}",
+                tr.confidence, tr.rationale
+            ),
+        });
+
+        // ── Act ──────────────────────────────────────────────────
+        // Execute the selected tool (with fallback if enabled).
+        let act_start = std::time::Instant::now();
+        let output = if config.enable_fallback {
+            registry
+                .run_with_fallback_async(&tr.tool, input)
+                .await
+                .unwrap_or_else(|e| ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(format!("tool '{}' error: {}", tr.tool, e)),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                })
+        } else {
+            match registry.get_arc(&tr.tool) {
+                None => ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(format!("tool '{}' not found", tr.tool)),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                },
+                Some(tool) => tool
+                    .run_async(input.clone())
+                    .await
+                    .unwrap_or_else(|e| ToolOutput {
+                        success: false,
+                        result: None,
+                        error: Some(format!("{}", e)),
+                        verification: None,
+                        audit_log: None,
+                        pua_report: None,
+                    }),
+            }
         };
         let act_duration_ms = act_start.elapsed().as_millis() as u64;
 
@@ -2705,6 +3152,7 @@ mod tests {
         let mut registry = ToolRegistry {
             tools: Vec::new(),
             profiles: HashMap::new(),
+            aliases: HashMap::new(),
         };
         registry.register_with_profile(
             AlwaysFailTool,

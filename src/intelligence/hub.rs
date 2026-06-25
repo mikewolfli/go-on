@@ -734,7 +734,7 @@ pub fn record_audit_entry(entry: AuditLogEntry) {
 ///
 /// # Usage
 ///
-/// ```ignore
+/// ```text
 /// use crate::intelligence::hub::AuditEntryBuilder;
 ///
 /// let entry = AuditEntryBuilder::new("task-001", "chat", "allow")

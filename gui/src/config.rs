@@ -162,7 +162,7 @@ impl Default for FeatureToggles {
             workflow_run_center: false,
             autotune_chain_injection: false,
             skills_lifecycle: false,
-            providers_ops: false,
+            providers_ops: true,
             monitor_history_alerts: false,
             config_safe_mode: false,
             setup_enterprise: false,

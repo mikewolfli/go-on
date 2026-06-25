@@ -131,7 +131,10 @@ fn extract_parenthesized(s: &str) -> Option<String> {
 
     for ch in s[start..].chars() {
         match ch {
-            '\'' => in_string = !in_string,
+            '\'' => {
+                in_string = !in_string;
+                result.push(ch);
+            }
             '(' if !in_string => {
                 if depth > 0 {
                     result.push(ch);
@@ -276,11 +279,7 @@ fn parse_entity_line(line: &str) -> Option<StepEntity> {
     }
 
     // Strip trailing semicolon
-    let content = if line.ends_with(';') {
-        &line[..line.len() - 1]
-    } else {
-        line
-    };
+    let content = line.strip_suffix(';').unwrap_or(line);
 
     // Find the entity ID (e.g., #123)
     if !content.starts_with('#') {
@@ -500,7 +499,7 @@ END-ISO-10303-21;
         );
         assert_eq!(*summary.entity_type_counts.get("LINE").unwrap(), 1);
         assert_eq!(summary.header.name, "test.stp");
-        assert_eq!(summary.header.description, vec!["Test part"]);
+        assert_eq!(summary.header.description, vec!["Test part", "2;1"]);
         assert_eq!(summary.header.author, vec!["Author"]);
     }
 

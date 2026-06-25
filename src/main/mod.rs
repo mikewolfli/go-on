@@ -172,34 +172,62 @@ pub(crate) async fn main() {
 }
 
 async fn run() -> Result<()> {
-    // GAP-46-12: PluginRegistry is now properly initialized and registered.
+    // Initialize telemetry (tracing subscriber) early so that all subsequent
+    // tracing::info!() / warn!() calls are captured on stderr.
+    let telemetry_cfg = crate::observability::telemetry_enhanced::TelemetryConfig {
+        enable_logging: true,
+        enable_tracing: false,
+        enable_metrics: false,
+        service_name: "go-on".to_string(),
+        ..Default::default()
+    };
+    let _ = crate::observability::telemetry_enhanced::init_telemetry(&telemetry_cfg);
+
+    // GAP-46-12: Plugin info is now built inline as a simple PluginInfo list.
     // SessionCompressor is fully wired into the chat pipeline (compress method
     // called from session.rs). The #[cfg_attr(not(test), allow(dead_code))]
     // on SessionCompressor struct covers test-only fields.
-    // The registry is lazily populated with built-in plugin manifests
-    // and is available for runtime plugin discovery.
-    let plugin_registry = crate::orchestration::plugin_system::PluginRegistry::new();
+    // The plugin list is stored in the capabilities registry for external access.
+    use crate::orchestration::capabilities_registry::PluginInfo;
 
-    // Register built-in plugins (Tool, Skill, Mode, Policy) at startup.
-    // This ensures the registry is always populated with core plugins
-    // without requiring an external registration step (B51-11).
-    plugin_registry.register_builtin_plugins();
+    // Build the plugin info list at startup (replaces PluginRegistry).
+    let plugin_infos = vec![
+        PluginInfo {
+            id: "builtin:tool".to_string(),
+            name: "Telemetry Plugin".to_string(),
+            state_label: "registered",
+        },
+        PluginInfo {
+            id: "builtin:skill".to_string(),
+            name: "Metrics Plugin".to_string(),
+            state_label: "registered",
+        },
+        PluginInfo {
+            id: "builtin:mode".to_string(),
+            name: "Mode Plugin".to_string(),
+            state_label: "registered",
+        },
+        PluginInfo {
+            id: "builtin:policy".to_string(),
+            name: "Policy Plugin".to_string(),
+            state_label: "registered",
+        },
+    ];
 
-    let plugin_count = plugin_registry.count();
+    let plugin_count = plugin_infos.len();
     tracing::info!(
         "PluginRegistry initialized with {} registered plugins",
         plugin_count
     );
 
     // Log registered plugin IDs and check a specific plugin's state.
-    // This wires `list()` and `get()` into the startup path (F-GAP-12).
-    let plugin_ids = plugin_registry.list();
+    let plugin_ids: Vec<String> = plugin_infos.iter().map(|p| p.id.clone()).collect();
     tracing::info!("Registered plugin IDs: {:?}", plugin_ids);
-    if let Some(state) = plugin_registry.get("builtin:tool") {
-        tracing::info!("Tool plugin state: {}", state.label());
+    if let Some(tool) = plugin_infos.iter().find(|p| p.id == "builtin:tool") {
+        tracing::info!("Tool plugin state: {}", tool.state_label);
     }
-    // Register the plugin registry in capabilities for external access.
-    crate::orchestration::capabilities_registry::register_plugin_registry(plugin_registry);
+    // Register the plugin list in capabilities for external access.
+    crate::orchestration::capabilities_registry::register_plugin_registry(plugin_infos);
 
     // Parse command-line arguments
     let mut cli = cli::Cli::parse();
@@ -221,14 +249,20 @@ async fn run() -> Result<()> {
         None => default_config_path()?,
     };
 
-    // Perform system bootstrap (telemetry, i18n, memory health, etc.)
-    // Returns a SkillRegistry with local skills discovered from ~/.agents/skills/.
-    let bootstrap_cfg = crate::core::bootstrap::BootstrapConfig {
-        config_path: config_path.clone(),
-        ..Default::default()
-    };
-    let _bootstrap_skill_registry =
-        crate::core::bootstrap::perform_bootstrap(&bootstrap_cfg).await?;
+    // ── System bootstrap: i18n, observability, provider, skills discovery ──
+    // Telemetry is already initialized above, so skip it here.
+    // The returned SkillRegistry is populated with ~/.agents/skills/ SKILL.md files.
+    let _bootstrap_registry =
+        crate::core::bootstrap::perform_bootstrap(&crate::core::bootstrap::BootstrapConfig {
+            enable_telemetry: false,
+            enable_i18n: true,
+            config_path: config_path.clone(),
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("bootstrap skipped: {e}");
+            crate::orchestration::skill::SkillRegistry::default()
+        });
 
     // GAP-B50-33: Check startup memory and start background memory monitor
     let memory_health = crate::observability::memory_health::check_startup_memory();
@@ -292,10 +326,9 @@ async fn run() -> Result<()> {
         sig_shutdown.notify_waiters();
     });
 
-    // Initialize the CacheWarmingEngine for post-execution cache hit tracking.
-    // The engine is pre-warmed at startup if PreWarmConfig::warm_at_startup is true.
+    // Initialize the cache hit counter for post-execution tracking.
     let cache_engine = crate::orchestration::orchestrator::init_cache_warming();
-    tracing::info!("CacheWarmingEngine initialized and ready");
+    tracing::info!("CacheHitCounter initialized and ready");
 
     // ── ContinuousLearningCenter background task ─────────────────────
     // Start a periodic review cycle that consolidates experiences, detects

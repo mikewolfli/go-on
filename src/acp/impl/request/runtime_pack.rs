@@ -3,7 +3,7 @@ use crate::i18n::runtime::{t, tf};
 use crate::shared::secret_override::set_secret_override;
 
 type CopilotModelsCacheEntry = Option<(u64, Vec<String>)>;
-type CopilotModelsCache = std::sync::Mutex<CopilotModelsCacheEntry>;
+type CopilotModelsCache = tokio::sync::Mutex<CopilotModelsCacheEntry>;
 static COPILOT_MODELS_CACHE: std::sync::OnceLock<CopilotModelsCache> = std::sync::OnceLock::new();
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
@@ -110,14 +110,11 @@ fn build_github_client() -> reqwest::Client {
 }
 
 fn copilot_models_cache() -> &'static CopilotModelsCache {
-    COPILOT_MODELS_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+    COPILOT_MODELS_CACHE.get_or_init(|| tokio::sync::Mutex::new(None))
 }
 
 fn read_copilot_models_cache() -> Option<Vec<String>> {
-    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("lock poisoned, recovering");
-        poisoned.into_inner()
-    });
+    let guard = copilot_models_cache().try_lock().ok()?;
     let (fetched_at, models) = guard.as_ref()?.clone();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -130,19 +127,13 @@ fn read_copilot_models_cache() -> Option<Vec<String>> {
     }
 }
 
-fn read_stale_copilot_models_cache() -> Option<Vec<String>> {
-    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("lock poisoned, recovering");
-        poisoned.into_inner()
-    });
+async fn read_stale_copilot_models_cache() -> Option<Vec<String>> {
+    let guard = copilot_models_cache().lock().await;
     guard.as_ref().map(|(_, models)| models.clone())
 }
 
-fn store_copilot_models_cache(models: Vec<String>) {
-    let mut guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("lock poisoned, recovering");
-        poisoned.into_inner()
-    });
+async fn store_copilot_models_cache(models: Vec<String>) {
+    let mut guard = copilot_models_cache().lock().await;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -179,7 +170,7 @@ async fn resolve_copilot_models_dynamic() -> Vec<String> {
         .collect::<Vec<_>>();
 
     let Some(github_token) = resolve_copilot_github_token() else {
-        return read_stale_copilot_models_cache().unwrap_or(fallback);
+        return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     };
 
     let client = build_github_client();
@@ -192,20 +183,20 @@ async fn resolve_copilot_models_dynamic() -> Vec<String> {
         .await
     {
         Ok(resp) => resp,
-        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+        Err(_) => return read_stale_copilot_models_cache().await.unwrap_or(fallback),
     };
 
     if !token_resp.status().is_success() {
-        return read_stale_copilot_models_cache().unwrap_or(fallback);
+        return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     }
 
     let token_body: Value = match token_resp.json().await {
         Ok(body) => body,
-        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+        Err(_) => return read_stale_copilot_models_cache().await.unwrap_or(fallback),
     };
 
     let Some(copilot_token) = token_body.get("token").and_then(Value::as_str) else {
-        return read_stale_copilot_models_cache().unwrap_or(fallback);
+        return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     };
 
     let models_resp = match client
@@ -220,24 +211,24 @@ async fn resolve_copilot_models_dynamic() -> Vec<String> {
         .await
     {
         Ok(resp) => resp,
-        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+        Err(_) => return read_stale_copilot_models_cache().await.unwrap_or(fallback),
     };
 
     if !models_resp.status().is_success() {
-        return read_stale_copilot_models_cache().unwrap_or(fallback);
+        return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     }
 
     let payload: Value = match models_resp.json().await {
         Ok(body) => body,
-        Err(_) => return read_stale_copilot_models_cache().unwrap_or(fallback),
+        Err(_) => return read_stale_copilot_models_cache().await.unwrap_or(fallback),
     };
 
     let ranked = crate::agents::copilot::CopilotAgent::extract_ranked_model_ids(&payload);
     if ranked.is_empty() {
-        return read_stale_copilot_models_cache().unwrap_or(fallback);
+        return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     }
 
-    store_copilot_models_cache(ranked.clone());
+    store_copilot_models_cache(ranked.clone()).await;
     ranked
 }
 

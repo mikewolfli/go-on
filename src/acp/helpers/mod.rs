@@ -75,8 +75,7 @@ pub mod context;
 pub mod council_deliberation;
 #[path = "planning/orchestration_alignment.rs"]
 pub mod orchestration_alignment;
-#[path = "planning/phase_resolver.rs"]
-pub mod phase_resolver;
+// phase_resolver removed — was a single doc-comment stub with no implementation (dead code)
 #[path = "planning/planner_bridge.rs"]
 pub mod planner_bridge;
 

@@ -1146,6 +1146,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[cfg(feature = "multi-users-server")]
+    #[allow(dead_code)]
     fn make_bus_with_peers(max: usize) -> DistributedMemoryBus {
         let bus = DistributedMemoryBus::new(max);
         bus.register_peer("peer-alpha", "10.0.0.1:9001");

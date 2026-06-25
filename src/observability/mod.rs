@@ -22,6 +22,14 @@ use std::sync::OnceLock;
 // ── Re-exports ──────────────────────────────────────────────────────────────
 
 /// Configuration for initialising the observability stack independently of ACP.
+///
+/// Used by [`init_independent_stack`] during system bootstrap and in
+/// integration tests (`test_server_startup_health.rs`).
+/// Reserved for future expansion of observability parameters.
+#[allow(
+    dead_code,
+    reason = "F-GAP reserved — used via bootstrap on select feature sets"
+)]
 #[derive(Debug, Clone)]
 pub struct ObservabilityConfig {
     /// Service name for telemetry resource attributes.
@@ -46,6 +54,10 @@ impl Default for ObservabilityConfig {
 }
 
 /// Global singleton for the independent observability stack.
+#[allow(
+    dead_code,
+    reason = "F-GAP reserved — singleton used via bootstrap on select feature sets"
+)]
 static OBSERVABILITY_STACK: OnceLock<ObservabilityStackInner> = OnceLock::new();
 
 /// Inner observability stack — fields are initialized once and never read directly.
@@ -61,6 +73,14 @@ struct ObservabilityStackInner {
 }
 
 /// Initialize the independent observability stack (idempotent — only first call wins).
+///
+/// Called from `core::bootstrap::perform_bootstrap` during application startup
+/// and tested in `tests/e2e/test_server_startup_health.rs`.
+/// Reserved for future standalone observability initialization paths.
+#[allow(
+    dead_code,
+    reason = "F-GAP reserved — used via bootstrap on select feature sets"
+)]
 pub fn init_independent_stack(config: &ObservabilityConfig) -> bool {
     if OBSERVABILITY_STACK.get().is_some() {
         return false;

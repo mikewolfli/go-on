@@ -450,7 +450,7 @@ impl ApprovalEngine {
     /// the corresponding approver identity, or `None` if unknown.
     ///
     /// Example:
-    /// ```ignore
+    /// ```text
     /// use std::collections::HashMap;
     /// struct MyResolver { mapping: HashMap<String, String> }
     /// impl ApproverResolver for MyResolver {

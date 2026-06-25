@@ -10,7 +10,7 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```text
 //! use crate::shared::secret_override::{set_secret_override, get_secret};
 //!
 //! // Instead of:

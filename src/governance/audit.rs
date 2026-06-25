@@ -317,7 +317,7 @@ fn dirs_or_fallback() -> PathBuf {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// // This example uses crate-internal paths not accessible from doctests.
 /// use go_on::governance::audit::{record_audit, AuditLog};
 ///

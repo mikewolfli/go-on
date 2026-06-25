@@ -12,6 +12,12 @@
 //! - Token economy estimation
 //! - Phase summary generation
 //! - Tool call extraction from various response formats
+//!
+//! NOTE: All tests in this module are gated behind `#[cfg(not(feature = "backend-postgres"))]`.
+//! When building with the `backend-postgres` feature (e.g., multi-users-server profile),
+//! these tests are silently skipped. No warning is emitted.
+//! To run these tests with any profile, build with `--no-default-features` or explicitly
+//! enable the SQLite backend.
 
 #[cfg(test)]
 mod unit_tests {

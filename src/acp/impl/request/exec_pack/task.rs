@@ -38,8 +38,16 @@ pub(crate) struct RuntimeExecutionContext {
     pub(super) secondary_agents: Vec<String>,
     pub(super) candidates: Vec<(String, Arc<dyn crate::agent::Agent>)>,
     pub(super) failure_strategy: String,
+    // NOTE: Intentionally using std::sync::Mutex (not tokio::sync::Mutex).
+    // Every lock() on adaptive_selector is scoped to a block that ends before
+    // any .await — verified at 2 callsites in execute_single_subtask.
+    // See docs/log/log-20260625-1.md §Remaining Non-Issues.
     pub(super) adaptive_selector: Arc<std::sync::Mutex<AdaptiveModelSelector>>,
     pub(super) outcome_tx: tokio::sync::mpsc::UnboundedSender<OutcomeEvent>,
+    // NOTE: Intentionally using std::sync::Mutex (not tokio::sync::Mutex).
+    // Every lock() on failure_prevention is scoped to a block that ends before
+    // any .await — verified at all 3 callsites in execute_single_subtask.
+    // See docs/log/log-20260625-1.md §Remaining Non-Issues.
     pub(super) failure_prevention: Arc<std::sync::Mutex<FailurePrevention>>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) memory_store: Arc<std::sync::Mutex<MemoryStore>>,

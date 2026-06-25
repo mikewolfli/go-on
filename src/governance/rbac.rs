@@ -121,7 +121,7 @@ impl RoleLevel {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// // RoleLevel paths are crate-internal.
     /// assert!(go_on::governance::rbac::RoleLevel::Admin.inherits(&go_on::governance::rbac::RoleLevel::Viewer));
     /// ```

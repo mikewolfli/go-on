@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use tracing::warn;
 
@@ -1466,17 +1467,50 @@ pub(super) async fn handle_skill_list_imported(
     request_id: Option<Value>,
 ) -> Result<()> {
     let store = open_skill_import_store(server)?;
-    let skills = store
-        .list()
+    let imported_skills = store.list();
+    let imported_names: HashSet<String> = imported_skills.iter().map(|r| r.name.clone()).collect();
+
+    // Convert imported skills to response values
+    let mut skills: Vec<Value> = imported_skills
         .into_iter()
         .map(normalize_imported_record)
-        .collect::<Vec<_>>();
+        .collect();
+
+    // Merge prompt-based skills from the registry that aren't already imported
+    if let Ok(registry) = server.orchestration_deps.skill_registry.read() {
+        for (name, data) in registry.prompt_skill_data() {
+            if !imported_names.contains(&name) {
+                let view = ImportedSkillRecordView {
+                    name: data.name,
+                    version: "1.0".to_string(),
+                    description: data.description,
+                    source: "prompt".to_string(),
+                    source_ref: String::new(),
+                    sha256: String::new(),
+                    manifest_path: String::new(),
+                    enabled: true,
+                    imported_at: data.created_at,
+                };
+                skills.push(serde_json::to_value(&view).unwrap_or_default());
+            }
+        }
+    }
+
+    // Sort merged list by name
+    skills.sort_by(|a, b| {
+        a.get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .cmp(b.get("name").and_then(Value::as_str).unwrap_or(""))
+    });
+
     let total = skills.len();
     let enabled = skills
         .iter()
         .filter(|skill| skill.get("enabled").and_then(Value::as_bool) == Some(true))
         .count();
     let disabled = total.saturating_sub(enabled);
+
     record_skill_admin_audit(
         "list_imported",
         "skill.list_imported",
@@ -1524,20 +1558,48 @@ pub(super) async fn handle_skill_enabled_toggle(
     };
     let mut store = open_skill_import_store(server)?;
     let updated = match store.set_enabled(&name, enabled) {
-        Ok(record) => record,
-        Err(err) => {
-            record_skill_admin_audit(action, &name, false, &err.to_string());
-            return crate::acp::r#impl::io::send_error(
-                server,
-                request_id,
-                -32602,
-                err.to_string(),
-                None,
-            )
-            .await;
+        Ok(record) => {
+            store.save()?;
+            record
+        }
+        Err(_) => {
+            // Fall back: prompt-based skills in SkillRegistry are always enabled
+            let is_prompt_skill = server
+                .orchestration_deps
+                .skill_registry
+                .read()
+                .map(|r| r.prompt_skill_data().contains_key(&name))
+                .unwrap_or(false);
+            if is_prompt_skill {
+                record_skill_admin_audit(
+                    action,
+                    &name,
+                    true,
+                    "prompt skill toggle (always enabled)",
+                );
+                let payload = serde_json::to_value(SkillActionResponse {
+                    ok: true,
+                    action: action.to_string(),
+                    name: Some(name),
+                    skill: None,
+                    total: None,
+                    enabled: None,
+                    disabled: None,
+                    skills: None,
+                    removed: None,
+                    unregistered: None,
+                    version: None,
+                    versions: None,
+                })
+                .unwrap_or_default();
+                return crate::acp::r#impl::io::send_result(server, request_id, payload).await;
+            }
+            let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
+            record_skill_admin_audit(action, &name, false, &reason);
+            return crate::acp::r#impl::io::send_error(server, request_id, -32602, reason, None)
+                .await;
         }
     };
-    store.save()?;
     record_skill_admin_audit(action, &name, true, "updated imported skill state");
     let payload = serde_json::to_value(SkillActionResponse {
         ok: true,
@@ -1579,6 +1641,38 @@ pub(super) async fn handle_skill_remove(
     let mut store = open_skill_import_store(server)?;
     let removed = store.remove(&name);
     if !removed {
+        // Fall back to SkillRegistry for prompt-based skills
+        let registry_removed = server
+            .orchestration_deps
+            .skill_registry
+            .write()
+            .map(|mut registry| {
+                let r = registry.unregister(&name);
+                if let Err(e) = registry.save_prompt_skills_to_disk() {
+                    tracing::warn!("Failed to persist prompt skills after removal: {}", e);
+                }
+                r
+            })
+            .unwrap_or(false);
+        if registry_removed {
+            record_skill_admin_audit("remove", &name, true, "removed prompt skill");
+            let payload = serde_json::to_value(SkillActionResponse {
+                ok: true,
+                action: "remove".to_string(),
+                name: Some(name),
+                skill: None,
+                total: None,
+                enabled: None,
+                disabled: None,
+                skills: None,
+                removed: Some(false),
+                unregistered: Some(true),
+                version: None,
+                versions: None,
+            })
+            .unwrap_or_default();
+            return crate::acp::r#impl::io::send_result(server, request_id, payload).await;
+        }
         let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
         record_skill_admin_audit("remove", &name, false, &reason);
         return crate::acp::r#impl::io::send_error(server, request_id, -32602, reason, None).await;
@@ -1720,9 +1814,72 @@ pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result
 
     let mut store = open_skill_import_store(server)?;
     let Some(mut record) = store.get(&name) else {
-        let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
-        record_skill_admin_audit("update", &name, false, &reason);
-        anyhow::bail!(reason);
+        // Fall back to SkillRegistry for prompt-based skills
+        let has_prompt_skill = server
+            .orchestration_deps
+            .skill_registry
+            .read()
+            .map(|r| r.prompt_skill_data().contains_key(&name))
+            .unwrap_or(false);
+        if !has_prompt_skill {
+            let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
+            record_skill_admin_audit("update", &name, false, &reason);
+            anyhow::bail!(reason);
+        }
+        // Load current prompt skill data to preserve unmodified fields
+        let current = server
+            .orchestration_deps
+            .skill_registry
+            .read()
+            .map(|r| r.prompt_skill_data().get(&name).cloned())
+            .ok()
+            .flatten()
+            .context("skill not found in registry")?;
+        let description = params
+            .get("description")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or(current.description);
+        let prompt_template = params
+            .get("prompt_template")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or(current.prompt_template);
+        let input_schema: std::collections::HashMap<String, String> = params
+            .get("input_schema")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or(current.input_schema);
+
+        {
+            let mut registry = server
+                .orchestration_deps
+                .skill_registry
+                .write()
+                .map_err(|err| anyhow::anyhow!("skill registry write-lock error: {}", err))?;
+            registry.create_skill_from_prompt(
+                &name,
+                &description,
+                &prompt_template,
+                input_schema,
+            )?;
+        }
+
+        record_skill_admin_audit("update", &name, true, "updated prompt skill");
+        return Ok(serde_json::to_value(SkillActionResponse {
+            ok: true,
+            action: "update".to_string(),
+            name: Some(name),
+            skill: None,
+            total: None,
+            enabled: None,
+            disabled: None,
+            skills: None,
+            removed: None,
+            unregistered: None,
+            version: None,
+            versions: None,
+        })
+        .unwrap_or_default());
     };
 
     let mut manifest = load_skill_manifest(&record.manifest_path)?;
@@ -1816,9 +1973,34 @@ pub(super) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> 
 
     let store = open_skill_import_store(server)?;
     let Some(record) = store.get(&name) else {
-        let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
-        record_skill_admin_audit("version.list", &name, false, &reason);
-        anyhow::bail!(reason);
+        // Fall back to SkillRegistry for prompt-based skills (version 1.0)
+        let has_prompt_skill = server
+            .orchestration_deps
+            .skill_registry
+            .read()
+            .map(|r| r.prompt_skill_data().contains_key(&name))
+            .unwrap_or(false);
+        if !has_prompt_skill {
+            let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
+            record_skill_admin_audit("version.list", &name, false, &reason);
+            anyhow::bail!(reason);
+        }
+        record_skill_admin_audit("version.list", &name, true, "listed prompt skill versions");
+        return Ok(serde_json::to_value(SkillActionResponse {
+            ok: true,
+            action: "version.list".to_string(),
+            name: Some(name),
+            skill: None,
+            total: None,
+            enabled: None,
+            disabled: None,
+            skills: None,
+            removed: None,
+            unregistered: None,
+            version: None,
+            versions: Some(vec![serde_json::json!({"version": "1.0"})]),
+        })
+        .unwrap_or_default());
     };
 
     let manifest = load_skill_manifest(&record.manifest_path)?;
@@ -1885,9 +2067,39 @@ pub(super) fn skill_version_rollback_payload(server: &AcpServer, params: &Value)
 
     let mut store = open_skill_import_store(server)?;
     let Some(mut record) = store.get(&name) else {
-        let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
-        record_skill_admin_audit("version.rollback", &name, false, &reason);
-        anyhow::bail!(reason);
+        // Fall back to SkillRegistry for prompt-based skills (no version history)
+        let has_prompt_skill = server
+            .orchestration_deps
+            .skill_registry
+            .read()
+            .map(|r| r.prompt_skill_data().contains_key(&name))
+            .unwrap_or(false);
+        if !has_prompt_skill {
+            let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
+            record_skill_admin_audit("version.rollback", &name, false, &reason);
+            anyhow::bail!(reason);
+        }
+        record_skill_admin_audit(
+            "version.rollback",
+            &name,
+            true,
+            "prompt skill has no version history",
+        );
+        return Ok(serde_json::to_value(SkillActionResponse {
+            ok: true,
+            action: "rollback".to_string(),
+            name: Some(name),
+            skill: None,
+            total: None,
+            enabled: None,
+            disabled: None,
+            skills: None,
+            removed: None,
+            unregistered: None,
+            version: Some(target_version.to_string()),
+            versions: None,
+        })
+        .unwrap_or_default());
     };
 
     let history = skill_version_history()
@@ -2208,13 +2420,15 @@ pub(super) async fn handle_terminal_output(
         .and_then(Value::as_str)
         .unwrap_or_default();
 
-    let (output, truncated, exit_status) = {
+    let terminal_id_owned = terminal_id.to_string();
+    let (output, truncated, exit_status) = tokio::task::spawn_blocking(move || {
         let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
             warn!("ACP terminal state lock poisoned in handle_terminal_output, recovering");
             poisoned.into_inner()
         });
-        if let Some(proc) = state.get_mut(terminal_id) {
-            // Try to read any available stdout/stderr
+        if let Some(proc) = state.get_mut(&terminal_id_owned) {
+            // Try to read any available stdout/stderr — we're in spawn_blocking, so
+            // blocking I/O is safe and doesn't hold up the async runtime.
             if let Some(ref mut stdout) = proc.child.stdout {
                 use std::io::Read;
                 let mut buf = [0u8; 4096];
@@ -2240,7 +2454,7 @@ pub(super) async fn handle_terminal_output(
                 }
             }
 
-            // Check if process has exited
+            // Check if process has exited — try_wait is non-blocking, safe anywhere
             let exit_code = proc.child.try_wait().ok().flatten().map(|status| {
                 proc.exited = true;
                 status.code()
@@ -2263,7 +2477,9 @@ pub(super) async fn handle_terminal_output(
         } else {
             (String::new(), false, None)
         }
-    };
+    })
+    .await
+    .unwrap_or((String::new(), false, None));
 
     crate::acp::r#impl::io::send_result(
         _server,
@@ -2290,14 +2506,22 @@ pub(super) async fn handle_terminal_release(
         .unwrap_or_default();
 
     if !terminal_id.is_empty() {
-        let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
-            warn!("ACP terminal state lock poisoned in handle_terminal_release, recovering");
-            poisoned.into_inner()
-        });
-        if let Some(mut proc) = state.remove(terminal_id) {
-            // Kill the process if still running
-            let _ = proc.child.kill();
-            let _ = proc.child.wait();
+        let proc = {
+            let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
+                warn!("ACP terminal state lock poisoned in handle_terminal_release, recovering");
+                poisoned.into_inner()
+            });
+            state.remove(terminal_id)
+        };
+        if let Some(mut p) = proc {
+            // Kill the process if still running — spawn_blocking to avoid blocking
+            // the async runtime during `wait()`.
+            let _ = p.child.kill();
+            tokio::task::spawn_blocking(move || {
+                let _ = p.child.wait();
+            })
+            .await
+            .ok();
         }
     }
 

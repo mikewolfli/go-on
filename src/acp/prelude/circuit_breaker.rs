@@ -4,6 +4,11 @@
 //! admission decisions, and snapshots.
 
 use std::collections::HashMap;
+// NOTE: Intentionally using std::sync::Mutex (not tokio::sync::Mutex).
+// All methods (record_success, record_failure, is_open, snapshot) are synchronous
+// and never hold the lock across .await points. std::sync::Mutex is faster for
+// short critical sections — tokio::sync::Mutex would add waker allocation overhead
+// with zero benefit. See docs/log/log-20260625-1.md §Remaining Non-Issues.
 use std::sync::Mutex as StdMutex;
 
 use serde::Serialize;

@@ -6,22 +6,17 @@ use crate::acp::prelude::now_ts;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryCachedResponse {
-    #[allow(
-        dead_code,
-        reason = "stored for retrieval, read via .response_text accessor"
-    )]
     pub(crate) response_text: String,
-    expires_at: i64,
+    pub(crate) expires_at: i64,
 }
 
 #[derive(Debug, Default)]
 pub struct MemoryResponseCache {
-    inner: Mutex<IndexMap<String, MemoryCachedResponse>>,
+    pub(crate) inner: Mutex<IndexMap<String, MemoryCachedResponse>>,
 }
 
 impl MemoryResponseCache {
     /// Retrieve a cached response by key. Returns `None` if expired or absent.
-    #[expect(dead_code, reason = "public API surface for cache integration")]
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -56,7 +51,6 @@ impl MemoryResponseCache {
     }
 
     /// Return the number of non-expired entries.
-    #[expect(dead_code, reason = "public API surface for cache integration")]
     pub(crate) fn active_entries(&self) -> usize {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -65,7 +59,6 @@ impl MemoryResponseCache {
     }
 
     /// Insert a response into the cache with TTL. No-op if `ttl_seconds` is 0.
-    #[expect(dead_code, reason = "public API surface for cache integration")]
     pub(crate) fn put(&self, key: String, response_text: String, ttl_seconds: u64) {
         if ttl_seconds == 0 {
             return;

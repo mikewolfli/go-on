@@ -58,6 +58,10 @@ fn parse_face_element(s: &str) -> Option<(i64, Option<i64>, Option<i64>)> {
     Some((v, vt, vn))
 }
 
+/// Axis-aligned bounding box: (min, max) as ((x, y, z), (x, y, z)).
+#[cfg(feature = "cad-obj")]
+type BoundingBox = ((f64, f64, f64), (f64, f64, f64));
+
 /// Parsed OBJ data summary.
 #[cfg(feature = "cad-obj")]
 struct ObjSummary {
@@ -68,7 +72,7 @@ struct ObjSummary {
     objects: Vec<String>,
     materials: Vec<String>,
     material_libraries: Vec<String>,
-    bounding_box: Option<((f64, f64, f64), (f64, f64, f64))>,
+    bounding_box: Option<BoundingBox>,
 }
 
 /// Parse an OBJ file from its text content and return a summary.
@@ -240,6 +244,7 @@ impl Tool for ObjReadTool {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "obj-test".to_string(),

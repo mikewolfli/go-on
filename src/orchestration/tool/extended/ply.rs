@@ -19,13 +19,17 @@ use std::fs;
 #[cfg(feature = "cad-ply")]
 use tracing::info;
 
+/// Axis-aligned bounding box: (min, max) as ((x, y, z), (x, y, z)).
+#[cfg(feature = "cad-ply")]
+type BoundingBox = ((f64, f64, f64), (f64, f64, f64));
+
 /// Parsed PLY summary.
 #[cfg(feature = "cad-ply")]
 struct PlySummary {
     vertex_count: usize,
     face_count: usize,
     element_types: BTreeMap<String, usize>,
-    bounding_box: Option<((f64, f64, f64), (f64, f64, f64))>,
+    bounding_box: Option<BoundingBox>,
     format: String,
 }
 
@@ -50,8 +54,8 @@ fn parse_ply(content: &str) -> Result<PlySummary> {
     // Find format line (should be line 2)
     let format = if lines.len() > 1 {
         let fmt_line = lines[1].trim();
-        if fmt_line.starts_with("format ") {
-            fmt_line[7..].to_string()
+        if let Some(rest) = fmt_line.strip_prefix("format ") {
+            rest.to_string()
         } else {
             return Err(anyhow::anyhow!(
                 "expected 'format' on line 2, got {fmt_line:?}"
@@ -95,7 +99,7 @@ fn parse_ply(content: &str) -> Result<PlySummary> {
     // If ASCII format, parse vertex positions for bounding box
     // Skip past header, parse element data
     let is_ascii = format.contains("ascii");
-    let mut bounding_box: Option<((f64, f64, f64), (f64, f64, f64))> = None;
+    let mut bounding_box: Option<BoundingBox> = None;
 
     if is_ascii && header_end > 0 {
         let data_lines: Vec<&str> = lines[header_end..].to_vec();
@@ -119,7 +123,7 @@ fn parse_ascii_ply_data(
     data_lines: &[&str],
     _elements: &BTreeMap<String, usize>,
     vertex_count: usize,
-) -> Option<((f64, f64, f64), (f64, f64, f64))> {
+) -> Option<BoundingBox> {
     if vertex_count == 0 || data_lines.is_empty() {
         return None;
     }
@@ -240,6 +244,7 @@ impl Tool for PlyReadTool {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "ply-test".to_string(),

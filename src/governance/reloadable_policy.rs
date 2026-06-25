@@ -248,7 +248,7 @@ impl PolicyReloader {
     ///
     /// ## Example
     ///
-    /// ```ignore
+    /// ```text
     /// let handle = reloader.start_background_reload(60);
     /// // … later …
     /// handle.abort();

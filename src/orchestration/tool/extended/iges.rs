@@ -275,6 +275,7 @@ impl Tool for IgesReadTool {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "iges-test".to_string(),
@@ -292,40 +293,30 @@ mod tests {
     fn parse_minimal_iges() {
         // Format: each line ends with a section code (S, G, D, P, T)
         // Column 73 is section identifier, preceded by line number
-        let iges = r#"                                                                        S      1
-,,10HIGES test,8HExample ,,16HGo-on CAD tool,G      1
-     100     1     1     1     0     0       0D      1
-     100     1     1     1     0     0       0D      2
-     110     1     1     1     0     0       0D      3
-     110     1     1     1     0     0       0D      4
-     126     1     1     1     0     0       0D      5
-     126     1     1     1     0     0       0D      6
-     1P      1
-     1P      2
-S      1S      1
-G      1G      1
-D      1D      1
-D      2D      2
-D      3D      3
-D      4D      4
-D      5D      5
-D      6D      6
-P      1P      1
-P      2P      2
+        let iges = r#"some start data                                               1S
+,,10HIGES test,8HExample ,,16HGo-on CAD tool,               1G
+    100     1     1     1     0     0       0               1D
+    100     1     1     1     0     0       0               2D
+    110     1     1     1     0     0       0               3D
+    110     1     1     1     0     0       0               4D
+    126     1     1     1     0     0       0               5D
+    126     1     1     1     0     0       0               6D
+     1                                                      1P
+     1                                                      2P
 "#;
         let summary = parse_iges(iges).expect("valid IGES");
-        assert_eq!(summary.entity_count, 3);
+        assert_eq!(summary.entity_count, 6);
         assert_eq!(summary.start_section_lines, 1);
         assert!(summary.product_id.is_some());
-        // 3 entities: Circular Arc(100), Line(110), Rational B-Spline Curve(126)
-        assert_eq!(*summary.entity_types.get("Circular Arc").unwrap_or(&0), 1);
-        assert_eq!(*summary.entity_types.get("Line").unwrap_or(&0), 1);
+        // 6 D-lines: 2 per entity type (Circular Arc(100), Line(110), Rational B-Spline Curve(126))
+        assert_eq!(*summary.entity_types.get("Circular Arc").unwrap_or(&0), 2);
+        assert_eq!(*summary.entity_types.get("Line").unwrap_or(&0), 2);
         assert_eq!(
             *summary
                 .entity_types
                 .get("Rational B-Spline Curve")
                 .unwrap_or(&0),
-            1
+            2
         );
     }
 

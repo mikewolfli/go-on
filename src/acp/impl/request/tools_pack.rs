@@ -400,13 +400,16 @@ pub(crate) async fn execute_mcp_tool_call(
             record_tool_harness_sandbox_denied();
             anyhow::bail!(
                 "tool '{}' is not in sandbox whitelist and requires user confirmation. \
-                 Ask the user for approval before using this tool.",
+                 Ask the user for approval before using this tool. \
+                 Tools can be added to the allowlist via governance policy configuration.",
                 name,
             );
         } else if !verdict.allowed {
             record_tool_harness_sandbox_denied();
             anyhow::bail!(
-                "tool '{}' denied by harness sandbox policy (sandbox_allowed={})",
+                "tool '{}' denied by harness sandbox policy (sandbox_allowed={}). \
+                 The sandbox level or governance policy is blocking this tool. \
+                 Try adjusting the sandbox level or providing a policy override.",
                 name,
                 verdict.allowed
             );

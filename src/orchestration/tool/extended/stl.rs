@@ -622,6 +622,7 @@ mod tests {
     use super::*;
     use crate::orchestration::tool::{Tool, ToolInput};
 
+    #[allow(dead_code)]
     fn tool_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "test-stl".to_string(),
@@ -907,8 +908,8 @@ endsolid cube
         let mut bin = vec![0u8; 84];
         bin[0..5].copy_from_slice(b"solid");
         // Fill with enough to make it look not-ASCII-like
-        for i in 5..80 {
-            bin[i] = 0xFF;
+        for byte in bin.iter_mut().take(80).skip(5) {
+            *byte = 0xFF;
         }
         // Triangle count = 0
         bin[80..84].copy_from_slice(&0u32.to_le_bytes());

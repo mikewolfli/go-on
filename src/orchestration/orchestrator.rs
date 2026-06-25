@@ -17,11 +17,11 @@ use crate::mode::{GenericModeRuntime, ModeKind, ModeRuntime};
 use crate::model_selector::{
     ModelCharacteristics, ModelSelectionStrategy, ModelSelector, SelectionCriteria,
 };
-use crate::orchestration::cache_warming::{CacheWarmingEngine, PreWarmConfig};
 use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::tool_pipeline::{PipelineResult, PipelineStep, ToolPipeline};
 use anyhow::Result;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub use crate::orchestration::context::OrchestrationContext;
@@ -256,42 +256,40 @@ pub async fn execute_tool_pipeline(
 }
 
 // ---------------------------------------------------------------------------
-// CacheWarmingEngine integration (GAP-46-12)
+// Cache hit counter (replaces CacheWarmingEngine — GAP-46-12)
 // ---------------------------------------------------------------------------
 
-/// Create and warm the cache engine during system initialization.
-///
-/// The returned `CacheWarmingEngine` should be stored in the app state
-/// and used to track cache hit/miss metrics.  Pre-warming runs immediately
-/// if `PreWarmConfig::warm_at_startup` is true.
-pub fn init_cache_warming() -> CacheWarmingEngine {
-    let config = PreWarmConfig::default();
-    let engine = CacheWarmingEngine::new(config);
+/// Simple atomic counter for tracking cache hits.
+/// Replaces the previous CacheWarmingEngine with a lightweight counter.
+pub struct CacheHitCounter {
+    hit_count: AtomicU64,
+}
 
-    tracing::info!("CacheWarmingEngine initialized");
+impl CacheHitCounter {
+    /// Increment the hit counter.
+    pub fn increment(&self) {
+        self.hit_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
-    if engine.should_pre_warm() {
-        let keys = engine.get_pre_warm_keys();
-        tracing::info!("CacheWarmingEngine: pre-warming {} categories", keys.len());
-        for (category, key_list) in &keys {
-            tracing::debug!(
-                "  pre-warming category '{}' with {} keys",
-                category,
-                key_list.len()
-            );
+impl Default for CacheHitCounter {
+    fn default() -> Self {
+        Self {
+            hit_count: AtomicU64::new(0),
         }
     }
+}
 
-    engine
+/// Create a cache hit counter during system initialization.
+pub fn init_cache_warming() -> CacheHitCounter {
+    tracing::info!("CacheHitCounter initialized");
+    CacheHitCounter::default()
 }
 
 /// Record a cache hit for observability after a successful execution.
-pub fn warm_cache_after_success(engine: &CacheWarmingEngine) {
-    engine.record_hit(
-        "execution_success",
-        crate::orchestration::cache_warming::CacheTier::L1,
-    );
-    tracing::debug!("CacheWarmingEngine: recorded post-execution cache hit");
+pub fn warm_cache_after_success(counter: &CacheHitCounter) {
+    counter.increment();
+    tracing::debug!("CacheHitCounter: recorded post-execution cache hit");
 }
 
 // ---------------------------------------------------------------------------

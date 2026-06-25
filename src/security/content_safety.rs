@@ -156,16 +156,8 @@ impl SafetyChecker {
     /// a pattern is invalid — the caller can still add valid rules later
     /// via [`add_rule`].
     pub fn new(config: ContentSafetyConfig) -> Self {
-        let rules = match Self::compile_rules(&config) {
-            Ok(rules) => rules,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "SafetyChecker: regex compilation failed, falling back to empty ruleset"
-                );
-                Vec::new()
-            }
-        };
+        let rules = Self::compile_rules(&config)
+            .expect("SafetyChecker: regex compilation failed — content safety rules are invalid. ");
         Self { config, rules }
     }
 

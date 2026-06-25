@@ -647,27 +647,22 @@ pub struct DagMetrics {
     pub depth: usize,
 }
 
-// -- Conversion traits (reserved for future use) -----------------------------
+// -- Test-only conversion and iteration traits -------------------------------------------------------------
 
-/// Trait for converting from another DAG type into a `CoreDag<T>`.
-#[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
+#[cfg(test)]
 pub trait IntoCoreDag<T, Source> {
-    /// Convert `Source` into a `CoreDag<T>`.
     fn into_core_dag(source: Source) -> CoreDag<T>;
 }
 
-// -- Iterators ---------------------------------------------------------------
-
-/// An iterator over the nodes of a `CoreDag` in topological order.
-#[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
+#[cfg(test)]
 pub struct TopoIter<'a, T> {
     dag: &'a CoreDag<T>,
     order: Vec<&'a str>,
     index: usize,
 }
 
+#[cfg(test)]
 impl<'a, T> TopoIter<'a, T> {
-    #[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
     fn new(dag: &'a CoreDag<T>) -> Result<Self, String> {
         let order = dag.topological_sort()?;
         Ok(Self {
@@ -678,6 +673,7 @@ impl<'a, T> TopoIter<'a, T> {
     }
 }
 
+#[cfg(test)]
 impl<'a, T> Iterator for TopoIter<'a, T> {
     type Item = (&'a str, &'a DagNode<T>);
 
@@ -688,15 +684,12 @@ impl<'a, T> Iterator for TopoIter<'a, T> {
     }
 }
 
+#[cfg(test)]
 impl<T> CoreDag<T> {
-    /// Return an iterator over nodes in topological order.
-    #[cfg_attr(not(test), allow(dead_code))] // used in tests (F-GAP-49)
     pub fn iter_topo(&self) -> Result<TopoIter<'_, T>, String> {
         TopoIter::new(self)
     }
 }
-
-// -- TaskContext -------------------------------------------------------------
 
 /// Chain-of-Thought context propagated between DAG nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]

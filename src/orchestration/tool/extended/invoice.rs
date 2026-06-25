@@ -119,8 +119,8 @@ fn parse_invoice(text: &str) -> InvoiceData {
 #[cfg(feature = "document-invoice")]
 fn extract_invoice_number(text: &str) -> String {
     let patterns = [
-        // "INV-12345", "INV12345"
-        r"(?i)\binvoice\s*(?:#|no\.?|number)?\s*:?\s*([\w\d][-/\w\d]{2,30})",
+        // "INV-12345", "INV12345" — use horizontal whitespace only to avoid matching across lines
+        r"(?i)\binvoice[ \t]*(?:#|no\.?|number)?[ \t]*:?[ \t]*([\w\d][-/\w\d]{2,30})",
         // "INV-12345" standalone
         r"(?i)\bINV[-]?(\d{4,20})\b",
         // "Invoice Number: 12345"
@@ -212,8 +212,8 @@ fn extract_customer(text: &str) -> String {
 #[cfg(feature = "document-invoice")]
 fn extract_total_amount(text: &str) -> Option<f64> {
     let patterns = [
-        r"(?i)(?:total|amount\s*due|balance\s*due|grand\s*total|total\s*due)\s*:?\s*[\$€£¥]?\s*(\d{1,10}(?:,\d{3})*(?:\.\d{1,2})?)",
-        r"(?i)(?:total|amount\s*due|balance\s*due)\s*[\$€£¥]?\s*(\d{1,10}(?:,\d{3})*(?:\.\d{1,2})?)",
+        r"(?i)(?:\btotal\b|amount\s*due|balance\s*due|grand\s*total|total\s*due)\s*:?\s*[\$€£¥]?\s*(\d{1,10}(?:,\d{3})*(?:\.\d{1,2})?)",
+        r"(?i)(?:\btotal\b|amount\s*due|balance\s*due)\s*[\$€£¥]?\s*(\d{1,10}(?:,\d{3})*(?:\.\d{1,2})?)",
         r"[\$€£¥]\s*(\d{1,10}(?:,\d{3})*(?:\.\d{1,2})?)\s*$",
     ];
 
