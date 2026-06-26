@@ -338,7 +338,7 @@ impl MemoryBus {
                     poisoned.into_inner()
                 }
             };
-            snapshot.vector_docs_count = guard.active_entries() as u32;
+            snapshot.vector_docs_count = guard.prune_and_count() as u32;
         }
 
         snapshot

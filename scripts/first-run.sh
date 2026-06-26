@@ -8,7 +8,7 @@ OS_NAME="$(uname -s || echo unknown)"
 
 # ── macOS-specific: Gatekeeper unblock ──────────────────────────────────
 if [[ "$OS_NAME" == "Darwin" ]]; then
-  UNBLOCK_SCRIPT="$ROOT_DIR/macos-gui-unblock.sh"
+  UNBLOCK_SCRIPT="$ROOT_DIR/scripts/macos-gui-unblock.sh"
   if [[ ! -x "$UNBLOCK_SCRIPT" ]]; then
     if [[ -f "$UNBLOCK_SCRIPT" ]]; then
       chmod +x "$UNBLOCK_SCRIPT" || true

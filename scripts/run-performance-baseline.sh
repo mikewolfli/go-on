@@ -8,7 +8,7 @@ echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo ""
 
 BINARY="${1:-./target/debug/go-on}"
-CONFIG="${2:-config.test.toml}"
+CONFIG="${2:-config/config.toml}"
 REPORT_DIR="bench-results/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$REPORT_DIR"
 

@@ -609,9 +609,6 @@ pub(crate) struct PhaseResolution {
     pub schema_error: Option<String>,
     pub routing_provenance: Vec<String>,
     pub reputation_scores: HashMap<String, f64>,
-    pub _online_scores: Vec<(String, f64)>,
-    pub _original_count: usize,
-    pub _unavailable_agents: Vec<String>,
 }
 
 // Resolve the request phase from parameters, adaptive inference, and controller recommendation.
@@ -773,9 +770,6 @@ pub(crate) async fn resolve_request_phase(
         schema_error,
         routing_provenance,
         reputation_scores,
-        _online_scores: online_scores,
-        _original_count: original_count,
-        _unavailable_agents: unavailable_agents,
     })
 }
 

@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
@@ -31,8 +31,7 @@ pub async fn new_acp_server(
     autotune_state_path: Option<String>,
     config_path: Option<String>,
     runtime_config: RuntimeConfig,
-    _http_client: Option<reqwest::Client>,
-    _verbose: bool,
+
     app_config: Option<Arc<crate::config::AppConfig>>,
 ) -> AcpServer {
     // Use ServerBuilder to create the server with correct field names and types
@@ -385,7 +384,7 @@ pub async fn new_acp_server(
     server.cache_deps.autotune_state_path = autotune_state_path;
     server.config_path = config_path;
     server.runtime_config = runtime_config;
-    server.verbose = _verbose;
+    server.verbose = false;
     server.governance_deps.harness_bus = Some(harness_bus);
     server.governance_deps.capability_bus = Some(capability_bus);
     server.governance_deps.provenance_ledger = Some(provenance_ledger);
@@ -672,25 +671,6 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
 
     server.session.session_registry = Some(session_registry);
     server.websocket_hub = Some(ws_hub);
-
-    // ── Federated learning initializer (activated, formerly BLUE2 / F-GAP-19) ────
-    // If FEDERATED_PEERS is set, initialize the FederatedRLAdapter with
-    // differential privacy and model versioning enabled.
-    {
-        use crate::intelligence::reinforcement::FederatedRLAdapter;
-        use std::sync::OnceLock;
-
-        static FEDERATED_ADAPTER: OnceLock<FederatedRLAdapter> = OnceLock::new();
-
-        if std::env::var("FEDERATED_PEERS").is_ok() {
-            let adapter = FederatedRLAdapter::new(true, true);
-            if FEDERATED_ADAPTER.set(adapter).is_ok() {
-                info!("wire_server: FederatedRLAdapter initialized with privacy + versioning");
-            }
-        } else {
-            debug!("wire_server: FEDERATED_PEERS not set, federated learning disabled");
-        }
-    }
 
     // ── Memory health monitor (F-GAP-49 activation) ───────────────
     // Start background memory pressure monitoring. Periodically queries

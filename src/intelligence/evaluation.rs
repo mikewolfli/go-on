@@ -94,127 +94,127 @@ pub fn is_cosine_similarity_enabled() -> bool {
 ///
 /// The function computes the maximum Jaccard similarity between the
 /// agent output's word set and each known unsafe pattern's word set.
+/// Known unsafe patterns as keyword sets.
+/// Each group represents a category of dangerous behaviour.
+const UNSAFE_PATTERNS: &[&[&str]] = &[
+    // File-system destruction
+    &[
+        "rm",
+        "-rf",
+        "/",
+        "delete",
+        "remove",
+        "force",
+        "recursive",
+        "unlink",
+        "wipe",
+        "destroy",
+        "erase",
+        "truncate",
+        "shred",
+    ],
+    // SQL injection / database destruction
+    &[
+        "DROP",
+        "TABLE",
+        "DATABASE",
+        "DELETE",
+        "FROM",
+        "TRUNCATE",
+        "ALTER",
+        "EXEC",
+        "xp_cmdshell",
+        "INTO",
+        "OVERRIDE",
+    ],
+    // Arbitrary code execution
+    &[
+        "eval",
+        "exec",
+        "shell",
+        "popen",
+        "subprocess",
+        "os.system",
+        "execve",
+        "command",
+        "invoke",
+        "spawn",
+        "compile",
+        "runtime.exec",
+    ],
+    // Privilege escalation
+    &[
+        "chmod",
+        "777",
+        "0777",
+        "chown",
+        "sudo",
+        "root",
+        "privilege",
+        "suid",
+        "sgid",
+        "setuid",
+        "setgid",
+        "sudoers",
+        "passwd",
+    ],
+    // Security bypass / defence disablement
+    &[
+        "bypass",
+        "security",
+        "disable",
+        "SELinux",
+        "AppArmor",
+        "iptables",
+        "ufw",
+        "firewall",
+        "disable_secure",
+        "no_check",
+        "insecure",
+    ],
+    // Network / data exfiltration
+    &[
+        "curl",
+        "wget",
+        "nc",
+        "netcat",
+        "reverse",
+        "shell",
+        "bind",
+        "exfiltrate",
+        "upload",
+        "send_to",
+        "callback",
+        "c2",
+    ],
+    // Cryptographic / ransomware-like operations
+    &[
+        "encrypt",
+        "decrypt",
+        "cipher",
+        "aes",
+        "rsa",
+        "ransomware",
+        "key_rotation",
+        "crypt",
+        "lock",
+    ],
+    // Credential / secret handling
+    &[
+        "password",
+        "secret",
+        "token",
+        "api_key",
+        "credential",
+        "plaintext",
+        "hardcode",
+        "leak",
+        "expose",
+    ],
+];
+
 fn embedding_safety_check(agent_output: &str) -> f64 {
     use std::collections::HashSet;
-
-    // Define known unsafe patterns as keyword sets.
-    // Each group represents a category of dangerous behaviour.
-    const UNSAFE_PATTERNS: &[&[&str]] = &[
-        // File-system destruction
-        &[
-            "rm",
-            "-rf",
-            "/",
-            "delete",
-            "remove",
-            "force",
-            "recursive",
-            "unlink",
-            "wipe",
-            "destroy",
-            "erase",
-            "truncate",
-            "shred",
-        ],
-        // SQL injection / database destruction
-        &[
-            "DROP",
-            "TABLE",
-            "DATABASE",
-            "DELETE",
-            "FROM",
-            "TRUNCATE",
-            "ALTER",
-            "EXEC",
-            "xp_cmdshell",
-            "INTO",
-            "OVERRIDE",
-        ],
-        // Arbitrary code execution
-        &[
-            "eval",
-            "exec",
-            "shell",
-            "popen",
-            "subprocess",
-            "os.system",
-            "execve",
-            "command",
-            "invoke",
-            "spawn",
-            "compile",
-            "runtime.exec",
-        ],
-        // Privilege escalation
-        &[
-            "chmod",
-            "777",
-            "0777",
-            "chown",
-            "sudo",
-            "root",
-            "privilege",
-            "suid",
-            "sgid",
-            "setuid",
-            "setgid",
-            "sudoers",
-            "passwd",
-        ],
-        // Security bypass / defence disablement
-        &[
-            "bypass",
-            "security",
-            "disable",
-            "SELinux",
-            "AppArmor",
-            "iptables",
-            "ufw",
-            "firewall",
-            "disable_secure",
-            "no_check",
-            "insecure",
-        ],
-        // Network / data exfiltration
-        &[
-            "curl",
-            "wget",
-            "nc",
-            "netcat",
-            "reverse",
-            "shell",
-            "bind",
-            "exfiltrate",
-            "upload",
-            "send_to",
-            "callback",
-            "c2",
-        ],
-        // Cryptographic / ransomware-like operations
-        &[
-            "encrypt",
-            "decrypt",
-            "cipher",
-            "aes",
-            "rsa",
-            "ransomware",
-            "key_rotation",
-            "crypt",
-            "lock",
-        ],
-        // Credential / secret handling
-        &[
-            "password",
-            "secret",
-            "token",
-            "api_key",
-            "credential",
-            "plaintext",
-            "hardcode",
-            "leak",
-            "expose",
-        ],
-    ];
 
     let output_lower = agent_output.to_lowercase();
     let output_words: HashSet<&str> = output_lower
@@ -283,123 +283,7 @@ fn embedding_safety_check(agent_output: &str) -> f64 {
 pub(crate) fn cosine_embedding_safety_check(agent_output: &str) -> f64 {
     use std::collections::HashMap;
 
-    // Reuse the same unsafe pattern definitions from `embedding_safety_check`.
-    const UNSAFE_PATTERNS: &[&[&str]] = &[
-        // File-system destruction
-        &[
-            "rm",
-            "-rf",
-            "/",
-            "delete",
-            "remove",
-            "force",
-            "recursive",
-            "unlink",
-            "wipe",
-            "destroy",
-            "erase",
-            "truncate",
-            "shred",
-        ],
-        // SQL injection / database destruction
-        &[
-            "DROP",
-            "TABLE",
-            "DATABASE",
-            "DELETE",
-            "FROM",
-            "TRUNCATE",
-            "ALTER",
-            "EXEC",
-            "xp_cmdshell",
-            "INTO",
-            "OVERRIDE",
-        ],
-        // Arbitrary code execution
-        &[
-            "eval",
-            "exec",
-            "shell",
-            "popen",
-            "subprocess",
-            "os.system",
-            "execve",
-            "command",
-            "invoke",
-            "spawn",
-            "compile",
-            "runtime.exec",
-        ],
-        // Privilege escalation
-        &[
-            "chmod",
-            "777",
-            "0777",
-            "chown",
-            "sudo",
-            "root",
-            "privilege",
-            "suid",
-            "sgid",
-            "setuid",
-            "setgid",
-            "sudoers",
-            "passwd",
-        ],
-        // Security bypass / defence disablement
-        &[
-            "bypass",
-            "security",
-            "disable",
-            "SELinux",
-            "AppArmor",
-            "iptables",
-            "ufw",
-            "firewall",
-            "disable_secure",
-            "no_check",
-            "insecure",
-        ],
-        // Network / data exfiltration
-        &[
-            "curl",
-            "wget",
-            "nc",
-            "netcat",
-            "reverse",
-            "shell",
-            "bind",
-            "exfiltrate",
-            "upload",
-            "send_to",
-            "callback",
-            "c2",
-        ],
-        // Cryptographic / ransomware-like operations
-        &[
-            "encrypt",
-            "decrypt",
-            "cipher",
-            "aes",
-            "rsa",
-            "ransomware",
-            "key_rotation",
-            "crypt",
-            "lock",
-        ],
-        // Credential / secret handling
-        &[
-            "password",
-            "secret",
-            "token",
-            "api_key",
-            "credential",
-            "plaintext",
-            "hardcode",
-            "leak",
-            "expose",
-        ],
-    ];
+    // Reuse the shared UNSAFE_PATTERNS constant defined at module level above.
 
     /// Build a term-frequency vector from word tokens.
     fn tf_vector(words: &[&str]) -> HashMap<String, f64> {

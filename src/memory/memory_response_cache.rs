@@ -26,7 +26,7 @@ impl MemoryResponseCache {
                 return None;
             }
             let entry = entry.clone();
-            guard.shift_remove(key);
+            guard.swap_remove(key);
             guard.insert(key.to_string(), entry.clone());
             return Some(entry);
         }
@@ -50,8 +50,8 @@ impl MemoryResponseCache {
         removed
     }
 
-    /// Return the number of non-expired entries.
-    pub(crate) fn active_entries(&self) -> usize {
+    /// Purge expired entries and return the count of remaining non-expired entries.
+    pub(crate) fn prune_and_count(&self) -> usize {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.retain(|_, entry| entry.expires_at > now);

@@ -8,14 +8,12 @@
 mod chaos_drill_tests {
     use go_on::resilience::chaos::*;
 
-    #[test]
-    fn drill_network_resilience() {
+    #[tokio::test]
+    async fn drill_network_resilience() {
         let engine = ChaosEngine::new();
         let scenario = network_resilience_scenario();
 
-        let result = tokio::runtime::Runtime::new()
-            .expect("create tokio runtime")
-            .block_on(engine.run_drills(&scenario));
+        let result = engine.run_drills(&scenario).await;
 
         assert!(
             result.passed,
@@ -33,28 +31,24 @@ mod chaos_drill_tests {
         );
     }
 
-    #[test]
-    fn drill_storage_resilience() {
+    #[tokio::test]
+    async fn drill_storage_resilience() {
         let engine = ChaosEngine::new();
         let scenario = storage_resilience_scenario();
 
-        let result = tokio::runtime::Runtime::new()
-            .expect("create tokio runtime")
-            .block_on(engine.run_drills(&scenario));
+        let result = engine.run_drills(&scenario).await;
 
         assert!(result.passed, "Storage resilience drill failed");
         assert_eq!(result.total_injections, 3);
         assert_eq!(result.successful_recoveries, 3);
     }
 
-    #[test]
-    fn drill_resource_exhaustion() {
+    #[tokio::test]
+    async fn drill_resource_exhaustion() {
         let engine = ChaosEngine::new();
         let scenario = resource_exhaustion_scenario();
 
-        let result = tokio::runtime::Runtime::new()
-            .expect("create tokio runtime")
-            .block_on(engine.run_drills(&scenario));
+        let result = engine.run_drills(&scenario).await;
 
         assert!(result.passed, "Resource exhaustion drill failed");
         assert_eq!(result.total_injections, 2);
@@ -85,8 +79,8 @@ mod chaos_drill_tests {
         );
     }
 
-    #[test]
-    fn drill_custom_scenario() {
+    #[tokio::test]
+    async fn drill_custom_scenario() {
         let engine = ChaosEngine::new();
 
         let scenario = DrillScenario {
@@ -102,9 +96,7 @@ mod chaos_drill_tests {
             timeout_secs: 10,
         };
 
-        let result = tokio::runtime::Runtime::new()
-            .expect("create tokio runtime")
-            .block_on(engine.run_drills(&scenario));
+        let result = engine.run_drills(&scenario).await;
 
         assert!(result.passed);
         assert_eq!(

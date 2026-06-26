@@ -33,11 +33,11 @@ fi
 # 3. 检查 Phase 10 核心模块
 echo "3. 检查 Phase 10 核心模块..."
 MODULES=(
-    "src/task_decomposer.rs"
-    "src/task_router.rs"
-    "src/workflow_optimizer.rs"
-    "src/reinforcement.rs"
-    "src/acp.rs"
+    "src/orchestration/task_decomposer.rs"
+    "src/orchestration/task_router.rs"
+    "src/orchestration/workflow_optimizer.rs"
+    "src/intelligence/reinforcement/mod.rs"
+    "src/acp/mod.rs"
 )
 
 for module in "${MODULES[@]}"; do
@@ -52,71 +52,71 @@ done
 # 4. 检查关键功能实现
 echo "4. 检查关键功能实现..."
 echo "   a) 任务分解功能..."
-if grep -q "struct TaskDecomposition" src/task_decomposer.rs; then
+if grep -q "struct TaskDecomposition" src/orchestration/task_decomposer.rs; then
     echo "      ✅ TaskDecomposition 结构体存在"
 else
     echo "      ❌ TaskDecomposition 结构体缺失"
 fi
 
-if grep -q "impl TaskDecomposer" src/task_decomposer.rs; then
+if grep -q "impl TaskDecomposer" src/orchestration/task_decomposer.rs; then
     echo "      ✅ TaskDecomposer 实现存在"
 else
     echo "      ❌ TaskDecomposer 实现缺失"
 fi
 
 echo "   b) 工作流功能..."
-if grep -q "workflow.generate" src/acp.rs; then
+if grep -q "workflow.generate" src/acp/mod.rs; then
     echo "      ✅ workflow.generate 方法存在"
 else
     echo "      ❌ workflow.generate 方法缺失"
 fi
 
-if grep -q "workflow.execute" src/acp.rs; then
+if grep -q "workflow.execute" src/acp/mod.rs; then
     echo "      ✅ workflow.execute 方法存在"
 else
     echo "      ❌ workflow.execute 方法缺失"
 fi
 
-if grep -q "workflow.research" src/acp.rs; then
+if grep -q "workflow.research" src/acp/mod.rs; then
     echo "      ✅ workflow.research 方法存在"
 else
     echo "      ❌ workflow.research 方法缺失"
 fi
 
 echo "   c) 自学习总线..."
-if grep -q "struct WorkflowLearningBusArtifact" src/reinforcement.rs; then
+if grep -q "struct WorkflowLearningBusArtifact" src/intelligence/reinforcement/mod.rs; then
     echo "      ✅ WorkflowLearningBusArtifact 结构体存在"
 else
     echo "      ❌ WorkflowLearningBusArtifact 结构体缺失"
 fi
 
-if grep -q "recommend_parallelism_from_learning" src/reinforcement.rs; then
+if grep -q "recommend_parallelism_from_learning" src/intelligence/reinforcement/mod.rs; then
     echo "      ✅ recommend_parallelism_from_learning 函数存在"
 else
     echo "      ❌ recommend_parallelism_from_learning 函数缺失"
 fi
 
-if grep -q "recommend_failure_strategy_from_learning" src/reinforcement.rs; then
+if grep -q "recommend_failure_strategy_from_learning" src/intelligence/reinforcement/mod.rs; then
     echo "      ✅ recommend_failure_strategy_from_learning 函数存在"
 else
     echo "      ❌ recommend_failure_strategy_from_learning 函数缺失"
 fi
 
 echo "   d) 自适应执行..."
-if grep -q "adaptive_parallelism" src/acp.rs; then
+if grep -q "adaptive_parallelism" src/acp/mod.rs; then
     echo "      ✅ adaptive_parallelism 参数存在"
 else
     echo "      ❌ adaptive_parallelism 参数缺失"
 fi
 
-if grep -q "adaptive_failure_strategy" src/acp.rs; then
+if grep -q "adaptive_failure_strategy" src/acp/mod.rs; then
     echo "      ✅ adaptive_failure_strategy 参数存在"
 else
     echo "      ❌ adaptive_failure_strategy 参数缺失"
 fi
 
 echo "   e) 角色感知分配..."
-if grep -q "role_aware_assignment" src/acp.rs; then
+if grep -q "role_aware_assignment" src/acp/mod.rs; then
     echo "      ✅ role_aware_assignment 参数存在"
 else
     echo "      ❌ role_aware_assignment 参数缺失"
@@ -147,19 +147,19 @@ fi
 
 # 6. 检查配置文件
 echo "6. 检查配置文件..."
-if [ -f "config.toml" ]; then
+if [ -f "config/config.toml" ]; then
     echo "   ✅ config.toml 存在"
 
-    if grep -q "default_phase" config.toml; then
-        DEFAULT_PHASE=$(grep "default_phase" config.toml | head -1 | cut -d'=' -f2 | tr -d ' "')
+    if grep -q "default_phase" config/config.toml; then
+        DEFAULT_PHASE=$(grep "default_phase" config/config.toml | head -1 | cut -d'=' -f2 | tr -d ' "')
         echo "     默认阶段: $DEFAULT_PHASE"
     fi
 
-    if grep -q "autotune" config.toml; then
+    if grep -q "autotune" config/config.toml; then
         echo "     ✅ 自动调优配置存在"
     fi
 else
-    echo "   ❌ config.toml 缺失"
+    echo "   ❌ config/config.toml 缺失"
 fi
 
 # 7. 运行关键功能测试

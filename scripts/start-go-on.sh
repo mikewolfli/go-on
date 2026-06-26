@@ -7,7 +7,7 @@ cd "$DIR"
 
 # go-on process manager
 ACTION=${1:-start}
-GOON_BIN="./go-on"
+GOON_BIN="../target/debug/go-on"
 CONFIG_ARG="--config ../config/config.toml"
 PID_FILE="go-on.pid"
 LOG_FILE="go-on.log"

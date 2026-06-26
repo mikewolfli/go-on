@@ -4,7 +4,6 @@ pub mod config_validation;
 
 pub mod error;
 pub mod onboarding;
-pub mod provider;
 pub mod providers;
 pub mod setup;
 

@@ -199,7 +199,7 @@ pub async fn dispatch_server(
     autotune_state: Option<Arc<tokio::sync::Mutex<AutoTuneState>>>,
     autotune_config: Option<AutoTuneConfig>,
     autotune_state_path: Option<String>,
-    client: reqwest::Client,
+    _client: reqwest::Client,
 ) -> Result<()> {
     let runtime_flow = flow_manager(config_path);
 
@@ -216,8 +216,6 @@ pub async fn dispatch_server(
                 autotune_state_path,
                 Some(config_path.to_string_lossy().to_string()),
                 runtime_config,
-                Some(client),
-                false,
                 None,
             )
             .await;
@@ -235,8 +233,6 @@ pub async fn dispatch_server(
                 autotune_state_path,
                 Some(config_path.to_string_lossy().to_string()),
                 runtime_config,
-                Some(client),
-                false,
                 None,
             )
             .await;
@@ -258,8 +254,6 @@ pub async fn dispatch_server(
                 autotune_state_path,
                 Some(config_path.to_string_lossy().to_string()),
                 runtime_config,
-                Some(client),
-                false,
                 None,
             )
             .await;
@@ -285,8 +279,6 @@ pub async fn dispatch_server(
                 autotune_state_path,
                 Some(config_path.to_string_lossy().to_string()),
                 runtime_config,
-                Some(client),
-                false,
                 None,
             )
             .await;

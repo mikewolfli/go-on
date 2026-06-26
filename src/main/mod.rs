@@ -210,17 +210,16 @@ async fn run() -> Result<()> {
     // ── System bootstrap: i18n, observability, provider, skills discovery ──
     // Telemetry is already initialized above, so skip it here.
     // The returned SkillRegistry is populated with ~/.agents/skills/ SKILL.md files.
-    let _bootstrap_registry =
+    if let Err(e) =
         crate::core::bootstrap::perform_bootstrap(&crate::core::bootstrap::BootstrapConfig {
             enable_telemetry: false,
             enable_i18n: true,
             config_path: config_path.clone(),
         })
         .await
-        .unwrap_or_else(|e| {
-            tracing::warn!("bootstrap skipped: {e}");
-            crate::orchestration::skill::SkillRegistry::default()
-        });
+    {
+        tracing::warn!("bootstrap skipped: {e}");
+    }
 
     // GAP-B50-33: Check startup memory and start background memory monitor
     let memory_health = crate::observability::memory_health::check_startup_memory();
@@ -258,22 +257,13 @@ async fn run() -> Result<()> {
     let active_config: Arc<tokio::sync::RwLock<AppConfig>> =
         Arc::new(tokio::sync::RwLock::new((*config).clone()));
 
-    // Start config hot-reload watchdog
+    // Config hot-reload watchdog is disabled (see NOTE below).
     // NOTE: Temporarily disabled to debug startup deadlock on macOS.
     // The notify kqueue watcher appears to deadlock with the tokio runtime
     // during ServerBuilder::build(). Enabling this can be reverted once the
     // root cause is identified.
-    let hot_reload_cfg = crate::core::config::hot_reload::HotReloadConfig {
-        config_path: config_path.clone(),
-        enabled: false,
-        ..Default::default()
-    };
-    let watchdog = crate::core::config::hot_reload::WatchDog::new(hot_reload_cfg, active_config);
-    tokio::spawn(async move {
-        if let Err(e) = watchdog.start().await {
-            tracing::warn!("Config hot-reload watchdog failed: {e}");
-        }
-    });
+    // When enabled, create WatchDog and spawn it here.
+    let _active_config = active_config; // kept for when hot-reload is re-enabled
 
     // ── Graceful shutdown notify (shared with all background tasks) ──
     let shutdown_notify = Arc::new(Notify::new());

@@ -65,12 +65,11 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
         info!("I18n initialized");
     }
 
-    // 3. Initialize orchestration provider (for architecture boundary verification)
-    let _provider = crate::core::provider::DefaultOrchestrationProvider::default();
+    // 3. Orchestration provider trait is available for architecture boundary verification.
+    //    DefaultOrchestrationProvider was a stub (always returned 0 skills) and has been removed.
     tracing::debug!(
         target: "go_on::core::bootstrap",
-        skills = crate::core::provider::OrchestrationProvider::skill_count(&_provider),
-        "OrchestrationProvider initialized"
+        "OrchestrationProvider trait available"
     );
 
     // 4. Initialize observability stack (standalone decoupled path)

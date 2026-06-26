@@ -11,37 +11,6 @@ use std::collections::HashSet;
 use super::session_compressor::{CompressedSession, SessionCompressor};
 
 // ---------------------------------------------------------------------------
-// ExtractedConcept
-// ---------------------------------------------------------------------------
-
-/// A key concept extracted from the conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtractedConcept {
-    /// The concept text or name.
-    pub text: String,
-    /// Category: entity, decision, file_path, code_symbol, error, constraint
-    pub category: ConceptCategory,
-    /// How many messages reference this concept.
-    pub frequency: u32,
-    /// When this concept was first mentioned (message index).
-    pub first_seen_at: usize,
-    /// When this concept was last mentioned (message index).
-    pub last_seen_at: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConceptCategory {
-    Entity,
-    Decision,
-    FilePath,
-    CodeSymbol,
-    Error,
-    Constraint,
-    Task,
-    Unknown,
-}
-
-// ---------------------------------------------------------------------------
 // ContextWindowBudget
 // ---------------------------------------------------------------------------
 
@@ -104,8 +73,6 @@ pub struct ContinuityMarker {
 
 /// The central session context manager.
 pub struct SessionContextManager {
-    /// Concepts extracted from the current session.
-    concepts: Vec<ExtractedConcept>,
     /// File paths referenced in this session.
     file_paths: HashSet<String>,
     /// Decisions recorded in this session.
@@ -121,7 +88,6 @@ pub struct SessionContextManager {
 impl SessionContextManager {
     pub fn new(budget: ContextWindowBudget) -> Self {
         Self {
-            concepts: Vec::new(),
             file_paths: HashSet::new(),
             decisions: Vec::new(),
             error_messages: HashSet::new(),
@@ -182,18 +148,12 @@ impl SessionContextManager {
     }
 
     /// Compute importance score for a message at the given index.
-    pub fn score_message(&self, index: usize, _total: usize, content: &str, _role: &str) -> u32 {
+    pub fn score_message(&self, index: usize, content: &str) -> u32 {
         let has_code_block = content.contains("```");
         let has_decision = self.decisions.iter().any(|(_, i)| *i == index);
         let has_file_path = self.file_paths.iter().any(|fp| content.contains(fp));
         let has_error = self.error_messages.contains(&index);
-        let concept_density = self
-            .concepts
-            .iter()
-            .filter(|c| content.contains(&c.text))
-            .count() as u32;
-
-        let mut score = 0u32;
+        let mut score = (has_code_block as u32) * 3;
         if has_code_block {
             score += 15;
         }
@@ -206,7 +166,6 @@ impl SessionContextManager {
         if has_error {
             score += 15;
         }
-        score += (concept_density * 5).min(25);
         score.min(100)
     }
 
@@ -233,8 +192,8 @@ impl SessionContextManager {
         let mut scored: Vec<(usize, u32)> = messages
             .iter()
             .enumerate()
-            .map(|(i, (role, content))| {
-                let score = self.score_message(i, total, content, role);
+            .map(|(i, (_role, content))| {
+                let score = self.score_message(i, content);
                 (i, score)
             })
             .collect();
@@ -262,12 +221,7 @@ impl SessionContextManager {
 
     /// Generate a continuity marker for trimmed messages.
     pub fn generate_continuity_marker(&self, trimmed_indices: &[usize]) -> ContinuityMarker {
-        let key_concepts = self
-            .concepts
-            .iter()
-            .filter(|c| trimmed_indices.contains(&c.first_seen_at))
-            .map(|c| c.text.clone())
-            .collect();
+        let key_concepts: Vec<String> = Vec::new();
 
         let files = self.file_paths.iter().cloned().collect();
         let decisions = self
@@ -317,8 +271,9 @@ impl SessionContextManager {
     }
 
     /// Get the current concept count.
+    /// Always returns 0 — concept extraction is not yet wired to record_message.
     pub fn concept_count(&self) -> usize {
-        self.concepts.len()
+        0
     }
 
     /// Get the current number of tracked decisions.
@@ -341,11 +296,11 @@ mod tests {
     fn test_importance_score_message_direct() {
         let mgr = SessionContextManager::default();
         // No concepts, no decisions, no code blocks, no file paths -> score of 0
-        let score = mgr.score_message(0, 10, "hello world", "user");
+        let score = mgr.score_message(0, "hello world");
         assert_eq!(score, 0);
-        // Contains a code block -> score 15
-        let score2 = mgr.score_message(0, 10, "hello ```code``` world", "assistant");
-        assert_eq!(score2, 15);
+        // Contains a code block -> score (3 from initial) + 15 = 18
+        let score2 = mgr.score_message(0, "hello ```code``` world");
+        assert_eq!(score2, 18);
     }
 
     #[test]
@@ -408,8 +363,8 @@ mod tests {
     fn test_message_scoring_different_content() {
         let mut mgr = SessionContextManager::default();
         mgr.record_message("Fix src/main.rs", "user");
-        let score_with_file = mgr.score_message(0, 5, "Fix src/main.rs", "user");
-        let score_plain = mgr.score_message(0, 5, "hello", "user");
+        let score_with_file = mgr.score_message(0, "Fix src/main.rs");
+        let score_plain = mgr.score_message(0, "hello");
         assert!(
             score_with_file > score_plain,
             "messages with file paths should score higher"

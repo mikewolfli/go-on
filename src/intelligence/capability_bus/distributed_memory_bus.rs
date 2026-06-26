@@ -273,11 +273,10 @@ impl DistributedMemoryBus {
             ttl_ms,
         };
 
-        // Compute shared length outside the local_entries lock scope to avoid
-        // potential deadlock with maybe_evict_oldest re-locking shared_entries.
-        let shared_len = self.shared_entries.lock().map(|g| g.len()).unwrap_or(0);
-
+        // Compute shared length inside the local_entries lock scope.
+        // Lock order: local → shared (consistent with share_with_peers / prune_expired).
         let mut entries = self.local_entries.lock().unwrap_or_else(|e| e.into_inner());
+        let shared_len = self.shared_entries.lock().map(|g| g.len()).unwrap_or(0);
         entries.push_back(entry);
         Self::maybe_evict_oldest(&mut entries, shared_len, self.max_entries);
 
