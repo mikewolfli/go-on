@@ -228,6 +228,11 @@ impl BackendClient {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
+
+    /// Get the currently negotiated chat endpoint path (e.g. `/v1/chat/completions`).
+    pub async fn get_chat_endpoint(&self) -> String {
+        self.chat_endpoint.read().await.clone()
+    }
 }
 
 // ── Health & Status ─────────────────────────────────────────────────────────
@@ -526,9 +531,11 @@ impl BackendClient {
         let mut last_err = String::new();
         let mut response = None;
 
-        // Use the endpoint discovered via /protocol/version at startup.
-        // This replaces the old dual-endpoint fallback (Round 3 unification).
-        let endpoint = self.chat_endpoint.read().await.clone();
+        // Use /chat/stream (native Go-On endpoint) which accepts ChatParams format
+        // (mode, phase, options, preferred_agent, etc.). Do NOT use the protocol-
+        // negotiated endpoint (/v1/chat/completions) because it crashes on GUI-
+        // specific fields that OpenAiChatRequest cannot deserialize.
+        let endpoint = "/chat/stream";
         for attempt in 1..=3 {
             match self
                 .long_client

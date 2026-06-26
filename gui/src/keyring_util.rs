@@ -241,19 +241,44 @@ pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Retrieve an API key from the system keyring.
+/// Retrieve an API key from the system keyring, falling back to `.env` file on Linux.
 pub fn get_api_key(provider: &str) -> Option<String> {
-    platform::get_api_key(provider)
+    // Primary: try system keyring
+    if let Some(key) = platform::get_api_key(provider) {
+        return Some(key);
+    }
+    // Fallback: read from `.env` file (especially important on Linux where
+    // the Secret Service keyring daemon may not be available).
+    let env_name = provider_to_env_name(provider, "api_key");
+    let dotenv = read_dotenv();
+    dotenv
+        .get(&env_name)
+        .map(|v| v.trim_matches('"').to_string())
 }
 
-/// Retrieve a provider secret key from the system keyring.
+/// Retrieve a provider secret key from the system keyring, falling back to `.env` file.
 pub fn get_secret_key(provider: &str) -> Option<String> {
-    platform::get_secret_key(provider)
+    // Primary: try system keyring
+    if let Some(key) = platform::get_secret_key(provider) {
+        return Some(key);
+    }
+    // Fallback: read from `.env` file
+    let env_name = provider_to_env_name(provider, "secret_key");
+    let dotenv = read_dotenv();
+    dotenv
+        .get(&env_name)
+        .map(|v| v.trim_matches('"').to_string())
 }
 
-/// Check whether a key exists in the system keyring for the given provider.
+/// Check whether a key exists in the system keyring or `.env` file for the given provider.
 pub fn has_api_key(provider: &str) -> bool {
-    platform::has_api_key(provider)
+    if platform::has_api_key(provider) {
+        return true;
+    }
+    // Fallback: check `.env` file
+    let env_name = provider_to_env_name(provider, "api_key");
+    let dotenv = read_dotenv();
+    dotenv.contains_key(&env_name)
 }
 
 /// Delete an API key from the system keyring AND `.env` file (silent if missing).

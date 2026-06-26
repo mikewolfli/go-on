@@ -441,12 +441,34 @@ impl ChatView {
                     return; // Skip the normal chat/stream flow
                 }
 
+                // Always use /chat/stream (native Go-On endpoint) which directly accepts
+                // ChatParams format (mode, phase, options, preferred_agent, etc.).
+                // /v1/chat/completions (OpenAI compat) only works with OpenAI-format bodies
+                // and will crash on GUI-specific fields.
                 let endpoint = format!("{}/chat/stream", base_url_clone.trim_end_matches('/'));
                 let stream_resp = sc.post(&endpoint).json(&body).send().await;
 
                 match stream_resp {
                     Ok(resp) => {
-                        let mut resp = if let Err(err) = resp.error_for_status_ref() {
+                        let status = resp.status();
+                        let mut resp = if !status.is_success() {
+                            // Capture the response body for better diagnostics
+                            let err_body = resp.text().await.unwrap_or_default();
+                            let err_msg = if err_body.is_empty() {
+                                format!(
+                                    "HTTP {} {}",
+                                    status.as_u16(),
+                                    status.canonical_reason().unwrap_or("Unknown")
+                                )
+                            } else {
+                                // Truncate long error bodies
+                                let truncated = if err_body.len() > 500 {
+                                    format!("{}...", &err_body[..500])
+                                } else {
+                                    err_body
+                                };
+                                format!("HTTP {}: {}", status.as_u16(), truncated)
+                            };
                             let fallback = backend_clone
                                 .chat_with_options(
                                     &outbound_clone,
@@ -471,7 +493,7 @@ impl ChatView {
                                 })
                                 .unwrap_or_else(|e| PendingResponse::Error {
                                     generation_id: Some(generation_id),
-                                    message: format!("stream error: {err}; fallback: {e}"),
+                                    message: format!("stream error: {err_msg}; fallback: {e}"),
                                 });
                             send_pending(&tx, fallback).await;
                             return;
