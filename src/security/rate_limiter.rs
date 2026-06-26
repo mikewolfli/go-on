@@ -1,14 +1,12 @@
-//! Global rate limiter — token bucket per-tenant + global max concurrent.
+//! Global rate limiter — token bucket per-tenant.
 //!
-//! Provides two layers of rate limiting:
-//! 1. Per-tenant token bucket (sliding window, configurable rate)
-//! 2. Global max concurrent requests (semaphore-based)
+//! Provides per-tenant token bucket rate limiting (sliding window,
+//! configurable rate).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::shared::token_bucket::TokenBucket;
-use tokio::sync::Semaphore;
 
 /// Rate limiter configuration.
 #[derive(Debug, Clone)]
@@ -17,8 +15,6 @@ pub struct RateLimitConfig {
     pub tenant_rps: f64,
     /// Max burst size per tenant.
     pub tenant_burst: u32,
-    /// Max concurrent requests across all tenants (semaphore limit).
-    pub max_concurrent: usize,
 }
 
 impl Default for RateLimitConfig {
@@ -26,39 +22,21 @@ impl Default for RateLimitConfig {
         Self {
             tenant_rps: 100.0,
             tenant_burst: 50,
-            max_concurrent: 1000,
         }
     }
-}
-
-/// A permit guard that auto-releases the global semaphore slot on drop.
-#[allow(
-    dead_code,
-    reason = "New API surface — wired from ACP HTTP request handler in subsequent PR"
-)]
-pub struct MaxConcurrentGuard<'a> {
-    _permit: tokio::sync::SemaphorePermit<'a>,
 }
 
 /// Global rate limiter instance.
 pub struct GlobalRateLimiter {
     config: RateLimitConfig,
     tenants: Mutex<HashMap<String, TokenBucket>>,
-    /// Global max-concurrent semaphore.
-    #[allow(
-        dead_code,
-        reason = "New API surface — wired from ACP HTTP request handler in subsequent PR"
-    )]
-    semaphore: Semaphore,
 }
 
 impl GlobalRateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
-        let max = config.max_concurrent;
         Self {
             config,
             tenants: Mutex::new(HashMap::new()),
-            semaphore: Semaphore::new(max),
         }
     }
 
@@ -70,29 +48,6 @@ impl GlobalRateLimiter {
             TokenBucket::new(self.config.tenant_burst as f64, self.config.tenant_rps)
         });
         bucket.try_consume(tokens)
-    }
-
-    /// Try to acquire the global semaphore permit.
-    /// Returns `None` if the global concurrency limit is reached.
-    #[allow(
-        dead_code,
-        reason = "New API surface — wired from ACP HTTP request handler in subsequent PR"
-    )]
-    pub fn try_acquire_global(&self) -> Option<MaxConcurrentGuard<'_>> {
-        self.semaphore
-            .try_acquire()
-            .ok()
-            .map(|permit| MaxConcurrentGuard { _permit: permit })
-    }
-
-    /// Manually release one global semaphore slot.
-    /// Prefer using `MaxConcurrentGuard` (auto-release via Drop) instead.
-    #[allow(
-        dead_code,
-        reason = "New API surface — wired from ACP HTTP request handler in subsequent PR"
-    )]
-    pub fn release_global(&self) {
-        self.semaphore.add_permits(1);
     }
 }
 

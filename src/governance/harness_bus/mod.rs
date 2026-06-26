@@ -642,56 +642,6 @@ impl HarnessBus {
         })
     }
 
-    /// Evaluate optimization policy for a task.
-    pub fn evaluate_optimization_for_task(&self, _task_type: &str) -> serde_json::Value {
-        use crate::acp::helpers::policy::evaluate_optimization_policy;
-        use crate::governance::pua::PuaEnforcementPlan;
-        use crate::intelligence::reinforcement::ArtifactLedger;
-        use crate::orchestration::task_router::{RoutingDecision, TaskCharacteristics, TaskType};
-        use crate::reinforcement::TaskPlanArtifact;
-
-        let ledger = ArtifactLedger::new(None);
-        let plan = TaskPlanArtifact {
-            generated_at: 0,
-            task: String::new(),
-            characteristics: TaskCharacteristics {
-                description: String::new(),
-                task_type: TaskType::Unknown,
-                complexity: 0,
-                required_capabilities: vec![],
-                involves_multiple_modules: false,
-                is_time_critical: false,
-                needs_verification: false,
-                has_safety_concerns: false,
-            },
-            routing: RoutingDecision {
-                roles: vec![],
-                requirements: vec![],
-                predicted_success_rate: 0.95,
-                estimated_duration_seconds: 0,
-                can_parallelize: vec![],
-                risk_factors: vec![],
-                recommended_safeguards: vec![],
-                pua_enforcement: PuaEnforcementPlan::default(),
-            },
-            decomposition: None,
-            planned_subtasks: vec![],
-            sub_agent_recommended: false,
-            activation_reasons: vec![],
-            action_checks_required: vec![],
-        };
-        let outcome = evaluate_optimization_policy(&ledger, "", &plan, None, true, true);
-
-        serde_json::json!({
-            "auto_attach": outcome.report.auto_attach,
-            "auto_detach": outcome.report.auto_detach,
-            "runtime_healthy": outcome.report.runtime_healthy,
-            "anomaly_detected": outcome.report.anomaly_detected,
-            "phase_parallelism_cap": outcome.phase_parallelism_cap,
-            "force_fail_fast": outcome.force_fail_fast,
-        })
-    }
-
     /// Update the sandbox level at runtime.
     pub fn set_sandbox_level(&self, level: SandboxLevel) {
         *self
@@ -707,16 +657,6 @@ impl HarnessBus {
     /// Inject a shared Arc RBAC enforcer into the policy evaluator.
     pub fn set_rbac_enforcer(&self, enforcer: Arc<RwLock<RbacEnforcer>>) {
         self.evaluator.set_rbac_enforcer(enforcer);
-    }
-
-    /// Extract an optional `u64` value from a JSON options map.
-    pub fn extra_u64(&self, options: &serde_json::Value, key: &str) -> Option<u64> {
-        options.get(key).and_then(|v| v.as_u64())
-    }
-
-    /// Extract an optional `f64` value from a JSON options map.
-    pub fn extra_f64(&self, options: &serde_json::Value, key: &str) -> Option<f64> {
-        options.get(key).and_then(|v| v.as_f64())
     }
 
     /// Start a background tokio task that periodically checks for drift.

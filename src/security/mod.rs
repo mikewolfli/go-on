@@ -24,14 +24,6 @@ pub mod vulnerability_scan;
 /// Global singleton for the SafetyChecker, instantiated by `wire_content_safety`.
 static CONTENT_SAFETY_CHECKER: OnceLock<content_safety::SafetyChecker> = OnceLock::new();
 
-/// Get a reference to the global SafetyChecker, if content safety has been wired.
-/// This is a convenience API for components that need one-shot safety checks
-/// without carrying a reference through the entire call chain.
-#[allow(dead_code)]
-pub fn get_content_safety_checker() -> Option<&'static content_safety::SafetyChecker> {
-    CONTENT_SAFETY_CHECKER.get()
-}
-
 /// Wire content safety checking into the server startup path.
 /// Instantiates a `SafetyChecker` if governance is enabled.
 /// Returns `true` if content safety was enabled.
@@ -63,14 +55,6 @@ pub fn wire_content_safety(config: &crate::config::types::RuntimeConfig) -> bool
 
 /// Global singleton for the InjectionDetector, instantiated by `wire_prompt_injection`.
 static PROMPT_INJECTION_DETECTOR: OnceLock<prompt_injection::InjectionDetector> = OnceLock::new();
-
-/// Get a reference to the global InjectionDetector, if prompt injection has been wired.
-/// This is a convenience API for components that need one-shot injection detection
-/// without carrying a reference through the entire call chain.
-#[allow(dead_code)]
-pub fn get_prompt_injection_detector() -> Option<&'static prompt_injection::InjectionDetector> {
-    PROMPT_INJECTION_DETECTOR.get()
-}
 
 /// Wire prompt injection detection into the server startup path.
 /// Instantiates an `InjectionDetector` if governance is enabled.

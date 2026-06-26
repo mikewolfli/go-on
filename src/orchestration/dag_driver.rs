@@ -19,7 +19,9 @@ use tracing::warn;
 use crate::orchestration::core_dag::CoreDag;
 use crate::orchestration::core_dag::{ExNodeId, ExNodeState};
 use crate::orchestration::planner_executor::ExecutionPlan;
-use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
+use crate::orchestration::tool::{
+    execute_loop_async, LoopConfig, LoopDecision, ToolInput, ToolRegistry,
+};
 
 pub use crate::orchestration::core_dag::{DagExecutionTrace, DagNodeResult};
 
@@ -346,7 +348,7 @@ fn create_tool_jobs(
                 };
                 // Use preferred_tools (tool names from the plan) instead of hardcoded `&[]`.
                 let (decision, _trace) =
-                    execute_loop(&tool_name, &registry, &input, &pref_tools, &cfg);
+                    execute_loop_async(&tool_name, &registry, &input, &pref_tools, &cfg).await;
                 let (state, tool_output, error_payload) = match decision {
                     LoopDecision::Complete(ref output) => {
                         (ExNodeState::Completed, output.result.clone(), None)

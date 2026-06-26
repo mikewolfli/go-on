@@ -17,17 +17,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Counter for generating unique artifact IDs.
 static ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Generates a unique artifact ID using a millisecond timestamp and
-/// an atomic counter to ensure uniqueness within the same millisecond.
-fn generate_id() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let seq = ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("art-{}-{}", now, seq)
-}
-
 fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
     match mtx.lock() {
         Ok(guard) => guard,
@@ -56,6 +45,17 @@ fn write_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockWriteGuard<
             poisoned.into_inner()
         }
     }
+}
+
+/// Generates a unique artifact ID using a millisecond timestamp and
+/// an atomic counter to ensure uniqueness within the same millisecond.
+fn generate_id() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let seq = ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("art-{}-{}", now, seq)
 }
 
 /// Contract that defines the structure of an artifact type.

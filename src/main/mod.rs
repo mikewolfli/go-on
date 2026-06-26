@@ -187,44 +187,6 @@ async fn run() -> Result<()> {
     // SessionCompressor is fully wired into the chat pipeline (compress method
     // called from session.rs). The #[cfg_attr(not(test), allow(dead_code))]
     // on SessionCompressor struct covers test-only fields.
-    // The plugin list is stored in the capabilities registry for external access.
-    use crate::orchestration::capabilities_registry::PluginInfo;
-
-    // Build the plugin info list at startup (replaces PluginRegistry).
-    let plugin_infos = vec![
-        PluginInfo {
-            id: "builtin:tool".to_string(),
-            state_label: "registered",
-        },
-        PluginInfo {
-            id: "builtin:skill".to_string(),
-            state_label: "registered",
-        },
-        PluginInfo {
-            id: "builtin:mode".to_string(),
-            state_label: "registered",
-        },
-        PluginInfo {
-            id: "builtin:policy".to_string(),
-            state_label: "registered",
-        },
-    ];
-
-    let plugin_count = plugin_infos.len();
-    tracing::info!(
-        "PluginRegistry initialized with {} registered plugins",
-        plugin_count
-    );
-
-    // Log registered plugin IDs and check a specific plugin's state.
-    let plugin_ids: Vec<String> = plugin_infos.iter().map(|p| p.id.clone()).collect();
-    tracing::info!("Registered plugin IDs: {:?}", plugin_ids);
-    if let Some(tool) = plugin_infos.iter().find(|p| p.id == "builtin:tool") {
-        tracing::info!("Tool plugin state: {}", tool.state_label);
-    }
-    // Register the plugin list in capabilities for external access.
-    crate::orchestration::capabilities_registry::register_plugin_registry(plugin_infos);
-
     // Parse command-line arguments
     let mut cli = cli::Cli::parse();
     if let Some(command) = cli.command.take() {
@@ -322,10 +284,6 @@ async fn run() -> Result<()> {
         sig_shutdown.notify_waiters();
     });
 
-    // Initialize the cache hit counter for post-execution tracking.
-    let cache_engine = crate::orchestration::orchestrator::init_cache_warming();
-    tracing::info!("CacheHitCounter initialized and ready");
-
     // ── ContinuousLearningCenter background task ─────────────────────
     // Start a periodic review cycle that consolidates experiences, detects
     // forgetting, and advances the curriculum in the background.
@@ -378,7 +336,6 @@ async fn run() -> Result<()> {
                 info!("Top-level shutdown signal received during onboarding server start");
             }
         }
-        crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
         return Ok(());
     }
 
@@ -396,9 +353,6 @@ async fn run() -> Result<()> {
             info!("Top-level shutdown signal received, server exiting");
         }
     }
-
-    // Warm cache after successful server execution.
-    crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
 
     Ok(())
 }

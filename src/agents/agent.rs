@@ -545,24 +545,7 @@ pub trait Agent: Send + Sync {
     }
 }
 
-/// Configuration for the agent registry's token caching behavior.
-#[derive(Debug, Clone, Copy)]
-pub struct AgentRegistryConfig {
-    /// When true, all agents registered via `register_arc()` are automatically
-    /// wrapped with `CachedAgentWrapper` if a token cache is set.
-    pub enable_token_cache: bool,
-}
-
-impl Default for AgentRegistryConfig {
-    fn default() -> Self {
-        Self {
-            enable_token_cache: true,
-        }
-    }
-}
-
 /// Agent registry for managing and accessing agents
-#[allow(missing_debug_implementations)]
 pub struct AgentRegistry {
     /// Map of agent names to agent instances
     agents: HashMap<String, Arc<dyn Agent>>,

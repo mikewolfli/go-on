@@ -341,12 +341,30 @@ impl ToolBus {
         // Check if it is a built-in tool.
         // Lock scope: dropped before any await point.
         {
-            let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            if reg.get(tool_name).is_some() {
-                return reg.run_with_fallback(tool_name, input);
+            // Check if tool exists (lock scope dropped before any await point)
+            let has_tool = self
+                .tool_registry
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .get(tool_name)
+                .is_some();
+            if has_tool {
+                // Offload to blocking pool to avoid holding std::sync::Mutex across .await
+                // and to prevent blocking the tokio worker thread.
+                let reg = self.tool_registry.clone();
+                let input = input.clone();
+                let tool_name = tool_name.to_string();
+                return tokio::task::spawn_blocking(move || {
+                    let reg = reg.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    reg.run_with_fallback(&tool_name, &input)
+                })
+                .await?;
             }
         }
 

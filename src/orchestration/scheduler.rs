@@ -24,7 +24,7 @@ mod queue;
 // ── Re-exports ──────────────────────────────────────────────────────────────
 
 pub use concurrency::TaskPermitGuard;
-pub use persistence::create_persistent_scheduler;
+pub use persistence::create_in_memory_scheduler;
 pub use priority::{Priority, ScheduledTask};
 
 // ──────────────────────────────────────────────
@@ -1530,10 +1530,8 @@ mod tests {
 
     #[test]
     #[cfg(feature = "backend-sqlite")]
-    fn persistent_scheduler_delegates_to_in_memory() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("scheduler.db");
-        let scheduler = create_persistent_scheduler(Some(path));
+    fn create_in_memory_scheduler_works() {
+        let scheduler = create_in_memory_scheduler();
         let _profile = scheduler.profile();
         // Smoke: submit a task to ensure the scheduler is alive.
         scheduler

@@ -5,8 +5,10 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Resolve-Path (Join-Path $scriptDir "..")
 
 $contractPath = Join-Path $rootDir "contracts/editor-capability-matrix.json"
+$blue26Path = Join-Path $rootDir "docs/blueprints/blue26.md"
 $addonSmokePath = Join-Path $rootDir "vscode-addon/scripts/contract-smoke.js"
 $guiSmokePath = Join-Path $rootDir "gui/scripts/contract-smoke.mjs"
+if (-not (Test-Path $blue26Path)) { throw "blue26.md not found" }
 if (-not (Test-Path $contractPath)) { throw "editor-capability-matrix.json not found" }
 if (-not (Test-Path $addonSmokePath)) { throw "vscode addon contract-smoke.js not found" }
 if (-not (Test-Path $guiSmokePath)) { throw "GUI contract-smoke.mjs not found" }

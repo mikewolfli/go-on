@@ -547,7 +547,7 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // targets.  The scheduler tracks queue depth and active-worker counts that
     // are surfaced in governance.status.
     {
-        let _persistent = crate::orchestration::scheduler::create_persistent_scheduler(None);
+        crate::orchestration::scheduler::create_in_memory_scheduler();
         let config = crate::orchestration::scheduler::SchedulerConfig::default();
         let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
             config,

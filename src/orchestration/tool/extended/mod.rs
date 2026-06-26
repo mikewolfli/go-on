@@ -56,6 +56,12 @@ pub mod network;
 pub mod obj;
 #[cfg(feature = "model-3d-extra")]
 pub mod obj_tool;
+#[cfg(any(
+    feature = "document-excel",
+    feature = "document-docx",
+    feature = "document-excel-write",
+    feature = "document-ppt"
+))]
 pub mod office;
 #[cfg(feature = "document-pdf")]
 pub mod pdf;

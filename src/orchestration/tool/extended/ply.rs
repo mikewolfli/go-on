@@ -244,7 +244,6 @@ impl Tool for PlyReadTool {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "ply-test".to_string(),

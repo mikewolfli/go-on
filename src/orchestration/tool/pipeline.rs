@@ -343,7 +343,7 @@ async fn run_single_tool(
         allowed_base_dir: None,
     };
 
-    let output = match registry.run_with_fallback(tool_name, &tool_input) {
+    let output = match registry.run_with_fallback_async(tool_name, &tool_input).await {
         Ok(out) => out,
         Err(e) => {
             let duration_ms = start.elapsed().as_millis() as u64;

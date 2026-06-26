@@ -9,6 +9,7 @@ mod types;
 
 pub use types::*;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -39,6 +40,7 @@ pub(crate) struct Inner {
 /// Snapshot of fault tolerance state for persistence operations.
 /// Cloned under the async lock before entering `spawn_blocking` to avoid
 /// holding the lock across blocking I/O.
+#[derive(Clone, Serialize, Deserialize)]
 struct FaultToleranceSnapshot {
     faults: HashMap<String, FaultEvent>,
     recovery_plans: HashMap<String, RecoveryPlan>,

@@ -21,27 +21,9 @@ use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::tool_pipeline::{PipelineResult, PipelineStep, ToolPipeline};
 use anyhow::Result;
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub use crate::orchestration::context::OrchestrationContext;
-
-// ---------------------------------------------------------------------------
-// Backward-compatible default context (deprecated)
-// ---------------------------------------------------------------------------
-
-/// Create a default `OrchestrationContext` with standard feed and failover
-/// settings.
-///
-/// ⚠ **Deprecated:** prefer to create an `OrchestrationContext` explicitly
-/// early in your request lifecycle and pass it through the call chain.
-/// This function exists to ease migration from the removed global singletons.
-#[deprecated(
-    note = "create an OrchestrationContext explicitly and pass it to orchestrator functions"
-)]
-pub fn default_context() -> OrchestrationContext {
-    OrchestrationContext::new()
-}
 
 /// Record a model execution outcome.
 ///
@@ -253,43 +235,6 @@ pub async fn execute_tool_pipeline(
     );
 
     result
-}
-
-// ---------------------------------------------------------------------------
-// Cache hit counter (replaces CacheWarmingEngine — GAP-46-12)
-// ---------------------------------------------------------------------------
-
-/// Simple atomic counter for tracking cache hits.
-/// Replaces the previous CacheWarmingEngine with a lightweight counter.
-pub struct CacheHitCounter {
-    hit_count: AtomicU64,
-}
-
-impl CacheHitCounter {
-    /// Increment the hit counter.
-    pub fn increment(&self) {
-        self.hit_count.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-impl Default for CacheHitCounter {
-    fn default() -> Self {
-        Self {
-            hit_count: AtomicU64::new(0),
-        }
-    }
-}
-
-/// Create a cache hit counter during system initialization.
-pub fn init_cache_warming() -> CacheHitCounter {
-    tracing::info!("CacheHitCounter initialized");
-    CacheHitCounter::default()
-}
-
-/// Record a cache hit for observability after a successful execution.
-pub fn warm_cache_after_success(counter: &CacheHitCounter) {
-    counter.increment();
-    tracing::debug!("CacheHitCounter: recorded post-execution cache hit");
 }
 
 // ---------------------------------------------------------------------------

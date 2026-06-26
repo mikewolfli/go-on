@@ -1,5 +1,5 @@
-//! SSE Streaming Optimizer — Adaptive chunking, brotli compression,
-//! buffer pooling, and extraction caching for maximum throughput.
+//! SSE buffer pool — pre-allocated byte buffers to reduce allocation churn
+//! during SSE event serialization.
 
 use std::sync::Mutex;
 

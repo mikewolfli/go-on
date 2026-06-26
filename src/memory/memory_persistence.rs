@@ -8,10 +8,6 @@
 //! Provides automatic migration (promotion/demotion) between tiers and
 //! metadata indexing on startup.
 
-#[cfg(feature = "backend-postgres")]
-use anyhow::{Context, Result};
-
-#[cfg(not(feature = "backend-postgres"))]
 use anyhow::{Context, Result};
 
 use flate2::read::GzDecoder;
@@ -24,7 +20,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::sync::Once;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1140,8 +1135,6 @@ pub struct MemoryPersistence {
     cold: ColdStorage,
     /// Tiering policy
     policy: MemoryTieringPolicy,
-    /// Monotonic sequence for ordering
-    sequence: AtomicU64,
     /// Optional memory summarizer for compressing excess hot entries
     /// during tier migration. Wired via `with_summarizer`.
     summarizer: Option<MemorySummarizer>,
@@ -1172,7 +1165,6 @@ impl MemoryPersistence {
             warm,
             cold: ColdStorage::new(cold_base_path),
             policy,
-            sequence: AtomicU64::new(0),
             summarizer: None,
         })
     }
@@ -1196,9 +1188,6 @@ impl MemoryPersistence {
     /// The entry is placed in the hot tier by default and will be promoted
     /// according to the tiering policy.
     pub fn store(&self, entry: MemoryEntry) -> Result<()> {
-        let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
-        let _ = seq; // available for future ordering needs
-
         let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("hot cache mutex poisoned in 'store', recovering");
             poisoned.into_inner()

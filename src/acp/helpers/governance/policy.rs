@@ -4,14 +4,11 @@
 //! work grade decisions, optimization policies, and agent ranking.
 
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::config::PhaseOptions;
 use crate::orchestration::roles::role_registry_keywords_for;
 use crate::orchestration::task_router::TaskCharacteristics;
-use crate::reinforcement::{
-    recommend_reattach_modules_from_policy_history, ArtifactLedger, ExecutionDecisionCandidate,
-};
+use crate::reinforcement::ExecutionDecisionCandidate;
 
 // Helper functions from original acp/helpers module
 // These are defined in acp/helpers/misc.rs via include! macro
@@ -27,12 +24,6 @@ fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_str())
         .map(|v| v.to_string())
-}
-
-fn extra_bool(options: Option<&PhaseOptions>, key: &str) -> Option<bool> {
-    options
-        .and_then(|opts| opts.extra.get(key))
-        .and_then(|v| v.as_bool())
 }
 
 fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Vec<String>> {
@@ -252,209 +243,6 @@ pub fn decide_work_grade(
         decision_action,
         reasons,
         risk_score,
-    }
-}
-
-/// Optimization policy report
-#[derive(Debug, Clone, Serialize)]
-pub struct OptimizationPolicyReport {
-    /// Whether auto-attach is enabled
-    pub auto_attach: bool,
-    /// Whether auto-detach is enabled
-    pub auto_detach: bool,
-    /// Whether runtime is healthy
-    pub runtime_healthy: bool,
-    /// Whether anomaly was detected
-    pub anomaly_detected: bool,
-    /// Requested optimization modules
-    pub requested_modules: Vec<String>,
-    /// Attached optimization modules
-    pub attached_modules: Vec<String>,
-    /// Detached optimization modules
-    pub detached_modules: Vec<String>,
-    /// Reattached optimization modules
-    pub reattached_modules: Vec<String>,
-    /// Reasons for reattachment
-    pub reattach_reasons: Vec<String>,
-    /// Reasons for detachment
-    pub detachment_reasons: Vec<String>,
-    /// Module impact descriptions
-    pub module_impacts: Vec<String>,
-    /// Recovery conditions
-    pub recovery_conditions: Vec<String>,
-    /// Recommendations
-    pub recommendations: Vec<String>,
-    /// Phase parallelism cap
-    pub phase_parallelism_cap: Option<usize>,
-    /// Whether to force fail-fast mode
-    pub force_fail_fast: bool,
-    /// Risk assessment data
-    pub risk_assessment: Value,
-    /// Resource budget data
-    pub resource_budget: Value,
-    /// Dynamic parameters data
-    pub dynamic_parameters: Value,
-    /// Reliability data
-    pub reliability: Value,
-    /// Speed data
-    pub speed: Value,
-    /// Cost data
-    pub cost: Value,
-    /// Anomaly detection data
-    pub anomaly: Value,
-}
-
-/// Optimization policy outcome
-#[derive(Debug, Clone)]
-pub struct OptimizationPolicyOutcome {
-    /// Policy report
-    pub report: OptimizationPolicyReport,
-    /// Phase parallelism cap
-    pub phase_parallelism_cap: Option<usize>,
-    /// Whether to force fail-fast mode
-    pub force_fail_fast: bool,
-}
-
-/// Check if module name is supported
-pub fn is_supported_optimization_module(name: &str) -> bool {
-    matches!(
-        name,
-        "workflow_optimizer"
-            | "adaptive_selector"
-            | "advanced_modules"
-            | "cost_optimizer"
-            | "speed_optimizer"
-            | "reliability_optimizer"
-            | "failure_prevention"
-    )
-}
-
-/// Evaluate optimization policy based on task characteristics and runtime state
-pub fn evaluate_optimization_policy(
-    ledger: &ArtifactLedger,
-    _task: &str,
-    _plan: &crate::reinforcement::TaskPlanArtifact,
-    options: Option<&PhaseOptions>,
-    runtime_healthy: bool,
-    is_workflow_execute: bool,
-) -> OptimizationPolicyOutcome {
-    let auto_attach = extra_bool(options, "auto_attach").unwrap_or(is_workflow_execute);
-    let auto_detach = extra_bool(options, "auto_detach").unwrap_or(is_workflow_execute);
-
-    let requested_modules = extra_string_list(options, "optimization_modules")
-        .map(|modules: Vec<String>| {
-            modules
-                .into_iter()
-                .map(|name: String| name.trim().to_ascii_lowercase())
-                .filter(|name: &String| is_supported_optimization_module(name))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let mut attached_modules = if auto_attach {
-        if requested_modules.is_empty() {
-            vec![
-                "workflow_optimizer".to_string(),
-                "advanced_modules".to_string(),
-                "reliability_optimizer".to_string(),
-                "failure_prevention".to_string(),
-                "speed_optimizer".to_string(),
-                "cost_optimizer".to_string(),
-                "adaptive_selector".to_string(),
-            ]
-        } else {
-            requested_modules.clone()
-        }
-    } else {
-        Vec::new()
-    };
-
-    attached_modules.sort();
-    attached_modules.dedup();
-
-    let mut detached_modules = Vec::new();
-    let mut reattached_modules = Vec::new();
-    let mut reattach_reasons = Vec::new();
-    let detachment_reasons = Vec::new();
-    let mut module_impacts = Vec::new();
-    let mut recovery_conditions = Vec::new();
-    let recommendations = Vec::new();
-    let phase_parallelism_cap = None;
-    let force_fail_fast = false;
-
-    let risk_assessment = Value::Null;
-    let resource_budget = Value::Null;
-    let dynamic_parameters = Value::Null;
-    let reliability = Value::Null;
-    let speed = Value::Null;
-    let cost = Value::Null;
-    let anomaly = Value::Null;
-    let anomaly_detected = false;
-
-    if auto_attach && auto_detach {
-        let recoverable = recommend_reattach_modules_from_policy_history(ledger, 2, 40);
-        for module in recoverable {
-            if is_supported_optimization_module(&module)
-                && !attached_modules.iter().any(|attached| attached == &module)
-            {
-                attached_modules.push(module.clone());
-                reattached_modules.push(module.clone());
-                reattach_reasons.push(format!(
-                    "reattached {} after policy history reported two consecutive healthy, anomaly-free executions",
-                    module
-                ));
-                module_impacts.push(format!(
-                    "{} reattached to restore optimization depth under healthy runtime conditions",
-                    module
-                ));
-            }
-        }
-    }
-
-    // Simplified implementation - in full version, this would call various optimizers
-    // For migration purposes, we keep the structure but simplify the implementation
-
-    detached_modules.sort();
-    detached_modules.dedup();
-    reattached_modules.sort();
-    reattached_modules.dedup();
-    reattach_reasons.sort();
-    reattach_reasons.dedup();
-    module_impacts.sort();
-    module_impacts.dedup();
-    recovery_conditions.sort();
-    recovery_conditions.dedup();
-    attached_modules.retain(|module| !detached_modules.iter().any(|detached| detached == module));
-
-    let report = OptimizationPolicyReport {
-        auto_attach,
-        auto_detach,
-        runtime_healthy,
-        anomaly_detected,
-        requested_modules,
-        attached_modules,
-        detached_modules,
-        reattached_modules,
-        reattach_reasons,
-        detachment_reasons,
-        module_impacts,
-        recovery_conditions,
-        recommendations,
-        phase_parallelism_cap,
-        force_fail_fast,
-        risk_assessment,
-        resource_budget,
-        dynamic_parameters,
-        reliability,
-        speed,
-        cost,
-        anomaly,
-    };
-
-    OptimizationPolicyOutcome {
-        phase_parallelism_cap,
-        force_fail_fast,
-        report,
     }
 }
 
@@ -746,17 +534,6 @@ mod tests {
         assert_eq!(candidates.len(), 2);
     }
 
-    // ── is_supported_optimization_module ───────────────────────────────
-
-    #[test]
-    fn test_is_supported_optimization_module() {
-        assert!(is_supported_optimization_module("workflow_optimizer"));
-        assert!(is_supported_optimization_module("adaptive_selector"));
-        assert!(is_supported_optimization_module("cost_optimizer"));
-        assert!(is_supported_optimization_module("failure_prevention"));
-        assert!(!is_supported_optimization_module("unknown_module"));
-    }
-
     // ── resolve_review_policy: edge cases ─────────────────────────────
 
     #[test]
@@ -792,40 +569,6 @@ mod tests {
         let plan = make_task_plan(1, false, false, 0.95);
         let decision = decide_work_grade(Some("edit"), &plan, false, true, false);
         assert_eq!(decision.decided, WorkGrade::Edit);
-    }
-
-    // ── OptimizationPolicy tests ───────────────────────────────────────
-
-    #[test]
-    fn test_is_supported_optimization_module_batch() {
-        let supported = [
-            "workflow_optimizer",
-            "adaptive_selector",
-            "cost_optimizer",
-            "failure_prevention",
-        ];
-        for name in &supported {
-            assert!(
-                is_supported_optimization_module(name),
-                "{} should be supported",
-                name
-            );
-        }
-    }
-
-    // ── evaluate_optimization_policy ───────────────────────────────────
-
-    #[test]
-    fn test_evaluate_optimization_policy_returns_report() {
-        let plan = make_task_plan(2, false, false, 0.9);
-        let ledger = crate::reinforcement::ArtifactLedger::new(None);
-        let outcome = evaluate_optimization_policy(&ledger, "test task", &plan, None, true, false);
-        assert!(!outcome.force_fail_fast);
-        // Simplified implementation returns None for phase_parallelism_cap
-        assert!(
-            outcome.phase_parallelism_cap.is_none()
-                || outcome.phase_parallelism_cap.unwrap_or(0) >= 1
-        );
     }
 
     #[test]

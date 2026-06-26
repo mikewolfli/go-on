@@ -275,7 +275,6 @@ impl Tool for IgesReadTool {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "iges-test".to_string(),

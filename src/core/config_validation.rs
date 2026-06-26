@@ -416,8 +416,6 @@ pub struct DependencyAnalysis {
     pub required_keyring_entries: HashSet<String>,
     /// External service dependencies
     pub external_dependencies: HashSet<String>,
-    /// Internal module dependencies
-    pub internal_dependencies: HashSet<String>,
     /// Configuration dependencies
     pub config_dependencies: HashMap<String, Vec<String>>,
 }

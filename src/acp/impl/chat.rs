@@ -40,7 +40,9 @@ use crate::i18n::runtime::{t, tf};
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
 
 use crate::orchestration::task_router::{TaskRouter, TaskType};
-use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
+use crate::orchestration::tool::{
+    execute_loop_async, LoopConfig, LoopDecision, ToolInput, ToolRegistry,
+};
 
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
 use crate::reinforcement::{
@@ -1091,13 +1093,14 @@ pub(crate) async fn run_full_auto_execution(
 
         if should_run_tao {
             let tao_config = LoopConfig::default();
-            let (tao_decision, tao_trace) = execute_loop(
+            let (tao_decision, tao_trace) = execute_loop_async(
                 &task_description,
                 &tool_registry,
                 &tool_input,
                 &preferred_tools,
                 &tao_config,
-            );
+            )
+            .await;
 
             let tool_result = match &tao_decision {
                 LoopDecision::Complete(output) => {

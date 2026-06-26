@@ -13,9 +13,8 @@ use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig}
 use crate::orchestration::core_dag::TaskContext;
 
 use super::{
-    now_epoch_ms, read_guard, tf, write_guard, BrainLoop, BrainLoopInner, BrainLoopPhase,
-    BrainLoopPlan, BrainLoopProfile, BrainLoopReflection, BrainLoopStep, DeepReasoningEngine,
-    PlannerHint, StepStatus,
+    now_epoch_ms, tf, BrainLoop, BrainLoopInner, BrainLoopPhase, BrainLoopPlan, BrainLoopProfile,
+    BrainLoopReflection, BrainLoopStep, DeepReasoningEngine, PlannerHint, StepStatus,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,7 +123,7 @@ impl BrainLoop {
         improvements: Vec<String>,
     ) -> anyhow::Result<BrainLoopReflection> {
         let now = now_epoch_ms();
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
 
         // Compute reflection inside a scope so the mutable plan borrow is
         // dropped before we push to `inner.reflections`.
@@ -212,7 +211,7 @@ impl BrainLoop {
     /// When TaskContexts exist on completed steps, they are merged and
     /// assigned to new steps for reasoning chain continuity.
     pub async fn replan(&self, plan_id: &str, new_steps: Vec<BrainLoopStep>) -> anyhow::Result<()> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
 
         let plan = inner
             .plans
@@ -268,7 +267,7 @@ impl BrainLoop {
 impl BrainLoop {
     /// Mark a plan as completed.
     pub async fn complete_plan(&self, plan_id: &str) -> anyhow::Result<()> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let plan = inner
             .plans
             .get_mut(plan_id)
@@ -291,7 +290,7 @@ impl BrainLoop {
 
     /// Mark a plan as failed with a reason.
     pub async fn fail_plan(&self, plan_id: &str, reason: &str) -> anyhow::Result<()> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let plan = inner
             .plans
             .get_mut(plan_id)
@@ -315,7 +314,7 @@ impl BrainLoop {
 
     /// Cancel a plan.
     pub async fn cancel_plan(&self, plan_id: &str) -> anyhow::Result<()> {
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         let plan = inner
             .plans
             .get_mut(plan_id)
@@ -344,7 +343,8 @@ impl BrainLoop {
 impl BrainLoop {
     /// The current phase of a plan.
     pub async fn current_phase(&self, plan_id: &str) -> anyhow::Result<BrainLoopPhase> {
-        read_guard(&self.inner)
+        self.inner
+            .read()
             .await
             .plans
             .get(plan_id)
@@ -354,7 +354,7 @@ impl BrainLoop {
 
     /// Return a snapshot of runtime metrics.
     pub async fn profile(&self) -> BrainLoopProfile {
-        let inner = read_guard(&self.inner).await;
+        let inner = self.inner.read().await;
         let total_plans = inner.total_plans_started;
         let active_plans = inner
             .plans
@@ -437,7 +437,7 @@ impl BrainLoop {
     /// directory is configured (silent no-op).
     pub async fn persist_plan(&self, plan_id: &str) -> anyhow::Result<()> {
         let (plan, dir) = {
-            let inner = read_guard(&self.inner).await;
+            let inner = self.inner.read().await;
             let plan = inner
                 .plans
                 .get(plan_id)
@@ -471,7 +471,7 @@ impl BrainLoop {
     /// Returns `None` if no directory is configured or the file does not exist.
     pub async fn load_plan(&self, plan_id: &str) -> Option<BrainLoopPlan> {
         let dir = {
-            let inner = read_guard(&self.inner).await;
+            let inner = self.inner.read().await;
             inner.config.plans_directory.clone()
         };
 
@@ -511,7 +511,7 @@ impl BrainLoop {
     /// `world_model_data` field.
     pub async fn query_world_model(&self, plan_id: &str) {
         let world_model_enabled = {
-            let inner = read_guard(&self.inner).await;
+            let inner = self.inner.read().await;
             inner.config.world_model_integration
         };
 
@@ -524,7 +524,7 @@ impl BrainLoop {
 
         // Register the current plan goal as a tracked entity.
         let goal = {
-            let inner = read_guard(&self.inner).await;
+            let inner = self.inner.read().await;
             inner
                 .plans
                 .get(plan_id)
@@ -564,7 +564,7 @@ impl BrainLoop {
             Value::Number(serde_json::Number::from(now_epoch_ms())),
         );
 
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
         if let Some(plan) = inner.plans.get_mut(plan_id) {
             plan.world_model_data = Some(data);
         }
@@ -587,7 +587,7 @@ impl BrainLoop {
         // lock to avoid a lock ordering inversion (sync Mutex inside async
         // RwLock).
         let mc = {
-            let inner = read_guard(&self.inner).await;
+            let inner = self.inner.read().await;
             inner.metacognitive.clone()
         };
 
@@ -646,7 +646,7 @@ impl BrainLoop {
 
         // Write hints into inner state.
         if !hints.is_empty() {
-            let mut inner = write_guard(&self.inner).await;
+            let mut inner = self.inner.write().await;
             inner.planner_hints.extend(hints);
         }
     }
@@ -673,7 +673,7 @@ impl BrainLoop {
 
         // ── Check deep-reasoning configuration ────────────────────────
         let (enable_deep, engine, world_model_int) = {
-            let inner = read_guard(&self.inner).await;
+            let inner = self.inner.read().await;
             let mut engine = DeepReasoningEngine::new(&inner.config);
             if let Some(ref registry) = inner.agent_registry {
                 engine = engine.with_agent_registry(std::sync::Arc::clone(registry));
@@ -700,7 +700,7 @@ impl BrainLoop {
             let enriched = engine.plan_with_reasoning(&context, &plan).await;
             // Write back reasoning and world model data to the plan.
             {
-                let mut inner = write_guard(&self.inner).await;
+                let mut inner = self.inner.write().await;
                 if let Some(p) = inner.plans.get_mut(&plan_id) {
                     p.reasoning = enriched.reasoning;
                     p.world_model_data = enriched.world_model_data;
@@ -717,7 +717,7 @@ impl BrainLoop {
         loop {
             // Collect pending step ids under a read lock.
             let pending: Vec<String> = {
-                let inner = read_guard(&self.inner).await;
+                let inner = self.inner.read().await;
                 inner
                     .plans
                     .get(&plan_id)
@@ -760,7 +760,7 @@ impl BrainLoop {
                     let err_msg = e.to_string();
                     let error_type = super::extract_error_type(&err_msg);
                     {
-                        let mut inner = write_guard(&self.inner).await;
+                        let mut inner = self.inner.write().await;
                         *inner.error_counts.entry(error_type.clone()).or_insert(0) += 1;
                         let count = inner.error_counts[&error_type];
                         if count >= 3 && count % 3 == 0 {
@@ -789,7 +789,7 @@ impl BrainLoop {
                     // Use deep-reasoning reflection.
                     let plan = self.get_plan(&plan_id).await?;
                     let history = {
-                        let inner = read_guard(&self.inner).await;
+                        let inner = self.inner.read().await;
                         inner.reflections.clone()
                     };
                     let deep_reflection = engine
@@ -820,7 +820,7 @@ impl BrainLoop {
 
             // Auto-replan if configured and within iteration limits.
             let should_continue = {
-                let inner = read_guard(&self.inner).await;
+                let inner = self.inner.read().await;
                 let config = &inner.config;
                 config.auto_replan
                     && inner
@@ -834,7 +834,7 @@ impl BrainLoop {
                 if enable_deep {
                     // Use deep-reasoning replanning based on reflection content.
                     let reflections = {
-                        let inner = read_guard(&self.inner).await;
+                        let inner = self.inner.read().await;
                         inner.reflections.clone()
                     };
                     if let Some(latest_reflection) = reflections.last() {
@@ -847,7 +847,7 @@ impl BrainLoop {
                             // advances (the deep-reasoning branch skips the normal
                             // execute_step path that normally increments it).
                             {
-                                let mut inner = write_guard(&self.inner).await;
+                                let mut inner = self.inner.write().await;
                                 if let Some(p) = inner.plans.get_mut(&plan_id) {
                                     p.current_iteration = p.current_iteration.saturating_add(1);
                                 }

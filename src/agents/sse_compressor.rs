@@ -112,10 +112,6 @@ impl SseDecompressor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Deprecated aliases for backward compatibility
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;

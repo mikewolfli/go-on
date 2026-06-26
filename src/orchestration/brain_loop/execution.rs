@@ -2,9 +2,7 @@
 //!
 //! ⚠️ **DEPRECATED** (non-test): Use cognitive loop in chat_phases.rs instead.
 
-use super::{
-    now_epoch_ms, read_guard, tf, write_guard, BrainLoop, BrainLoopPhase, StepStatus, TaskContext,
-};
+use super::{now_epoch_ms, tf, BrainLoop, BrainLoopPhase, StepStatus, TaskContext};
 
 // ---------------------------------------------------------------------------
 // Execution (async)
@@ -23,7 +21,7 @@ impl BrainLoop {
         output: &str,
     ) -> anyhow::Result<()> {
         let now = now_epoch_ms();
-        let mut inner = write_guard(&self.inner).await;
+        let mut inner = self.inner.write().await;
 
         // Phase 1: validate and check iteration limit.
         let plan_failed = {
@@ -135,7 +133,7 @@ impl BrainLoop {
     ) -> anyhow::Result<TaskContext> {
         // First, attach the context to the step.
         {
-            let mut inner = write_guard(&self.inner).await;
+            let mut inner = self.inner.write().await;
             let plan = inner.plans.get_mut(plan_id).ok_or_else(|| {
                 anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)]))
             })?;
@@ -159,7 +157,7 @@ impl BrainLoop {
         self.execute_step(plan_id, step_id, output).await?;
 
         // Retrieve the step's updated context to return.
-        let inner = read_guard(&self.inner).await;
+        let inner = self.inner.read().await;
         let plan = inner
             .plans
             .get(plan_id)

@@ -254,7 +254,6 @@ impl Tool for GeoUtilTool {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "geo-test".to_string(),

@@ -868,8 +868,6 @@ impl PolicyEvaluator {
 
     /// Resolve a raw response string into a governance-level review verdict.
     fn resolve_review_policy(response: &str, min_response_chars: usize) -> ReviewVerdict {
-        let verdict = review_verdict(response, min_response_chars);
-        let _ = verdict.as_str();
-        verdict
+        review_verdict(response, min_response_chars)
     }
 }

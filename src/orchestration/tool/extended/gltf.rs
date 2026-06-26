@@ -189,7 +189,6 @@ impl Tool for GltfReadTool {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
     fn test_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "gltf-test".to_string(),

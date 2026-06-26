@@ -37,7 +37,6 @@ pub struct ResolvedPhase {
 }
 
 /// Resolved routing information
-#[allow(missing_debug_implementations)]
 pub struct ResolvedRouting {
     /// Resolved phase information
     pub phase: ResolvedPhase,

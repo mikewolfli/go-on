@@ -64,20 +64,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
-// RwLock guard helpers
-// ---------------------------------------------------------------------------
-
-/// Acquire a read guard on the inner RwLock.
-pub(crate) async fn read_guard<T>(rw: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
-    rw.read().await
-}
-
-/// Acquire a write guard on the inner RwLock.
-pub(crate) async fn write_guard<T>(rw: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
-    rw.write().await
-}
-
-// ---------------------------------------------------------------------------
 // Public data types
 // ---------------------------------------------------------------------------
 
@@ -1251,7 +1237,7 @@ mod tests {
 
         // Manually set reasoning on the plan.
         {
-            let mut inner = write_guard(&bl.inner).await;
+            let mut inner = bl.inner.write().await;
             if let Some(p) = inner.plans.get_mut(&plan_id) {
                 p.reasoning = Some("manual reasoning chain".to_string());
                 let mut wm = HashMap::new();

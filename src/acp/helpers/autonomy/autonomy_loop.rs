@@ -26,7 +26,7 @@ use crate::orchestration::audit::{AuditEntry, AuditTrail};
 use crate::orchestration::planner_executor::{DagMetrics, Planner};
 use crate::orchestration::recovery::RecoveryOrchestrator;
 use crate::orchestration::tool::{
-    execute_loop, LoopConfig, LoopDecision, ToolInput, ToolOutput, ToolRegistry,
+    execute_loop_async, LoopConfig, LoopDecision, ToolInput, ToolOutput, ToolRegistry,
 };
 
 /// Global store for the latest DAG metrics computed during planning.
@@ -857,13 +857,14 @@ pub async fn run_autonomy_loop(
                                     verify_output: None,
                                 };
 
-                                let (decision, _trace) = execute_loop(
+                                let (decision, _trace) = execute_loop_async(
                                     &tool_name,
                                     &registry,
                                     &tool_input,
                                     &[],
                                     &loop_cfg,
-                                );
+                                )
+                                .await;
                                 (tool_name, decision)
                             })
                         })

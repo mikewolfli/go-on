@@ -622,7 +622,6 @@ mod tests {
     use super::*;
     use crate::orchestration::tool::{Tool, ToolInput};
 
-    #[allow(dead_code)]
     fn tool_input(payload: serde_json::Value) -> ToolInput {
         ToolInput {
             task_id: "test-stl".to_string(),
