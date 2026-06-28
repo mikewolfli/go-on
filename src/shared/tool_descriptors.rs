@@ -391,6 +391,38 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["skill_name"]
             })),
         },
+        "skill_create" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Create a new reusable skill from a prompt template. ".to_string()
+                    + "The skill is immediately registered and available via skill_execute.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name (alphanumeric + hyphens)"},
+                    "description": {"type": "string", "description": "Human-readable description"},
+                    "prompt_template": {"type": "string", "description": "Prompt template for the skill (may include {{input}} placeholder)"},
+                    "input_schema": {"type": "object", "description": "Optional JSON schema for skill input parameters"}
+                },
+                "required": ["name", "description", "prompt_template"]
+            })),
+        },
+        "skill_reload" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Immediately reload skills from the local skills directory. ".to_string()
+                    + "Scans ~/.agents/skills/ for new or changed SKILL.md files and registers them. "
+                    + "Returns counts of new, skipped, and errored skills.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Optional custom skills directory (default: ~/.agents/skills/)"}
+                },
+                "required": []
+            })),
+        },
         "skill_list" => McpTool {
             name: name.to_string(),
             description: Some(
@@ -555,6 +587,23 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("skill_execute requires arguments.skill_name"))?;
         }
+        "skill_create" => {
+            tool_input
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("skill_create requires arguments.name"))?;
+            tool_input
+                .get("description")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("skill_create requires arguments.description"))?;
+            tool_input
+                .get("prompt_template")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("skill_create requires arguments.prompt_template")
+                })?;
+        }
+        "skill_reload" => {}
         "workflow_execute" | "workflow_ask" | "workflow_generate" => {}
         _ => {}
     }

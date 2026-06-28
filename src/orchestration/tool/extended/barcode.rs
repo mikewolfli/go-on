@@ -27,13 +27,11 @@ impl Tool for QrCodeTool {
         let module_size = input.payload["module_size"]
             .as_u64()
             .unwrap_or(10)
-            .max(1)
-            .min(100) as u32;
+            .clamp(1, 100) as u32;
         let quiet_zone = input.payload["quiet_zone"]
             .as_u64()
             .unwrap_or(4)
-            .max(0)
-            .min(20) as u32;
+            .clamp(0, 20) as u32;
 
         info!(text_len = text.len(), module_size, "generating QR code");
 
@@ -159,14 +157,11 @@ fn encode_data(data: &[u8], version: usize) -> Result<Vec<u8>> {
 
     // Terminator: up to 4 zero bits
     let terminator_len = 4.min(data_codewords * 8 - bits.len());
-    for _ in 0..terminator_len {
-        bits.push(false);
-    }
+    bits.resize(bits.len() + terminator_len, false);
 
     // Pad to byte boundary
-    while bits.len() % 8 != 0 {
-        bits.push(false);
-    }
+    let pad_to_byte = (8 - bits.len() % 8) % 8;
+    bits.resize(bits.len() + pad_to_byte, false);
 
     // Pad with alternating bytes (0xEC, 0x11) to fill data codewords
     let pad_bytes = [0xEC, 0x11];
@@ -294,7 +289,7 @@ fn place_finder_at(modules: &mut [Vec<bool>], _size: usize, x: usize, y: usize) 
                 || row == 6
                 || col == 0
                 || col == 6
-                || (row >= 2 && row <= 4 && col >= 2 && col <= 4);
+                || ((2..=4).contains(&row) && (2..=4).contains(&col));
             if y + row < modules.len() && x + col < modules[y + row].len() {
                 modules[y + row][x + col] = is_black;
             }
@@ -323,24 +318,19 @@ fn place_finder_at(modules: &mut [Vec<bool>], _size: usize, x: usize, y: usize) 
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn place_timing_patterns(modules: &mut [Vec<bool>], size: usize) {
     // Horizontal timing pattern (row 6)
-    for col in 0..size {
-        // Skip finder pattern areas
-        if col < 8 || col >= size - 8 {
-            continue;
-        }
+    for col in 8..size - 8 {
         modules[6][col] = col % 2 == 0;
     }
     // Vertical timing pattern (col 6)
-    for row in 0..size {
-        if row < 8 || row >= size - 8 {
-            continue;
-        }
+    for row in 8..size - 8 {
         modules[row][6] = row % 2 == 0;
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn place_data(modules: &mut [Vec<bool>], bits: &[bool], version: usize) {
     let size = qr_module_count(version);
     let mut bit_idx = 0;
@@ -372,21 +362,17 @@ fn place_data(modules: &mut [Vec<bool>], bits: &[bool], version: usize) {
                         break;
                     }
                     row -= 1;
-                    if !is_reserved(row, cx, size) {
-                        if bit_idx < bits.len() {
-                            modules[row][cx] = bits[bit_idx];
-                            bit_idx += 1;
-                        }
+                    if !is_reserved(row, cx, size) && bit_idx < bits.len() {
+                        modules[row][cx] = bits[bit_idx];
+                        bit_idx += 1;
                     }
                 }
             } else {
                 // Downward column
                 for row in 0..size {
-                    if !is_reserved(row, cx, size) {
-                        if bit_idx < bits.len() {
-                            modules[row][cx] = bits[bit_idx];
-                            bit_idx += 1;
-                        }
+                    if !is_reserved(row, cx, size) && bit_idx < bits.len() {
+                        modules[row][cx] = bits[bit_idx];
+                        bit_idx += 1;
                     }
                 }
             }
@@ -397,7 +383,7 @@ fn place_data(modules: &mut [Vec<bool>], bits: &[bool], version: usize) {
 /// Check if a module position is reserved (finder patterns, timing, etc.)
 fn is_reserved(row: usize, col: usize, size: usize) -> bool {
     // Finder patterns (7x7 at corners)
-    if (row < 8 && col < 8) || (row < 8 && col >= size - 8) || (row >= size - 8 && col < 8) {
+    if row < 8 && (col < 8 || col >= size - 8) || row >= size - 8 && col < 8 {
         return true;
     }
     // Timing patterns (row 6, col 6)
@@ -409,6 +395,7 @@ fn is_reserved(row: usize, col: usize, size: usize) -> bool {
 
 // ── Mask pattern ──────────────────────────────────────────────────────────────
 
+#[allow(clippy::needless_range_loop)]
 fn apply_mask(modules: &mut [Vec<bool>], version: usize, mask_id: usize) {
     let size = qr_module_count(version);
     for row in 0..size {
@@ -436,6 +423,7 @@ fn apply_mask(modules: &mut [Vec<bool>], version: usize, mask_id: usize) {
 
 // ── Format information ────────────────────────────────────────────────────────
 
+#[allow(clippy::needless_range_loop)]
 fn place_format_info(modules: &mut [Vec<bool>], version: usize, _mask_id: usize) {
     let size = qr_module_count(version);
     // Format info bits for ECC level M with given mask (simplified)

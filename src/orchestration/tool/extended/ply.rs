@@ -244,19 +244,6 @@ impl Tool for PlyReadTool {
 mod tests {
     use super::*;
 
-    fn test_input(payload: serde_json::Value) -> ToolInput {
-        ToolInput {
-            task_id: "ply-test".to_string(),
-            phase: "act".to_string(),
-            agent_role: "coder".to_string(),
-            objective: "test".to_string(),
-            constraints: None,
-            evidence: None,
-            payload,
-            allowed_base_dir: None,
-        }
-    }
-
     #[test]
     fn parse_ascii_ply_cube() {
         let ply = r#"ply

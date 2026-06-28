@@ -620,20 +620,6 @@ impl Tool for StlGenerateTool {
 #[cfg(feature = "cad-stl")]
 mod tests {
     use super::*;
-    use crate::orchestration::tool::{Tool, ToolInput};
-
-    fn tool_input(payload: serde_json::Value) -> ToolInput {
-        ToolInput {
-            task_id: "test-stl".to_string(),
-            phase: "act".to_string(),
-            agent_role: "coder".to_string(),
-            objective: "test".to_string(),
-            constraints: None,
-            evidence: None,
-            payload,
-            allowed_base_dir: None,
-        }
-    }
 
     #[test]
     fn parse_ascii_cube() {

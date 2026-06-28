@@ -189,19 +189,6 @@ impl Tool for GltfReadTool {
 mod tests {
     use super::*;
 
-    fn test_input(payload: serde_json::Value) -> ToolInput {
-        ToolInput {
-            task_id: "gltf-test".to_string(),
-            phase: "act".to_string(),
-            agent_role: "coder".to_string(),
-            objective: "test".to_string(),
-            constraints: None,
-            evidence: None,
-            payload,
-            allowed_base_dir: None,
-        }
-    }
-
     #[test]
     fn parse_minimal_gltf() {
         let gltf = r#"{

@@ -1139,16 +1139,4 @@ mod tests {
         );
         assert_eq!(bus.find_by_key("d").len(), 1);
     }
-
-    // ------------------------------------------------------------------
-    // Transport tests
-    // ------------------------------------------------------------------
-
-    #[cfg(feature = "multi-users-server")]
-    fn make_bus_with_peers(max: usize) -> DistributedMemoryBus {
-        let bus = DistributedMemoryBus::new(max);
-        bus.register_peer("peer-alpha", "10.0.0.1:9001");
-        bus.register_peer("peer-beta", "10.0.0.2:9002");
-        bus
-    }
 }

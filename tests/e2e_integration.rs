@@ -54,22 +54,41 @@ impl E2eHarness {
 
         // Determine project root by walking up from the binary path until
         // we find the Cargo.toml that belongs to this workspace.
-        // `CARGO_BIN_EXE_go-on` points to `<project>/target/debug/go-on`.
         let mut project_root = binary_path();
-        // Pop the file name first (go-on), then walk up.
         project_root.pop();
         loop {
             if project_root.join("Cargo.toml").exists() {
                 break;
             }
             if !project_root.pop() {
-                // Fallback: use CWD.
                 project_root = std::env::current_dir().unwrap_or_default();
                 break;
             }
         }
 
-        let config_path = project_root.join("config").join("config.toml");
+        // Write a minimal test config with synthetic providers (no network deps).
+        let tmp_dir = std::env::temp_dir().join(format!("go-on-e2e-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let config_path = tmp_dir.join("config.toml");
+        let test_config = r#"
+default_phase = "coding"
+
+[flow]
+name = "E2E Test Flow"
+phases = ["coding"]
+
+[runtime]
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 5
+governance_enabled = true
+
+[phases.coding]
+description = "Coding phase for e2e tests"
+agents = []
+fallback = true
+"#;
+        std::fs::write(&config_path, test_config).expect("failed to write e2e test config");
 
         let mut child = Command::new(binary_path())
             .current_dir(&project_root)
