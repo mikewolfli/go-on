@@ -63,6 +63,12 @@ pub struct ChatView {
     show_thinking_idx: Option<usize>,
     // Global "Show/Hide All Thinking" toggle
     pub show_all_thinking: bool,
+    // Sub-agent panels
+    pub show_all_sub_agents: bool,
+    pub show_sub_agent_idx: Option<usize>,
+    // Command panels
+    pub show_all_commands: bool,
+    pub show_command_idx: Option<usize>,
     // Message edit
     edit_msg_idx: Option<usize>,
     edit_msg_buf: String,
@@ -452,6 +458,10 @@ impl ChatView {
             rename_session_buf: String::new(),
             show_thinking_idx: None,
             show_all_thinking: false,
+            show_all_sub_agents: false,
+            show_sub_agent_idx: None,
+            show_all_commands: false,
+            show_command_idx: None,
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             // Feature 4
@@ -1027,6 +1037,10 @@ mod tests {
             rename_session_buf: String::new(),
             show_thinking_idx: None,
             show_all_thinking: false,
+            show_all_sub_agents: false,
+            show_sub_agent_idx: None,
+            show_all_commands: false,
+            show_command_idx: None,
             edit_msg_idx: None,
             edit_msg_buf: String::new(),
             stop_requested: false,

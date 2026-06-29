@@ -917,17 +917,23 @@ export class GoOnManager {
 
         buffer += decoder.decode(value as Uint8Array, { stream: true });
 
-        // Use parseSseChunk to extract data payloads from the SSE stream
-        const events = parseSseChunk(buffer);
+        // Use parseSseChunk to extract structured SSE frames
+        const frames = parseSseChunk(buffer);
         buffer = ""; // Reset buffer as parseSseChunk consumed the text
 
-        for (const event of events) {
-          switch (event.type) {
-            case "token": {
-              const content = event.content as string | undefined;
-              if (content) {
-                fullContent += content;
-                callbacks?.onToken(content);
+        for (const frame of frames) {
+          const eventData = frame.data;
+          const eventType = frame.eventType || "";
+
+          switch (eventType) {
+            case "chunk": {
+              const token =
+                (eventData.token as string) ||
+                (eventData.content as string) ||
+                "";
+              if (token) {
+                fullContent += token;
+                callbacks?.onToken(token);
               }
               break;
             }
@@ -936,14 +942,35 @@ export class GoOnManager {
               return fullContent;
             case "error": {
               const err = new Error(
-                (event.message as string) || "Stream error",
+                (eventData.message as string) || "Stream error",
               );
               callbacks?.onError(err);
               throw err;
             }
+            case "sub_agent": {
+              console.log(
+                "[SSE] sub_agent:",
+                eventData.agent,
+                eventData.status,
+              );
+              break;
+            }
+            case "command": {
+              console.log(
+                "[SSE] command:",
+                eventData.command,
+                "exit=",
+                eventData.exit_code,
+              );
+              break;
+            }
             default: {
               // Unknown event type — handle delta-style content (OpenAI compat)
-              const content = event.content as string | undefined;
+              // For OpenAI-style data: lines without event:, try content field
+              const content =
+                (eventData.content as string) ||
+                (eventData.token as string) ||
+                "";
               if (content) {
                 fullContent += content;
                 callbacks?.onToken(content);

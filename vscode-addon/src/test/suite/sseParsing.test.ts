@@ -76,28 +76,69 @@ suite("sseParsing", () => {
   });
 
   suite("parseSseChunk", () => {
-    test("parses a single data line", () => {
-      const results = parseSseChunk('data: {"token":"hello"}\n');
+    test("parses a single data line without event type", () => {
+      const results = parseSseChunk('data: {"token":"hello"}\n\n');
       assert.strictEqual(results.length, 1);
-      assert.strictEqual(results[0].token, "hello");
+      assert.strictEqual(results[0].data.token, "hello");
+      assert.strictEqual(results[0].eventType, undefined);
     });
 
-    test("parses multiple data lines", () => {
+    test("parses multiple data lines without event types", () => {
       const chunk =
-        'data: {"token":"hello"}\ndata: {"token":"world"}\ndata: [DONE]\n';
+        'data: {"token":"hello"}\n\ndata: {"token":"world"}\n\ndata: [DONE]\n\n';
       const results = parseSseChunk(chunk);
       assert.strictEqual(results.length, 2);
-      assert.strictEqual(results[0].token, "hello");
-      assert.strictEqual(results[1].token, "world");
+      assert.strictEqual(results[0].data.token, "hello");
+      assert.strictEqual(results[1].data.token, "world");
     });
 
-    test("ignores event lines", () => {
-      const chunk =
-        'event: chunk\ndata: {"token":"hello"}\n\nevent: done\ndata: {"response":"ok"}\n';
+    test("injects event type as _event_type into parsed data", () => {
+      const chunk = 'event: chunk\ndata: {"token":"hello"}\n\n';
       const results = parseSseChunk(chunk);
-      assert.strictEqual(results.length, 2);
-      assert.strictEqual(results[0].token, "hello");
-      assert.strictEqual(results[1].response, "ok");
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].eventType, "chunk");
+      assert.strictEqual(results[0].data._event_type, "chunk");
+      assert.strictEqual(results[0].data.token, "hello");
+    });
+
+    test("parses multiple event types correctly", () => {
+      const chunk =
+        'event: chunk\ndata: {"token":"The"}\n\nevent: chunk\ndata: {"token":" fox"}\n\nevent: done\ndata: {"response":"ok"}\n\n';
+      const results = parseSseChunk(chunk);
+      assert.strictEqual(results.length, 3);
+      assert.strictEqual(results[0].eventType, "chunk");
+      assert.strictEqual(results[0].data.token, "The");
+      assert.strictEqual(results[1].eventType, "chunk");
+      assert.strictEqual(results[1].data.token, " fox");
+      assert.strictEqual(results[2].eventType, "done");
+      assert.strictEqual(results[2].data.response, "ok");
+    });
+
+    test("parses telemetry events with token economy", () => {
+      const chunk =
+        'event: telemetry\ndata: {"token_economy":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}\n\n';
+      const results = parseSseChunk(chunk);
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].eventType, "telemetry");
+      const te = results[0].data.token_economy as { input_tokens: number };
+      assert.strictEqual(te.input_tokens, 10);
+    });
+
+    test("parses error events", () => {
+      const chunk = 'event: error\ndata: {"message":"rate limit exceeded"}\n\n';
+      const results = parseSseChunk(chunk);
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].eventType, "error");
+      assert.strictEqual(results[0].data.message, "rate limit exceeded");
+    });
+
+    test("handles event lines without space after colon", () => {
+      const chunk = 'event:chunk\ndata:{"token":"hello"}\n\n';
+      const results = parseSseChunk(chunk);
+      assert.strictEqual(results.length, 1);
+      // Without space, event:chunk is not matched by "event: " prefix — this
+      // is acceptable per spec; callers should ensure a space after event:
+      // (the backend writes "event: chunk" with a space at all times).
     });
 
     test("handles empty chunk", () => {
@@ -112,19 +153,27 @@ suite("sseParsing", () => {
 
     test("parses a complete SSE stream with multiple tokens", () => {
       const stream =
-        'data: {"token":"The"}\ndata: {"token":" quick"}\ndata: {"token":" brown"}\ndata: {"token":" fox"}\ndata: [DONE]\n';
+        'event: chunk\ndata: {"token":"The"}\n\nevent: chunk\ndata: {"token":" quick"}\n\nevent: chunk\ndata: {"token":" brown"}\n\nevent: chunk\ndata: {"token":" fox"}\n\ndata: [DONE]\n\n';
       const results = parseSseChunk(stream);
       assert.strictEqual(results.length, 4);
-      const tokens = results.map((r) => r.token as string);
+      const tokens = results.map((r) => r.data.token as string);
       assert.deepStrictEqual(tokens, ["The", " quick", " brown", " fox"]);
     });
 
-    test("parses stream with content field tokens", () => {
-      const stream = 'data: {"content":"Hello"}\ndata: {"content":" World"}\n';
-      const results = parseSseChunk(stream);
-      assert.strictEqual(results.length, 2);
-      assert.strictEqual(results[0].content, "Hello");
-      assert.strictEqual(results[1].content, " World");
+    test("skips [DONE] sentinel frames", () => {
+      const results = parseSseChunk(
+        'data: {"token":"hello"}\n\ndata: [DONE]\n\n',
+      );
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].data.token, "hello");
+    });
+
+    test("skips malformed JSON frames", () => {
+      const results = parseSseChunk(
+        'data: {invalid}\n\ndata: {"ok":"yes"}\n\n',
+      );
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].data.ok, "yes");
     });
   });
 

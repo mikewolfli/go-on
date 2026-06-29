@@ -57,9 +57,9 @@ jobs:
     name: Validate skills
     runs-on: ubuntu-latest
     outputs:
-      valid_count: ${{ steps.collect.outputs.valid_count }}
-      total_count: ${{ steps.collect.outputs.total_count }}
-      index_json: ${{ steps.build-json.outputs.index_json }}
+      valid_count: ${{ steps.validate.outputs.valid }}
+      total_count: ${{ steps.check-dir.outputs.count }}
+      index_json: ${{ steps.build-index.outputs.index }}
     steps:
       - uses: actions/checkout@v4
 
@@ -209,9 +209,9 @@ jobs:
 
       - name: Create SQLite databases
         run: |
-          mkdir -p config
-          touch config/acp_cache.sqlite3
-          touch config/acp_vector.sqlite3
+          mkdir -p config/sqlite3
+          touch config/sqlite3/acp_cache.sqlite3
+          touch config/sqlite3/acp_vector.sqlite3
 
       - name: Test skill import via go-on CLI
         shell: bash

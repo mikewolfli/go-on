@@ -494,6 +494,9 @@ pub(crate) async fn act_phase(
         should_bypass_for_execution(&params.mode, &routing_out.agent_messages);
     let sched_task_id = trace.request_id.clone();
 
+    // Create intermediate file directory for this task
+    let _ = crate::orchestration::intermediate::create_task_intermediate_dir(&trace.request_id);
+
     // Scheduler
     observe_submit_to_scheduler(server, &resolve_out.resolved, &sched_task_id).await;
 

@@ -1026,6 +1026,52 @@ impl ChatView {
             }
         }
 
+        // ── Global sub-agent toggle ──
+        {
+            let msgs_ref = self.messages();
+            let has_sub = msgs_ref.iter().any(|m| !m.sub_agent_records.is_empty());
+            if has_sub {
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(
+                            self.show_all_sub_agents,
+                            format!("🤖 {}", "Show/Hide all sub-agents"),
+                        )
+                        .clicked()
+                    {
+                        self.show_all_sub_agents = !self.show_all_sub_agents;
+                        if !self.show_all_sub_agents {
+                            self.show_sub_agent_idx = None;
+                        }
+                    }
+                });
+                ui.add_space(2.0);
+            }
+        }
+
+        // ── Global command toggle ──
+        {
+            let msgs_ref = self.messages();
+            let has_cmd = msgs_ref.iter().any(|m| !m.command_records.is_empty());
+            if has_cmd {
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(
+                            self.show_all_commands,
+                            format!("⌨️ {}", "Show/Hide all commands"),
+                        )
+                        .clicked()
+                    {
+                        self.show_all_commands = !self.show_all_commands;
+                        if !self.show_all_commands {
+                            self.show_command_idx = None;
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+            }
+        }
+
         // Show ALL messages. Avoid full Vec clone — iterate by index directly.
         let dark_mode = ui.visuals().dark_mode;
         let mut last_ts: u64 = 0;
@@ -1060,6 +1106,8 @@ impl ChatView {
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     m.content.hash(&mut hasher);
                     m.thinking.hash(&mut hasher);
+                    m.sub_agent_records.len().hash(&mut hasher);
+                    m.command_records.len().hash(&mut hasher);
                     let current_hash = hasher.finish();
                     let prev_hash = self.rendered_content_hashes[msg_idx];
                     let is_last = last_assistant_idx == Some(msg_idx);
@@ -1085,7 +1133,16 @@ impl ChatView {
             }
 
             // Full render for changed or last message
-            let (is_user, timestamp, model_name, content_text, has_thinking, thinking_text) = {
+            let (
+                is_user,
+                timestamp,
+                model_name,
+                content_text,
+                has_thinking,
+                thinking_text,
+                sub_agent_records,
+                command_records,
+            ) = {
                 let msgs = self.messages();
                 if msg_idx >= msgs.len() {
                     continue;
@@ -1098,6 +1155,8 @@ impl ChatView {
                     m.content.clone(),
                     !m.thinking.is_empty() && m.role != "user",
                     m.thinking.clone(),
+                    m.sub_agent_records.clone(),
+                    m.command_records.clone(),
                 )
             };
             // ── Edit mode: show TextEdit instead of bubble ────────
@@ -1552,6 +1611,371 @@ impl ChatView {
                                         });
                                 }
                             }
+
+                        // ── Sub-agent records panel ──
+                        let has_sub_agents = !sub_agent_records.is_empty();
+                        if has_sub_agents {
+                            ui.add_space(6.0);
+
+                            let is_expanded = self.show_all_sub_agents
+                                || self.show_sub_agent_idx == Some(msg_idx);
+                            let toggle_icon = if is_expanded { "▼" } else { "▶" };
+                            let sub_count = sub_agent_records.len();
+
+                            let (bar_bg, bar_border, bar_text, accent) = if dark {
+                                (
+                                    egui::Color32::from_rgba_premultiplied(30, 70, 80, 50),
+                                    egui::Color32::from_rgba_premultiplied(60, 140, 160, 80),
+                                    egui::Color32::from_rgb(80, 200, 210),
+                                    egui::Color32::from_rgb(60, 190, 200),
+                                )
+                            } else {
+                                (
+                                    egui::Color32::from_rgba_premultiplied(220, 245, 255, 120),
+                                    egui::Color32::from_rgba_premultiplied(100, 180, 200, 100),
+                                    egui::Color32::from_rgb(0, 120, 150),
+                                    egui::Color32::from_rgb(0, 140, 170),
+                                )
+                            };
+
+                            // Header bar
+                            let header_id = ui.next_auto_id();
+                            let header_rect = {
+                                let mut header_frame = egui::Frame::new()
+                                    .fill(bar_bg)
+                                    .stroke(egui::Stroke::new(1.0, bar_border))
+                                    .corner_radius(6.0);
+                                if is_expanded {
+                                    header_frame = header_frame.corner_radius(egui::CornerRadius {
+                                        nw: 6, ne: 6, sw: 0, se: 0,
+                                    });
+                                }
+                                header_frame
+                                    .inner_margin(egui::Margin::symmetric(10i8, 6i8))
+                                    .show(ui, |ui| {
+                                        ui.set_min_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} 🤖  Sub-agents ({})",
+                                                    toggle_icon, sub_count
+                                                ))
+                                                .size(12.0)
+                                                .color(bar_text)
+                                                .strong(),
+                                            );
+                                        });
+                                    })
+                                    .response
+                                    .rect
+                            };
+
+                            let header_clicked = ui
+                                .interact(header_rect, header_id.with("sub_toggle"), egui::Sense::click())
+                                .clicked();
+
+                            if header_clicked {
+                                if self.show_all_sub_agents {
+                                    self.show_all_sub_agents = false;
+                                    self.show_sub_agent_idx = Some(msg_idx);
+                                } else if self.show_sub_agent_idx == Some(msg_idx) {
+                                    self.show_sub_agent_idx = None;
+                                } else {
+                                    self.show_sub_agent_idx = Some(msg_idx);
+                                }
+                            }
+
+                            // Expanded content
+                            if is_expanded {
+                                let content_bg = if dark {
+                                    egui::Color32::from_rgba_premultiplied(20, 60, 70, 40)
+                                } else {
+                                    egui::Color32::from_rgba_premultiplied(230, 248, 255, 180)
+                                };
+                                let content_border = if dark {
+                                    egui::Color32::from_rgba_premultiplied(60, 140, 160, 40)
+                                } else {
+                                    egui::Color32::from_rgba_premultiplied(100, 180, 200, 60)
+                                };
+                                egui::Frame::new()
+                                    .fill(content_bg)
+                                    .stroke(egui::Stroke::new(1.0, content_border))
+                                    .corner_radius(egui::CornerRadius { nw: 0, ne: 0, sw: 6, se: 6 })
+                                    .inner_margin(egui::Margin::symmetric(12i8, 10i8))
+                                    .show(ui, |ui| {
+                                        for (rec_idx, rec) in sub_agent_records.iter().enumerate() {
+                                            // Agent header with status badge
+                                            let status_color = match rec.status.as_str() {
+                                                "completed" => egui::Color32::from_rgb(80, 200, 80),
+                                                "failed" => egui::Color32::from_rgb(220, 60, 60),
+                                                _ => egui::Color32::from_rgb(220, 200, 60),
+                                            };
+                                            let status_icon = match rec.status.as_str() {
+                                                "completed" => "🟢",
+                                                "failed" => "🔴",
+                                                _ => "🟡",
+                                            };
+                                            let duration_str = if rec.duration_ms > 0 {
+                                                format!(" · {}ms", rec.duration_ms)
+                                            } else {
+                                                String::new()
+                                            };
+
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(format!(
+                                                    "{}. {} {}",
+                                                    rec_idx + 1,
+                                                    rec.agent_name,
+                                                    rec.action
+                                                )).size(11.0).color(bar_text).strong());
+                                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                    ui.label(egui::RichText::new(format!(
+                                                        "{} {}{}",
+                                                        status_icon, rec.status, duration_str
+                                                    )).size(10.0).color(status_color));
+                                                });
+                                            });
+
+                                            // Input text
+                                            if !rec.input.is_empty() {
+                                                ui.add_space(4.0);
+                                                ui.label(egui::RichText::new(format!(
+                                                    "Input: {}", rec.input
+                                                )).size(10.0).color(weak_text));
+                                            }
+
+                                            // Tool calls
+                                            if !rec.tool_calls.is_empty() {
+                                                ui.add_space(4.0);
+                                                ui.label(egui::RichText::new("Tool calls:").size(10.0).strong());
+                                                for (tc_idx, tc) in rec.tool_calls.iter().enumerate() {
+                                                    ui.add_space(2.0);
+                                                    egui::Frame::new()
+                                                        .fill(if dark {
+                                                            egui::Color32::from_rgba_premultiplied(40, 40, 50, 60)
+                                                        } else {
+                                                            egui::Color32::from_rgba_premultiplied(240, 240, 245, 180)
+                                                        })
+                                                        .corner_radius(4.0)
+                                                        .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                                        .show(ui, |ui| {
+                                                            ui.label(egui::RichText::new(format!(
+                                                                "{}· {} ({}ms)",
+                                                                tc_idx + 1, tc.tool_name, tc.duration_ms
+                                                            )).size(10.0).color(accent).strong());
+                                                            if !tc.arguments.is_empty() && tc.arguments != "{}" {
+                                                                ui.label(egui::RichText::new(format!(
+                                                                    "  args: {}", tc.arguments
+                                                                )).size(9.0).color(weak_text));
+                                                            }
+                                                            if !tc.result.is_empty() {
+                                                                let max_preview: String = tc.result.chars().take(200).collect();
+                                                                ui.label(egui::RichText::new(format!(
+                                                                    "  → {}", max_preview
+                                                                )).size(9.0).color(weak_text));
+                                                            }
+                                                        });
+                                                }
+                                            }
+
+                                            // Output text
+                                            if !rec.output.is_empty() {
+                                                ui.add_space(4.0);
+                                                let max_out: String = rec.output.chars().take(300).collect();
+                                                ui.label(egui::RichText::new(format!(
+                                                    "Output: {}", max_out
+                                                )).size(10.0).color(weak_text));
+                                            }
+
+                                            if rec_idx + 1 < sub_agent_records.len() {
+                                                ui.separator();
+                                            }
+                                        }
+                                    });
+                            }
+                        }
+
+                        // ── Command records panel ──
+                        let has_commands = !command_records.is_empty();
+                        if has_commands {
+                            ui.add_space(6.0);
+
+                            let is_expanded = self.show_all_commands
+                                || self.show_command_idx == Some(msg_idx);
+                            let toggle_icon = if is_expanded { "▼" } else { "▶" };
+                            let cmd_count = command_records.len();
+
+                            let (bar_bg, bar_border, bar_text, _accent) = if dark {
+                                (
+                                    egui::Color32::from_rgba_premultiplied(50, 40, 80, 50),
+                                    egui::Color32::from_rgba_premultiplied(120, 100, 180, 80),
+                                    egui::Color32::from_rgb(160, 140, 220),
+                                    egui::Color32::from_rgb(140, 120, 210),
+                                )
+                            } else {
+                                (
+                                    egui::Color32::from_rgba_premultiplied(240, 235, 255, 120),
+                                    egui::Color32::from_rgba_premultiplied(160, 140, 200, 100),
+                                    egui::Color32::from_rgb(80, 60, 150),
+                                    egui::Color32::from_rgb(90, 70, 160),
+                                )
+                            };
+
+                            // Header bar
+                            let header_id = ui.next_auto_id();
+                            let header_rect = {
+                                let mut header_frame = egui::Frame::new()
+                                    .fill(bar_bg)
+                                    .stroke(egui::Stroke::new(1.0, bar_border))
+                                    .corner_radius(6.0);
+                                if is_expanded {
+                                    header_frame = header_frame.corner_radius(egui::CornerRadius {
+                                        nw: 6, ne: 6, sw: 0, se: 0,
+                                    });
+                                }
+                                header_frame
+                                    .inner_margin(egui::Margin::symmetric(10i8, 6i8))
+                                    .show(ui, |ui| {
+                                        ui.set_min_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} ⌨️  Commands ({})",
+                                                    toggle_icon, cmd_count
+                                                ))
+                                                .size(12.0)
+                                                .color(bar_text)
+                                                .strong(),
+                                            );
+                                        });
+                                    })
+                                    .response
+                                    .rect
+                            };
+
+                            let header_clicked = ui
+                                .interact(header_rect, header_id.with("cmd_toggle"), egui::Sense::click())
+                                .clicked();
+
+                            if header_clicked {
+                                if self.show_all_commands {
+                                    self.show_all_commands = false;
+                                    self.show_command_idx = Some(msg_idx);
+                                } else if self.show_command_idx == Some(msg_idx) {
+                                    self.show_command_idx = None;
+                                } else {
+                                    self.show_command_idx = Some(msg_idx);
+                                }
+                            }
+
+                            // Expanded content
+                            if is_expanded {
+                                let content_bg = if dark {
+                                    egui::Color32::from_rgba_premultiplied(30, 25, 55, 40)
+                                } else {
+                                    egui::Color32::from_rgba_premultiplied(245, 240, 255, 180)
+                                };
+                                let content_border = if dark {
+                                    egui::Color32::from_rgba_premultiplied(120, 100, 180, 40)
+                                } else {
+                                    egui::Color32::from_rgba_premultiplied(160, 140, 200, 60)
+                                };
+                                egui::Frame::new()
+                                    .fill(content_bg)
+                                    .stroke(egui::Stroke::new(1.0, content_border))
+                                    .corner_radius(egui::CornerRadius { nw: 0, ne: 0, sw: 6, se: 6 })
+                                    .inner_margin(egui::Margin::symmetric(12i8, 10i8))
+                                    .show(ui, |ui| {
+                                        for (cmd_idx, cmd) in command_records.iter().enumerate() {
+                                            // Command line header
+                                            let exit_icon = if cmd.exit_code == 0 { "✅" } else { "❌" };
+                                            let exit_color = if cmd.exit_code == 0 {
+                                                egui::Color32::from_rgb(80, 200, 80)
+                                            } else {
+                                                egui::Color32::from_rgb(220, 60, 60)
+                                            };
+
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(format!(
+                                                    "{}  {}",
+                                                    exit_icon, cmd.command
+                                                )).size(11.0).color(bar_text).strong());
+                                            });
+
+                                            // Working directory
+                                            if !cmd.working_dir.is_empty() {
+                                                ui.label(egui::RichText::new(format!(
+                                                    "  dir: {}", cmd.working_dir
+                                                )).size(9.0).color(weak_text));
+                                            }
+
+                                            // Exit code + duration
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(format!(
+                                                    "Exit: {}  ·  {}ms",
+                                                    cmd.exit_code, cmd.duration_ms
+                                                )).size(10.0).color(exit_color));
+                                            });
+
+                                            // stdout (monospace)
+                                            if !cmd.stdout.is_empty() {
+                                                ui.add_space(2.0);
+                                                egui::Frame::new()
+                                                    .fill(if dark {
+                                                        egui::Color32::from_rgba_premultiplied(20, 20, 30, 80)
+                                                    } else {
+                                                        egui::Color32::from_rgba_premultiplied(230, 230, 240, 180)
+                                                    })
+                                                    .corner_radius(4.0)
+                                                    .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                                    .show(ui, |ui| {
+                                                        let max_stdout: String = cmd.stdout.chars().take(500).collect();
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "[stdout]\n{}", max_stdout
+                                                            ))
+                                                            .size(9.0)
+                                                            .family(egui::FontFamily::Monospace)
+                                                            .color(weak_text)
+                                                        );
+                                                    });
+                                            }
+
+                                            // stderr (monospace)
+                                            if !cmd.stderr.is_empty() {
+                                                ui.add_space(2.0);
+                                                egui::Frame::new()
+                                                    .fill(if dark {
+                                                        egui::Color32::from_rgba_premultiplied(50, 20, 20, 80)
+                                                    } else {
+                                                        egui::Color32::from_rgba_premultiplied(255, 235, 235, 180)
+                                                    })
+                                                    .corner_radius(4.0)
+                                                    .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                                    .show(ui, |ui| {
+                                                        let max_stderr: String = cmd.stderr.chars().take(500).collect();
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "[stderr]\n{}", max_stderr
+                                                            ))
+                                                            .size(9.0)
+                                                            .family(egui::FontFamily::Monospace)
+                                                            .color(if dark {
+                                                                egui::Color32::from_rgb(220, 120, 120)
+                                                            } else {
+                                                                egui::Color32::from_rgb(180, 60, 60)
+                                                            })
+                                                        );
+                                                    });
+                                            }
+
+                                            if cmd_idx + 1 < command_records.len() {
+                                                ui.separator();
+                                            }
+                                        }
+                                    });
+                            }
+                        }
                         });
                 });
             });

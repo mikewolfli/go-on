@@ -1,4 +1,5 @@
-#!/bin/bash
-which cargo > /tmp/cargo_path.txt 2>&1
-cargo --version >> /tmp/cargo_path.txt 2>&1
-cat /tmp/cargo_path.txt
+#!/usr/bin/env bash
+# Check cargo availability
+set -euo pipefail
+cargo --version 2>&1
+echo "---CHECK_DONE---"

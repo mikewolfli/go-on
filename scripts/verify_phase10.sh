@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Phase 10 功能验证脚本
 # 验证 BLUE3 中定义的 Phase 10 核心功能
@@ -122,27 +122,15 @@ else
     echo "      ❌ role_aware_assignment 参数缺失"
 fi
 
-# 5. 检查 spec 目录结构
-echo "5. 检查 spec 目录结构..."
+# 5. 检查 .goon 目录结构
+echo "5. 检查 .goon 目录结构..."
 if [ -d ".goon" ]; then
     echo "   ✅ .goon 目录存在"
-
-    if [ -d ".goon/spec" ]; then
-        echo "   ✅ .goon/spec 目录存在"
-    else
-        echo "   ⚠️  .goon/spec 目录不存在，正在创建..."
-        mkdir -p .goon/spec
-    fi
-
-    if [ -d ".goon/checkpoints" ]; then
-        CHECKPOINT_COUNT=$(ls -1 .goon/checkpoints/*.json 2>/dev/null | wc -l)
-        echo "   ✅ .goon/checkpoints 目录存在，包含 $CHECKPOINT_COUNT 个检查点"
-    else
-        echo "   ⚠️  .goon/checkpoints 目录不存在"
+    if [ -d ".goon/intermediates" ]; then
+        echo "   ✅ .goon/intermediates 目录存在（agent 中间文件存储）"
     fi
 else
-    echo "   ⚠️  .goon 目录不存在，正在创建..."
-    mkdir -p .goon/spec .goon/checkpoints
+    echo "   ⚠️  .goon 目录不存在，运行时会自动创建"
 fi
 
 # 6. 检查配置文件
@@ -162,28 +150,9 @@ else
     echo "   ❌ config/config.toml 缺失"
 fi
 
-# 7. 运行关键功能测试
-echo "7. 运行关键功能测试..."
-echo "   a) 运行任务分解测试..."
-if cargo test test_task_decomposition -- --nocapture 2>&1 | grep -q "test_task_decomposition ... ok"; then
-    echo "      ✅ 任务分解测试通过"
-else
-    echo "      ⚠️  任务分解测试未运行或失败"
-fi
-
-echo "   b) 运行任务路由测试..."
-if cargo test test_task_routing -- --nocapture 2>&1 | grep -q "test_task_routing ... ok"; then
-    echo "      ✅ 任务路由测试通过"
-else
-    echo "      ⚠️  任务路由测试未运行或失败"
-fi
-
-echo "   c) 运行工作流优化器测试..."
-if cargo test test_workflow_optimizer -- --nocapture 2>&1 | grep -q "test_workflow_optimizer ... ok"; then
-    echo "      ✅ 工作流优化器测试通过"
-else
-    echo "      ⚠️  工作流优化器测试未运行或失败"
-fi
+# 7. 运行全量测试
+echo "7. 运行全量测试..."
+cargo test --lib 2>&1 | tail -3
 
 # 8. 生成验证报告
 echo "8. 生成验证报告..."
@@ -209,51 +178,5 @@ echo "2. 测试工作流生成: 使用 workflow.generate 方法"
 echo "3. 测试自学习: 执行多个任务观察 LearningBus 效果"
 echo "4. 验证并行执行: 使用 task.execute 或 workflow.execute"
 echo "=========================================="
-
-# 创建示例学习文件
-if [ ! -f ".goon/spec/latest-learning.json" ]; then
-    echo "创建示例学习文件..."
-    cat > .goon/spec/latest-learning.json << 'EOF'
-{
-  "generated_at": 1775563498,
-  "total_events": 2,
-  "events": [
-    {
-      "generated_at": 1775563400,
-      "task": "修复登录功能bug",
-      "complexity": 3,
-      "predicted_success_rate": 0.8,
-      "subtasks_total": 5,
-      "subtasks_completed": 5,
-      "subtasks_failed": 0,
-      "subtasks_skipped": 0,
-      "serial_work_ms": 5000,
-      "critical_path_ms": 3000,
-      "parallel_speedup": 1.67,
-      "parallel_efficiency": 0.6,
-      "executor": "agent1",
-      "source": "task.execute"
-    },
-    {
-      "generated_at": 1775563450,
-      "task": "实现用户注册功能",
-      "complexity": 4,
-      "predicted_success_rate": 0.7,
-      "subtasks_total": 8,
-      "subtasks_completed": 7,
-      "subtasks_failed": 1,
-      "subtasks_skipped": 0,
-      "serial_work_ms": 8000,
-      "critical_path_ms": 4000,
-      "parallel_speedup": 2.0,
-      "parallel_efficiency": 0.5,
-      "executor": "agent2",
-      "source": "workflow.execute"
-    }
-  ]
-}
-EOF
-    echo "✅ 示例学习文件已创建"
-fi
 
 exit 0

@@ -39,10 +39,13 @@ case "${1:-}" in
 esac
 
 # ── Profiles to test ─────────────────────────────────────────────────────────
+# Note: these are Cargo feature flags, not profile names.
+# Each entry is passed as --features to cargo.
 PROFILES=(
-  "profile-local,backend-sqlite"
-  "profile-multi-users-server,backend-postgres"
-  "profile-simple-server,backend-sqlite"
+  "local"
+  "multi-users-server"
+  "simple-server"
+  "full"
 )
 
 # ── Detect coverage tool ─────────────────────────────────────────────────────
@@ -70,8 +73,8 @@ if [ "$USE_LLVM_COV" = true ]; then
     OVERALL_EXIT=0
     for PROFILE in "${PROFILES[@]}"; do
         echo "--- Profile: $PROFILE ---"
-        COV_FLAGS="--features $PROFILE"
-        PROFILE_SAFE="${PROFILE//,/__}"
+        COV_FLAGS="--no-default-features --features $PROFILE"
+        PROFILE_SAFE="$PROFILE"
         PROFILE_OUT="$COV_DIR/$PROFILE_SAFE"
 
         if [ "$RUN_UNIT" = true ] && [ "$RUN_INTEGRATION" = true ]; then
@@ -118,16 +121,16 @@ else
     OVERALL_EXIT=0
     for PROFILE in "${PROFILES[@]}"; do
         echo "--- Profile: $PROFILE ---"
-        COV_FLAGS="--features $PROFILE"
+        COV_FLAGS="--no-default-features --features $PROFILE"
 
         if [ "$RUN_UNIT" = true ]; then
             echo "  Unit Tests..."
-            cargo test --lib "$COV_FLAGS" || { echo "FAILED"; OVERALL_EXIT=1; }
+            cargo test --lib $COV_FLAGS || { echo "FAILED"; OVERALL_EXIT=1; }
         fi
 
         if [ "$RUN_INTEGRATION" = true ]; then
             echo "  Integration Tests..."
-            cargo test --test '*' "$COV_FLAGS" || { echo "FAILED"; OVERALL_EXIT=1; }
+            cargo test --test '*' $COV_FLAGS || { echo "FAILED"; OVERALL_EXIT=1; }
         fi
         echo ""
     done

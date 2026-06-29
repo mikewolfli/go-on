@@ -23,6 +23,10 @@ pub struct Message {
     pub total_tokens: usize,
     #[serde(default)]
     pub thinking: String,
+    #[serde(default)]
+    pub sub_agent_records: Vec<SubAgentRecord>,
+    #[serde(default)]
+    pub command_records: Vec<CommandRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +136,23 @@ pub enum PendingResponse {
     Models(std::collections::HashMap<String, Vec<String>>),
     UiMessage(String),
     ExternalEditorResult(String),
+    SubAgentEvent {
+        generation_id: u64,
+        agent: String,
+        action: String,
+        status: String,
+        input: String,
+        output: String,
+    },
+    CommandOutput {
+        generation_id: u64,
+        command: String,
+        working_dir: String,
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+        duration_ms: u64,
+    },
 }
 
 /// A pre-rendered markdown segment that can be displayed without re-parsing.
@@ -172,6 +193,38 @@ pub struct MarkdownStyle {
 #[derive(Debug, Clone)]
 pub struct CachedMarkdownRender {
     pub segments: Vec<MarkdownSegment>,
+}
+
+/// A record of a sub-agent execution run (Zed-style collapsible panel)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentRecord {
+    pub agent_name: String,
+    pub action: String,
+    pub status: String, // "running", "completed", "failed"
+    pub input: String,
+    pub output: String,
+    pub tool_calls: Vec<SubAgentToolCall>,
+    pub started_at: u64, // unix seconds
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentToolCall {
+    pub tool_name: String,
+    pub arguments: String, // JSON string
+    pub result: String,
+    pub duration_ms: u64,
+}
+
+/// A record of a command execution (cmd window)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandRecord {
+    pub command: String,
+    pub working_dir: String,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: u64,
 }
 
 /// Model performance statistics for caching and analysis

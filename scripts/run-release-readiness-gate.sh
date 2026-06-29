@@ -9,10 +9,13 @@ echo "=== Release Readiness Gate ==="
 echo ""
 
 # ── Profiles to validate ─────────────────────────────────────────────────────
+# Each entry: "<cargo-features>:<config-file>"
+# Use --no-default-features --features to ensure exactly one profile is selected.
 PROFILES=(
-  "profile-local,backend-sqlite:config.toml"
-  "profile-multi-users-server,backend-postgres:config.multi-users-server.toml"
-  "profile-simple-server,backend-sqlite:config.simple-server.toml"
+  "local:config.toml"
+  "multi-users-server:config.multi-users-server.toml"
+  "simple-server:config.simple-server.toml"
+  "full:config.toml"
 )
 
 OVERALL_EXIT=0
@@ -28,8 +31,8 @@ for ENTRY in "${PROFILES[@]}"; do
     echo "========================================="
     echo ""
 
-    # Check 1: Binary exists (first profile only — same binary, different features)
-    if [ "$PROFILE" = "profile-local,backend-sqlite" ]; then
+    # Check 1: Binary exists (first profile only)
+    if [ "$PROFILE" = "local" ]; then
         echo "[1] Checking binary..."
         if [ ! -f "$BINARY" ]; then
             echo "  FAIL: Binary not found at $BINARY"
@@ -50,17 +53,17 @@ for ENTRY in "${PROFILES[@]}"; do
 
     # Check 3: Cargo check
     echo "[3] Running cargo check..."
-    cargo check --no-default-features -F "$PROFILE" || { echo "  FAIL"; OVERALL_EXIT=1; }
+    cargo check --no-default-features --features "$PROFILE" || { echo "  FAIL"; OVERALL_EXIT=1; }
     echo "  PASS"
 
     # Check 4: Clippy
     echo "[4] Running clippy..."
-    cargo clippy --no-default-features -F "$PROFILE" -- -D warnings || { echo "  FAIL"; OVERALL_EXIT=1; }
+    cargo clippy --no-default-features --features "$PROFILE" -- -D warnings || { echo "  FAIL"; OVERALL_EXIT=1; }
     echo "  PASS"
 
     # Check 5: Tests
     echo "[5] Running tests..."
-    cargo test --no-default-features -F "$PROFILE" || { echo "  FAIL"; OVERALL_EXIT=1; }
+    cargo test --lib --no-default-features --features "$PROFILE" || { echo "  FAIL"; OVERALL_EXIT=1; }
     echo "  PASS"
 
     echo ""

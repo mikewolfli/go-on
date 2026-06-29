@@ -147,15 +147,4 @@ FUTURE4 增量目标是引入"自进化闭环"：
 - R2（2~3 周）：P2 + P3
 - R3（2~3 周）：P4 + P5
 - R4（1~2 周）：P6 + P7
-I need to fix the garbled Chinese text in `/home/mikeli/workspace/go-on/docs/design/FUTURE4.MD`.
 
-The file contains UTF-8 Chinese text where some bytes have been corrupted to `0x3f` (`?`). The file structure is identical to FUTURE3.MD which has correct Chinese text.
-
-Please:
-1. Read the current file `docs/design/FUTURE4.MD`
-2. Read `docs/design/FUTURE3.MD` to understand the template structure and correct encoding
-3. Write the corrected version of FUTURE4.MD
-
-The file title should be: `FUTURE4 — 自进化全能助手升级路线图（自动匹配方案 + 子AI自训练接入）`
-
-Use context clues from the garbled text and FUTURE3.MD structure to reconstruct the correct Chinese. Write the complete corrected file.

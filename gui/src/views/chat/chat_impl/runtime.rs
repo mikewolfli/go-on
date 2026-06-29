@@ -1,5 +1,5 @@
 use super::*;
-
+use crate::views::chat::types::{CommandRecord, SubAgentRecord};
 use std::sync::mpsc::TrySendError;
 use std::time::Duration;
 
@@ -170,6 +170,8 @@ impl ChatView {
             output_tokens: 0,
             total_tokens: 0,
             thinking: String::new(),
+            sub_agent_records: Vec::new(),
+            command_records: Vec::new(),
         });
         self.save_sessions_to_disk();
 
@@ -230,6 +232,8 @@ impl ChatView {
                 output_tokens: 0,
                 total_tokens: 0,
                 thinking: String::new(),
+                sub_agent_records: Vec::new(),
+                command_records: Vec::new(),
             });
             let msg_idx = self.session().messages.len().saturating_sub(1);
 
@@ -634,6 +638,89 @@ impl ChatView {
                                                     )
                                                     .await;
                                                 }
+                                            }
+                                            "sub_agent" => {
+                                                let agent = val
+                                                    .get("agent")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let action = val
+                                                    .get("action")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let status = val
+                                                    .get("status")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("running")
+                                                    .to_string();
+                                                let input = val
+                                                    .get("input")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let output = val
+                                                    .get("output")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                send_pending(
+                                                    &tx,
+                                                    PendingResponse::SubAgentEvent {
+                                                        generation_id,
+                                                        agent,
+                                                        action,
+                                                        status,
+                                                        input,
+                                                        output,
+                                                    },
+                                                )
+                                                .await;
+                                            }
+                                            "command" => {
+                                                let command_str = val
+                                                    .get("command")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let working_dir = val
+                                                    .get("working_dir")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let exit_code = val
+                                                    .get("exit_code")
+                                                    .and_then(|v| v.as_i64())
+                                                    .unwrap_or(-1)
+                                                    as i32;
+                                                let stdout = val
+                                                    .get("stdout")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let stderr = val
+                                                    .get("stderr")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let duration_ms = val
+                                                    .get("duration_ms")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                send_pending(
+                                                    &tx,
+                                                    PendingResponse::CommandOutput {
+                                                        generation_id,
+                                                        command: command_str,
+                                                        working_dir,
+                                                        exit_code,
+                                                        stdout,
+                                                        stderr,
+                                                        duration_ms,
+                                                    },
+                                                )
+                                                .await;
                                             }
                                             "result" | "done" => {
                                                 final_content = val
@@ -1085,6 +1172,59 @@ impl ChatView {
                     self.stream_progress = TokenProgress::default();
                     self.stream_processor = None;
                     self.abort_controller = None;
+                }
+                PendingResponse::SubAgentEvent {
+                    generation_id,
+                    agent,
+                    action,
+                    status,
+                    input,
+                    output,
+                } => {
+                    if let Some(idx) = self.generation_msg_idx(generation_id) {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            if let Some(m) = session.messages.get_mut(idx) {
+                                // Push a new sub-agent record to the message
+                                m.sub_agent_records.push(SubAgentRecord {
+                                    agent_name: agent,
+                                    action,
+                                    status,
+                                    input,
+                                    output,
+                                    tool_calls: Vec::new(),
+                                    started_at: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs(),
+                                    duration_ms: 0,
+                                });
+                            }
+                        }
+                    }
+                }
+                PendingResponse::CommandOutput {
+                    generation_id,
+                    command,
+                    working_dir,
+                    exit_code,
+                    stdout,
+                    stderr,
+                    duration_ms,
+                } => {
+                    if let Some(idx) = self.generation_msg_idx(generation_id) {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            if let Some(m) = session.messages.get_mut(idx) {
+                                m.command_records.push(CommandRecord {
+                                    command,
+                                    working_dir,
+                                    exit_code,
+                                    stdout,
+                                    stderr,
+                                    duration_ms,
+                                });
+                            }
+                        }
+                    }
                 }
                 PendingResponse::UiMessage(msg) => {
                     self.success_message = Some(msg);

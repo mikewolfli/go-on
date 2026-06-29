@@ -27,9 +27,9 @@ jobs:
 
       - name: Create required SQLite databases
         run: |
-          mkdir -p config
-          touch config/acp_cache.sqlite3
-          touch config/acp_vector.sqlite3
+          mkdir -p config/sqlite3
+          touch config/sqlite3/acp_cache.sqlite3
+          touch config/sqlite3/acp_vector.sqlite3
 
       - name: Check (all targets, locked)
         run: cargo check --all-targets --locked

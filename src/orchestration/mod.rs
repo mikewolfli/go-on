@@ -17,8 +17,9 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor
 pub mod council; // F-GAP-15
 pub mod dag_driver; // Tool execution DAG — orchestrates tool calls with parallel fan-out and plan-topology
 pub mod diagnostic_feedback; // F-GAP-51: Reserved for full diagnostic integration
-                             // pub use core_dag::TaskContext; — unused re-export, callers use crate::orchestration::core_dag::TaskContext directly
-                             // pub mod distributed_tx; — removed: test-only scaffold, zero production references
+pub mod intermediate;
+// pub use core_dag::TaskContext; — unused re-export, callers use crate::orchestration::core_dag::TaskContext directly
+// pub mod distributed_tx; — removed: test-only scaffold, zero production references
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod flow_with_models;

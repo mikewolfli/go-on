@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 ACP/MCP 智能体编排运行时，提供桌面 GUI、VS Code 插件，支持 35+ 家 AI 供应商。
+  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.3.0
 </p>
 
 <p align="center">
@@ -14,22 +14,25 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.3.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2114-brightgreen)]()
-[![Providers](https://img.shields.io/badge/providers-41-9cf)]()
+[![Tests](https://img.shields.io/badge/tests-1946-brightgreen)]()
+[![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
+[![Providers](https://img.shields.io/badge/providers-38-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 [![LOC](https://img.shields.io/badge/code-265K-blue)]()
 
 ## go-on 是什么？
 
-go-on 是一个**本地优先**、生产级的 AI 智能体编排运行时，使用 Rust 编写。它通过标准智能体协议（ACP / MCP）连接大语言模型与你的工具和工作流。你可以将它作为 CLI 工具、桌面 GUI 应用或后端服务器运行 — 内置自治循环、工具编排与治理能力。
+go-on 是一个**本地优先**、生产级的 AI 智能体编排运行时，使用 Rust 编写。它通过 SSE 流式传输、标准智能体协议（ACP / MCP）和认知循环架构，连接大语言模型与你的工具、文件和工作流。你可以将它作为 CLI 工具、桌面 GUI 应用或后端服务器运行 — 内置自治循环、DAG 工具编排、子代理面板与治理能力。
 
 **用 go-on 你可以：**
-- 🖥️ 通过原生桌面 GUI 或终端与 AI 模型对话
-- 🤖 运行能自主规划、执行、自我纠错的智能体
+- 🖥️ 通过原生桌面 GUI（EGUI）或终端与 AI 模型对话
+- 🤖 运行能自主规划、执行、反思、自我纠错的智能体
+- 🧩 选择 **5 种对话模式**：Ask、Plan、Edit、SafeGuard、FullAuto
 - 🔧 通过依赖感知的 DAG 执行引擎编排多工具工作流
 - 🔌 将 AI 模型连接到 MCP 服务器，或作为 MCP 服务器运行
 - 🛡️ 通过 RBAC、审计追踪和风险评估执行治理策略
-- 🧩 通过 VS Code 插件或 Rust/Python SDK 扩展
+- 📊 通过 SSE 面板实时监控子代理执行和命令输出
+- 🧩 通过 VS Code 插件、技能市场（18 个技能）或 Rust/Python/TypeScript SDK 扩展
 
 ## 快速开始
 
@@ -74,13 +77,15 @@ cargo run -- --protocol-mode mcp_stdio
 ## 核心功能
 
 ### 智能体编排
+- **5 种对话模式** — Ask（流式对话）、Plan（仅生成计划大纲）、Edit（迭代编辑+高风险审查）、SafeGuard（风险评分自动降级）、FullAuto（全自动+记忆+验证）
 - **自治循环** — 规划 → 执行 → 反思 → 重规划，迭代次数根据复杂度自适应调整
+- **子代理监控** — GUI 中通过 SSE 面板实时显示子代理执行和命令输出
 - **DAG 任务执行** — Kahn 拓扑排序、依赖边、并行组执行、循环检测
 - **全自动流程** — 意图解析 → 技能发现 → 环境准备 → 执行 → 报告
 - **快路径缓存** — SHA-256 指纹索引、TTL/LRU 淘汰、四层缓存（意图/技能/环境/路由）
 - **多模型投票** — 高风险决策的并发智能体投票（多数/加权/一致/融合）
 
-### AI 供应商支持（35+ 家）
+### AI 供应商支持（38 家）
 OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · 文心 · 西湖
 
 OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Function Call。
@@ -88,15 +93,16 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 ### 协议与传输
 - **ACP**（Agent Client Protocol）— stdio + HTTP，JSON-RPC 2.0
 - **MCP**（Model Context Protocol）— stdio + HTTP，工具列表/调用、流式传输、取消、超时
-- **5 种模式**：`adaptive`（双栈）、`acp-stdio`、`acp-http`、`mcp-stdio`、`mcp-http`
+- **5 种传输模式**：`adaptive`（双栈）、`acp-stdio`、`acp-http`、`mcp-stdio`、`mcp-http`
+- **SSE 流式传输协议** — 12 种事件类型（chunk、done、telemetry、error、state_sync、sub_agent、command + Responses API 事件）
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
 ### 工具系统
-- **39 个内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/find/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **60+ 内置工具** — 读写文件/代码搜索/补丁应用/测试运行/Git Diff/Shell 执行/HTTP 请求/grep/find/git/cargo_check/cargo_test/目录列表/文件移动/文件删除/压缩解压/日期时间/DNS/Ping/端口扫描 + CAD/3D/GIS/条码/SVG/Office/图像处理 + 文档解析(PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
 - **工具事务** — 幂等键去重、WAL 持久化、补偿操作
 - **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
-- **原生函数调用** — OpenAI/Anthropic tool_choice、Gemini functionCall、DeepSeek tools 参数
+- **基于模式的工具限制** — 各模式强制执行 allowed_tools 与 max_tool_calls
 
 ### 治理与安全
 - **HarnessBus** — 中央治理层，含策略评估、漂移检测、安全检查
@@ -147,11 +153,16 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **OTel** — 通过 OTLP collector 的分布式追踪（默认：`localhost:4317`）
 - **三语国际化** — 英文、简体中文、繁体中文，覆盖后端/GUI/VS Code 约 95%
 
+### 技能市场（18 个技能）
+- **内置技能**：api-docs-generator、changelog-generator、ci-pipeline-generator、code-reviewer、commit-message-generator、data-transformer、dependency-analyzer、dockerfile-generator、knowledge-retriever、log-analyzer、prompt-optimizer、refactoring-advisor、regex-builder、skill-creator、sql-query-helper、task-planner、test-generator、web-scraper
+- **从 GitHub/URL/本地导入** — SkillImportStore 获取并验证 SKILL.md 清单
+- **自动发现** — 启动时扫描 `~/.agents/skills/` 目录
+
 ---
 
 ## 架构
 
-go-on 采用 **14 条总线能力架构**，含认知模块：
+go-on 采用 **14 条总线能力架构**，含认知循环：
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -165,6 +176,24 @@ go-on 采用 **14 条总线能力架构**，含认知模块：
 ├──────────┼──────────┼──────────┼──────────┼───────────────┤
 │ OrchestB.│          │          │ DistMemB.│               │
 └──────────┴──────────┴──────────┴──────────┴───────────────┘
+```
+
+### 对话执行流水线（SSE）
+
+```
+GUI/CLI → POST /chat/stream → 后端
+  │ observe_phase → think_phase → act_phase → reflect_phase
+  │   ├─ emit_stream_chunk()     → SSE event: chunk
+  │   ├─ emit_stream_sub_agent() → SSE event: sub_agent
+  │   ├─ emit_stream_command()   → SSE event: command
+  │   ├─ emit_stream_token_economy() → SSE event: telemetry
+  │   └─ emit_stream_done()      → SSE event: done
+  ▼
+客户端 SSE 解析器 → PendingResponse → UI 面板
+  ├─ StreamChunk   → 消息内容更新
+  ├─ SubAgentEvent → 子代理面板（可折叠）
+  ├─ CommandOutput → 命令面板（可折叠）
+  └─ TokenEconomy  → Token 计数显示
 ```
 
 ### 核心能力模块
@@ -200,6 +229,10 @@ npm run compile
 - **Rust SDK**（`sdk/rust/`）— 强类型客户端，多领域方法覆盖
 - **Python SDK**（`sdk/python/`）— 基于 HTTPX 的异步客户端，支持流式传输
 - **Node.js SDK**（`sdk/nodejs/`）— TypeScript 异步客户端，30+ 方法覆盖全部 API 领域
+- **TypeScript SDK**（`sdk/typescript/`）— 面向浏览器和 Node.js 环境的完整 TypeScript 客户端
+
+### Zed 编辑器集成
+`.zed/settings.json` 包含预配置的智能体服务器设置，为 Zed 内置 AI 面板提供 OpenAI 兼容协议支持。
 
 ---
 
@@ -207,10 +240,14 @@ npm run compile
 
 | 指标 | 数值 |
 |:-----|:-----|
-| Rust 后端代码行数 | ~234K（494 个模块）|
+| Rust 后端代码行数 | ~234K（490+ 个模块）|
 | GUI（EGUI）代码行数 | ~22K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
-| SDK（Rust + Python）代码行数 | ~1.2K |
+| SDK（Rust + Python + TypeScript）代码行数 | ~3K |
+| 内置工具数量 | 60+ |
+| AI 供应商数量 | 38 |
+| 技能市场数量 | 18 |
+| 单元测试数量 | 1946（全部通过，零失败）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -226,19 +263,20 @@ npm run compile
 # 构建命令
 cargo build                                                    # local（默认）
 cargo build --no-default-features --features simple-server
-cargo build --no-default-features --features multi-users-server,backend-postgres
+cargo build --no-default-features --features multi-users-server
+cargo build --no-default-features --features full
 ```
 
 ## 验证状态
 
 | 配置 | `cargo clippy -D warnings` | 测试状态 |
 |:-----|:--------------------------:|:--------:|
-| `local` | ✅ **零警告** | ✅ **2114 通过，0 失败，0 忽略** |
+| `local` | ✅ **零警告** | ✅ **1946 通过，0 失败，0 忽略** |
 | `simple-server` | ✅ **零警告** | ✅ **全部通过** |
 | `multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
 | `full` | ✅ **零警告** | ✅ **全部通过** |
 
-所有 4 种构建配置零 clippy 警告通过。单元测试（2252 个）全部通过，零失败，零忽略。E2E 集成测试需要运行基础设施。
+所有 4 种构建配置零 clippy 警告通过。单元测试（1946 个）全部通过，零失败，零忽略。GUI 和 VS Code 插件同样零错误编译通过。
 
 ---
 

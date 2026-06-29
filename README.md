@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based ACP/MCP agent orchestration runtime with desktop GUI, VS Code extension, and multi-AI-provider support. v1.3.0
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.3.0
 </p>
 
 <p align="center">
@@ -11,29 +11,32 @@
 </p>
 
 <p align="center">
-  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety</em>
+  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 1946 tests · zero clippy warnings</em>
 </p>
 
 ---
 
 [![Rust](https://img.shields.io/badge/rust-1.3.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2114-brightgreen)]()
-[![Providers](https://img.shields.io/badge/providers-41-9cf)]()
+[![Tests](https://img.shields.io/badge/tests-1946-brightgreen)]()
+[![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
+[![Providers](https://img.shields.io/badge/providers-38-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 [![LOC](https://img.shields.io/badge/code-265K-blue)]()
 
 ## What is go-on?
 
-go-on is a **local-first**, production-grade **AI agent orchestration runtime** written in Rust. It bridges large language models with your tools and workflows through standard agent protocols (ACP / MCP). You can run it as a CLI, a desktop GUI app, or a backend server — with autonomous loops, tool orchestration, and built-in governance.
+go-on is a **local-first**, production-grade **AI agent orchestration runtime** written in Rust. It bridges large language models with your tools, files, and workflows through SSE streaming, standard agent protocols (ACP / MCP), and a cognitive loop architecture. You can run it as a CLI, a desktop GUI app, or a backend server — with autonomous loops, DAG tool orchestration, sub-agent panels, and built-in governance.
 
 **Use go-on to:**
-- 🖥️ Chat with AI models via a native desktop GUI or terminal
-- 🤖 Run autonomous agents that plan, execute, and self-correct
+- 🖥️ Chat with AI models via a native desktop GUI (EGUI) or terminal
+- 🤖 Run autonomous agents that plan, execute, reflect, and self-correct
+- 🧩 Choose from **5 chat modes**: Ask, Plan, Edit, SafeGuard, FullAuto
 - 🔧 Orchestrate multi-tool workflows with dependency-aware DAG execution
 - 🔌 Connect AI models to MCP servers or act as an MCP server yourself
 - 🛡️ Enforce governance policies with RBAC, audit trails, and risk assessment
-- 🧩 Extend via VS Code extension or Rust/Python SDK
+- 📊 Monitor sub-agent executions and command outputs in real-time via SSE panels
+- 🧩 Extend via VS Code extension, Skill Marketplace (18 skills), or Rust/Python/TypeScript SDK
 
 ## Quick Start
 
@@ -78,13 +81,15 @@ Default health endpoint: `http://127.0.0.1:8090/health`
 ## Features
 
 ### Agent Orchestration
+- **5 chat modes** — Ask (streaming conversation), Plan (outline-only), Edit (iterative with high-risk guards), SafeGuard (risk-scored auto-degradation), FullAuto (memory+diff+verification)
 - **Autonomous agent loop** — Plan → Execute → Reflect → Replan, with complexity-adaptive iteration
+- **Sub-agent monitoring** — Real-time SSE panels for sub-agent execution and command output in the GUI
 - **DAG task execution** — Kahn topological sort, dependency edges, parallel group execution, cycle detection
 - **Full-auto flow** — Parse intent → discover skills → prepare environment → execute → report
 - **Fast path cache** — SHA-256 fingerprint, TTL/LRU eviction, 4-tier caching (intent/skill/env/route)
 - **Multi-model voter** — Concurrent agent voting for high-stakes decisions (majority/weighted/unanimous/fusion)
 
-### AI Provider Support (41)
+### AI Provider Support (38)
 OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · Wenxin · Xihu
 
 Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Groq, and xAI Grok.
@@ -92,15 +97,16 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 ### Protocols & Transport
 - **ACP** (Agent Client Protocol) — stdio + HTTP, JSON-RPC 2.0
 - **MCP** (Model Context Protocol) — stdio + HTTP, tool list/call, streaming, cancellation, timeout
-- **5 modes**: `adaptive` (dual-stack), `acp-stdio`, `acp-http`, `mcp-stdio`, `mcp-http`
+- **5 transport modes**: `adaptive` (dual-stack), `acp-stdio`, `acp-http`, `mcp-stdio`, `mcp-http`
+- **SSE streaming protocol** — 12 event types (chunk, done, telemetry, error, state_sync, sub_agent, command + Responses API events)
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
 
 ### Tool System
-- **39 built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/find/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
+- **60+ built-in tools** — read/write/search/apply_patch/run_tests/inspect_git_diff/shell_exec/http_request/grep/find/git/cargo_check/cargo_test/list_directory/file_move/file_delete/compress/decompress/date_time/dns_lookup/ping/port_scan/skill_list/skill_execute + CAD/3D/GIS/barcode/SVG/office/image processing + document parsers (PDF/DOCX/PPT/HTML/Markdown/Excel)
 - **Tool pipeline** — serial/parallel/conditional execution with error handling
 - **Tool transactions** — idempotency keys, WAL persistence, compensation actions
 - **Dynamic tool recommendation** — pattern + recency + co-occurrence based suggestions
-- **Native function calling** — OpenAI/Anthropic tool_choice, Gemini functionCall, DeepSeek tools
+- **Mode-based tool restrictions** — allowed_tools and max_tool_calls enforced per mode
 
 ### Governance & Safety
 - **HarnessBus** — central governance with policy evaluation, drift detection, security checks
@@ -112,8 +118,8 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **Prompt injection detection** — runtime scanning for injection patterns with configurable threshold
 - **Content safety checking** — SafeGuard mode for AI-powered risk assessment
 
-### Performance (v1.2.0)
-- **Fast sub-second startup** — Reduced redundant SQLite initialization; HTTP server binds port in seconds (previously 180s+)
+### Performance
+- **Fast sub-second startup** — Reduced redundant SQLite initialization; HTTP server binds port in seconds
 - **FastPathCache** — sub-millisecond cache lookup for repeated queries
 - **SSE buffer pool** — zero-allocation streaming event serialization
 - **Cache warming** — predictive pre-warming with adaptive TTL
@@ -151,11 +157,16 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **OTel** — distributed tracing via OTLP collector (default: `localhost:4317`)
 - **Trilingual i18n** — English, Simplified Chinese, Traditional Chinese (~95% coverage across backend, GUI, VS Code)
 
+### Skill Marketplace (18 skills)
+- **Built-in skills**: api-docs-generator, changelog-generator, ci-pipeline-generator, code-reviewer, commit-message-generator, data-transformer, dependency-analyzer, dockerfile-generator, knowledge-retriever, log-analyzer, prompt-optimizer, refactoring-advisor, regex-builder, skill-creator, sql-query-helper, task-planner, test-generator, web-scraper
+- **Import from GitHub/URL/local** — SkillImportStore fetches and validates SKILL.md manifests
+- **Auto-discovery** — `~/.agents/skills/` directory scanned on startup
+
 ---
 
 ## Architecture
 
-go-on uses a **14-bus capability architecture** with cognitive modules:
+go-on uses a **14-bus capability architecture** with a cognitive loop:
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -169,6 +180,24 @@ go-on uses a **14-bus capability architecture** with cognitive modules:
 ├──────────┼──────────┼──────────┼──────────┼───────────────┤
 │ OrchestB.│          │          │ DistMemB.│               │
 └──────────┴──────────┴──────────┴──────────┴───────────────┘
+```
+
+### Chat Execution Pipeline (SSE)
+
+```
+GUI/CLI → POST /chat/stream → Backend
+  │ observe_phase → think_phase → act_phase → reflect_phase
+  │   ├─ emit_stream_chunk()     → SSE event: chunk
+  │   ├─ emit_stream_sub_agent() → SSE event: sub_agent
+  │   ├─ emit_stream_command()   → SSE event: command
+  │   ├─ emit_stream_token_economy() → SSE event: telemetry
+  │   └─ emit_stream_done()      → SSE event: done
+  ▼
+Client SSE parser → PendingResponse → UI panels
+  ├─ StreamChunk   → message content update
+  ├─ SubAgentEvent → Sub-agents panel (collapsible)
+  ├─ CommandOutput → Commands panel (collapsible)
+  └─ TokenEconomy  → token count display
 ```
 
 ### Key Capability Modules
@@ -204,6 +233,10 @@ npm run compile
 - **Rust SDK** (`sdk/rust/`) — Strongly typed client with methods across multiple domains
 - **Python SDK** (`sdk/python/`) — HTTPX-based async client with streaming support
 - **Node.js SDK** (`sdk/nodejs/`) — TypeScript async client with 30+ methods across all API domains
+- **TypeScript SDK** (`sdk/typescript/`) — Full TypeScript client for browser and Node.js environments
+
+### Zed Editor Integration
+`.zed/settings.json` includes pre-configured agent server settings for Zed's built-in AI panel, supporting OpenAI-compatible protocol mode.
 
 ---
 
@@ -211,10 +244,14 @@ npm run compile
 
 | Metric | Value |
 |:-------|:------|
-| Rust backend LOC | ~234K (494 modules) |
+| Rust backend LOC | ~234K (490+ modules) |
 | GUI (EGUI) LOC | ~22K |
 | VS Code addon (TypeScript) LOC | ~17K |
-| SDK (Rust + Python) LOC | ~1.2K |
+| SDK (Rust + Python + TypeScript) LOC | ~3K |
+| Built-in tools | 60+ |
+| AI providers | 38 |
+| Skills in marketplace | 18 |
+| Unit tests | 1946 (all pass, zero fail) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -230,19 +267,20 @@ npm run compile
 # Build commands
 cargo build                                                    # local (default)
 cargo build --no-default-features --features simple-server
-cargo build --no-default-features --features multi-users-server,backend-postgres
+cargo build --no-default-features --features multi-users-server
+cargo build --no-default-features --features full
 ```
 
 ## Verification
 
 | Profile | `cargo clippy -D warnings` | Test Status |
 |:--------|:--------------------------:|:-----------:|
-| `local` | ✅ **Zero warnings** | ✅ **2114 pass, 0 fail, 0 ignored** |
+| `local` | ✅ **Zero warnings** | ✅ **1946 pass, 0 fail, 0 ignored** |
 | `simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `full` | ✅ **Zero warnings** | ✅ **all pass** |
 
-All 4 build profiles compile with zero clippy warnings. Unit tests all pass with zero failures and zero ignored tests. E2e integration tests require running infrastructure.
+All 4 build profiles compile with zero clippy warnings. Unit tests (1946) all pass with zero failures and zero ignored tests. The GUI and VS Code addon also compile cleanly with zero errors.
 
 ---
 

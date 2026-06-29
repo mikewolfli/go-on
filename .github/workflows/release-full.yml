@@ -25,31 +25,31 @@ jobs:
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
-            profile_features: local,backend-sqlite
+            profile_features: local
           - os: ubuntu-latest
             platform: linux-x64-multi-users
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
-            profile_features: multi-users-server,backend-postgres
+            profile_features: multi-users-server
           - os: ubuntu-latest
             platform: linux-x64-simple-server
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
-            profile_features: simple-server,backend-sqlite
+            profile_features: simple-server
           - os: macos-latest
             platform: macos-arm64
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
-            profile_features: profile-local,backend-sqlite
+            profile_features: local
           - os: windows-latest
             platform: windows-x64
             backend_bin: go-on.exe
             gui_bin: go-on-gui-egui.exe
             archive_ext: zip
-            profile_features: profile-local,backend-sqlite
+            profile_features: local
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
@@ -90,9 +90,9 @@ jobs:
       - name: Create SQLite databases
         shell: bash
         run: |
-          mkdir -p config
-          touch config/acp_cache.sqlite3
-          touch config/acp_vector.sqlite3
+          mkdir -p config/sqlite3
+          touch config/sqlite3/acp_cache.sqlite3
+          touch config/sqlite3/acp_vector.sqlite3
 
       # ── Build backend (all profiles) ────────────────────────
       - name: Build backend (release, ${{ matrix.profile_features }})
