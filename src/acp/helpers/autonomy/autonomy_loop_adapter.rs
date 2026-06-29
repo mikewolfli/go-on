@@ -5,7 +5,7 @@
 //! think → act → observe → replan → finalize cycles without bloating
 //! the large chat.rs handler.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -13,15 +13,12 @@ use tokio::sync::mpsc;
 
 use crate::agent::{Agent, Message};
 
-use super::autonomy::is_execution_like_request;
 use super::autonomy_loop::{
     run_autonomy_loop, AutonomyLoopConfig, AutonomyLoopReport, AutonomyLoopResult,
 };
 use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopProfile, BrainLoopStep, StepStatus,
 };
-use crate::orchestration::full_auto::FullAutoFlow;
-use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::tool::ToolRegistry;
 
 /// Run the multi-round autonomy loop in an ACP-compatible way.
@@ -63,7 +60,9 @@ pub(crate) async fn run_acp_autonomy_loop(
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
         recovery_orchestrator: Some(crate::orchestration::recovery::RecoveryOrchestrator::new()),
         max_messages: 200,
-        use_brain_loop: option_bool("use_brain_loop", true), // Enable by default; disable via config for simple tasks
+        use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default. BrainLoop path does not invoke agent.chat()
+                                                              // and is designed for specific agent types with BrainLoop integration.
+                                                              // Enable via config for agents that support it.
     };
 
     let result = if config.use_brain_loop {
@@ -193,115 +192,6 @@ fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> 
     }
 }
 
-/// Run the FullAutoFlow orchestrator for `full_auto` mode.
-///
-/// Creates a `FullAutoFlow` instance from the shared skill registry and a
-/// new tool registry, then executes the flow against the given task text.
-/// Returns an `AutonomyLoopResult` with the execution report embedded as a
-/// JSON response string.
-pub(crate) async fn run_full_auto_flow(
-    skill_registry: Arc<RwLock<SkillRegistry>>,
-    task_text: &str,
-) -> Result<AutonomyLoopResult> {
-    let tool_registry = Arc::new(ToolRegistry::new());
-    let mut flow = FullAutoFlow::new(skill_registry, tool_registry);
-    let report = flow.run(task_text).await;
-
-    let success = report.is_success();
-    let success_count = report.success_count();
-    let failure_count = report.failure_count();
-
-    let response = serde_json::json!({
-        "flow": "full_auto",
-        "status": if success { "success" } else { "partial" },
-        "success_count": success_count,
-        "failure_count": failure_count,
-        "total_duration_ms": report.total_duration_ms,
-        "output": report.final_output,
-        "errors": report.errors,
-        "task_intent": {
-            "goals": report.task_intent.goals,
-            "constraints": report.task_intent.constraints,
-            "prerequisites": report.task_intent.prerequisites,
-            "deliverables": report.task_intent.deliverables,
-        },
-        "matched_skills": report.matched_skills.iter().map(|s| {
-            serde_json::json!({
-                "name": s.name,
-                "score": s.score,
-                "reason": s.reason,
-            })
-        }).collect::<Vec<_>>(),
-        "execution_steps": report.execution_log.len(),
-    });
-
-    let reasoning = format!(
-        "FullAutoFlow: {} skills matched, {} steps executed ({} ok, {} failed) in {}ms",
-        report.matched_skills.len(),
-        report.execution_log.len(),
-        success_count,
-        failure_count,
-        report.total_duration_ms,
-    );
-
-    Ok(AutonomyLoopResult {
-        response: response.to_string(),
-        reasoning,
-        selected_model: None,
-        report: AutonomyLoopReport {
-            total_rounds: 1,
-            total_tools: report.execution_log.len(),
-            final_phase: if success {
-                super::autonomy_loop::AutonomyPhase::Completed
-            } else {
-                super::autonomy_loop::AutonomyPhase::Failed
-            },
-            rounds: report
-                .execution_log
-                .iter()
-                .map(|step| super::autonomy_loop::AutonomyRound {
-                    round_index: 0,
-                    phase: if step.success {
-                        super::autonomy_loop::AutonomyPhase::Executing
-                    } else {
-                        super::autonomy_loop::AutonomyPhase::Failed
-                    },
-                    tools_executed: vec![step.skill_name.clone()],
-                    planner_guided: false,
-                    duration_ms: step.duration_ms,
-                    error: step.error.clone(),
-                    round_start_offset_ms: step.timestamp_ms,
-                    retry_count: 0,
-                    round_stop_reason: if step.success {
-                        "completed".to_string()
-                    } else {
-                        "failed".to_string()
-                    },
-                    agent_switched: false,
-                    agent_switch_reason: None,
-                    candidate_agent_count: 0,
-                    corrective_actions: Vec::new(),
-                    corrective_actions_applied: 0,
-                    reroute_expected_gain: None,
-                    reroute_health_score: None,
-                    dag_trace: None,
-                })
-                .collect(),
-            planner_guidance_used: false,
-            trace_alignment_coverage: 0.0,
-            total_duration_ms: report.total_duration_ms,
-            corrective_actions_applied_total: 0,
-            corrective_action_effectiveness_ratio: 0.0,
-            audit_trail: None,
-            stop_reason: if success {
-                "completed".to_string()
-            } else {
-                "partial_failure".to_string()
-            },
-        },
-    })
-}
-
 /// Extract a concise objective from the message list.
 fn extract_objective(messages: &[Message]) -> String {
     messages
@@ -366,73 +256,9 @@ fn split_for_streaming(text: &str, chunk_size: usize) -> Vec<String> {
     chunks
 }
 
-/// Check whether a chat request should use the multi-round autonomy loop.
-///
-/// Returns `true` when the request is execution-like (either by mode or by
-/// message content).  In `full_auto` mode the existing TAO loop with review
-/// gating takes precedence for non-execution requests; the autonomy loop
-/// is reserved for cases where iterative tool use is clearly beneficial.
-pub(crate) fn should_use_acp_autonomy_loop(mode: &str, messages: &[Message]) -> bool {
-    // full_auto mode has its own execution path (review gate + TAO loop),
-    // so the autonomy loop is only used for non-full_auto execution-like requests.
-    // This prevents dual tool execution and preserves the review gate.
-    let mode_lower = mode.trim().to_ascii_lowercase();
-    if mode_lower == "full_auto" || mode_lower == "full-auto" {
-        return false;
-    }
-    is_execution_like_request(mode, messages)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn full_auto_mode_uses_tao_loop_instead_of_autonomy() {
-        // full_auto mode always uses the TAO loop with review gating,
-        // regardless of message content. The autonomy loop is reserved
-        // for non-full_auto execution-like requests.
-        let exec = vec![Message {
-            role: "user".to_string(),
-            content: "fix the bug in main.rs".to_string(),
-        }];
-        assert!(!should_use_acp_autonomy_loop("full_auto", &exec));
-        assert!(!should_use_acp_autonomy_loop("full-auto", &exec));
-
-        let generic = vec![Message {
-            role: "user".to_string(),
-            content: "review timeout collision".to_string(),
-        }];
-        assert!(!should_use_acp_autonomy_loop("full_auto", &generic));
-    }
-
-    #[test]
-    fn execute_mode_triggers_autonomy_loop() {
-        let messages = vec![Message {
-            role: "user".to_string(),
-            content: "fix the bug in main.rs".to_string(),
-        }];
-        assert!(should_use_acp_autonomy_loop("execute", &messages));
-    }
-
-    #[test]
-    fn chat_mode_does_not_trigger_loop_for_generic_queries() {
-        let messages = vec![Message {
-            role: "user".to_string(),
-            content: "what is the meaning of life?".to_string(),
-        }];
-        // "chat" mode with a non-execution message should not trigger
-        assert!(!should_use_acp_autonomy_loop("chat", &messages));
-    }
-
-    #[test]
-    fn agent_mode_triggers_for_fix_requests() {
-        let messages = vec![Message {
-            role: "user".to_string(),
-            content: "update the configuration file".to_string(),
-        }];
-        assert!(should_use_acp_autonomy_loop("agent", &messages));
-    }
 
     #[test]
     fn extract_objective_uses_last_user_message() {

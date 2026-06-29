@@ -126,41 +126,57 @@ pub(crate) fn planner_guided_tool_preferences(
     tools
 }
 
-pub(crate) fn is_execution_like_request(mode: &str, messages: &[Message]) -> bool {
-    let mode_lower = mode.trim().to_ascii_lowercase();
-    if matches!(
-        mode_lower.as_str(),
-        "agent" | "edit" | "full_auto" | "workflow" | "execute"
-    ) {
-        return true;
-    }
+pub(crate) async fn run_followup_after_tool_observation(
+    agent: Arc<dyn Agent>,
+    messages: Vec<Message>,
+    principles: Option<Vec<String>>,
+    options: Option<HashMap<String, Value>>,
+    timeout_duration: Option<Duration>,
+) -> Result<(String, String, Option<String>)> {
+    let (sender, mut receiver) = mpsc::channel::<String>(1024);
+    let sender = crate::agent::StreamingSender::from(sender);
+    let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 
-    const EXECUTION_HINTS: &[&str] = &[
-        "fix",
-        "modify",
-        "update",
-        "edit",
-        "refactor",
-        "implement",
-        "create file",
-        "run tests",
-        "build",
-        "compile",
-        "verify",
-        "apply patch",
-        "execute",
-        "workflow.execute",
-        "task.execute",
-        "workflow.generate",
-    ];
+    let collect = async move {
+        let mut response = String::new();
+        let mut reasoning = String::new();
+        let mut selected_model: Option<String> = None;
 
-    messages.iter().any(|message| {
-        if message.role != "user" {
-            return false;
+        while let Some(token) = receiver.recv().await {
+            if let Some(model_id) = token.strip_prefix("__model_used__:") {
+                selected_model = Some(model_id.trim().to_string());
+                continue;
+            }
+
+            if token.starts_with("__tool_call__:") {
+                continue;
+            }
+
+            if let Some(reasoning_token) = token.strip_prefix("__thinking__") {
+                reasoning.push_str(reasoning_token);
+            } else {
+                response.push_str(&token);
+            }
         }
-        let text = message.content.to_ascii_lowercase();
-        EXECUTION_HINTS.iter().any(|hint| text.contains(hint))
+
+        match task.await {
+            Ok(Ok(())) => Ok::<(String, String, Option<String>), anyhow::Error>((
+                response,
+                reasoning,
+                selected_model,
+            )),
+            Ok(Err(err)) => Err(err.into()),
+            Err(join_err) => Err(anyhow::anyhow!("agent follow-up task panicked: {join_err}")),
+        }
+    };
+
+    run_with_optional_timeout(timeout_duration, collect, |duration| {
+        anyhow::anyhow!(
+            "agent follow-up timed out after {}s",
+            duration.as_secs().max(1)
+        )
     })
+    .await
 }
 
 pub(crate) fn terminal_chat_contract_snapshot(
@@ -197,60 +213,6 @@ pub(crate) fn terminal_chat_contract_snapshot(
         audit_trail: None,
         stop_reason: stop_reason.to_string(),
     })
-}
-
-pub(crate) async fn run_followup_after_tool_observation(
-    agent: Arc<dyn Agent>,
-    messages: Vec<Message>,
-    principles: Option<Vec<String>>,
-    options: Option<HashMap<String, Value>>,
-    timeout_duration: Option<Duration>,
-) -> Result<(String, String, Option<String>)> {
-    let (sender, mut receiver) = mpsc::channel::<String>(1024);
-    let sender = crate::agent::StreamingSender::from(sender);
-    let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
-
-    let collect = async move {
-        let mut response = String::new();
-        let mut reasoning = String::new();
-        let mut selected_model: Option<String> = None;
-
-        while let Some(token) = receiver.recv().await {
-            if let Some(model_id) = token.strip_prefix("__model_used__:") {
-                selected_model = Some(model_id.trim().to_string());
-                continue;
-            }
-
-            if token.starts_with("__tool_call__:") {
-                // Follow-up round only consumes observations and finalizes output.
-                continue;
-            }
-
-            if let Some(reasoning_token) = token.strip_prefix("__thinking__") {
-                reasoning.push_str(reasoning_token);
-            } else {
-                response.push_str(&token);
-            }
-        }
-
-        match task.await {
-            Ok(Ok(())) => Ok::<(String, String, Option<String>), anyhow::Error>((
-                response,
-                reasoning,
-                selected_model,
-            )),
-            Ok(Err(err)) => Err(err.into()),
-            Err(join_err) => Err(anyhow::anyhow!("agent follow-up task panicked: {join_err}")),
-        }
-    };
-
-    run_with_optional_timeout(timeout_duration, collect, |duration| {
-        anyhow::anyhow!(
-            "agent follow-up timed out after {}s",
-            duration.as_secs().max(1)
-        )
-    })
-    .await
 }
 
 #[cfg(test)]

@@ -19,10 +19,8 @@ use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use crate::acp::helpers::agent_selector::{collect_reputation_scores, AgentSelector};
-use crate::acp::helpers::autonomy::planner_guided_tool_preferences;
 use crate::acp::helpers::autonomy_metrics::{
-    record_agent_switch, record_autonomy_loop_stop_reason, record_explicit_tool_route,
-    record_planner_guided_route, record_reputation_routing_applied,
+    record_agent_switch, record_autonomy_loop_stop_reason, record_reputation_routing_applied,
 };
 use crate::acp::helpers::context::{
     probe_agent_runtime_readiness, request_timeout, AgentRuntimeReadiness,
@@ -31,18 +29,14 @@ use crate::acp::helpers::context::{
 use crate::acp::helpers::response_assembler::{
     build_chat_response, build_role_routing, build_task_graph_checkpoint, ChatResponseContext,
 };
-use crate::acp::helpers::review_gate::{run_enhanced_verification, run_review_gate};
+use crate::acp::helpers::review_gate::run_enhanced_verification;
 use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{t, tf};
-use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
 
 use crate::orchestration::task_router::{TaskRouter, TaskType};
-use crate::orchestration::tool::{
-    execute_loop_async, LoopConfig, LoopDecision, ToolInput, ToolRegistry,
-};
 
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
 use crate::reinforcement::{
@@ -63,7 +57,7 @@ pub mod voting;
 
 pub(crate) use agent_runtime::run_agent_collecting;
 pub(crate) use session::handle_chat;
-pub(crate) use tool_extraction::{detect_repeated_task_pattern, extract_tool_calls_from_response};
+pub(crate) use tool_extraction::detect_repeated_task_pattern;
 
 // Re-export streaming items that are part of the chat module's public API
 pub use self::params::ChatParams;
@@ -798,7 +792,7 @@ pub(crate) use fallback::{execute_fallback_agents, FallbackExecutionResult};
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_autonomy_round(
     _server: &AcpServer,
-    params: &ChatParams,
+    _params: &ChatParams,
     phase: &crate::orchestration::flow::ResolvedPhase,
     _phase_name: &str,
     resolved: &crate::orchestration::flow::ResolvedRouting,
@@ -806,12 +800,7 @@ pub(crate) async fn execute_autonomy_round(
     base_agent_options: &HashMap<String, Value>,
     cache_hit: bool,
 ) -> AutonomyOutcome {
-    if cache_hit
-        || !crate::acp::helpers::autonomy_loop_adapter::should_use_acp_autonomy_loop(
-            &params.mode,
-            agent_messages,
-        )
-    {
+    if cache_hit {
         return AutonomyOutcome {
             autonomy_loop_executed: false,
             selected_agent: String::new(),
@@ -913,247 +902,6 @@ pub(crate) async fn execute_autonomy_round(
         _reasoning_text: reasoning_text,
         _selected_model_name: selected_model_name,
         agent_attempts,
-    }
-}
-
-/// Result of the full_auto execution block (review gate + TAO loop).
-pub(crate) struct FullAutoExecutionResult {
-    pub reviews: Vec<Value>,
-    pub tool_execution_results: Vec<Value>,
-}
-
-// Execute the FullAuto review gate and TAO loop.
-//
-// Runs the review gate for full_auto mode, then conditionally executes
-// the Think-Act-Observe (TAO) loop when the autonomy loop did not handle
-// tool execution. Uses a cached task description to avoid redundant calls.
-//
-// F-GAP-64: FullAuto has overlapping execution paths:
-//   1. FullAutoFlow (BLUE43, skill-based, ~L2038)
-//   2. TAO loop (Think-Act-Observe, ~L2073)
-//   3. Raw string comparisons below (~L2224-2288)
-// Consider unifying these into a single dispatch via ModeKind::FullAuto.
-// ============================================================================
-// Section: Full Auto Execution
-// ============================================================================
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_full_auto_execution(
-    server: &AcpServer,
-    params: &ChatParams,
-    phase: &crate::orchestration::flow::ResolvedPhase,
-    phase_name: &str,
-    span: Option<&OtelContext>,
-    trace: &RequestTraceContext,
-    selected_agent: &str,
-    response_text: &str,
-    conversation_id: &str,
-    autonomy_loop_executed: bool,
-) -> FullAutoExecutionResult {
-    let mut reviews = Vec::new();
-    let mut tool_execution_results = Vec::new();
-
-    // Use ModeRuntime to check if this is FullAuto mode — replaces raw string comparison
-    let runtime = resolve_mode_runtime(&params.mode, server.agent_registry(), None);
-    if !matches!(runtime.kind(), ModeKind::FullAuto) {
-        return FullAutoExecutionResult {
-            reviews,
-            tool_execution_results,
-        };
-    }
-
-    // Cache task description once for all full_auto sub-steps
-    let task_description = extract_task_description(&params.messages);
-
-    // ── Review gate always runs for full_auto mode ────────────────
-    let timeout_before = server
-        .observability
-        .metrics
-        .snapshot()
-        .review_gate_timeout_total;
-    let review_outcome = run_review_gate(
-        server,
-        &params.messages,
-        phase.options.as_ref(),
-        span,
-        trace,
-    )
-    .await;
-    let timeout_after = server
-        .observability
-        .metrics
-        .snapshot()
-        .review_gate_timeout_total;
-
-    let inferred_degrade_single_timeout = phase
-        .options
-        .as_ref()
-        .map(|opts| {
-            let review_timeout_policy = opts
-                .extra
-                .get("review_timeout_policy")
-                .and_then(Value::as_str)
-                .unwrap_or("reject");
-            let dual_review_enabled = opts
-                .full_auto_review_agents
-                .as_ref()
-                .map(|agents| agents.len() > 1)
-                .unwrap_or(false);
-            dual_review_enabled
-                && (review_timeout_policy.eq_ignore_ascii_case("degrade_single")
-                    || review_timeout_policy.eq_ignore_ascii_case("warn"))
-        })
-        .unwrap_or(false);
-
-    if inferred_degrade_single_timeout && review_outcome.passed && timeout_after == timeout_before {
-        server.observability.metrics.inc_review_gate_timeout();
-        server.observability.metrics.inc_review_gate_degraded();
-    }
-
-    if let Some(error) = &review_outcome.error {
-        tracing::warn!("review gate failed: {}", error);
-    }
-    reviews = review_outcome.reviews.clone();
-
-    // ── Only run TAO loop when the autonomy loop did NOT handle execution ──
-    if !autonomy_loop_executed && review_outcome.passed {
-        let tool_input = ToolInput {
-            task_id: "chat".to_string(),
-            phase: phase_name.to_string(),
-            agent_role: selected_agent.to_string(),
-            objective: task_description.clone(),
-            constraints: None,
-            evidence: None,
-            payload: serde_json::json!({
-                "task": task_description,
-                "phase": phase_name,
-            }),
-            allowed_base_dir: None,
-        };
-
-        let tool_registry = ToolRegistry::new();
-
-        let preferred_tools: Vec<String> = {
-            let calls = extract_tool_calls_from_response(response_text, 5);
-            if calls.is_empty() {
-                record_planner_guided_route();
-                planner_guided_tool_preferences(
-                    conversation_id,
-                    phase_name,
-                    selected_agent,
-                    &task_description,
-                    response_text,
-                    5,
-                )
-            } else {
-                record_explicit_tool_route();
-                calls
-            }
-        };
-
-        // ── FullAutoFlow execution (BLUE43) ─────────────────────────
-        let full_auto_result = crate::acp::helpers::autonomy_loop_adapter::run_full_auto_flow(
-            server.orchestration_deps.skill_registry.clone(),
-            &task_description,
-        )
-        .await;
-        match &full_auto_result {
-            Ok(result) => {
-                tool_execution_results.push(json!({
-                    "tool_loop": "full_auto_flow",
-                    "status": "completed",
-                    "response": result.response,
-                    "reasoning": result.reasoning,
-                    "total_steps": result.report.total_tools,
-                    "duration_ms": result.report.total_duration_ms,
-                    "stop_reason": result.report.stop_reason,
-                }));
-            }
-            Err(e) => {
-                tracing::warn!("FullAutoFlow execution failed: {}", e);
-                tool_execution_results.push(json!({
-                    "tool_loop": "full_auto_flow",
-                    "status": "failed",
-                    "error": e.to_string(),
-                }));
-            }
-        }
-
-        let should_run_tao = !preferred_tools.is_empty()
-            && full_auto_result
-                .as_ref()
-                .map(|result| result.report.total_tools > 0)
-                .unwrap_or(true);
-
-        if should_run_tao {
-            let tao_config = LoopConfig::default();
-            let (tao_decision, tao_trace) = execute_loop_async(
-                &task_description,
-                &tool_registry,
-                &tool_input,
-                &preferred_tools,
-                &tao_config,
-            )
-            .await;
-
-            let tool_result = match &tao_decision {
-                LoopDecision::Complete(output) => {
-                    record_autonomy_loop_stop_reason("complete");
-                    serde_json::json!({
-                        "status": "complete",
-                        "success": output.success,
-                        "result": output.result,
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-                LoopDecision::Failed { reason, .. } => {
-                    record_autonomy_loop_stop_reason("failed");
-                    serde_json::json!({
-                        "status": "failed",
-                        "reason": reason,
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-                LoopDecision::Escalate { reason, .. } => {
-                    record_autonomy_loop_stop_reason("escalated");
-                    serde_json::json!({
-                        "status": "escalated",
-                        "reason": reason,
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-                _ => {
-                    record_autonomy_loop_stop_reason("incomplete");
-                    serde_json::json!({
-                        "status": "incomplete",
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-            };
-
-            tool_execution_results.push(json!({
-                "tool_loop": "tao_executed",
-                "decision": tool_result,
-                "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
-                "task": task_description
-            }));
-        } else {
-            tool_execution_results.push(json!({
-                "tool_loop": "tao_skipped",
-                "status": "skipped",
-                "reason": "no_actionable_tools",
-                "task": task_description,
-            }));
-        }
-    }
-
-    FullAutoExecutionResult {
-        reviews,
-        tool_execution_results,
     }
 }
 

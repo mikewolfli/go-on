@@ -16,12 +16,13 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Supported chat/agent modes
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ModeKind {
     #[default]
     Ask,
+    /// Plan mode for step-by-step planning without execution.
+    Plan,
     Edit,
-    Agent,
     FullAuto,
     /// Automatic mode that requires approval at high-risk nodes.
     SafeGuard,
@@ -31,8 +32,9 @@ impl From<&str> for ModeKind {
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "ask" => ModeKind::Ask,
+            "plan" => ModeKind::Plan,
             "edit" => ModeKind::Edit,
-            "agent" => ModeKind::Agent,
+            "agent" => ModeKind::Edit,
             "full_auto" | "fullauto" => ModeKind::FullAuto,
             "safeguard" | "safe_guard" => ModeKind::SafeGuard,
             _ => ModeKind::Ask,
@@ -89,7 +91,7 @@ pub fn resolve_mode_runtime(
     let kind = match mode.to_lowercase().as_str() {
         "ask" => ModeKind::Ask,
         "edit" => ModeKind::Edit,
-        "agent" => ModeKind::Agent,
+        "agent" => ModeKind::Edit,
         "full_auto" => ModeKind::FullAuto,
         "safeguard" => ModeKind::SafeGuard,
         _ => {
@@ -468,8 +470,8 @@ impl ModeStrategy for GenericModeRuntime {
     fn mode_name(&self) -> &str {
         match self.kind {
             ModeKind::Ask => "ask",
+            ModeKind::Plan => "plan",
             ModeKind::Edit => "edit",
-            ModeKind::Agent => "agent",
             ModeKind::FullAuto => "full_auto",
             ModeKind::SafeGuard => "safeguard",
         }
@@ -482,8 +484,8 @@ impl ModeStrategy for GenericModeRuntime {
     fn pua_mode(&self) -> &str {
         match self.kind {
             ModeKind::Ask => "ask",
+            ModeKind::Plan => "plan",
             ModeKind::Edit => "edit",
-            ModeKind::Agent => "agent",
             ModeKind::FullAuto => "full_auto",
             ModeKind::SafeGuard => "safeguard",
         }
@@ -497,16 +499,16 @@ impl ModeStrategy for GenericModeRuntime {
                     objective, phase, role
                 );
             }
-            ModeKind::Edit => {
+            ModeKind::Plan => {
                 info!(
-                    "[Edit Mode] Planning edits for: {} (phase: {}, role: {})",
+                    "[Plan Mode] Planning for: {} (phase: {}, role: {})",
                     objective, phase, role
                 );
             }
-            ModeKind::Agent => {
+            ModeKind::Edit => {
                 let is_high_risk = self.is_high_risk_operation(objective);
                 info!(
-                    "[Agent Mode] Executing iterative task: {} (phase: {}, role: {}, high_risk: {})",
+                    "[Edit Mode] Executing iterative task: {} (phase: {}, role: {}, high_risk: {})",
                     objective, phase, role, is_high_risk
                 );
             }
@@ -534,28 +536,28 @@ impl ModeStrategy for GenericModeRuntime {
         role: &str,
     ) -> Option<Result<AgentTaskResult>> {
         match self.kind {
-            ModeKind::Agent => {
+            ModeKind::Edit => {
                 if self.is_high_risk_operation(objective) {
-                    warn!("[Agent Mode] High-risk operation detected: {}", objective);
+                    warn!("[Edit Mode] High-risk operation detected: {}", objective);
                     Some(Ok(AgentTaskResult {
                         success: false,
                         output: Some(serde_json::json!({
-                            "mode": "agent",
+                            "mode": "edit",
                             "task_id": task_id.to_string(),
                             "status": "pending_approval",
                             "is_high_risk": true,
                             "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
                             "max_tool_calls": 20,
-                            "message": format!("Agent task '{}' requires approval for high-risk operation", objective)
+                            "message": format!("Edit task '{}' requires approval for high-risk operation", objective)
                         })),
                         error: Some(AgentError::Runtime(
                             "Operator approval required for high-risk operation".to_string(),
                         )),
                         audit_log: Some(format!(
-                            "Agent mode: task_id={}, phase={}, role={}, high_risk=true",
+                            "Edit mode: task_id={}, phase={}, role={}, high_risk=true",
                             task_id, phase, role
                         )),
-                        pua_report: Some(mode_execution_report("agent", true)),
+                        pua_report: Some(mode_execution_report("edit", true)),
                     }))
                 } else {
                     None
@@ -681,33 +683,16 @@ impl ModeStrategy for GenericModeRuntime {
                     "task_id": task_id.to_string(),
                     "status": "unavailable",
                     "note": "No suitable Edit mode agent was available in the registry",
-                    "stages": ["plan", "patch", "verify"],
-                    "message": format!("Edit task '{}' completed with verification", objective)
-                })),
-                error: None,
-                audit_log: Some(format!(
-                    "Edit mode: task_id={}, phase={}, role={}, max_tools=5",
-                    task_id, phase, role
-                )),
-                pua_report: Some(mode_execution_report("edit", false)),
-            },
-            ModeKind::Agent => AgentTaskResult {
-                success: true,
-                output: Some(serde_json::json!({
-                    "mode": "agent",
-                    "task_id": task_id.to_string(),
-                    "status": "unavailable",
-                    "note": "No suitable Agent mode agent was available in the registry",
                     "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
                     "max_tool_calls": 20,
-                    "message": format!("Agent task '{}' ready for execution", objective)
+                    "message": format!("Edit task '{}' ready for execution", objective)
                 })),
                 error: None,
                 audit_log: Some(format!(
-                    "Agent mode: task_id={}, phase={}, role={}, high_risk={}",
+                    "Edit mode: task_id={}, phase={}, role={}, high_risk={}",
                     task_id, phase, role, false
                 )),
-                pua_report: Some(mode_execution_report("agent", false)),
+                pua_report: Some(mode_execution_report("edit", false)),
             },
             ModeKind::FullAuto => AgentTaskResult {
                 success: true,
@@ -727,6 +712,22 @@ impl ModeStrategy for GenericModeRuntime {
                     task_id, phase, role
                 )),
                 pua_report: Some(mode_execution_report("full_auto", false)),
+            },
+            ModeKind::Plan => AgentTaskResult {
+                success: true,
+                output: Some(serde_json::json!({
+                    "mode": "plan",
+                    "task_id": task_id.to_string(),
+                    "status": "unavailable",
+                    "note": "No suitable Plan mode agent was available in the registry",
+                    "message": format!("Plan task '{}' ready for analysis", objective)
+                })),
+                error: None,
+                audit_log: Some(format!(
+                    "Plan mode: task_id={}, phase={}, role={}",
+                    task_id, phase, role
+                )),
+                pua_report: Some(mode_execution_report("plan", false)),
             },
             ModeKind::SafeGuard => {
                 let risk_score = self.compute_risk_score(objective);
@@ -774,12 +775,8 @@ impl ModeRuntime for GenericModeRuntime {
     fn allowed_tools(&self) -> Vec<String> {
         match self.kind {
             ModeKind::Ask => vec![],
-            ModeKind::Edit => vec![
-                "read_file".to_string(),
-                "apply_patch".to_string(),
-                "run_tests".to_string(),
-            ],
-            ModeKind::Agent | ModeKind::FullAuto | ModeKind::SafeGuard => vec![
+            ModeKind::Plan => vec!["read_file".to_string(), "search_files".to_string()],
+            ModeKind::Edit | ModeKind::FullAuto | ModeKind::SafeGuard => vec![
                 "read_file".to_string(),
                 "search_files".to_string(),
                 "apply_patch".to_string(),
@@ -792,20 +789,20 @@ impl ModeRuntime for GenericModeRuntime {
     fn max_tool_calls(&self) -> usize {
         match self.kind {
             ModeKind::Ask => 0,
-            ModeKind::Edit => 5,
-            ModeKind::Agent => 20,
+            ModeKind::Plan => 3,
+            ModeKind::Edit => 20,
             ModeKind::FullAuto => 50,
             ModeKind::SafeGuard => 30,
         }
     }
 
     fn user_approval_required(&self) -> bool {
-        matches!(self.kind, ModeKind::Ask | ModeKind::Edit)
+        matches!(self.kind, ModeKind::Edit)
     }
 
     fn is_high_risk_operation(&self, objective: &str) -> bool {
         match self.kind {
-            ModeKind::Agent => {
+            ModeKind::Edit => {
                 let lower = objective.to_lowercase();
                 lower.contains("delete")
                     || lower.contains("remove")
@@ -832,14 +829,12 @@ mod tests {
         // Verify all expected variants can be constructed.
         let ask = ModeKind::Ask;
         let edit = ModeKind::Edit;
-        let agent = ModeKind::Agent;
         let full_auto = ModeKind::FullAuto;
         let safe_guard = ModeKind::SafeGuard;
 
         // Equality checks.
         assert_eq!(ask, ModeKind::Ask);
         assert_eq!(edit, ModeKind::Edit);
-        assert_eq!(agent, ModeKind::Agent);
         assert_eq!(full_auto, ModeKind::FullAuto);
         assert_eq!(safe_guard, ModeKind::SafeGuard);
         assert_ne!(ask, edit);

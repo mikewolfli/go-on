@@ -16,9 +16,7 @@ use crate::rpc_protocol::RequestTraceContext;
 /// Outcome of a review gate execution
 #[derive(Debug, Clone)]
 pub struct ReviewGateOutcome {
-    pub reviews: Vec<Value>,
     pub passed: bool,
-    pub error: Option<String>,
 }
 
 /// Run the dual review gate for full_auto mode.
@@ -32,8 +30,6 @@ pub async fn run_review_gate(
     span: Option<&opentelemetry::Context>,
     trace: &RequestTraceContext,
 ) -> ReviewGateOutcome {
-    let mut reviews = Vec::new();
-
     let review_outcome = crate::acp::r#impl::agent::run_dual_review_gate(
         server,
         None,
@@ -44,23 +40,8 @@ pub async fn run_review_gate(
     )
     .await;
 
-    let error = match &review_outcome {
-        Ok(outcome) => {
-            reviews.push(json!({
-                "reviewer": outcome.reviewer,
-                "verdict": if outcome.passed { "APPROVE" } else { "REJECT" },
-                "response": outcome.comments.join("; "),
-                "duration_ms": outcome.duration_ms,
-            }));
-            None
-        }
-        Err(e) => Some(e.to_string()),
-    };
-
     ReviewGateOutcome {
-        reviews,
         passed: review_outcome.map(|o| o.passed).unwrap_or(false),
-        error,
     }
 }
 
@@ -156,16 +137,8 @@ mod tests {
         let outcome = run_review_gate(&server, &[], None, None, &trace).await;
 
         // With no flow_manager configured, the underlying dual review gate
-        // should fail, producing a ReviewGateOutcome with passed=false and an error.
+        // should fail, producing a ReviewGateOutcome with passed=false.
         assert!(!outcome.passed, "should not pass without a flow manager");
-        assert!(
-            outcome.error.is_some(),
-            "expected error due to missing flow manager"
-        );
-        assert!(
-            outcome.reviews.is_empty(),
-            "no reviews should be collected on error"
-        );
     }
 
     #[test]

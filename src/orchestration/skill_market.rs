@@ -135,6 +135,58 @@ pub struct SkillMarketRegistry {
     // import_policy reserved for future import validation
 }
 
+// ── GitHub index parsing helpers ─────────────────────────────────────────
+
+/// Internal index structure for `goon-skill-index.yaml` / `.json` parsing.
+#[derive(Deserialize)]
+struct SkillIndex {
+    #[allow(dead_code)]
+    schema_version: String,
+    updated_at: String,
+    #[allow(dead_code)]
+    maintainers: Option<Vec<MaintainerEntry>>,
+    skills: Vec<SkillIndexEntry>,
+}
+
+#[derive(Deserialize)]
+struct MaintainerEntry {
+    #[allow(dead_code)]
+    github: String,
+}
+
+#[derive(Deserialize)]
+struct SkillIndexEntry {
+    name: String,
+    description: String,
+    author: String,
+    repository: String,
+    path: Option<String>,
+    version: String,
+    min_go_on_version: Option<String>,
+    tags: Option<Vec<String>>,
+    verified: Option<bool>,
+    rating: Option<f64>,
+    install_count: Option<u64>,
+    #[allow(dead_code)]
+    dependencies: Option<HashMap<String, String>>,
+}
+
+/// Parse the skill index as JSON first; fall back to YAML when `data-export` feature is enabled.
+fn parse_index_json_or_yaml(text: &str) -> Result<SkillIndex> {
+    // Always try JSON first (serde_json is a hard dependency)
+    if let Ok(index) = serde_json::from_str::<SkillIndex>(text) {
+        return Ok(index);
+    }
+    // Try YAML if the data-export feature is enabled
+    #[cfg(feature = "data-export")]
+    if let Ok(index) = serde_yaml::from_str::<SkillIndex>(text) {
+        return Ok(index);
+    }
+    anyhow::bail!(
+        "failed to parse skill index as JSON. If the index is YAML, enable the 'data-export' feature."
+    )
+}
+
 impl SkillMarketRegistry {
     /// Create a new SkillMarketRegistry.
     pub fn new(
@@ -393,6 +445,83 @@ impl SkillMarketRegistry {
     pub async fn get_install_count(&self, name: &str) -> u64 {
         let installations = self.installations.read().await;
         installations.iter().filter(|i| i.name == name).count() as u64
+    }
+
+    /// Fetch the community index from a GitHub-hosted index file.
+    ///
+    /// When `data-export` feature is enabled, parses `goon-skill-index.yaml`.
+    /// Otherwise, falls back to JSON parsing.
+    pub async fn fetch_github_index(&self, raw_url: &str) -> Result<Vec<SkillMarketItem>> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent("go-on-skill-market/1.0")
+            .build()
+            .context("failed to build HTTP client")?;
+
+        let response = client
+            .get(raw_url)
+            .send()
+            .await
+            .context("failed to fetch GitHub skill index")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "GitHub index returned status {} for URL: {}",
+                response.status(),
+                raw_url
+            );
+        }
+
+        let text = response
+            .text()
+            .await
+            .context("failed to read response body")?;
+
+        // Parse using serde_json first (always available), then try serde_yaml if feature is enabled
+        let items: Vec<SkillMarketItem> = {
+            let index: SkillIndex = parse_index_json_or_yaml(&text)
+                .context("failed to parse GitHub skill index (tried JSON, then YAML)")?;
+
+            index
+                .skills
+                .into_iter()
+                .map(|entry| {
+                    let repo_path = entry.repository.trim_start_matches("github.com/");
+                    let parts: Vec<&str> = repo_path.split('/').collect();
+                    let (owner, repo) = if parts.len() >= 2 {
+                        (parts[0].to_string(), parts[1].to_string())
+                    } else {
+                        ("unknown".to_string(), repo_path.to_string())
+                    };
+                    let skill_path = entry.path.unwrap_or_else(|| "..".to_string());
+
+                    SkillMarketItem {
+                        name: entry.name,
+                        description: entry.description,
+                        version: entry.version,
+                        author: entry.author,
+                        source: SkillSource::GitHub {
+                            owner,
+                            repo,
+                            path: skill_path,
+                            branch: "main".to_string(),
+                        },
+                        tags: entry.tags.unwrap_or_default(),
+                        install_count: entry.install_count.unwrap_or(0),
+                        rating: entry.rating.unwrap_or(0.0),
+                        updated_at: index.updated_at.clone(),
+                        verified: entry.verified.unwrap_or(false),
+                        min_go_on_version: entry
+                            .min_go_on_version
+                            .unwrap_or_else(|| "1.0.0".to_string()),
+                        compatible_providers: Vec::new(),
+                        dependencies: entry.dependencies.unwrap_or_default(),
+                    }
+                })
+                .collect()
+        };
+
+        Ok(items)
     }
 
     // ── Built-in sample skills ──────────────────────────────────────────

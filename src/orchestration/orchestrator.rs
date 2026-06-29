@@ -356,7 +356,7 @@ mod tests {
         // Verify all modes return valid runtimes with correct kinds
         assert_eq!(ask.kind(), ModeKind::Ask);
         assert_eq!(edit.kind(), ModeKind::Edit);
-        assert_eq!(agent.kind(), ModeKind::Agent);
+        assert_eq!(agent.kind(), ModeKind::Edit);
         assert_eq!(full_auto.kind(), ModeKind::FullAuto);
         // unknown should default to ask
         assert_eq!(unknown.kind(), ModeKind::Ask);
@@ -460,14 +460,14 @@ mod tests {
         let base = Arc::new(AgentRegistry::new());
         let ask = select_mode_runtime_with_registry("ask", Arc::clone(&base));
         let edit = select_mode_runtime_with_registry("edit", Arc::clone(&base));
-        let agent = select_mode_runtime_with_registry("agent", Arc::clone(&base));
+        let _agent = select_mode_runtime_with_registry("agent", Arc::clone(&base));
         let full_auto = select_mode_runtime_with_registry("full_auto", base);
 
-        // Only Agent mode has some high-risk detection (for delete operations)
-        // but Ask, Edit, and FullAuto rely on approval settings instead
+        // After AUTONOMY + TAO merge, Agent mode was merged into Edit.
+        // Edit inherits Agent's risk detection for operations like delete.
         assert!(!ask.is_high_risk_operation("delete"));
-        assert!(!edit.is_high_risk_operation("delete"));
-        assert!(agent.is_high_risk_operation("delete")); // Agent mode has risk detection
+        assert!(edit.is_high_risk_operation("delete")); // Edit has Agent's risk detection
+        assert!(edit.is_high_risk_operation("delete")); // "agent" resolves to Edit
         assert!(!full_auto.is_high_risk_operation("delete"));
     }
 

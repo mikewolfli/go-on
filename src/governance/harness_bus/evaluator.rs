@@ -557,7 +557,7 @@ impl PolicyEvaluator {
             | "game_save_manager"
             | "game_mod_install" => SandboxPolicy::can_execute_write(level),
             // ── Search / Discovery tools ──────────────────────────
-            "grep" | "find_path" | "semantic_search" | "find_files" => {
+            "grep" | "find_path" | "semantic_search" | "code_index_search" | "find_files" => {
                 SandboxPolicy::can_execute_search(level)
             }
             // ── Network / Outbound tools ─────────────────────────
@@ -719,9 +719,8 @@ impl PolicyEvaluator {
             "run_tests" | "execute_command" | "terminal" | "bash" | "shell_exec" | "cargo_test" => {
                 GovernanceAction::Shell
             }
-            "search" | "find" | "grep" | "semantic_search" | "find_path" | "find_files" => {
-                GovernanceAction::Search
-            }
+            "search" | "find" | "grep" | "semantic_search" | "code_index_search" | "find_path"
+            | "find_files" => GovernanceAction::Search,
             _ => GovernanceAction::Read,
         };
 

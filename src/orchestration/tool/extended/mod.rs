@@ -5,6 +5,7 @@
 //! image processing, data serialization, and compression utilities.
 
 pub mod archive;
+pub mod code_index;
 #[cfg(feature = "barcode-tools")]
 pub mod barcode;
 #[cfg(feature = "cad-utils")]
@@ -85,6 +86,7 @@ pub mod time;
 pub mod web;
 
 pub use archive::{ArchiveExtractTool, ArchiveInspectTool};
+pub use code_index::CodeIndexTool;
 #[cfg(feature = "barcode-tools")]
 pub use barcode::QrCodeTool;
 #[cfg(feature = "cad-utils")]

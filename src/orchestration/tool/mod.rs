@@ -1286,6 +1286,23 @@ impl ToolRegistry {
             },
         );
 
+        // ── Code index / semantic search tool ───────────────────
+        // Provides workspace-wide code symbol indexing and ranked semantic
+        // search across multiple programming languages.
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CodeIndexTool,
+            ToolCapabilityProfile {
+                capability: "code_index_search".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["grep".to_string()],
+            },
+        );
+
         // ── Backward-compatibility aliases ───────────────────────
         // These names exist in the governance evaluator's allowlist but
         // were never registered as standalone Tool implementations.
@@ -1298,7 +1315,7 @@ impl ToolRegistry {
         registry.register_alias("terminal", "shell_exec");
         registry.register_alias("bash", "shell_exec");
         registry.register_alias("find_path", "find_files");
-        registry.register_alias("semantic_search", "grep");
+        registry.register_alias("semantic_search", "code_index_search");
 
         registry
     }
@@ -2374,11 +2391,16 @@ impl Tool for SkillExecuteTool {
     }
 
     /// Sync fallback: bridges to `run_async` via the dedicated skill runtime.
-    /// Never uses `block_in_place` so it won't block tokio worker threads.
+    /// Uses a pre-created dedicated tokio runtime to avoid blocking tokio worker
+    /// threads with `block_in_place` (per principle rule #23).
     /// Async callers should always use `run_async` directly for optimal performance.
     /// Uses a cached static Arc to avoid allocating a new Arc on every call.
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let input = input.clone();
+        // Always use the dedicated skill runtime. Because the runtime is created
+        // lazily via OnceLock (not inline), this does NOT trigger the
+        // "Cannot start a runtime from within a runtime" panic when called from
+        // an existing tokio runtime context.
         let rt = skill_runtime();
         rt.block_on(skill_execute_arc().run_async(input))
     }

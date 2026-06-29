@@ -176,7 +176,7 @@ impl Planner {
                     let plan_step = PlanStep {
                         step_id: "plan-1".to_string(),
                         description: format!("Analyze objective: {}", task.objective),
-                        mode: ModeKind::Agent,
+                        mode: ModeKind::Edit,
                         agent: None,
                         depends_on: vec![],
                         timeout_seconds: 120,
@@ -214,7 +214,7 @@ impl Planner {
                     let plan_step = PlanStep {
                         step_id: "plan-1".to_string(),
                         description: format!("Analyze objective: {}", task.objective),
-                        mode: ModeKind::Agent,
+                        mode: ModeKind::Edit,
                         agent: None,
                         depends_on: vec![],
                         timeout_seconds: 120,
@@ -249,7 +249,7 @@ impl Planner {
                 let plan_step = PlanStep {
                     step_id: "plan-1".to_string(),
                     description: format!("Deep analysis: {}", task.objective),
-                    mode: ModeKind::Agent,
+                    mode: ModeKind::Edit,
                     agent: None,
                     depends_on: vec![],
                     timeout_seconds: 300,

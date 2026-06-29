@@ -154,7 +154,7 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "web_scrape" | "invoice_parse" | "rss_read" | "sqlite_query" => "read",
 
         // ── Search operations ──
-        "grep" | "find_path" | "find_files" => "search",
+        "grep" | "find_path" | "find_files" | "code_index_search" => "search",
 
         // ── Write operations (file creation/modification) ──
         "write_file"
@@ -343,7 +343,10 @@ async fn run_single_tool(
         allowed_base_dir: None,
     };
 
-    let output = match registry.run_with_fallback_async(tool_name, &tool_input).await {
+    let output = match registry
+        .run_with_fallback_async(tool_name, &tool_input)
+        .await
+    {
         Ok(out) => out,
         Err(e) => {
             let duration_ms = start.elapsed().as_millis() as u64;

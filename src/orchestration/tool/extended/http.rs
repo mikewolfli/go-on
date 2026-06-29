@@ -8,6 +8,20 @@ use serde_json::Value;
 use std::time::Duration;
 use tracing::debug;
 
+/// Extract the first HTTP/HTTPS URL from a text string.
+fn extract_url(text: &str) -> Option<String> {
+    let https = text.find("https://");
+    let http = text.find("http://").filter(|_| https.is_none());
+    let start = https.or(http)?;
+    let remaining = &text[start..];
+    let end = remaining
+        .find(|c: char| {
+            c.is_whitespace() || c == '\"' || c == '\'' || c == '>' || c == ')' || c == ']'
+        })
+        .unwrap_or(remaining.len());
+    Some(remaining[..end].to_string())
+}
+
 pub struct HttpRequestTool;
 
 impl Tool for HttpRequestTool {
@@ -15,9 +29,16 @@ impl Tool for HttpRequestTool {
         "http_request"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let url = input.payload["url"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_url")))?;
+        // Primary: url from function call arguments.
+        // Fallback: extract URL from the task objective when the AI model
+        // fails to pass the url argument (common in some models).
+        let url = if let Some(url_str) = input.payload["url"].as_str() {
+            url_str.to_string()
+        } else {
+            extract_url(&input.objective)
+                .or_else(|| extract_url(&input.payload.to_string()))
+                .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_url")))?
+        };
         let method = input.payload["method"].as_str().unwrap_or("GET");
         let body = input.payload["body"].as_str();
 
@@ -40,38 +61,38 @@ impl Tool for HttpRequestTool {
             .context("failed to build HTTP client")?;
 
         let mut request_builder = match method.to_uppercase().as_str() {
-            "GET" => client.get(url),
+            "GET" => client.get(&url),
             "POST" => {
-                let mut builder = client.post(url);
+                let mut builder = client.post(&url);
                 if let Some(body_text) = body {
                     builder = builder.body(body_text.to_string());
                 }
                 builder
             }
             "PUT" => {
-                let mut builder = client.put(url);
+                let mut builder = client.put(&url);
                 if let Some(body_text) = body {
                     builder = builder.body(body_text.to_string());
                 }
                 builder
             }
             "DELETE" => {
-                let mut builder = client.delete(url);
+                let mut builder = client.delete(&url);
                 if let Some(body_text) = body {
                     builder = builder.body(body_text.to_string());
                 }
                 builder
             }
             "PATCH" => {
-                let mut builder = client.patch(url);
+                let mut builder = client.patch(&url);
                 if let Some(body_text) = body {
                     builder = builder.body(body_text.to_string());
                 }
                 builder
             }
-            "HEAD" => client.head(url),
+            "HEAD" => client.head(&url),
             "OPTIONS" => {
-                let mut builder = client.request(reqwest::Method::OPTIONS, url);
+                let mut builder = client.request(reqwest::Method::OPTIONS, &url);
                 if let Some(body_text) = body {
                     builder = builder.body(body_text.to_string());
                 }

@@ -643,7 +643,7 @@ mod tests {
                 PlanStep {
                     step_id: "plan-1".to_string(),
                     description: "Analyze objective".to_string(),
-                    mode: ModeKind::Agent,
+                    mode: ModeKind::Edit,
                     agent: None,
                     depends_on: vec![],
                     timeout_seconds: 10,

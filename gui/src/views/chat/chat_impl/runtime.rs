@@ -284,7 +284,7 @@ impl ChatView {
                 // Guard ensures active_generations is decremented when this task exits
                 let _guard = active_gen_guard;
 
-                let phase_val = if phase_clone.is_empty() {
+                let _phase_val = if phase_clone.is_empty() {
                     serde_json::Value::Null
                 } else {
                     serde_json::Value::String(phase_clone.clone())
@@ -307,7 +307,6 @@ impl ChatView {
                     serde_json::json!({
                         "messages": history_messages,
                         "mode": mode_clone,
-                        "phase": phase_val,
                     })
                 };
 

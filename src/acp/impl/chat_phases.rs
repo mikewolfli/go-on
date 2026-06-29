@@ -36,6 +36,7 @@ use crate::acp::helpers::cache_strategy::{
 };
 use crate::acp::helpers::context::request_timeout;
 use crate::acp::helpers::response_assembler::CapabilityRoutingInfo;
+use crate::acp::helpers::review_gate::run_review_gate;
 use crate::acp::helpers::vote_executor::{execute_high_risk_vote, HighRiskVoteExecutionResult};
 use crate::acp::r#impl::chat::{
     agent_switch_state, apply_review_gate_assemble, auto_create_skills_from_conversation,
@@ -43,10 +44,9 @@ use crate::acp::r#impl::chat::{
     emit_stream_done, emit_stream_token_economy, estimate_token_economy,
     evaluate_pre_route_policies, execute_autonomy_round, execute_fallback_agents,
     extract_task_description, persist_chat_knowledge, persist_session_distillation,
-    persist_vector_memory, resolve_request_phase, routing_handles, run_full_auto_execution,
-    select_and_score_agents, ChatParams, ChatRequestContext, FallbackExecutionResult,
-    FullAutoExecutionResult, RiskAssessment, RiskVotePolicy, StreamEventMeta, StreamObserver,
-    VectorContext,
+    persist_vector_memory, resolve_request_phase, routing_handles, select_and_score_agents,
+    AutonomyOutcome, ChatParams, ChatRequestContext, FallbackExecutionResult, RiskAssessment,
+    RiskVotePolicy, StreamEventMeta, StreamObserver, VectorContext,
 };
 use crate::acp::r#impl::request;
 use crate::acp::server::{AcpServer, OutcomeEvent};
@@ -129,7 +129,6 @@ pub(crate) struct ActOutput {
     pub last_err: Option<anyhow::Error>,
     pub cache_hit: bool,
     pub cache_bypassed_for_execution: bool,
-    pub autonomy_loop_executed: bool,
     pub agent_attempts: Vec<Value>,
     pub quota_failed_agents: Vec<String>,
     pub vote_winner: Option<String>,
@@ -142,7 +141,6 @@ pub(crate) struct ActOutput {
     pub metacognitive_loop: Value,
     pub distillation: Value,
     pub _task_contexts: Vec<TaskContext>,
-    pub full_auto_result: FullAutoExecutionResult,
 }
 
 // ── ThresholdLearner (INT-2) ──────────────────────────────────────────
@@ -576,19 +574,53 @@ pub(crate) async fn act_phase(
         }
     }
 
+    // ── Pre-execution review gate (SafeGuard mode) ────────────────────
+    let review_passed = match ModeKind::from(params.mode.as_str()) {
+        ModeKind::SafeGuard => {
+            if let Some(span) = None {
+                let outcome = run_review_gate(
+                    server,
+                    &params.messages,
+                    resolve_out.phase.options.as_ref(),
+                    span,
+                    trace,
+                )
+                .await;
+                if !outcome.passed {
+                    tracing::info!("safeguard review gate blocked execution");
+                }
+                outcome.passed
+            } else {
+                true
+            }
+        }
+        _ => true,
+    };
+
     // Autonomy round
     let mut task_contexts: Vec<TaskContext> = Vec::new();
-    let autonomy_outcome = execute_autonomy_round(
-        server,
-        params,
-        &resolve_out.phase,
-        &resolve_out.phase_name,
-        &resolve_out.resolved,
-        &routing_out.agent_messages,
-        &routing_out.base_agent_options,
-        cache_hit,
-    )
-    .await;
+    let autonomy_outcome = if review_passed {
+        execute_autonomy_round(
+            server,
+            params,
+            &resolve_out.phase,
+            &resolve_out.phase_name,
+            &resolve_out.resolved,
+            &routing_out.agent_messages,
+            &routing_out.base_agent_options,
+            cache_hit,
+        )
+        .await
+    } else {
+        AutonomyOutcome {
+            autonomy_loop_executed: false,
+            selected_agent: String::new(),
+            response_text: String::new(),
+            _reasoning_text: String::new(),
+            _selected_model_name: None,
+            agent_attempts: Vec::new(),
+        }
+    };
     if autonomy_outcome.autonomy_loop_executed {
         selected_agent = autonomy_outcome.selected_agent;
         response_text = autonomy_outcome.response_text;
@@ -628,7 +660,7 @@ pub(crate) async fn act_phase(
     }
 
     // Fallback + vote
-    if !cache_hit && response_text.is_empty() {
+    if !(cache_hit || autonomy_loop_executed && !response_text.trim().is_empty()) {
         let (fallback_result, vote_result, emit_final_vote) = execute_fallback_with_vote(
             server,
             params,
@@ -652,7 +684,7 @@ pub(crate) async fn act_phase(
             used_multi_model_vote,
             used_multi_agent_vote,
             review_required,
-            vote_winner,
+            _vote_winner,
             vote_report,
         ) = if emit_final_vote {
             response_text = vote_result.response_text;
@@ -743,33 +775,6 @@ pub(crate) async fn act_phase(
                     )
                     .await;
             }
-
-            return Ok(ActOutput {
-                selected_agent,
-                response_text,
-                reasoning_text,
-                selected_model_name,
-                last_err,
-                cache_hit,
-                cache_bypassed_for_execution,
-                autonomy_loop_executed,
-                agent_attempts,
-                quota_failed_agents,
-                vote_winner,
-                vote_report: vote_report.clone(),
-                used_multi_model_vote,
-                used_multi_agent_vote,
-                review_required,
-                checkpoint: cognitive_empty_checkpoint(),
-                knowledge: Value::Null,
-                metacognitive_loop: Value::Null,
-                distillation: Value::Null,
-                _task_contexts: task_contexts,
-                full_auto_result: FullAutoExecutionResult {
-                    reviews: Vec::new(),
-                    tool_execution_results: Vec::new(),
-                },
-            });
         }
         if let Some(err) = last_err.take() {
             return Err(err);
@@ -833,7 +838,7 @@ pub(crate) async fn act_phase(
             role: "assistant".to_string(),
             content: response_text.clone(),
         });
-        let (mut checkpoint, knowledge) = tokio::join!(
+        let (mut checkpoint, _knowledge) = tokio::join!(
             request::create_checkpoint_record(
                 server,
                 &routing_out.conversation_id,
@@ -852,7 +857,7 @@ pub(crate) async fn act_phase(
                 &response_text
             ),
         );
-        let (metacognitive_loop, distillation) = tokio::join!(
+        let (metacognitive_loop, _distillation) = tokio::join!(
             request::persist_checkpoint_metacognitive_loop(
                 server,
                 &routing_out.conversation_id,
@@ -937,33 +942,6 @@ pub(crate) async fn act_phase(
                 )
                 .await;
         }
-
-        return Ok(ActOutput {
-            selected_agent,
-            response_text,
-            reasoning_text,
-            selected_model_name,
-            last_err,
-            cache_hit,
-            cache_bypassed_for_execution,
-            autonomy_loop_executed,
-            agent_attempts,
-            quota_failed_agents,
-            vote_winner,
-            vote_report,
-            used_multi_model_vote,
-            used_multi_agent_vote,
-            review_required,
-            checkpoint,
-            knowledge,
-            metacognitive_loop,
-            distillation,
-            _task_contexts: task_contexts,
-            full_auto_result: FullAutoExecutionResult {
-                reviews: Vec::new(),
-                tool_execution_results: Vec::new(),
-            },
-        });
     }
 
     // O-FIX4: Record global performance metric (cache-hit or fallback-early path)
@@ -992,7 +970,6 @@ pub(crate) async fn act_phase(
         last_err,
         cache_hit,
         cache_bypassed_for_execution,
-        autonomy_loop_executed,
         agent_attempts,
         quota_failed_agents,
         vote_winner: None,
@@ -1005,10 +982,6 @@ pub(crate) async fn act_phase(
         metacognitive_loop: Value::Null,
         distillation: Value::Null,
         _task_contexts: task_contexts,
-        full_auto_result: FullAutoExecutionResult {
-            reviews: Vec::new(),
-            tool_execution_results: Vec::new(),
-        },
     })
 }
 
@@ -1271,7 +1244,7 @@ pub(crate) async fn reflect_phase(
     server: &AcpServer,
     params: &ChatParams,
     trace: &RequestTraceContext,
-    span: Option<&OtelContext>,
+    _span: Option<&OtelContext>,
     started: Instant,
     _stream_observer: Option<StreamObserver>,
     resolve_out: &ObserveOutput,
@@ -1290,7 +1263,8 @@ pub(crate) async fn reflect_phase(
     }
 
     // ModeRuntime + MultiAgent — skip for ask mode since response is already handled
-    if params.mode != "ask" {
+    let mode_kind = ModeKind::from(params.mode.as_str());
+    if mode_kind != ModeKind::Ask {
         run_mode_runtime_and_multi_agent(
             server,
             params,
@@ -1302,22 +1276,6 @@ pub(crate) async fn reflect_phase(
         )
         .await;
     }
-
-    // FullAuto execution
-    let full_auto_result = run_full_auto_execution(
-        server,
-        params,
-        &resolve_out.phase,
-        &resolve_out.phase_name,
-        span,
-        trace,
-        &exec_out.selected_agent,
-        &exec_out.response_text,
-        &routing_out.conversation_id,
-        exec_out.autonomy_loop_executed,
-    )
-    .await;
-    exec_out.full_auto_result = full_auto_result;
 
     let risk_decision = json!({
         "policy_enabled": routing_out.risk_policy.enabled,
@@ -1350,7 +1308,7 @@ pub(crate) async fn reflect_phase(
         resolve_out.schema_warnings.clone(),
         resolve_out.schema_error.clone(),
         routing_out.layered_prompt_segments,
-        &exec_out.full_auto_result.tool_execution_results,
+        &Vec::<Value>::new(),
         &sched_task_id,
         &routing_out.candidate_agents,
         &resolve_out.routing_provenance,
@@ -1372,7 +1330,7 @@ pub(crate) async fn reflect_phase(
             selection_reason: routing_out.capability_selection_reason.clone(),
             optimization_hint: routing_out.capability_optimization_hint.clone(),
         },
-        exec_out.full_auto_result.reviews.clone(),
+        Vec::new(),
         exec_out.agent_attempts.clone(),
         risk_decision,
         exec_out.quota_failed_agents.clone(),
@@ -1633,7 +1591,7 @@ async fn run_mode_runtime_and_multi_agent(
         }
     }
 
-    if matches!(mode_runtime.kind(), ModeKind::Agent)
+    if matches!(mode_runtime.kind(), ModeKind::Edit)
         && resolved.agents.len() > 1
         && !exec_out.cache_hit
     {

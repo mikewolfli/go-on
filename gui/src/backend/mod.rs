@@ -230,6 +230,7 @@ impl BackendClient {
     }
 
     /// Get the currently negotiated chat endpoint path (e.g. `/v1/chat/completions`).
+    #[allow(dead_code)]
     pub async fn get_chat_endpoint(&self) -> String {
         self.chat_endpoint.read().await.clone()
     }
@@ -476,19 +477,13 @@ impl BackendClient {
     pub async fn chat_with_options(
         &self,
         message: &str,
-        mode: &str,
-        phase: &str,
+        _mode: &str,
+        _phase: &str,
         model: Option<&str>,
         options_extra: Option<Value>,
         history: Option<Vec<Value>>,
         abort_ctrl: Option<AbortController>,
     ) -> Result<(String, String, String, Option<String>), String> {
-        let phase_val = if phase.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::String(phase.to_string())
-        };
-
         let messages = if let Some(hist) = history {
             let mut msgs = hist;
             msgs.push(serde_json::json!({ "role": "user", "content": message }));
@@ -497,10 +492,12 @@ impl BackendClient {
             vec![serde_json::json!({ "role": "user", "content": message })]
         };
 
+        // Always use mode="ask" regardless of the passed mode parameter.
+        // The backend's phase routing pipeline (edit/agent/full_auto) requires
+        // phase agents in config.toml which are not configured in local mode.
         let mut body = serde_json::json!({
             "messages": messages,
-            "mode": mode,
-            "phase": phase_val,
+            "mode": "ask",
         });
 
         if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
@@ -677,6 +674,35 @@ impl BackendClient {
                                 }
                             }
                         }
+                        "result" | "done" => {
+                            // Final result event — extract response content.
+                            // This is used by non-streaming responses from /chat/stream.
+                            if let Some(text) = val
+                                .get("response")
+                                .or_else(|| val.get("content"))
+                                .and_then(|v| v.as_str())
+                            {
+                                response_text = text.to_string();
+                            }
+                            if let Some(r) = val.get("thinking").and_then(|v| v.as_str()) {
+                                thinking_text = r.to_string();
+                            }
+                            if let Some(agent) = val
+                                .get("agent")
+                                .or_else(|| val.get("selected_agent"))
+                                .and_then(|v| v.as_str())
+                            {
+                                if !agent.is_empty() {
+                                    agent_text = agent.to_string();
+                                }
+                            }
+                            if let Some(model) = val.get("selected_model").and_then(|v| v.as_str())
+                            {
+                                if !model.is_empty() {
+                                    selected_model = Some(model.to_string());
+                                }
+                            }
+                        }
                         "error" => {
                             if let Some(err_msg) = val
                                 .get("error")
@@ -692,6 +718,10 @@ impl BackendClient {
                                 serde_json::to_string(&val).unwrap_or_default()
                             ));
                         }
+                        "telemetry" => {
+                            // Telemetry events carry token economy data — ignore here
+                            // as they don't contribute to response text.
+                        }
                         _ => {}
                     }
                 }
@@ -702,8 +732,11 @@ impl BackendClient {
         }
 
         if response_text.is_empty() && thinking_text.is_empty() {
+            // If the backend returned no content, generate a friendly fallback
+            // message instead of a confusing "(empty)" response.
+            let fallback = "I received your request but was unable to generate a complete response. Please try rephrasing or check if the provider is properly configured.";
             Ok((
-                "(empty)".to_string(),
+                fallback.to_string(),
                 String::new(),
                 agent_text,
                 selected_model,

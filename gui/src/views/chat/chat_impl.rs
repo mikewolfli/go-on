@@ -385,16 +385,12 @@ impl ChatView {
         let mut sessions = Self::load_sessions_from_disk();
         let templates = Self::load_templates_from_disk();
         if sessions.is_empty() {
-            sessions.push(Self::default_session(0, String::new(), "ask".to_string()));
+            sessions.push(Self::default_session(0, String::new(), "edit".to_string()));
         }
         let initial_phase = sessions
             .first()
             .map(|s| s.phase.clone())
             .unwrap_or_default();
-        let initial_mode = sessions
-            .first()
-            .map(|s| s.mode.clone())
-            .unwrap_or_else(|| "ask".to_string());
         let initial_model = sessions
             .first()
             .map(|s| s.model.clone())
@@ -416,17 +412,10 @@ impl ChatView {
         // Load persistent UI state before constructing ChatView
         let ui_state = GlobalUiState::load();
 
-        // Final mode: persisted ui_state > session default > "ask"
-        let valid_modes = ["ask", "plan", "edit", "safeguard", "full_auto"];
-        let saved_mode = if !ui_state.selected_mode.is_empty()
-            && valid_modes.contains(&ui_state.selected_mode.as_str())
-        {
-            ui_state.selected_mode.clone()
-        } else if valid_modes.contains(&initial_mode.as_str()) {
-            initial_mode
-        } else {
-            "edit".to_string()
-        };
+        // Final mode: always default to "edit". Ignore saved ui_state or session
+        // defaults — the internal backend request always uses mode="ask" regardless
+        // of UI selection (see runtime.rs). The mode selector is for UI reference only.
+        let saved_mode = "edit".to_string();
 
         // Deserialize model_stats from saved JSON if present
         let model_stats: std::collections::HashMap<String, ModelPerfStats> = ui_state
@@ -566,7 +555,7 @@ impl ChatView {
                 self.sessions.push(Self::default_session(
                     0,
                     "think".to_string(),
-                    "ask".to_string(),
+                    "edit".to_string(),
                 ));
             }
             self.active_session = self.sessions.len() - 1;

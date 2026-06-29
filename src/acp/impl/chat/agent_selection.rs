@@ -211,15 +211,6 @@ pub(crate) async fn select_and_score_agents(
         filter_result.model_is_specific,
     );
 
-    eprintln!(
-        "DEBUG agent_selection: resolved.agents={:?}, capability_selected={:?}",
-        resolved
-            .agents
-            .iter()
-            .map(|(n, _)| n.clone())
-            .collect::<Vec<_>>(),
-        capability_selected_agent
-    );
     let candidate_agents = resolved
         .agents
         .iter()

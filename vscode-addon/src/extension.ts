@@ -14,6 +14,7 @@ import { revealGoOnView } from "./viewRouter";
 import { registerViewCommands } from "./commandRegistry";
 import { registerRpcCommands } from "./rpcCommandRegistry";
 import { registerCoreCommands } from "./coreCommandRegistry";
+import { registerWorkspaceContextCommands } from "./commands/workspaceContext";
 import { GoOnManager, GoOnStatusProvider } from "./runtimeManager";
 import { disposeLogger } from "./logger";
 import { startStateSyncListener } from "./stateSync";
@@ -686,10 +687,17 @@ function registerCommands(
     },
   );
 
+  const workspaceCommands = registerWorkspaceContextCommands(context, {
+    isRunning: () => state.manager.isRunning(),
+    sendRequest: (method: string, params?: unknown) =>
+      state.manager.sendRequest(method, params),
+  });
+
   context.subscriptions.push(
     ...coreCommands,
     ...viewCommands,
     ...rpcCommands,
+    ...workspaceCommands,
     refreshStatusMonitorCommand,
     refreshStatusTreeCommand,
     keyringSetCommand,

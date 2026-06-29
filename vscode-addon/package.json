@@ -410,6 +410,26 @@
         "icon": "$(note)"
       },
       {
+        "command": "go-on.sendSelection",
+        "title": "Go-On: Send Selection as Context",
+        "icon": "$(whole-word)"
+      },
+      {
+        "command": "go-on.sendFile",
+        "title": "Go-On: Send Current File as Context",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "go-on.semanticSearch",
+        "title": "Go-On: Semantic Code Search",
+        "icon": "$(search)"
+      },
+      {
+        "command": "go-on.workspaceContext",
+        "title": "Go-On: Send Workspace Context",
+        "icon": "$(root-folder)"
+      },
+      {
         "command": "go-on-status.refresh",
         "title": "Refresh Status Tree",
         "icon": "$(refresh)"
