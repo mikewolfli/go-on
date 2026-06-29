@@ -344,6 +344,50 @@ impl DeterministicVerifier {
             VerificationVerdict::Reject
         }
     }
+
+    /// Run an adversarial verification check by invoking all four
+    /// `AdversarialVerifier` bias probes (Security, Logic, Completeness,
+    /// Performance) and aggregating the results into a single signal.
+    ///
+    /// The signal passes only when ALL adversarial biases pass, indicating
+    /// no security, logic, completeness, or performance weaknesses were found.
+    pub fn run_adversarial_check(content: &str) -> VerificationSignal {
+        let verdicts = AdversarialVerifier::verify_all(content);
+        let passed_count = verdicts.iter().filter(|v| v.passed).count();
+        let total = verdicts.len();
+        let all_passed = passed_count == total;
+        let confidence = if total > 0 {
+            passed_count as f32 / total as f32
+        } else {
+            1.0
+        };
+        let details = if all_passed {
+            "all adversarial checks passed".to_string()
+        } else {
+            let failures: Vec<&str> = verdicts
+                .iter()
+                .filter(|v| !v.passed)
+                .map(|v| match v.bias {
+                    AdversarialBias::Security => "security",
+                    AdversarialBias::Logic => "logic",
+                    AdversarialBias::Completeness => "completeness",
+                    AdversarialBias::Performance => "performance",
+                })
+                .collect();
+            format!(
+                "adversarial checks failed for: {} (passed {}/{})",
+                failures.join(", "),
+                passed_count,
+                total
+            )
+        };
+        VerificationSignal {
+            signal_type: QualitySignalType::RuntimeVerification,
+            passed: all_passed,
+            confidence,
+            details: Some(details),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

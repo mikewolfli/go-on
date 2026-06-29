@@ -90,7 +90,6 @@ mod health_pack;
 mod learning_pack;
 mod lifecycle_handlers;
 mod lifecycle_pack;
-mod method_router;
 mod metrics_pack;
 mod ops_pack;
 pub mod prompts_pack;
@@ -602,21 +601,6 @@ pub async fn handle_request(
     // Use the potentially normalized method for dispatch.
     let result = DISPATCH_REQUEST_METHOD
         .scope(method.to_string(), async {
-            // B51-28: Try the MethodRouter first; fall through to legacy match
-            // if no handler is registered.
-            if let Some(router_result) = method_router::global_method_router()
-                .dispatch(
-                    method.as_ref(),
-                    server,
-                    request.params.clone().unwrap_or_default(),
-                    request_id.clone(),
-                    &trace,
-                )
-                .await
-            {
-                return router_result;
-            }
-
             match method.as_ref() {
                 "initialize" => protocol_pack::handle_initialize(server, request_id).await,
                 // Standard ACP session lifecycle methods

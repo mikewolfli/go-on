@@ -62,6 +62,10 @@ pub enum AudioProcessorError {
     #[error("unsupported audio format: {0:?}")]
     UnsupportedFormat(AudioFormat),
 
+    /// Backend runtime error.
+    #[error("backend error: {0}")]
+    Backend(String),
+
     /// Generic/internal error.
     #[error("{0}")]
     Other(String),
@@ -519,9 +523,7 @@ impl AudioProcessor {
             )));
         }
 
-        Err(AudioProcessorError::Other(
-            "Vosk transcription requires model loading. The `audio-vosk` feature was compiled, but no real Vosk model was loaded during initialization. Set `vosk_model_path` in the audio configuration and ensure the model directory exists at the specified path.".to_string(),
-        ))
+        Err(AudioProcessorError::Backend("Vosk backend initialized: model path exists but runtime transcription is not yet connected to the Vosk C library".to_string()))
     }
 
     #[cfg(not(feature = "audio-vosk"))]

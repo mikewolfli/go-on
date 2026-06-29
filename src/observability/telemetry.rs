@@ -264,7 +264,6 @@ fn init_otel_provider(_exporter: &str, endpoint: Option<String>, service_name: &
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use std::sync::atomic::Ordering;
 
     /// Helper to build a minimal RuntimeConfig with OTEL enabled.
@@ -279,77 +278,7 @@ mod tests {
         }
     }
 
-    // ── reset_otel ────────────────────────────────────────────────────
-
-    #[test]
-    fn test_reset_otel_allows_reinit() {
-        // Reset any prior state
-        reset_otel();
-
-        // First init
-        let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-        assert!(rt.is_enabled(), "should be enabled after first init");
-
-        // Reset
-        reset_otel();
-
-        // Re-init
-        let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
-        assert!(rt2.is_enabled(), "should be re-enabled after reset");
-    }
-
-    #[test]
-    fn test_reset_otel_clears_init_state() {
-        reset_otel();
-
-        let rt1 = TelemetryRuntime::new(&otel_config(true, 1.0));
-        assert!(rt1.is_enabled());
-
-        reset_otel();
-
-        // After reset, verify we can re-init fresh (this is the reliable
-        // behavioral check). The raw guard value may be concurrently modified
-        // by other tests running in parallel, so we avoid asserting on the
-        // internal state and instead verify the observable behaviour:
-        let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
-        assert!(rt2.is_enabled(), "should be re-initializable after reset");
-    }
-
-    #[test]
-    #[serial]
-    fn test_reset_otel_repeat_reset_behavior() {
-        // Verify that calling reset_otel multiple times in sequence
-        // does not panic and correctly allows re-initialization each time.
-        for i in 0..3 {
-            reset_otel();
-
-            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-            assert!(
-                rt.is_enabled(),
-                "iteration {}: should be enabled after reset+init",
-                i
-            );
-
-            // After re-init, the OTEL_INIT guard should be Some(Ok(()))
-            let guard = OTEL_INIT.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            assert!(
-                guard.is_some(),
-                "iteration {}: OTEL_INIT should be Some after init",
-                i
-            );
-            assert!(
-                guard.as_ref().unwrap().is_ok(),
-                "iteration {}: OTEL_INIT should be Ok",
-                i
-            );
-            // If poisoned (from a prior panic), the recovery handled it;
-        }
-    }
-
-    // ── Sampling logic ────────────────────────────────────────────────
+    // ── Sampling logic (pure unit tests, NO global state) ────────────
 
     #[test]
     fn test_should_sample_always_at_1_0() {
@@ -358,7 +287,6 @@ mod tests {
             sample_ratio: 1.0,
             ..Default::default()
         };
-        // Every key should sample at ratio 1.0
         for key in &["", "a", "test-key", "conversation-12345"] {
             assert!(
                 rt.should_sample(key),
@@ -391,7 +319,6 @@ mod tests {
             sample_ratio: 0.5,
             ..Default::default()
         };
-        // Same key must produce the same result every time
         let key = "consistent-key";
         let r1 = rt.should_sample(key);
         let r2 = rt.should_sample(key);
@@ -407,9 +334,6 @@ mod tests {
             sample_ratio: 0.5,
             ..Default::default()
         };
-        // With 1000 distinct keys at ratio 0.5, both true and false
-        // should appear (statistically near-certain). This test verifies
-        // the hash-based sampler is not degenerate.
         let mut saw_true = false;
         let mut saw_false = false;
         for i in 0..1000u64 {
@@ -436,12 +360,9 @@ mod tests {
             sample_ratio: 0.001,
             ..Default::default()
         };
-        // Very low ratio — most keys should not sample
         let sampled_count: u32 = (0..10000u64)
             .map(|i| rt.should_sample(&format!("key-{}", i)) as u32)
             .sum();
-        // With ratio 0.001 and 10000 keys, expected ~10 samples.
-        // Allow generous range: 0-50 to avoid flakiness.
         assert!(
             sampled_count < 100,
             "at ratio 0.001, 10000 keys should produce <100 samples, got {}",
@@ -451,6 +372,8 @@ mod tests {
 
     #[test]
     fn test_should_sample_clamps_ratio() {
+        // Note: TelemetryRuntime::new() may access OTEL_INIT global if OTEL
+        // is enabled, but clamping logic is independent of init state.
         let rt = TelemetryRuntime::new(&otel_config(true, 1.5));
         assert!(
             rt.should_sample("anything"),
@@ -464,118 +387,188 @@ mod tests {
         );
     }
 
-    // ── Span lifecycle ────────────────────────────────────────────────
+    // ── Span lifecycle (pure unit tests, NO global state) ─────────────
 
     #[test]
     fn test_disabled_runtime_returns_none() {
-        let rt = TelemetryRuntime::default(); // enabled = false
+        let rt = TelemetryRuntime::default();
         assert!(!rt.is_enabled());
         assert!(rt.start_root_span("test", "key", vec![]).is_none());
         assert!(rt
             .start_child_span(&Context::current(), "child", vec![])
             .is_none());
-        // end_span should not panic when disabled
         rt.end_span(Context::current(), vec![]);
     }
 
-    #[test]
-    fn test_sampling_rate_tracking() {
-        reset_otel();
-        let rt = TelemetryRuntime::new(&otel_config(true, 0.25));
-        assert!(rt.is_enabled());
+    // ── Integration tests that depend on global OTEL_INIT state ───────
+    //
+    // These tests share `OTEL_INIT`, `TRACER_INITIALIZED`, and the global
+    // tracer provider. They MUST run serially to avoid race conditions.
+    // A dedicated std::sync::Mutex<()> lock ensures mutual exclusion across
+    // all OTel init tests — no two will ever interleave their reset/setup.
+    static OTEL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-        // Start 1000 root spans — about 25% should be sampled
-        for i in 0..1000u64 {
-            let _ = rt.start_root_span("op", &format!("key-{}", i), vec![]);
+    /// Acquire the OTel test lock before running an integration test that
+    /// depends on global OTEL_INIT state. Returns a guard that releases the
+    /// lock when dropped.
+    fn lock_otel_test() -> std::sync::MutexGuard<'static, ()> {
+        OTEL_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("OTEL_TEST_LOCK poisoned, recovering");
+            poisoned.into_inner()
+        })
+    }
+
+    mod otel_integration {
+        use super::*;
+
+        #[test]
+        fn allows_reinit() {
+            let _guard = lock_otel_test();
+            reset_otel();
+            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
+            assert!(rt.is_enabled(), "should be enabled after first init");
+
+            reset_otel();
+            let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
+            assert!(rt2.is_enabled(), "should be re-enabled after reset");
         }
 
-        let rate = rt.sampling_rate();
-        assert!(
-            rate > 0.0,
-            "sampling rate should be > 0 after 1000 attempts"
-        );
-        assert!(rate <= 1.0, "sampling rate should be <= 1.0");
-        // At ratio 0.25, expected ~250 samples. Allow 50-500 range.
-        let sampled = rt.sampled_roots.load(Ordering::Relaxed);
-        assert!(
-            sampled > 50,
-            "at ratio 0.25, 1000 attempts should produce at least 50 samples, got {}",
-            sampled
-        );
-        assert!(
-            sampled < 600,
-            "at ratio 0.25, 1000 attempts should produce at most 600 samples, got {}",
-            sampled
-        );
-    }
+        #[test]
+        fn clears_init_state() {
+            let _guard = lock_otel_test();
+            reset_otel();
+            let rt1 = TelemetryRuntime::new(&otel_config(true, 1.0));
+            assert!(rt1.is_enabled());
 
-    #[test]
-    fn test_start_root_span_sets_attributes() {
-        reset_otel();
-        let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-        let cx = rt
-            .start_root_span(
-                "test-op",
-                "test-key",
-                vec![KeyValue::new("test_attr", "hello")],
-            )
-            .expect("root span should be created at ratio 1.0");
-        let span = cx.span();
-        assert_eq!(span.span_context().trace_id().to_string().len(), 32);
-        rt.end_span(cx, vec![]);
-    }
+            reset_otel();
+            let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
+            assert!(rt2.is_enabled(), "should be re-initializable after reset");
+        }
 
-    // ── Reset + reinit tracer functionality ──────────────────────────
+        #[test]
+        fn repeat_reset_behavior() {
+            let _guard = lock_otel_test();
+            for i in 0..3 {
+                reset_otel();
 
-    /// Verify that `reset_otel()` followed by re-initialization produces a
-    /// fully functional tracer that can create spans with valid trace IDs.
-    #[test]
-    fn test_tracer_functional_after_reset() {
-        // First init cycle
-        reset_otel();
-        let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-        let cx = rt
-            .start_root_span("first-cycle", "key-a", vec![])
-            .expect("first span after init");
-        assert_eq!(
-            cx.span().span_context().trace_id().to_string().len(),
-            32,
-            "first cycle trace_id must be 32 hex chars"
-        );
-        rt.end_span(cx, vec![]);
+                let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
+                assert!(
+                    rt.is_enabled(),
+                    "iteration {}: should be enabled after reset+init",
+                    i
+                );
 
-        // Reset and re-init
-        reset_otel();
-        let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
-        assert!(rt2.is_enabled(), "runtime should be enabled after reset");
+                let guard = OTEL_INIT.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                assert!(
+                    guard.is_some(),
+                    "iteration {}: OTEL_INIT should be Some after init",
+                    i
+                );
+                assert!(
+                    guard.as_ref().unwrap().is_ok(),
+                    "iteration {}: OTEL_INIT should be Ok",
+                    i
+                );
+            }
+        }
 
-        let cx2 = rt2
-            .start_root_span("second-cycle", "key-b", vec![])
-            .expect("second span after reset+reinit");
-        assert_eq!(
-            cx2.span().span_context().trace_id().to_string().len(),
-            32,
-            "second cycle trace_id must be 32 hex chars"
-        );
-        rt2.end_span(cx2, vec![]);
-    }
+        #[test]
+        fn sampling_rate_tracking() {
+            let _guard = lock_otel_test();
+            reset_otel();
+            let rt = TelemetryRuntime::new(&otel_config(true, 0.25));
+            assert!(rt.is_enabled());
 
-    /// Verify that a child span can be created after a reset and that
-    /// the parent-child relationship works correctly.
-    #[test]
-    fn test_child_span_after_reset() {
-        reset_otel();
-        let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
+            for i in 0..1000u64 {
+                let _ = rt.start_root_span("op", &format!("key-{}", i), vec![]);
+            }
 
-        let parent = rt
-            .start_root_span("parent", "parent-key", vec![])
-            .expect("parent span");
+            let rate = rt.sampling_rate();
+            assert!(
+                rate > 0.0,
+                "sampling rate should be > 0 after 1000 attempts"
+            );
+            assert!(rate <= 1.0, "sampling rate should be <= 1.0");
 
-        let child = rt
-            .start_child_span(&parent, "child", vec![KeyValue::new("child_attr", "yes")])
-            .expect("child span");
+            let sampled = rt.sampled_roots.load(Ordering::Relaxed);
+            assert!(
+                sampled > 50,
+                "at ratio 0.25, 1000 attempts should produce at least 50 samples, got {}",
+                sampled
+            );
+            assert!(
+                sampled < 600,
+                "at ratio 0.25, 1000 attempts should produce at most 600 samples, got {}",
+                sampled
+            );
+        }
 
-        rt.end_span(child, vec![]);
-        rt.end_span(parent, vec![]);
+        #[test]
+        fn start_root_span_sets_attributes() {
+            let _guard = lock_otel_test();
+            reset_otel();
+            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
+            let cx = rt
+                .start_root_span(
+                    "test-op",
+                    "test-key",
+                    vec![KeyValue::new("test_attr", "hello")],
+                )
+                .expect("root span should be created at ratio 1.0");
+            let span = cx.span();
+            assert_eq!(span.span_context().trace_id().to_string().len(), 32);
+            rt.end_span(cx, vec![]);
+        }
+
+        #[test]
+        fn tracer_functional_after_reset() {
+            let _guard = lock_otel_test();
+            reset_otel();
+            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
+            let cx = rt
+                .start_root_span("first-cycle", "key-a", vec![])
+                .expect("first span after init");
+            assert_eq!(
+                cx.span().span_context().trace_id().to_string().len(),
+                32,
+                "first cycle trace_id must be 32 hex chars"
+            );
+            rt.end_span(cx, vec![]);
+
+            reset_otel();
+            let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
+            assert!(rt2.is_enabled(), "runtime should be enabled after reset");
+
+            let cx2 = rt2
+                .start_root_span("second-cycle", "key-b", vec![])
+                .expect("second span after reset+reinit");
+            assert_eq!(
+                cx2.span().span_context().trace_id().to_string().len(),
+                32,
+                "second cycle trace_id must be 32 hex chars"
+            );
+            rt2.end_span(cx2, vec![]);
+        }
+
+        #[test]
+        fn child_span_after_reset() {
+            let _guard = lock_otel_test();
+            reset_otel();
+            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
+
+            let parent = rt
+                .start_root_span("parent", "parent-key", vec![])
+                .expect("parent span");
+
+            let child = rt
+                .start_child_span(&parent, "child", vec![KeyValue::new("child_attr", "yes")])
+                .expect("child span");
+
+            rt.end_span(child, vec![]);
+            rt.end_span(parent, vec![]);
+        }
     }
 }

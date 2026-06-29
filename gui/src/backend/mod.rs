@@ -230,6 +230,11 @@ impl BackendClient {
     }
 
     /// Get the currently negotiated chat endpoint path (e.g. `/v1/chat/completions`).
+    ///
+    /// The GUI's own `chat_with_options()` always uses `/chat/stream` (native Go-On
+    /// endpoint accepting ChatParams format). This getter is provided for external
+    /// API consumers (SDK integrations, scripts, monitoring tools) that need to know
+    /// which protocol endpoint was negotiated during the ACP handshake.
     #[allow(dead_code)]
     pub async fn get_chat_endpoint(&self) -> String {
         self.chat_endpoint.read().await.clone()
@@ -477,7 +482,7 @@ impl BackendClient {
     pub async fn chat_with_options(
         &self,
         message: &str,
-        _mode: &str,
+        mode: &str,
         _phase: &str,
         model: Option<&str>,
         options_extra: Option<Value>,
@@ -492,12 +497,12 @@ impl BackendClient {
             vec![serde_json::json!({ "role": "user", "content": message })]
         };
 
-        // Always use mode="ask" regardless of the passed mode parameter.
-        // The backend's phase routing pipeline (edit/agent/full_auto) requires
-        // phase agents in config.toml which are not configured in local mode.
+        // Use the UI-selected mode (edit, ask, plan, etc.).
+        // Default to "edit" if mode is empty.
+        let effective_mode = if mode.is_empty() { "edit" } else { mode };
         let mut body = serde_json::json!({
             "messages": messages,
-            "mode": "ask",
+            "mode": effective_mode,
         });
 
         if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {

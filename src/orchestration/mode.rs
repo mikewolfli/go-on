@@ -80,6 +80,8 @@ pub trait ModeRuntime: Send + Sync {
 /// Resolve a mode string ("ask", "edit", "agent", "full_auto", "safeguard") into
 /// a [`Box<dyn ModeRuntime>`] with the given registry and agent name.
 ///
+/// Returns an error if no registry is provided.
+///
 /// This wires the `ModeRuntime` trait into the chat execution flow — callers
 /// in `chat.rs` can use the returned runtime to get per-mode policies for
 /// allowed tools, max tool calls, approval requirements, and risk assessment.
@@ -87,7 +89,7 @@ pub fn resolve_mode_runtime(
     mode: &str,
     registry: Option<Arc<AgentRegistry>>,
     agent_name: Option<String>,
-) -> Box<dyn ModeRuntime> {
+) -> std::result::Result<Box<dyn ModeRuntime>, String> {
     let kind = match mode.to_lowercase().as_str() {
         "ask" => ModeKind::Ask,
         "edit" => ModeKind::Edit,
@@ -99,8 +101,10 @@ pub fn resolve_mode_runtime(
             ModeKind::Ask
         }
     };
-    let registry = registry.expect("ModeRuntime requires a registry");
-    Box::new(GenericModeRuntime::new(kind, registry, agent_name))
+    let registry = registry.ok_or_else(|| "ModeRuntime requires a registry".to_string())?;
+    Ok(Box::new(GenericModeRuntime::new(
+        kind, registry, agent_name,
+    )))
 }
 
 /// Async helper to execute an agent chat without blocking.

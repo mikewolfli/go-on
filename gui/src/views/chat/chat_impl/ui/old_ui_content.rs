@@ -905,7 +905,7 @@ impl ChatView {
                                         self.rename_session_buf = self.sessions[idx].name.clone();
                                     } else if resp.clicked() {
                                         self.active_session = idx;
-                                        self.selected_mode = self.sessions[idx].mode.clone();
+                                        // Don't restore mode from session — keep current UI selection.
                                         self.selected_phase = self.sessions[idx].phase.clone();
                                         self.selected_model = self.sessions[idx].model.clone();
                                         self.sync_model_selection();
@@ -943,8 +943,7 @@ impl ChatView {
                                     self.active_session = self.sessions.len().saturating_sub(1);
                                 }
                                 if self.active_session < self.sessions.len() {
-                                    self.selected_mode =
-                                        self.sessions[self.active_session].mode.clone();
+                                    // Don't restore mode from session — keep current UI selection.
                                     self.selected_phase =
                                         self.sessions[self.active_session].phase.clone();
                                     self.selected_model =

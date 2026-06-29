@@ -806,7 +806,7 @@ mod unit_tests {
         server.config_path = Some(config_path.display().to_string());
 
         let params = ChatParams {
-            mode: "execute".to_string(),
+            mode: "edit".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
                 content: "Fix the build and return the result".to_string(),
@@ -837,7 +837,7 @@ mod unit_tests {
             "response should be non-empty"
         );
         assert_eq!(result["agent"], "test-agent");
-        assert_eq!(result["mode"], "execute");
+        assert_eq!(result["mode"], "edit");
         assert_eq!(result["done"], true);
         assert_eq!(result["phase"], "coding");
     }

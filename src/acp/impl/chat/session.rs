@@ -122,6 +122,22 @@ pub async fn handle_chat(
             );
         }
 
+        // Validate the resolved mode is a recognized value before dispatching.
+        let mode_lower = chat_params.mode.trim().to_ascii_lowercase();
+        match mode_lower.as_str() {
+            "ask" | "plan" | "edit" | "agent" | "full_auto" | "safeguard" | "safe_guard"
+            | "fullauto" => {
+                info!("chat mode validated: '{}'", chat_params.mode);
+            }
+            other => {
+                warn!(
+                    "unrecognized mode '{}' from client, defaulting to 'ask'",
+                    other
+                );
+                chat_params.mode = "ask".to_string();
+            }
+        }
+
         // GAP-46-12: Track session context across requests.
         // Use SessionContextManager to extract key concepts from the conversation
         // and maintain continuity markers for long-running sessions.

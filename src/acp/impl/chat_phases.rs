@@ -577,22 +577,18 @@ pub(crate) async fn act_phase(
     // ── Pre-execution review gate (SafeGuard mode) ────────────────────
     let review_passed = match ModeKind::from(params.mode.as_str()) {
         ModeKind::SafeGuard => {
-            if let Some(span) = None {
-                let outcome = run_review_gate(
-                    server,
-                    &params.messages,
-                    resolve_out.phase.options.as_ref(),
-                    span,
-                    trace,
-                )
-                .await;
-                if !outcome.passed {
-                    tracing::info!("safeguard review gate blocked execution");
-                }
-                outcome.passed
-            } else {
-                true
+            let outcome = run_review_gate(
+                server,
+                &params.messages,
+                resolve_out.phase.options.as_ref(),
+                None,
+                trace,
+            )
+            .await;
+            if !outcome.passed {
+                tracing::info!("safeguard review gate blocked execution");
             }
+            outcome.passed
         }
         _ => true,
     };
@@ -1277,6 +1273,24 @@ pub(crate) async fn reflect_phase(
         .await;
     }
 
+    // Extract inline tool calls from the model's natural-language response
+    // for observability and audit. This catches tool calls that appear as
+    // JSON blocks or inline markers (e.g. ```json {"tool_call": "read_file"} ```)
+    // rather than through the structured streaming protocol.
+    let inline_tool_calls =
+        crate::acp::r#impl::chat::tool_extraction::extract_tool_calls_from_response(
+            &exec_out.response_text,
+            16,
+        );
+    if !inline_tool_calls.is_empty() {
+        tracing::info!(
+            target: "chat_phases",
+            tool_calls = ?inline_tool_calls,
+            "reflect_phase: detected {} inline tool call(s) in response",
+            inline_tool_calls.len(),
+        );
+    }
+
     let risk_decision = json!({
         "policy_enabled": routing_out.risk_policy.enabled,
         "score": routing_out.risk_assessment.score,
@@ -1550,11 +1564,17 @@ async fn run_mode_runtime_and_multi_agent(
     resolved: &crate::orchestration::flow::ResolvedRouting,
     exec_out: &mut ActOutput,
 ) {
-    let mode_runtime = resolve_mode_runtime(
+    let mode_runtime = match resolve_mode_runtime(
         &params.mode,
         server.agent_registry(),
         Some(exec_out.selected_agent.clone()),
-    );
+    ) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            tracing::warn!("failed to resolve mode runtime: {}", e);
+            return;
+        }
+    };
 
     if !exec_out.cache_hit && !exec_out.response_text.is_empty() {
         let envelope = crate::agent::AgentTaskEnvelope {

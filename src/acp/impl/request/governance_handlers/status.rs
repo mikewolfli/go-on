@@ -109,25 +109,17 @@ pub(crate) async fn handle_governance_status(
         .as_ref()
         .and_then(|cfg| cfg.compliance.clone())
         .unwrap_or_default();
-    let startup_context_profile = json!({
-        "enabled": app_config
-            .as_ref()
-            .and_then(|cfg| cfg.startup_context.as_ref())
-            .map(|cfg| cfg.enabled)
-            .unwrap_or(false),
-        "loaded": startup_context.as_ref().map(|ctx| ctx.loaded).unwrap_or(false),
-        "readme_chars": startup_context.as_ref().map(|ctx| ctx.readme_chars).unwrap_or(0),
-        "build_command_count": startup_context
-            .as_ref()
-            .map(|ctx| ctx.build_commands.len())
-            .unwrap_or(0),
-        "style_rule_count": startup_context
-            .as_ref()
-            .map(|ctx| ctx.style_rules.len())
-            .unwrap_or(0),
-        "commit_count": startup_context.as_ref().map(|ctx| ctx.recent_commits.len()).unwrap_or(0),
-        "has_code_repo": startup_context.as_ref().map(|ctx| ctx.has_code_repo).unwrap_or(false),
-    });
+    let startup_context_profile = {
+        let ctx = startup_context.clone().unwrap_or_default();
+        let core_cfg = app_config.as_ref().and_then(|c| c.startup_context.as_ref());
+        let cfg = crate::orchestration::startup_context::StartupContextConfig {
+            enabled: core_cfg.map(|c| c.enabled).unwrap_or(false),
+            readme_max_chars: core_cfg.map(|c| c.readme_max_chars).unwrap_or(2000),
+            recent_commits: core_cfg.map(|c| c.recent_commits).unwrap_or(5),
+            io_timeout_ms: 5_000,
+        };
+        json!(crate::orchestration::startup_context::profile::startup_context_profile(&ctx, &cfg))
+    };
     let compliance_framework_profile = json!({
         "enabled": compliance_config.enabled,
         "standards": compliance_config.standards,

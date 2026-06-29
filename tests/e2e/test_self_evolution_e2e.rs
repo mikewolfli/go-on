@@ -22,8 +22,6 @@ use go_on::orchestration::self_evolution::sandbox::{BuildResult, SandboxExecutor
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 struct EvolutionE2eContext {
-    #[expect(dead_code, reason = "stored for semantic context in tests")]
-    session_id: String,
     workdir: PathBuf,
 }
 
@@ -32,7 +30,6 @@ impl EvolutionE2eContext {
         let workdir = std::env::temp_dir().join(format!("go-on-e2e-evol-{}", session_id));
         let _ = std::fs::create_dir_all(&workdir);
         Self {
-            session_id: session_id.to_string(),
             workdir,
         }
     }

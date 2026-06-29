@@ -1194,21 +1194,15 @@ async fn write_http_json_response(
 // Helper functions for MCP HTTP security hardening
 // ---------------------------------------------------------------------------
 
-/// Extract a Bearer token from MCP HTTP request headers.
-/// Checks `Authorization: Bearer <token>` first, then falls back to
-/// `X-Api-Key` and `X-Go-On-Key` headers.
 /// Constant-time string comparison to prevent timing side-channel attacks.
-/// Compares two strings in constant time to prevent timing side-channel attacks.
-///
-/// Uses the `subtle` crate's `ConstantTimeEq` trait which guarantees
-/// constant-time comparison via compiler barriers and careful implementation,
-/// protecting against attackers who measure response latency to guess tokens
-/// character-by-character.
 fn constant_time_eq(a: &str, b: &str) -> bool {
     use subtle::ConstantTimeEq;
     a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
+/// Extract a Bearer token from MCP HTTP request headers.
+/// Checks `Authorization: Bearer <token>` first, then falls back to
+/// `X-Api-Key` and `X-Go-On-Key` headers.
 fn extract_mcp_entry_token(headers: &str) -> Option<String> {
     if let Some(auth) = extract_mcp_header_value(headers, "authorization") {
         let lower = auth.to_ascii_lowercase();

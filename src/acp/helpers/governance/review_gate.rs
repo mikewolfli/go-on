@@ -65,7 +65,7 @@ pub fn run_enhanced_verification(response_text: &str) -> Value {
         verification_signals.push(lint_signal);
     }
 
-    let adversarial_signal = DeterministicVerifier::run_test_check(response_text);
+    let adversarial_signal = DeterministicVerifier::run_adversarial_check(response_text);
     verification_signals.push(adversarial_signal);
 
     let passed_count = verification_signals.iter().filter(|s| s.passed).count();

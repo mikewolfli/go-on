@@ -151,19 +151,19 @@ impl TokenMultiLevelCache {
 
     /// Set the maximum token budget for a period.  Pass `0` to disable
     /// budget enforcement (unlimited).
-    pub async fn set_token_budget(&self, max: usize) {
+    pub fn set_token_budget(&self, max: usize) {
         self.max_token_budget.store(max, Ordering::Release);
         self.remaining_budget.store(max, Ordering::Release);
     }
 
     /// Returns the remaining token budget.  `0` means either unlimited
     /// (when `max_budget` is also 0) or exhausted.
-    pub async fn remaining_budget(&self) -> usize {
+    pub fn remaining_budget(&self) -> usize {
         self.remaining_budget.load(Ordering::Acquire)
     }
 
     /// Returns the configured maximum token budget (`0` = unlimited).
-    pub async fn max_token_budget(&self) -> usize {
+    pub fn max_token_budget(&self) -> usize {
         self.max_token_budget.load(Ordering::Acquire)
     }
 
@@ -199,17 +199,17 @@ impl TokenMultiLevelCache {
     }
 
     /// Set the TTL for cached entries.  Pass `0` to disable expiration.
-    pub async fn set_ttl_ms(&self, ttl: u64) {
+    pub fn set_ttl_ms(&self, ttl: u64) {
         self.ttl_ms.store(ttl, Ordering::Release);
     }
 
     /// Returns the configured TTL in milliseconds (`0` = no expiration).
-    pub async fn ttl_ms(&self) -> u64 {
+    pub fn ttl_ms(&self) -> u64 {
         self.ttl_ms.load(Ordering::Acquire)
     }
 
     /// Reset the remaining budget to the configured maximum.
-    pub async fn reset_budget(&self) {
+    pub fn reset_budget(&self) {
         let max = self.max_token_budget.load(Ordering::Acquire);
         self.remaining_budget.store(max, Ordering::Release);
     }

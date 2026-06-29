@@ -140,17 +140,26 @@ pub struct SkillMarketRegistry {
 /// Internal index structure for `goon-skill-index.yaml` / `.json` parsing.
 #[derive(Deserialize)]
 struct SkillIndex {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Deserialized from skill index; reserved for future validation"
+    )]
     schema_version: String,
     updated_at: String,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Deserialized from skill index; reserved for future display"
+    )]
     maintainers: Option<Vec<MaintainerEntry>>,
     skills: Vec<SkillIndexEntry>,
 }
 
 #[derive(Deserialize)]
 struct MaintainerEntry {
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Deserialized from skill index; reserved for future attribution"
+    )]
     github: String,
 }
 
@@ -167,7 +176,7 @@ struct SkillIndexEntry {
     verified: Option<bool>,
     rating: Option<f64>,
     install_count: Option<u64>,
-    #[allow(dead_code)]
+    /// Deserialized from skill index; reserved for future dependency resolution
     dependencies: Option<HashMap<String, String>>,
 }
 

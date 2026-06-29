@@ -850,7 +850,7 @@ mod rules {
 
 /// Helper function to get current timestamp
 fn now_ts() -> i64 {
-    crate::acp::prelude::now_ts()
+    crate::shared::timestamps::now_ts()
 }
 
 // ── Non-AI bootstrap config TOML ──────────────────────────────────────────

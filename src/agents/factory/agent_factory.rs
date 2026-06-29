@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 // ─── Data structures ─────────────────────────────────────────────────────────
@@ -469,10 +468,7 @@ impl Default for AgentFactory {
 
 /// Return the current Unix time in milliseconds.
 fn now_epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

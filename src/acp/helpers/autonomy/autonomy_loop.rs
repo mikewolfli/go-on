@@ -1011,7 +1011,13 @@ pub async fn run_autonomy_loop(
                 objective,
                 success,
                 &if response.len() > 100 {
-                    format!("{}...", &response[..100])
+                    // Use char boundary-safe slicing to avoid panic on multi-byte UTF-8.
+                    let end = response
+                        .char_indices()
+                        .nth(100)
+                        .map(|(i, _)| i)
+                        .unwrap_or(response.len());
+                    format!("{}...", &response[..end])
                 } else {
                     response.clone()
                 },

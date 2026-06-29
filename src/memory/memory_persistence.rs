@@ -1087,10 +1087,12 @@ impl WarmStore {
     }
 
     fn upsert(&self, _entry: &MemoryEntry) -> Result<()> {
+        tracing::warn!("WarmStore: operation not available - no storage backend configured");
         Ok(())
     }
 
     fn get(&self, _id: &str) -> Result<Option<MemoryEntry>> {
+        tracing::warn!("WarmStore: operation not available - no storage backend configured");
         Ok(None)
     }
 
@@ -1099,22 +1101,27 @@ impl WarmStore {
         _min_usefulness: f32,
         _limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
+        tracing::warn!("WarmStore: operation not available - no storage backend configured");
         Ok(Vec::new())
     }
 
     fn remove(&self, _id: &str) -> Result<bool> {
+        tracing::warn!("WarmStore: operation not available - no storage backend configured");
         Ok(false)
     }
 
     fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
+        tracing::warn!("WarmStore: operation not available - no storage backend configured");
         Ok(Vec::new())
     }
 
     fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
+        tracing::warn!("WarmStore: operation not available - no storage backend configured");
         Ok(Vec::new())
     }
 
     fn count(&self) -> Result<usize> {
+        tracing::warn!("WarmStore: operation not available - no storage backend configured");
         Ok(0)
     }
 }

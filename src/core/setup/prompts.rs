@@ -60,7 +60,7 @@ pub fn run_setup_with_options(config_path: &Path, options: SetupOptions) -> Resu
     };
     let template_name = ADAPTIVE_TEMPLATE;
 
-    let _template_path = super::config_gen::find_template(template_name)
+    let _ = super::config_gen::find_template(template_name)
         .ok_or_else(|| anyhow::anyhow!("template file '{}' not found", template_name))?;
 
     let secret_mode = match options.secret_mode {

@@ -35,6 +35,7 @@ use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{t, tf};
+use crate::orchestration::mode::ModeKind;
 
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 
@@ -989,7 +990,7 @@ pub(crate) async fn apply_review_gate_assemble(
     // Memory policy execution integration
     // F-GAP-64: Use structured ModeKind::FullAuto check instead of raw string comparison.
     // Same pattern repeated at L~2260, L~2277, L~2284.
-    let memory_promotion_result = if params.mode.eq_ignore_ascii_case("full_auto") {
+    let memory_promotion_result = if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
         let memory_entry = MemoryEntry {
             id: format!("task-{}-{}", conversation_id, started.elapsed().as_millis()),
             class: MemoryClass::Observation,
@@ -1026,7 +1027,7 @@ pub(crate) async fn apply_review_gate_assemble(
 
     // Task graph execution engine integration
     let (task_graph_result, _saved_graph_id, _saved_checkpoint_id) =
-        if params.mode.eq_ignore_ascii_case("full_auto") {
+        if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
             build_task_graph_checkpoint(
                 server,
                 conversation_id,
@@ -1043,14 +1044,14 @@ pub(crate) async fn apply_review_gate_assemble(
         };
 
     // Role-based agent routing integration
-    let role_routing_result = if params.mode.eq_ignore_ascii_case("full_auto") {
+    let role_routing_result = if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
         Some(build_role_routing(&task_description))
     } else {
         None
     };
 
     // Enhanced verification system integration
-    let verification_result = if params.mode.eq_ignore_ascii_case("full_auto") {
+    let verification_result = if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
         Some(run_enhanced_verification(response_text))
     } else {
         None

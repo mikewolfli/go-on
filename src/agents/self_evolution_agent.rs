@@ -631,11 +631,13 @@ impl SelfEvolutionAgent {
     }
 
     /// Get the loaded RULES prompts.
+    #[inline]
     pub fn rules_prompts(&self) -> &[String] {
         &self.rules_prompts
     }
 
     /// Get the agent registry.
+    #[inline]
     pub fn agent_registry(&self) -> &HashMap<String, String> {
         &self.agent_registry
     }

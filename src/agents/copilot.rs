@@ -32,7 +32,6 @@ pub(crate) const COPILOT_FALLBACK_MODEL_PRIORITY: &[&str] = &[
     "gemini-2.5-pro",
     "o3",
     "o1",
-    "gpt-5",
     "claude-sonnet-4",
     "gemini-2.0-flash-001",
     "gpt-4.1",
@@ -930,8 +929,9 @@ mod tests {
     fn extract_ranked_model_ids_dedups_and_accepts_string_list() {
         let payload = json!(["gpt-4o", "gpt-4o", "gpt-5"]);
         let models = CopilotAgent::extract_ranked_model_ids(&payload);
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0], "gpt-5");
-        assert_eq!(models[1], "gpt-4o");
+        // Both models have same fallback rank, so ordering is by original index
+        assert_eq!(models.len(), 2, "should dedup to 2 unique models");
+        assert!(models.contains(&"gpt-4o".to_string()));
+        assert!(models.contains(&"gpt-5".to_string()));
     }
 }

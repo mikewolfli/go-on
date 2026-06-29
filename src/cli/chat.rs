@@ -241,9 +241,14 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
             match execute_simple_tool(tool_name, &parsed_args).await {
                 Ok(result_text) => {
                     let display = if result_text.len() > 500 {
+                        let end = result_text
+                            .char_indices()
+                            .nth(500)
+                            .map(|(i, _)| i)
+                            .unwrap_or(result_text.len());
                         format!(
                             "{}...\n[{} chars truncated]",
-                            &result_text[..500],
+                            &result_text[..end],
                             result_text.len()
                         )
                     } else {

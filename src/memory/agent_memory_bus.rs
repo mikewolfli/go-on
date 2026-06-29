@@ -348,9 +348,10 @@ impl AgentMemoryBus {
             .filter(|s| !s.is_empty() && s.len() > 15 && s.chars().any(|c| c.is_alphanumeric()))
             .take(max_insights)
             .map(|s| {
-                // Truncate to 200 chars.
+                // Truncate to ~200 chars, safe for multi-byte UTF-8.
                 if s.len() > 200 {
-                    format!("{}...", &s[..197])
+                    let end = s.char_indices().nth(197).map(|(i, _)| i).unwrap_or(s.len());
+                    format!("{}...", &s[..end])
                 } else {
                     s.to_string()
                 }

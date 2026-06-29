@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::session_compressor::{CompressedSession, SessionCompressor};
 
@@ -83,6 +84,8 @@ pub struct SessionContextManager {
     pub budget: ContextWindowBudget,
     /// Current message count.
     message_count: usize,
+    /// Count of messages that contain concepts.
+    concept_count: AtomicUsize,
 }
 
 impl SessionContextManager {
@@ -93,6 +96,7 @@ impl SessionContextManager {
             error_messages: HashSet::new(),
             budget,
             message_count: 0,
+            concept_count: AtomicUsize::new(0),
         }
     }
 
@@ -102,12 +106,13 @@ impl SessionContextManager {
         self.message_count += 1;
 
         // Extract file paths (simple heuristic: /path or .ext patterns)
-        self.extract_file_paths(content);
+        let file_path_count = self.extract_file_paths(content);
 
         // Extract error mentions
         let content_lower = content.to_lowercase();
         let error_keywords = ["error", "fail", "exception", "panic", "timeout", "denied"];
-        if error_keywords.iter().any(|k| content_lower.contains(k)) {
+        let has_errors = error_keywords.iter().any(|k| content_lower.contains(k));
+        if has_errors {
             self.error_messages.insert(idx);
         }
 
@@ -121,12 +126,21 @@ impl SessionContextManager {
             "resolved",
             "finalized",
         ];
-        if decision_keywords.iter().any(|k| content_lower.contains(k)) {
+        let has_decisions = decision_keywords.iter().any(|k| content_lower.contains(k));
+        if has_decisions {
             self.decisions.push((content.to_string(), idx));
+        }
+
+        // Track concept-bearing messages (contains decisions, file paths, or errors)
+        let has_concepts = has_decisions || file_path_count > 0 || has_errors;
+        if has_concepts {
+            self.concept_count.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    fn extract_file_paths(&mut self, content: &str) {
+    /// Returns the number of file paths extracted.
+    fn extract_file_paths(&mut self, content: &str) -> usize {
+        let mut count = 0;
         // Match patterns like /path/to/file.rs, src/main.rs, Cargo.toml
         for word in content.split_whitespace() {
             let word = word.trim_matches(|c: char| {
@@ -143,8 +157,10 @@ impl SessionContextManager {
                 || word.ends_with(".js")
             {
                 self.file_paths.insert(word.to_string());
+                count += 1;
             }
         }
+        count
     }
 
     /// Compute importance score for a message at the given index.
@@ -270,10 +286,10 @@ impl SessionContextManager {
         compressor.compress(&compressor_msgs)
     }
 
-    /// Get the current concept count.
-    /// Always returns 0 — concept extraction is not yet wired to record_message.
+    /// Get the current concept count — messages that contain decisions, file paths,
+    /// or error keywords tracked by `record_message`.
     pub fn concept_count(&self) -> usize {
-        0
+        self.concept_count.load(Ordering::Relaxed)
     }
 
     /// Get the current number of tracked decisions.

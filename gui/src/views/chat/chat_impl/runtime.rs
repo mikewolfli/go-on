@@ -763,7 +763,7 @@ impl ChatView {
                             .await;
                         }
 
-                        let status_log = format!(
+                        let _status_log = format!(
                             "tokens:{}, thinking:{}, agent:{}",
                             final_content.as_ref().map(|c| c.len()).unwrap_or(0),
                             !final_thinking
@@ -775,7 +775,7 @@ impl ChatView {
                         #[cfg(debug_assertions)]
                         eprintln!(
                             "[Gen] Generation {} completed ({})",
-                            generation_id, status_log
+                            generation_id, _status_log
                         );
 
                         // Emit SSE parse error summary warning if any errors occurred

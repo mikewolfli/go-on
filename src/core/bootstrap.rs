@@ -72,15 +72,7 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
         "OrchestrationProvider trait available"
     );
 
-    // 4. Initialize observability stack (standalone decoupled path)
-    let obs_config = crate::observability::ObservabilityConfig::default();
-    if crate::observability::init_independent_stack(&obs_config) {
-        tracing::debug!(target: "go_on::core::bootstrap", "ObservabilityStack initialized");
-    } else {
-        tracing::warn!(target: "go_on::core::bootstrap", "ObservabilityStack init skipped (already initialized or failed)");
-    }
-
-    // 5. Initialize agent skills system — discover local SKILL.md files
+    // 4. Initialize agent skills system — discover local SKILL.md files
     //    and set up the default prompt skill agent.
     //    The registry is returned so the server can use these discovered skills.
     let mut skill_registry = crate::orchestration::skill::SkillRegistry::default();

@@ -162,6 +162,8 @@ pub struct AgentAuditLog {
 }
 
 /// Keyring prefix for secret references
+///
+/// Duplicated from acp::helpers::planning::context — consider using a shared constant.
 const KEYRING_PREFIX: &str = "keyring://";
 static SECRET_POOL_STATE: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 
@@ -503,7 +505,7 @@ pub trait Agent: Send + Sync {
 
     /// Whether the provider supports overriding the target model through chat options.
     fn supports_model_override(&self) -> bool {
-        false
+        true
     }
 
     /// (Phase 0/1 discipline) Structured agent task entrypoint

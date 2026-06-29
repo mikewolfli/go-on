@@ -538,11 +538,6 @@ impl ConfigValidator {
                     section: "runtime.cors".to_string(),
                 });
             }
-
-            if runtime.cors_allowed_origins.is_empty() && runtime.acp_http_bind_addr.is_some() {
-                // Not a warning, just informational — the user may intend to serve APIs internally.
-                // We leave this intentionally informational only.
-            }
         }
     }
 
@@ -743,22 +738,6 @@ impl ConfigValidator {
                     });
                 }
             }
-        }
-
-        // Check runtime configuration
-        if let Some(_runtime) = &self.config.runtime {
-            // Note: RuntimeConfig doesn't have max_concurrent_requests field in current version
-            // This check is commented out but kept for future reference
-            /*
-            if runtime.max_concurrent_requests > 100 {
-                result.recommendations.push(Recommendation {
-                    message: "High max_concurrent_requests may lead to resource exhaustion".to_string(),
-                    category: RecommendationCategory::Security,
-                    impact: ImpactLevel::Medium,
-                    priority: PriorityLevel::Medium,
-                });
-            }
-            */
         }
 
         // Check for keyring usage

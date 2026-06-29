@@ -1034,9 +1034,11 @@ top_k = 2
                     }
                     requested_refresh = true;
                 }
-                StateSyncEvent::BackendRestarting { reason, .. } => {
+                StateSyncEvent::BackendRestarting {
+                    reason: _reason, ..
+                } => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[state-sync] Backend restarting: {}", reason);
+                    eprintln!("[state-sync] Backend restarting: {}", _reason);
                     self.connection.consecutive_poll_failures = 10;
                     self.connection.last_refresh = std::time::Instant::now()
                         - self.backend_refresh_interval()

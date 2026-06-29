@@ -24,8 +24,6 @@ pub mod detection;
 pub mod profile;
 
 pub use detection::load;
-#[cfg(test)]
-pub use profile::startup_context_profile;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Profile struct (governance metrics)
@@ -35,10 +33,6 @@ pub use profile::startup_context_profile;
 ///
 /// Returned by `startup_context_profile()` for the `/governance/status` endpoint.
 /// Exported via all 5 protocol modes (auto/acp-stdio/acp-http/mcp-stdio/mcp-http).
-#[allow(
-    dead_code,
-    reason = "Public API surface for governance/status endpoint (cfg(test) re-exported)"
-)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StartupContextProfile {
     /// Whether the startup context loader is enabled in config
@@ -268,6 +262,7 @@ pub fn summary_text(ctx: &StartupContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestration::startup_context::profile::startup_context_profile;
     use serial_test::serial;
     use std::io::Write;
 

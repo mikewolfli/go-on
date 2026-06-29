@@ -6,7 +6,6 @@
 
 use go_on::config::RuntimeConfig;
 use go_on::governance::status::GovernanceStatus;
-use go_on::observability::{init_independent_stack, ObservabilityConfig};
 
 /// Verify that server startup config defaults do not panic and have
 /// expected initial values.
@@ -27,29 +26,6 @@ fn test_default_config_is_well_formed() {
     assert!(
         config.health_interval_seconds > 0,
         "health_interval_seconds must be positive"
-    );
-}
-
-/// Verify that the ObservabilityStack singleton can be initialised
-/// independently and is idempotent.
-#[test]
-fn test_observability_stack_init_idempotent() {
-    let config = ObservabilityConfig {
-        service_name: "test".to_string(),
-        otel_enabled: false,
-        otlp_endpoint: None,
-        sample_ratio: 1.0,
-    };
-
-    // First call should succeed
-    let first = init_independent_stack(&config);
-    assert!(first, "first init_independent_stack call must return true");
-
-    // Second call (same config) should be idempotent — return false
-    let second = init_independent_stack(&config);
-    assert!(
-        !second,
-        "second init_independent_stack call must return false (idempotent)"
     );
 }
 

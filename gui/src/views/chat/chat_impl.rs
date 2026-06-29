@@ -412,9 +412,8 @@ impl ChatView {
         // Load persistent UI state before constructing ChatView
         let ui_state = GlobalUiState::load();
 
-        // Final mode: always default to "edit". Ignore saved ui_state or session
-        // defaults — the internal backend request always uses mode="ask" regardless
-        // of UI selection (see runtime.rs). The mode selector is for UI reference only.
+        // Final mode: always use "edit" as default. Ignore saved ui_state or session
+        // defaults so the initial mode stays as "edit" regardless of previous sessions.
         let saved_mode = "edit".to_string();
 
         // Deserialize model_stats from saved JSON if present

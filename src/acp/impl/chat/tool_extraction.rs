@@ -6,7 +6,6 @@
 use serde_json::Value;
 
 /// Extract model tool calls from response
-#[allow(dead_code)]
 pub(crate) fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
     // Parse only explicit tool-call markers; never synthesize placeholder calls.
     let mut calls: Vec<String> = Vec::with_capacity(max_calls);
