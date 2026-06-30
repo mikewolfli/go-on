@@ -693,8 +693,13 @@ mod tests {
         let from = make_version(1, 0, 0, "hash_1");
         let to = make_version(2, 0, 0, "hash_2");
 
+        // V1 -> V2 migration is registered as a built-in, so it should succeed.
         let result = migrate_weights(&weights, &from, &to);
-        assert!(result.is_err());
+        assert!(
+            result.is_ok(),
+            "expected migration 1->2 to succeed, got: {result:?}"
+        );
+        assert_eq!(result.unwrap().version, 2);
     }
 
     #[test]

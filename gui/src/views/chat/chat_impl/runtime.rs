@@ -888,7 +888,7 @@ impl ChatView {
                             send_pending(&tx, PendingResponse::UiMessage(warn_msg)).await;
                         }
 
-                        let is_empty = final_content.as_ref().map_or(true, |c| c.is_empty());
+                        let is_empty = final_content.as_ref().is_none_or(|c| c.is_empty());
                         if is_empty && !final_agent.as_ref().is_some_and(|a| a.is_empty()) {
                             // Response was empty even after successful streaming.
                             // This happens when the backend sends a "done" event without

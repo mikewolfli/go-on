@@ -222,17 +222,23 @@ async fn run() -> Result<()> {
     }
 
     // GAP-B50-33: Check startup memory and start background memory monitor
-    let memory_health = crate::observability::memory_health::check_startup_memory();
-    tracing::info!(?memory_health, "startup memory check");
-    crate::observability::memory_health::print_memory_health(&memory_health);
-    if let crate::observability::memory_health::MemoryHealth::Critical { free_mb, message } =
-        &memory_health
-    {
-        anyhow::bail!(
-            "Insufficient memory to start server: {} MB free — {}",
-            free_mb,
-            message
-        );
+    //
+    // Integration tests can bypass this check by setting
+    // GO_ON_SKIP_MEMORY_CHECK=true — useful when the test environment has
+    // critically low but non-fatal available memory.
+    if std::env::var("GO_ON_SKIP_MEMORY_CHECK").map_or(true, |v| v != "true") {
+        let memory_health = crate::observability::memory_health::check_startup_memory();
+        tracing::info!(?memory_health, "startup memory check");
+        crate::observability::memory_health::print_memory_health(&memory_health);
+        if let crate::observability::memory_health::MemoryHealth::Critical { free_mb, message } =
+            &memory_health
+        {
+            anyhow::bail!(
+                "Insufficient memory to start server: {} MB free — {}",
+                free_mb,
+                message
+            );
+        }
     }
     crate::observability::memory_health::start_memory_monitor();
 

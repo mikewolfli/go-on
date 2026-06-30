@@ -119,6 +119,7 @@ pub(crate) async fn emit_stream_chunk(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_stream_done(
     server: &AcpServer,
     observer: Option<&StreamObserver>,

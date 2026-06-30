@@ -948,15 +948,11 @@ export class GoOnManager {
               throw err;
             }
             case "sub_agent": {
-              console.log(
-                "[SSE] sub_agent:",
-                eventData.agent,
-                eventData.status,
-              );
+              log.info("[SSE] sub_agent:", eventData.agent, eventData.status);
               break;
             }
             case "command": {
-              console.log(
+              log.info(
                 "[SSE] command:",
                 eventData.command,
                 "exit=",

@@ -1137,9 +1137,9 @@ async fn check_conversation_history_escalation(
         .rev()
         .take(5)
         .filter(|cp| {
-            cp.note.as_deref().map_or(false, |n| {
-                n.contains("fail") || n.contains("error") || n.contains("reject")
-            })
+            cp.note
+                .as_deref()
+                .is_some_and(|n| n.contains("fail") || n.contains("error") || n.contains("reject"))
         })
         .count();
     let has_repeated_failures = recent_failures >= 3;

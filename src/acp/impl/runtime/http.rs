@@ -552,7 +552,7 @@ async fn route_http_post(
                                         sse_event_count += 1;
                                         // Periodic flush: every SSE_FLUSH_INTERVAL events.
                                         // This batches syscalls while keeping latency low.
-                                        if sse_event_count % SSE_FLUSH_INTERVAL == 0 {
+                                        if sse_event_count.is_multiple_of(SSE_FLUSH_INTERVAL) {
                                             let _ = flush_sse(socket).await;
                                         }
                                     }

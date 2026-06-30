@@ -56,7 +56,6 @@ pub mod threshold_learner; // BLUE44: Dynamic threshold learning for skill match
 pub mod token_layers;
 pub mod tool;
 pub use tool::extended as tool_extended;
-pub use tool::lock as tool_lock;
 pub use tool::pipeline as tool_pipeline;
 pub use tool::recommender as tool_recommender;
 

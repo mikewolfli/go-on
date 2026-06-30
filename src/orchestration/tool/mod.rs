@@ -2676,6 +2676,7 @@ enum IterationAction {
 /// Shared post-Act phase: record the result, observe the output, and decide
 /// the next action. Called by both `execute_loop` and `execute_loop_async`
 /// to avoid duplicating the observe-and-match logic.
+#[allow(clippy::too_many_arguments)]
 fn handle_iteration(
     task: &str,
     trace: &mut LoopTrace,

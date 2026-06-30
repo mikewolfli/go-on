@@ -207,7 +207,8 @@ pub fn contract_snapshot(report: &AutonomyLoopReport) -> Value {
         "final_phase": format!("{:?}", report.final_phase),
         "total_duration_ms": report.total_duration_ms,
         "stop_reason": report.stop_reason,
-        "corrective_actions": report.corrective_actions_applied_total,
+        "corrective_actions_applied_total": report.corrective_actions_applied_total,
+        "corrective_action_effectiveness_ratio": report.corrective_action_effectiveness_ratio,
     })
 }
 

@@ -547,7 +547,7 @@ fn get_cpu_usage() -> f64 {
     }
     #[cfg(target_os = "macos")]
     {
-        return macos_cpu_usage();
+        macos_cpu_usage()
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     0.0

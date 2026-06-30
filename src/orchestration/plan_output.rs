@@ -46,7 +46,7 @@ pub struct PlanOutput {
 }
 
 /// A single step within a plan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlanStep {
     /// Step number (1-based).
     pub number: usize,
@@ -62,18 +62,6 @@ pub struct PlanStep {
 
     /// Whether this step has been completed.
     pub completed: bool,
-}
-
-impl Default for PlanStep {
-    fn default() -> Self {
-        Self {
-            number: 0,
-            description: String::new(),
-            action: None,
-            file: None,
-            completed: false,
-        }
-    }
 }
 
 /// Extract a structured plan from a Plan-mode chat response.
@@ -284,6 +272,12 @@ fn classify_step_action(description: &str, _full_line: &str) -> String {
         || lower.contains("check")
     {
         "read".to_string()
+    } else if lower.contains("test")
+        || lower.contains("verify")
+        || lower.contains("validate")
+        || lower.contains("run")
+    {
+        "test".to_string()
     } else if lower.contains("write")
         || lower.contains("create")
         || lower.contains("add")
