@@ -5,7 +5,6 @@
 //! across `FullAutoFlow` invocations.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -157,10 +156,6 @@ pub struct FastPathCache {
     ttl: Duration,
     /// Max entries per cache.
     max_entries: usize,
-    /// Hit count recorded externally by CacheWarmingEngine.
-    warming_hits: AtomicU64,
-    /// Miss count recorded externally by CacheWarmingEngine.
-    warming_misses: AtomicU64,
 }
 
 impl FastPathCache {
@@ -174,8 +169,6 @@ impl FastPathCache {
             route_cache: Mutex::new(HashMap::new()),
             ttl: Duration::from_secs(300),
             max_entries: 128,
-            warming_hits: AtomicU64::new(0),
-            warming_misses: AtomicU64::new(0),
         }
     }
 
@@ -190,8 +183,6 @@ impl FastPathCache {
             route_cache: Mutex::new(HashMap::new()),
             ttl,
             max_entries,
-            warming_hits: AtomicU64::new(0),
-            warming_misses: AtomicU64::new(0),
         }
     }
 
@@ -393,30 +384,6 @@ impl FastPathCache {
     }
 
     // -----------------------------------------------------------------------
-    // Warming engine integration
-    // -----------------------------------------------------------------------
-
-    /// Record hit/miss activity from the CacheWarmingEngine.
-    ///
-    /// The warming engine tracks access patterns independently; this method
-    /// allows it to communicate its observations back to the FastPathCache
-    /// so that aggregate metrics reflect the full picture.
-    pub fn record_warming_activity(&self, hits: u64, misses: u64) {
-        self.warming_hits.fetch_add(hits, Ordering::Relaxed);
-        self.warming_misses.fetch_add(misses, Ordering::Relaxed);
-    }
-
-    /// Total warming hits recorded by the CacheWarmingEngine.
-    pub fn warming_hits(&self) -> u64 {
-        self.warming_hits.load(Ordering::Relaxed)
-    }
-
-    /// Total warming misses recorded by the CacheWarmingEngine.
-    pub fn warming_misses(&self) -> u64 {
-        self.warming_misses.load(Ordering::Relaxed)
-    }
-
-    // -----------------------------------------------------------------------
     // Metrics
     // -----------------------------------------------------------------------
 
@@ -471,10 +438,6 @@ impl FastPathCache {
                 "entries": env_total,
                 "total_hits": env_hits,
                 "avg_hits_per_entry": env_avg,
-            },
-            "warming_engine": {
-                "hits": self.warming_hits(),
-                "misses": self.warming_misses(),
             },
             "ttl_secs": self.ttl.as_secs(),
             "max_entries": self.max_entries,

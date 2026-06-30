@@ -624,26 +624,47 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
     let mut name = String::new();
     let mut description = String::new();
     let mut version = "1.0.0".to_string();
+    let mut input_schema: Option<Value> = None;
 
     // Try to parse YAML frontmatter (between --- delimiters)
     let remaining = if let Some(after_prefix) = text.strip_prefix("---") {
         if let Some(end) = after_prefix.find("\n---") {
             let frontmatter = &after_prefix[..end];
-            for line in frontmatter.lines() {
+            // Collect raw lines for multi-line value reconstruction
+            let raw_lines: Vec<&str> = frontmatter.lines().collect();
+            let mut i = 0;
+            while i < raw_lines.len() {
+                let line = raw_lines[i];
                 if let Some((key, value)) = line.split_once(':') {
                     let key = key.trim().to_lowercase();
-                    let value = value
-                        .trim()
-                        .trim_matches('"')
-                        .trim_matches('\'')
-                        .to_string();
+                    let value = value.trim().to_string();
+                    if key == "input_schema" && !value.is_empty() {
+                        // Collect multi-line JSON value
+                        let mut json_str = value.clone();
+                        i += 1;
+                        while i < raw_lines.len() {
+                            let continuation = raw_lines[i];
+                            if continuation.starts_with(' ') || continuation.starts_with('\t') {
+                                json_str.push_str(continuation.trim());
+                                i += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        if let Ok(parsed) = serde_json::from_str(&json_str) {
+                            input_schema = Some(parsed);
+                        }
+                        continue;
+                    }
+                    let value_clean = value.trim_matches('"').trim_matches('\'').to_string();
                     match key.as_str() {
-                        "name" => name = value,
-                        "description" | "title" => description = value,
-                        "version" => version = value,
+                        "name" => name = value_clean,
+                        "description" | "title" => description = value_clean,
+                        "version" => version = value_clean,
                         _ => {}
                     }
                 }
+                i += 1;
             }
             Some(&text[3 + end + 5..]) // skip past closing ---
         } else {
@@ -723,7 +744,7 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
         name,
         version,
         description,
-        input_schema: default_manifest_schema(),
+        input_schema: input_schema.unwrap_or_else(default_manifest_schema),
         endpoint: None,
         prompt_template: Some(full_text),
     })

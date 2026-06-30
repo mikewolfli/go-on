@@ -793,7 +793,15 @@ impl CapabilityBus {
         self
     }
 
-    /// Attach a LivePerformanceFeed to the CapabilityBus (P2-6).
+    /// Attach a pre-populated capability graph (shared with AgentRegistry)
+    /// so the capability bus sees all registered agents for candidate selection.
+    /// Without this, agents_from_config are invisible to decide().
+    pub fn with_capability_graph(mut self, graph: Arc<Mutex<CapabilityGraph>>) -> Self {
+        self.capability_graph = graph;
+        self
+    }
+
+    /// Attach a LivePerformanceFeed to the CapabilityBus
     pub fn with_live_performance(mut self, feed: Arc<LivePerformanceFeed>) -> Self {
         self.live_performance = Some(feed);
         self
@@ -1033,8 +1041,18 @@ impl CapabilityBus {
 
     /// Register evolve action as a FaultTolerance node and send heartbeat.
     pub(crate) async fn evolve_fault_tolerance(&self, node_id: &str) {
-        let _ = self.harness.fault_tolerance.register_node(node_id).await;
-        let _ = self.harness.fault_tolerance.report_heartbeat(node_id).await;
+        if let Err(e) = self.harness.fault_tolerance.register_node(node_id).await {
+            warn!(
+                "evolve_fault_tolerance: register_node failed for {}: {:?}",
+                node_id, e
+            );
+        }
+        if let Err(e) = self.harness.fault_tolerance.report_heartbeat(node_id).await {
+            warn!(
+                "evolve_fault_tolerance: report_heartbeat failed for {}: {:?}",
+                node_id, e
+            );
+        }
     }
 
     /// Record an audit entry for the evolve cycle.

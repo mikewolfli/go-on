@@ -2,11 +2,9 @@
 //!
 //! Audit logging system for go-on (Phase 2 — thread-safe + persistence)
 //!
-//! Provides:
-//! - [`AuditLog`] — original single-threaded circular buffer (backward compatible)
-//! - [`ThreadSafeAuditLog`] — thread-safe version with optional NDJSON file persistence
+//! Provides [`ThreadSafeAuditLog`] — thread-safe version with optional NDJSON file persistence.
 //!
-//! Both structures record agent/tool/phase decisions for compliance and debugging.
+//! Records agent/tool/phase decisions for compliance and debugging.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -62,48 +60,6 @@ pub struct AuditLogEntry {
     pub retention_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
-}
-
-// ─── AuditLog (single-threaded, backward compatible) ────────────────────────
-
-/// Audit log sink for collecting decision traces (single-threaded).
-///
-/// This is the original implementation kept for backward compatibility.
-/// For thread-safe usage with file persistence, use [`ThreadSafeAuditLog`].
-pub struct AuditLog {
-    entries: VecDeque<AuditLogEntry>,
-    max_entries: usize,
-}
-
-impl AuditLog {
-    pub fn new(max_entries: usize) -> Self {
-        Self {
-            entries: VecDeque::new(),
-            max_entries,
-        }
-    }
-
-    pub fn record(&mut self, entry: AuditLogEntry) {
-        let mut entry = entry;
-        entry.inputs = redact_sensitive(&entry.inputs);
-        entry.outputs = entry.outputs.map(|o| redact_sensitive(&o));
-        if self.entries.len() >= self.max_entries {
-            tracing::warn!(
-                "audit buffer full, dropping entry at timestamp: {}",
-                entry.timestamp
-            );
-            self.entries.pop_front();
-        }
-        self.entries.push_back(entry);
-    }
-
-    pub fn entries(&self) -> Vec<AuditLogEntry> {
-        self.entries.iter().cloned().collect()
-    }
-
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
 }
 
 // ─── ThreadSafeAuditLog ─────────────────────────────────────────────────────
@@ -308,50 +264,19 @@ fn dirs_or_fallback() -> PathBuf {
     base.join("audit.ndjson")
 }
 
-/// Gateway function to record an audit entry, routing to any configured
-/// audit sink (single-threaded or thread-safe).
+/// Convenience wrapper that creates an [`AuditLogEntry`] from simple arguments
+/// and records it into the given [`ThreadSafeAuditLog`].
 ///
-/// This is the unified entry point for producing audit log entries across
-/// the system.  It creates an [`AuditLogEntry`] from the provided fields
-/// and records it into the given [`AuditLog`] or [`ThreadSafeAuditLog`].
-///
-/// # Example
+/// ## Example
 ///
 /// ```text
 /// // This example uses crate-internal paths not accessible from doctests.
-/// use go_on::governance::audit::{record_audit, AuditLog};
+/// use go_on::governance::audit::record_audit_threadsafe;
+/// use go_on::governance::audit::ThreadSafeAuditLog;
 ///
-/// let mut log = AuditLog::new(100);
-/// record_audit(&mut log, "task-001", "verification", "high_risk_detected", None, None);
+/// let log = ThreadSafeAuditLog::new(100);
+/// record_audit_threadsafe(&log, "task-001", "verification", "high_risk_detected", None, None);
 /// ```
-pub fn record_audit(
-    log: &mut AuditLog,
-    task_id: &str,
-    phase: &str,
-    decision: &str,
-    error: Option<String>,
-    correlation_id: Option<String>,
-) {
-    let entry = AuditLogEntry {
-        timestamp: chrono_now(),
-        task_id: task_id.to_string(),
-        phase: phase.to_string(),
-        agent: None,
-        tool: None,
-        decision: decision.to_string(),
-        inputs: serde_json::Value::Null,
-        outputs: None,
-        error,
-        confidence: None,
-        data_classification: None,
-        compliance_tags: vec![],
-        retention_policy: None,
-        correlation_id,
-    };
-    log.record(entry);
-}
-
-/// Thread-safe version of [`record_audit`] for use with [`ThreadSafeAuditLog`].
 pub fn record_audit_threadsafe(
     log: &ThreadSafeAuditLog,
     task_id: &str,

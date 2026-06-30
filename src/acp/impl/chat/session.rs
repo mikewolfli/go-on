@@ -134,7 +134,7 @@ pub async fn handle_chat(
                     "unrecognized mode '{}' from client, defaulting to 'ask'",
                     other
                 );
-                chat_params.mode = "ask".to_string();
+                chat_params.mode = "edit".to_string();
             }
         }
 
@@ -407,9 +407,9 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
         .rfind(|m| m.role.eq_ignore_ascii_case("user"));
     let last_user_len = last_user.map(|m| m.content.len()).unwrap_or(0);
 
-    // ── Vote early: short / ambiguous user inputs → "ask" ──────────────
+    // ── Vote early: short / ambiguous user inputs → "edit" ──────────────
     if last_user_len > 0 && last_user_len < 15 {
-        return "ask".to_string();
+        return "edit".to_string();
     }
 
     // ── Density-based routing ──────────────────────────────────────────
@@ -485,11 +485,11 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
     let total_triggers = imperative_count + planning_count + analytical_count;
 
     if total_triggers == 0 {
-        // Fallback: if conversation has multiple turns, ask is the safe default
+        // Fallback: if conversation has multiple turns, edit is the default
         if has_multiple_turns || word_count > 30 {
-            return "ask".to_string();
+            return "edit".to_string();
         }
-        return "ask".to_string();
+        return "edit".to_string();
     }
 
     // ── Multi-turn conversations with planning → "edit" ────────────────
@@ -506,7 +506,7 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
     } else if imperative_score >= analytical_score {
         "agent"
     } else {
-        "ask"
+        "edit"
     }
     .to_string()
 }

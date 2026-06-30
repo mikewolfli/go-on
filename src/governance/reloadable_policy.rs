@@ -5,11 +5,9 @@
 //! watches for file changes and triggers reloads automatically.
 
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::Result;
 use notify::{Config, Event, EventKind, RecursiveMode, Watcher};
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::governance::audit::{record_audit_threadsafe, ThreadSafeAuditLog};
@@ -69,10 +67,7 @@ impl Default for PolicyReloader {
         Self::new()
     }
 }
-#[allow(
-    dead_code,
-    reason = "All methods reserved for production governance wiring"
-)]
+
 impl PolicyReloader {
     /// Create a new empty `PolicyReloader` without a watcher.
     pub fn new() -> Self {
@@ -90,31 +85,6 @@ impl PolicyReloader {
     pub fn register(&mut self, policy: Box<dyn ReloadablePolicy>) {
         self.policies.push(policy);
         info!("policy registered, total: {}", self.policies.len());
-    }
-
-    /// Set a callback that is invoked after every reload cycle completes.
-    pub fn set_on_reload(&mut self, callback: Box<dyn Fn() + Send + Sync + 'static>) {
-        self.on_reload = Some(callback);
-    }
-
-    /// Set a channel sender that receives `()` after each reload cycle.
-    pub fn set_notify_channel(&mut self, tx: std::sync::mpsc::Sender<()>) {
-        self.notify_tx = Some(tx);
-    }
-
-    /// Set an audit log for recording reload events.
-    pub fn set_audit_log(&mut self, log: ThreadSafeAuditLog) {
-        self.audit_log = Some(log);
-    }
-
-    /// Drain the notification channel, returning the number of pending reload events.
-    /// This can be polled from a background task.
-    pub fn drain_notifications(&self, rx: &std::sync::mpsc::Receiver<()>) -> usize {
-        let mut count = 0;
-        while rx.try_recv().is_ok() {
-            count += 1;
-        }
-        count
     }
 
     /// Reload all registered policies. Errors are logged per-policy but
@@ -237,31 +207,6 @@ impl PolicyReloader {
     /// Returns the path being watched, if any.
     pub fn watch_path(&self) -> Option<&str> {
         self.watch_path.as_deref()
-    }
-
-    /// Start a background task that calls [`reload_all`] periodically.
-    ///
-    /// Consumes this `PolicyReloader` and spawns a tokio task that runs
-    /// forever (or until the returned `JoinHandle` is cancelled).
-    /// Each iteration waits `interval_secs` seconds, then calls
-    /// `reload_all()`.
-    ///
-    /// ## Example
-    ///
-    /// ```text
-    /// let handle = reloader.start_background_reload(60);
-    /// // … later …
-    /// handle.abort();
-    /// ```
-    pub fn start_background_reload(mut self, interval_secs: u64) -> JoinHandle<()> {
-        let duration = Duration::from_secs(interval_secs);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(duration);
-            loop {
-                interval.tick().await;
-                self.reload_all();
-            }
-        })
     }
 }
 

@@ -612,14 +612,16 @@ impl AgentRegistry {
             agents.insert(name.clone(), agent);
 
             // Register agent in capability graph with inferred tags
-            let mut tags = vec![agent_cfg.agent_type.clone()];
+            // Every agent gets "general" by default so the capability bus
+            // can find it via agents_with_tag("general") during candidate
+            // selection. Additional tags enable more specific routing.
+            let mut tags = vec![agent_cfg.agent_type.clone(), "general".to_string()];
             let name_lower = name.to_lowercase();
             if name_lower.contains("primary")
                 || name_lower.contains("coder")
                 || name_lower.contains("developer")
             {
                 tags.push("coding".to_string());
-                tags.push("general".to_string());
             }
             if name_lower.contains("review") || name_lower.contains("reviewer") {
                 tags.push("review".to_string());

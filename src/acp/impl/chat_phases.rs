@@ -61,7 +61,7 @@ use crate::observability::performance::record_global_operation;
 use crate::orchestration::core_dag::TaskContext;
 use crate::orchestration::flow::ResolvedPhase;
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
-use crate::orchestration::multi_agent_pipeline::{AgentAssignment, MultiAgentPipeline};
+use crate::orchestration::multi_agent_pipeline::MultiAgentPipeline;
 use crate::orchestration::task_router::{TaskCharacteristics, TaskType};
 use crate::rpc_protocol::{child_trace_context, RequestTraceContext};
 
@@ -1642,7 +1642,7 @@ async fn run_multi_agent_pipeline(
     let registry = server
         .agent_registry()
         .unwrap_or_else(|| Arc::new(crate::agent::AgentRegistry::new()));
-    let pipeline_result = MultiAgentPipeline::new(registry, AgentAssignment::RoundRobin)
+    let pipeline_result = MultiAgentPipeline::new(registry)
         .execute(
             &extract_task_description(&params.messages),
             &task_chars,

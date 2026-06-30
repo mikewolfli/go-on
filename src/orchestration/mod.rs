@@ -3,12 +3,11 @@ pub mod audit;
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
 pub mod bulkhead; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
-                  // pub mod cache_warming; // Inlined into orchestrator.rs
 
 pub mod capability_signals; // BLUE41: Structured capability decision data
 pub mod complexity_estimator;
 pub mod context;
-pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor, task_graph, execution_graph
+pub mod core_dag; // DAG-UNIFY: Unified generic DAG
 #[cfg(any(
     feature = "sub-bus-tool",
     feature = "simple-server",
@@ -17,14 +16,12 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor
 pub mod council; // F-GAP-15
 pub mod dag_driver; // Tool execution DAG — orchestrates tool calls with parallel fan-out and plan-topology
 pub mod diagnostic_feedback; // F-GAP-51: Reserved for full diagnostic integration
-pub mod intermediate;
-// pub use core_dag::TaskContext; — unused re-export, callers use crate::orchestration::core_dag::TaskContext directly
-// pub mod distributed_tx; — removed: test-only scaffold, zero production references
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod flow_with_models;
 pub mod fork_registry;
-pub mod full_auto; // BLUE43 Step 10: Full-auto flow orchestrator
+pub mod full_auto;
+pub mod intermediate; // BLUE43 Step 10: Full-auto flow orchestrator
 
 pub mod mode;
 pub mod multi_agent_pipeline;
@@ -33,7 +30,6 @@ pub mod orchestrator;
 pub mod planner_embedding; // BLUE47 Step 7: Embedding-based task classification
 pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG
 pub mod planner_executor;
-// pub mod plugin_system; // Inlined into capabilities_registry.rs
 pub mod promotion_plugin;
 pub mod prompt_layers;
 pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
@@ -62,6 +58,6 @@ pub use tool::extended as tool_extended;
 pub use tool::lock as tool_lock;
 pub use tool::pipeline as tool_pipeline;
 pub use tool::recommender as tool_recommender;
-// pub use tool::transaction as tool_transaction; — unused re-export, types imported directly from tool::transaction::types
+
 pub mod workflow_optimizer;
 pub mod workflow_registry;

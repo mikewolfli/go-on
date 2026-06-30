@@ -154,8 +154,10 @@ pub async fn new_acp_server(
         Arc::clone(&harness_bus),
         Some(workflow_registry),
     )
+    .with_capability_graph(registry.get_capability_graph())
     .with_provenance_ledger(Arc::clone(&provenance_ledger))
     .with_live_performance(Arc::clone(&perf_feed));
+    let cb_builder = cb_builder.with_live_performance(Arc::clone(&perf_feed));
     let cb_builder = if let Some(agent) = first_agent {
         cb_builder.with_metacognitive_llm(agent)
     } else {

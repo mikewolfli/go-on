@@ -4,39 +4,10 @@
 //! It tracks active transport mode, protocol health, and latency statistics
 //! to enable intelligent protocol recommendations for task execution.
 
+use crate::intelligence::{lock_guard, read_guard, write_guard};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("{} lock poisoned; recovering", name);
-            poisoned.into_inner()
-        }
-    }
-}
-
-fn read_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
-    match rw.read() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("{} read lock poisoned; recovering", name);
-            poisoned.into_inner()
-        }
-    }
-}
-
-fn write_lock_recover<'a, T>(rw: &'a RwLock<T>, name: &str) -> RwLockWriteGuard<'a, T> {
-    match rw.write() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("{} write lock poisoned; recovering", name);
-            poisoned.into_inner()
-        }
-    }
-}
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Number of latency measurements kept per protocol in the ring buffer.
 const LATENCY_RING_BUFFER_CAPACITY: usize = 100;
@@ -175,8 +146,7 @@ impl ProtocolBus {
     /// is incremented.
     pub fn set_active_transport(&self, transport: &str) {
         {
-            let mut current =
-                write_lock_recover(self.active_transport.as_ref(), "active_transport");
+            let mut current = write_guard(self.active_transport.as_ref());
             if *current != transport {
                 *current = transport.to_string();
             } else {
@@ -186,14 +156,14 @@ impl ProtocolBus {
         }
 
         // Update profile outside of the transport lock to avoid nested locking.
-        let mut profile = lock_mutex_recover(self.profile.as_ref(), "profile");
+        let mut profile = lock_guard(self.profile.as_ref());
         profile.active_transport = transport.to_string();
         profile.total_protocol_switches += 1;
     }
 
     /// Return the currently active transport mode.
     pub fn active_transport(&self) -> String {
-        read_lock_recover(self.active_transport.as_ref(), "active_transport").clone()
+        read_guard(self.active_transport.as_ref()).clone()
     }
 
     /// Recommend the best protocol for a task of the given type and payload size.
@@ -206,12 +176,11 @@ impl ProtocolBus {
     /// Returns a `ProtocolRecommendation` with the preferred protocol, a
     /// human-readable reason, and a confidence score.
     pub fn recommend_protocol(&self, task_type: &str, payload_size: u64) -> ProtocolRecommendation {
-        let transport =
-            read_lock_recover(self.active_transport.as_ref(), "active_transport").clone();
+        let transport = read_guard(self.active_transport.as_ref()).clone();
 
-        let health = read_lock_recover(self.protocol_health.as_ref(), "protocol_health").clone();
+        let health = read_guard(self.protocol_health.as_ref()).clone();
 
-        let latency = read_lock_recover(self.protocol_latency.as_ref(), "protocol_latency").clone();
+        let latency = read_guard(self.protocol_latency.as_ref()).clone();
 
         // 1. If the active transport is healthy, prefer it.
         if health.get(&transport).copied().unwrap_or(false) {
@@ -276,7 +245,7 @@ impl ProtocolBus {
     /// entries per protocol). If the protocol is not yet tracked, a new entry is
     /// created automatically.
     pub fn record_protocol_latency(&self, protocol: &str, duration_ms: u64) {
-        let mut latency = write_lock_recover(self.protocol_latency.as_ref(), "protocol_latency");
+        let mut latency = write_guard(self.protocol_latency.as_ref());
         // Evict oldest when at capacity for a new protocol.
         if !latency.contains_key(protocol) && latency.len() >= self.max_protocols {
             if let Some(oldest) = latency.keys().next().cloned() {
@@ -289,7 +258,7 @@ impl ProtocolBus {
         stats.record(duration_ms);
 
         // If the protocol is not already in the health map, add it as healthy.
-        let mut health = write_lock_recover(self.protocol_health.as_ref(), "protocol_health");
+        let mut health = write_guard(self.protocol_health.as_ref());
         // Evict oldest from health map in sync.
         if !health.contains_key(protocol) && health.len() >= self.max_protocols {
             if let Some(oldest) = health.keys().next().cloned() {
@@ -303,7 +272,7 @@ impl ProtocolBus {
     ///
     /// Unknown protocols are assumed healthy by default.
     pub fn is_protocol_healthy(&self, protocol: &str) -> bool {
-        read_lock_recover(self.protocol_health.as_ref(), "protocol_health")
+        read_guard(self.protocol_health.as_ref())
             .get(protocol)
             .copied()
             .unwrap_or(true)
@@ -312,10 +281,10 @@ impl ProtocolBus {
     /// Return a snapshot of the current `ProtocolBusProfile`.
     pub fn profile(&self) -> ProtocolBusProfile {
         let transport = self.active_transport();
-        let health = read_lock_recover(self.protocol_health.as_ref(), "protocol_health");
+        let health = read_guard(self.protocol_health.as_ref());
         let healthy_count = health.values().filter(|h| **h).count() as u32;
 
-        let profile_guard = lock_mutex_recover(self.profile.as_ref(), "profile");
+        let profile_guard = lock_guard(self.profile.as_ref());
         ProtocolBusProfile {
             enabled: profile_guard.enabled,
             active_transport: transport,

@@ -19,7 +19,7 @@ use crate::reinforcement::{
 pub struct ChatParams {
     /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto").
     /// When absent or empty (e.g., from external clients like Zed),
-    /// defaults to "ask" (the safest general-purpose mode).
+    /// defaults to "edit".
     #[serde(default)]
     pub mode: String,
     /// Messages to process

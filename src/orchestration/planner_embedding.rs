@@ -30,14 +30,6 @@ pub struct EmbeddingTaskClassifier {
 }
 
 impl EmbeddingTaskClassifier {
-    /// Create a new classifier with an optional per-instance vector store reference.
-    /// When `None`, the global vector store (if set via `init_global_task_vector_store`) is used.
-    /// F-GAP-49: Create a new classifier with an optional per-instance vector store reference.
-    #[allow(dead_code)]
-    pub fn new(vector_store: Option<Arc<crate::memory::vector::VectorStore>>) -> Self {
-        Self { vector_store }
-    }
-
     /// Resolve the active vector store: per-instance > global > None.
     fn resolve_store(&self) -> Option<&crate::memory::vector::VectorStore> {
         self.vector_store
@@ -176,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_classifier_without_vector_store_falls_back() {
-        let classifier = EmbeddingTaskClassifier::new(None);
+        let classifier = EmbeddingTaskClassifier::default();
 
         assert_eq!(
             classifier.classify_task("Hello world"),

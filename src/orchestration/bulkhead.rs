@@ -38,45 +38,6 @@ impl Bulkhead {
     /// If a semaphore already exists for this provider it is replaced,
     /// so in-flight permits obtained from the previous semaphore are
     /// **not** affected.
-    /// Public API surface for Bulkhead consumers
-    #[allow(dead_code)]
-    pub fn set_limit(&self, provider: &str, limit: usize) {
-        if let Ok(mut map) = self.semaphores.write() {
-            map.insert(provider.to_string(), Arc::new(Semaphore::new(limit)));
-        }
-    }
-
-    /// Acquire a permit for the given provider, blocking until one is available.
-    ///
-    /// If no semaphore exists for this provider yet, one is created with the
-    /// default limit that was passed to [`new`](Self::new).
-    ///
-    /// Returns `None` if the semaphore has been closed (should not happen
-    /// under normal operation).
-    /// Public API surface for Bulkhead consumers
-    #[allow(dead_code)]
-    pub async fn acquire(&self, provider: &str) -> Option<OwnedSemaphorePermit> {
-        let semaphore = {
-            let map = self.semaphores.read().ok()?;
-            map.get(provider).cloned()
-        };
-
-        let semaphore = match semaphore {
-            Some(s) => s,
-            None => {
-                let mut map = self.semaphores.write().ok()?;
-                // Double-check after acquiring the write lock to avoid races.
-                map.get(provider).cloned().unwrap_or_else(|| {
-                    let s = Arc::new(Semaphore::new(self.default_limit));
-                    map.insert(provider.to_string(), s.clone());
-                    s
-                })
-            }
-        };
-
-        semaphore.acquire_owned().await.ok()
-    }
-
     /// Try to acquire a permit for the given provider without blocking.
     ///
     /// If no semaphore exists for this provider yet, one is created with the
@@ -122,48 +83,6 @@ impl Bulkhead {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_acquire_and_release() {
-        let bulkhead = Bulkhead::new(2);
-        let p1 = bulkhead.acquire("openai").await;
-        assert!(p1.is_some());
-        let p2 = bulkhead.acquire("openai").await;
-        assert!(p2.is_some());
-        // Third should block — we can't test blocking in a simple way,
-        // but verify our permits exist.
-        drop(p1);
-        drop(p2);
-    }
-
-    #[tokio::test]
-    async fn test_set_limit_replaces_semaphore() {
-        let bulkhead = Bulkhead::new(1);
-        bulkhead.set_limit("openai", 5);
-        let p1 = bulkhead.acquire("openai").await;
-        assert!(p1.is_some());
-        let p2 = bulkhead.acquire("openai").await;
-        assert!(p2.is_some());
-        let p3 = bulkhead.acquire("openai").await;
-        assert!(p3.is_some());
-        let p4 = bulkhead.acquire("openai").await;
-        assert!(p4.is_some());
-        let p5 = bulkhead.acquire("openai").await;
-        assert!(p5.is_some());
-        // Sixth would block — drop permits.
-        drop((p1, p2, p3, p4, p5));
-    }
-
-    #[tokio::test]
-    async fn test_separate_providers_independent() {
-        let bulkhead = Bulkhead::new(1);
-        let p1 = bulkhead.acquire("openai").await;
-        assert!(p1.is_some());
-        let p2 = bulkhead.acquire("anthropic").await;
-        assert!(p2.is_some());
-        // Both providers have their own permits.
-        drop((p1, p2));
-    }
 
     #[test]
     fn test_try_acquire_non_blocking() {

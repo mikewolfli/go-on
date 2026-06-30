@@ -289,7 +289,7 @@ mod tests {
 
     fn make_chat_params() -> ChatParams {
         ChatParams {
-            mode: "ask".to_string(),
+            mode: "edit".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
                 content: "Hello, how can you help?".to_string(),

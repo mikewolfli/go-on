@@ -343,7 +343,7 @@ fn openai_to_chat_params(req: &OpenAiChatRequest) -> ChatParams {
     };
 
     ChatParams {
-        mode: "ask".to_string(),
+        mode: "edit".to_string(),
         messages,
         conversation_id: None,
         branch_id: None,
@@ -1578,7 +1578,7 @@ async fn handle_response_create(
     }
 
     let params = ChatParams {
-        mode: "ask".to_string(),
+        mode: "edit".to_string(),
         messages,
         conversation_id: None,
         branch_id: None,
@@ -1994,7 +1994,7 @@ mod tests {
         };
 
         let params = openai_to_chat_params(&req);
-        assert_eq!(params.mode, "ask");
+        assert_eq!(params.mode, "edit");
         assert_eq!(params.messages.len(), 3);
         assert_eq!(params.messages[1].role, "user"); // tool role normalized
         assert!(params.messages[1].content.contains("tool_call_id"));

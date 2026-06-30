@@ -273,8 +273,10 @@ impl ApprovalPreferenceLearner {
     }
 
     /// Record a rejection decision.
-    pub fn record_rejection(&mut self, action_type: &str, _reason: &str) -> String {
-        self.record_decision("system", action_type, false, HashMap::new())
+    pub fn record_rejection(&mut self, action_type: &str, reason: &str) -> String {
+        let mut context = HashMap::new();
+        context.insert("rejection_reason".to_string(), reason.to_string());
+        self.record_decision("system", action_type, false, context)
     }
 
     /// Record an escalation event.

@@ -44,6 +44,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::intelligence::reinforcement::federated::ModelWeights;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 // ── Proto definition (embedded for reference) ──────────────────────────────
 //
@@ -544,7 +546,11 @@ impl FederatedServer {
         self
     }
 
-    /// Start the gRPC server and begin serving requests.
+    /// Start a basic HTTP server and begin serving requests.
+    ///
+    /// This implementation provides a minimal HTTP server with a health-check
+    /// endpoint (`GET /health`).  When the `tonic` dependency is added, replace
+    /// this method with the real gRPC server code (see comments below).
     ///
     /// This blocks the current task. Spawn it onto a runtime:
     ///
@@ -560,30 +566,10 @@ impl FederatedServer {
             .parse::<std::net::SocketAddr>()
             .context("invalid bind address for FederatedServer")?;
 
-        info!("FederatedServer starting gRPC endpoint on {}", addr);
+        let listener = TcpListener::bind(addr)
+            .await
+            .context("FederatedServer: failed to bind TCP listener")?;
 
-        // ── gRPC server (tonic) ───────────────────────────────────────────
-        // In production, replace this section with:
-        //
-        // ```ignore
-        // use go_on_federated::federated_service_server::{
-        //     FederatedService, FederatedServiceServer,
-        // };
-        //
-        // let svc = FederatedServiceServer::new(GrpcFederatedServiceImpl {
-        //     coordinator: self.coordinator.clone(),
-        //     accepted_submissions: &self.accepted_submissions,
-        //     started_at_ms: self.started_at_ms.load(std::sync::atomic::Ordering::Relaxed),
-        // });
-        //
-        // tonic::transport::Server::builder()
-        //     .add_service(svc)
-        //     .serve(addr)
-        //     .await?;
-        // ```
-
-        // For now, we simulate a running server by printing the address.
-        // Replace with the real tonic server code above.
         info!(
             "FederatedServer listening on {} (submissions accepted: {})",
             addr,
@@ -591,12 +577,53 @@ impl FederatedServer {
                 .load(std::sync::atomic::Ordering::Relaxed)
         );
 
-        // Simulate a never-ending server loop.
-        // In production this is replaced by `tonic::transport::Server::serve()`.
-        let forever = std::future::pending::<()>();
-        forever.await;
+        loop {
+            let (mut stream, peer_addr) = match listener.accept().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    warn!("FederatedServer: accept failed: {:?}", e);
+                    continue;
+                }
+            };
 
-        Ok(())
+            tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                let n = match stream.read(&mut buf).await {
+                    Ok(0) => return,
+                    Ok(n) => n,
+                    Err(e) => {
+                        warn!("FederatedServer: read error from {}: {:?}", peer_addr, e);
+                        return;
+                    }
+                };
+
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let response = if request.starts_with("GET /health") {
+                    let uptime = elapsed_ms();
+                    let body = format!(
+                        r#"{{"status":"ok","uptime_ms":{},"submissions":{}}}"#,
+                        uptime,
+                        0u64,
+                    );
+                    format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else {
+                    let body = "404 Not Found";
+                    format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+
+                if let Err(e) = stream.write_all(response.as_bytes()).await {
+                    warn!("FederatedServer: write error to {}: {:?}", peer_addr, e);
+                }
+            });
+        }
     }
 
     /// Return the number of submissions accepted since startup.

@@ -933,30 +933,8 @@ impl DistributedMemoryBus {
 // ---------------------------------------------------------------------------
 
 /// Generate a v4 UUID string.
-///
-/// Uses a simple random generator seeded from the system clock to avoid
-/// pulling in the full `uuid` crate as a hard dependency.  In production you
-/// may wish to replace this with `uuid::Uuid::new_v4()`.
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-
-    // Use the low bits of the timestamp as a crude random-ish value.
-    let r0 = (nanos & 0xFFFF_FFFF_FFFF) as u64;
-    let r1 = ((nanos >> 48) & 0xFFFF_FFFF_FFFF) as u64;
-
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        (r0 >> 16) as u32,
-        (r0 & 0xFFFF) as u16,
-        ((r1 >> 12) & 0x0FFF) as u16,
-        (0x8000 | ((r1 >> 4) & 0x3FFF)) as u16,
-        r1 & 0x0000_FFFF_FFFF,
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// Return the local node identifier.

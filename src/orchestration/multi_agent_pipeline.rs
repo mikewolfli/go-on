@@ -52,26 +52,10 @@ pub struct PipelineResult {
     pub failed_count: usize,
 }
 
-/// Strategy for assigning agents to subtasks.
-#[derive(Debug, Clone)]
-pub enum AgentAssignment {
-    /// Use a specific agent by name for all subtasks
-    #[allow(dead_code)]
-    Fixed(String),
-    /// Use agents from the registry; the pipeline picks available agents
-    /// round-robin across subtasks within each phase
-    RoundRobin,
-    /// Use only agents whose names contain any of the given substrings
-    #[allow(dead_code)]
-    Filtered(Vec<String>),
-}
-
 /// Multi-agent pipeline for parallel task execution.
 pub struct MultiAgentPipeline {
     /// Agent registry for agent lookups
     registry: Arc<AgentRegistry>,
-    /// How to assign agents to subtasks
-    assignment: AgentAssignment,
     /// Per-subtask timeout in seconds (default: 60)
     subtask_timeout_seconds: u64,
 }
@@ -81,20 +65,11 @@ impl MultiAgentPipeline {
     ///
     /// # Arguments
     /// * `registry` - Agent registry for agent lookups
-    /// * `assignment` - Strategy for assigning agents to subtasks
-    pub fn new(registry: Arc<AgentRegistry>, assignment: AgentAssignment) -> Self {
+    pub fn new(registry: Arc<AgentRegistry>) -> Self {
         Self {
             registry,
-            assignment,
             subtask_timeout_seconds: 60,
         }
-    }
-
-    /// Set a custom per-subtask timeout.
-    #[allow(dead_code)]
-    pub fn with_subtask_timeout(mut self, seconds: u64) -> Self {
-        self.subtask_timeout_seconds = seconds;
-        self
     }
 
     /// Execute a task through the multi-agent pipeline.
@@ -166,18 +141,8 @@ impl MultiAgentPipeline {
     ) -> Vec<SubtaskResult> {
         let mut join_set: JoinSet<SubtaskResult> = JoinSet::new();
 
-        // Collect available agent names
-        let agent_names = self.registry.names();
-        let eligible_agents: Vec<String> = match &self.assignment {
-            AgentAssignment::Fixed(name) => {
-                vec![name.clone()]
-            }
-            AgentAssignment::RoundRobin => agent_names,
-            AgentAssignment::Filtered(patterns) => agent_names
-                .into_iter()
-                .filter(|name| patterns.iter().any(|p| name.contains(p)))
-                .collect(),
-        };
+        // Collect available agent names (RoundRobin strategy)
+        let eligible_agents: Vec<String> = self.registry.names();
 
         if eligible_agents.is_empty() {
             // No agents available — return failed results for all subtasks
@@ -377,8 +342,7 @@ mod tests {
         reg.register_arc("mock_agent", Arc::new(MockAgent));
         let registry = Arc::new(reg);
 
-        let pipeline =
-            MultiAgentPipeline::new(registry, AgentAssignment::Fixed("mock_agent".into()));
+        let pipeline = MultiAgentPipeline::new(registry);
 
         let characteristics = TaskCharacteristics {
             description: "test task".to_string(),

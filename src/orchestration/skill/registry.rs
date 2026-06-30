@@ -17,6 +17,27 @@ use super::execution::{
     extract_intent_tokens, name_similarity, normalize_name, semantic_similarity, PromptBasedSkill,
 };
 
+/// Convert a JSON schema Value (e.g. `{"type":"object","properties":{"code":{"type":"string"}}}`)
+/// into a flat `HashMap<String, String>` suitable for `PromptBasedSkill::input_schema`.
+fn schema_value_to_map(schema: &serde_json::Value) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
+        for (key, val) in props {
+            let type_str = val.get("type").and_then(|v| v.as_str()).unwrap_or("string");
+            let desc = val
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if desc.is_empty() {
+                map.insert(key.clone(), type_str.to_string());
+            } else {
+                map.insert(key.clone(), format!("{} — {}", type_str, desc));
+            }
+        }
+    }
+    map
+}
+
 /// Records a version change in a skill's evolution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillVersionRecord {
@@ -580,11 +601,12 @@ impl SkillRegistry {
                 .clone()
                 .unwrap_or_else(|| manifest.description.clone());
 
+            let parsed_schema = schema_value_to_map(&manifest.input_schema);
             let skill = PromptBasedSkill {
                 name: manifest.name.clone(),
                 description: manifest.description.clone(),
                 prompt_template: prompt_text,
-                input_schema: HashMap::new(),
+                input_schema: parsed_schema.clone(),
                 timeout_secs: 30,
                 max_retries: 2,
             };
@@ -601,7 +623,7 @@ impl SkillRegistry {
                             name: manifest.name.clone(),
                             description: manifest.description,
                             prompt_template: manifest.prompt_template.unwrap_or_default(),
-                            input_schema: HashMap::new(),
+                            input_schema: parsed_schema,
                             created_at: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -860,11 +882,12 @@ pub fn spawn_skill_refresh_task(
                             .clone()
                             .unwrap_or_else(|| pf.manifest.description.clone());
 
+                        let parsed_schema = schema_value_to_map(&pf.manifest.input_schema);
                         let skill = PromptBasedSkill {
                             name: pf.manifest.name.clone(),
                             description: pf.manifest.description.clone(),
                             prompt_template: prompt_text,
-                            input_schema: HashMap::new(),
+                            input_schema: parsed_schema,
                             timeout_secs: 30,
                             max_retries: 2,
                         };
