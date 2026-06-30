@@ -86,14 +86,10 @@ pub struct IncrementalState {
 /// Configuration for the session compressor.
 ///
 /// Some fields (max_messages, compression_msg_threshold, token_window) are
-/// only read directly in #[cfg(test)] code. The struct itself is wired into
-/// the production chat pipeline via SessionCompressor::default() and .compress().
+/// read by downstream consumers (session_manager.rs, tests).
 #[cfg_attr(
     not(test),
-    allow(
-        dead_code,
-        reason = "test-only fields (max_messages, compression_msg_threshold, token_window) are direct-accessed only in tests"
-    )
+    allow(dead_code, reason = "fields are read by session_manager.rs and tests")
 )]
 #[derive(Debug, Clone)]
 pub struct SessionCompressor {

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// Conversation checkpoint — architectural placeholder.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConversationCheckpoint {
     pub checkpoint_id: String,
     pub conversation_id: String,

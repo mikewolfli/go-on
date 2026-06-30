@@ -16,6 +16,8 @@
 //! Once all call sites have migrated, `CoreDag<T>` will become the sole DAG type
 //! and the ExecutionGraph / TaskGraph types will be deprecated.
 
+#![allow(dead_code, reason = "generic DAG types for tool execution")]
+
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

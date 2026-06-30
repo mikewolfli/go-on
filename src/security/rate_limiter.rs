@@ -4,7 +4,7 @@
 //! configurable rate).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use crate::shared::token_bucket::TokenBucket;
 
@@ -49,10 +49,4 @@ impl GlobalRateLimiter {
         });
         bucket.try_consume(tokens)
     }
-}
-
-static GLOBAL_RATE_LIMITER: OnceLock<GlobalRateLimiter> = OnceLock::new();
-
-pub fn global_rate_limiter() -> &'static GlobalRateLimiter {
-    GLOBAL_RATE_LIMITER.get_or_init(|| GlobalRateLimiter::new(RateLimitConfig::default()))
 }

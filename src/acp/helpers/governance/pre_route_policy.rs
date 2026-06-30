@@ -302,6 +302,7 @@ mod tests {
             plan: None,
             vector_hits: None,
             execution_decision_candidate: None,
+            plan_output: None,
         }
     }
 

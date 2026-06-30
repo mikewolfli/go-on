@@ -3,7 +3,9 @@
 //! Provides the [`DeepReasoningEngine`] for LLM-level reasoning augmentation,
 //! and report types for post-loop analysis.
 //!
-//! ⚠️ **DEPRECATED** (non-test): Use cognitive loop in chat_phases.rs instead.
+//! Actively wired in production: HarnessBus, autonomy_loop_adapter, chat_phases.rs.
+//! The cognitive loop in chat_phases.rs is an additional path; the brain loop
+//! remains the primary iterative orchestration driver.
 
 use std::sync::Arc;
 

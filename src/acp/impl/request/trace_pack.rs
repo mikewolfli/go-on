@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use super::*;
 use crate::governance::hardening::{AuditLogger, BudgetTracker};
 

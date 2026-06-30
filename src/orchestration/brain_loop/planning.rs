@@ -1,6 +1,8 @@
 //! Planning, reflection, replanning, and lifecycle methods for [`BrainLoop`](super::BrainLoop).
 //!
-//! ⚠️ **DEPRECATED** (non-test): Use cognitive loop in chat_phases.rs instead.
+//! Actively wired in production: HarnessBus, autonomy_loop_adapter, chat_phases.rs.
+//! The cognitive loop in chat_phases.rs is an additional path; the brain loop
+//! remains the primary iterative orchestration driver.
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;

@@ -46,6 +46,7 @@ pub(crate) async fn run_acp_autonomy_loop(
             .unwrap_or(default)
     };
     let config = AutonomyLoopConfig {
+        // Autonomy loop configuration
         max_iterations: 5,
         max_tools_per_round: 8,
         enable_planner_guidance: true,
@@ -54,15 +55,17 @@ pub(crate) async fn run_acp_autonomy_loop(
         replan_complexity_threshold: 4,
         enable_early_stop: true,
         early_stop_confidence_threshold: 0.85,
-        capability_signals: None,
+        capability_signals: false,
         use_dag_execution: option_bool("enable_dag_execution", true), // DAG on by default for autonomy loop
         enable_agent_reroute: option_bool("enable_agent_reroute", true),
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
-        recovery_orchestrator: Some(crate::orchestration::recovery::RecoveryOrchestrator::new()),
+        recovery_orchestrator: Some("auto".to_string()),
         max_messages: 200,
-        use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default. BrainLoop path does not invoke agent.chat()
-                                                              // and is designed for specific agent types with BrainLoop integration.
-                                                              // Enable via config for agents that support it.
+        use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default.
+        tool_timeout_ms: None,
+        max_tool_concurrency: 4,
+        max_tool_retries: 2,
+        enable_governance_gate: true,
     };
 
     let result = if config.use_brain_loop {
@@ -101,7 +104,7 @@ async fn run_acp_autonomy_loop_with_brain_loop(
     _agent: Arc<dyn Agent>,
     objective: &str,
     messages: &[Message],
-    _config: AutonomyLoopConfig,
+    config: AutonomyLoopConfig,
 ) -> Result<AutonomyLoopResult> {
     // ── Convert messages into BrainLoop steps ────────────────────────
     let steps: Vec<BrainLoopStep> = messages
@@ -126,7 +129,10 @@ async fn run_acp_autonomy_loop_with_brain_loop(
         .collect();
 
     // ── Run the BrainLoop ────────────────────────────────────────────
-    let brain_config = BrainLoopConfig::default();
+    let brain_config = BrainLoopConfig {
+        max_iterations: config.max_iterations as u32,
+        ..Default::default()
+    };
     let brain_loop = BrainLoop::new(brain_config);
     let profile: BrainLoopProfile = brain_loop.run_async(objective, steps).await?;
 
@@ -150,22 +156,8 @@ fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> 
         "convergence_info": profile.convergence_info,
     });
 
-    let converged = profile
-        .convergence_info
-        .to_lowercase()
-        .contains("converged");
-    let reasoning = format!(
-        "BrainLoop: {} plan(s), {} cycle(s), {} step(s), converged={}",
-        profile.total_plans,
-        profile.total_cycles,
-        profile.total_steps,
-        if converged { "yes" } else { "no" },
-    );
-
     AutonomyLoopResult {
         response: response.to_string(),
-        reasoning,
-        selected_model: None,
         report: AutonomyLoopReport {
             total_rounds: profile.total_cycles as usize,
             total_tools: profile.total_steps as usize,

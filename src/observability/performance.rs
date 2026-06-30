@@ -543,69 +543,69 @@ pub(crate) fn get_memory_usage() -> u64 {
 fn get_cpu_usage() -> f64 {
     #[cfg(target_os = "linux")]
     {
-        // Linux: delta-based CPU usage from /proc/stat
-        use std::fs;
-        use std::sync::Mutex;
-
-        static PREV: Mutex<Option<(u64, u64)>> = Mutex::new(None);
-
-        let Ok(content) = fs::read_to_string("/proc/stat") else {
-            return 0.0;
-        };
-        let Some(cpu_line) = content.lines().find(|l| l.starts_with("cpu ")) else {
-            return 0.0;
-        };
-        let fields: Vec<u64> = cpu_line
-            .split_whitespace()
-            .skip(1)
-            .filter_map(|s| s.parse::<u64>().ok())
-            .collect();
-        if fields.len() < 4 {
-            return 0.0;
-        }
-        // user(0) + nice(1) + system(2) + idle(3)
-        let total: u64 = fields[0] + fields[1] + fields[2] + fields[3];
-        let idle = fields[3];
-
-        let mut prev = PREV.lock().unwrap();
-        if let Some((prev_total, prev_idle)) = *prev {
-            let total_delta = total.saturating_sub(prev_total);
-            let idle_delta = idle.saturating_sub(prev_idle);
-            *prev = Some((total, idle));
-            if total_delta > 0 {
-                return 100.0 * (total_delta.saturating_sub(idle_delta)) as f64
-                    / total_delta as f64;
-            }
-        } else {
-            *prev = Some((total, idle));
-        }
-        0.0
+        return linux_cpu_usage();
     }
-
     #[cfg(target_os = "macos")]
     {
-        // macOS: use `ps` to get aggregate CPU
-        if let Ok(output) = std::process::Command::new("ps")
-            .args(["-A", "-o", "%cpu="])
-            .output()
-        {
-            if let Ok(stdout) = String::from_utf8(output.stdout) {
-                let total: f64 = stdout
-                    .lines()
-                    .filter_map(|l| l.trim().parse::<f64>().ok())
-                    .sum();
-                // Number of logical CPUs ≈ rough estimate
-                let ncpus = std::thread::available_parallelism()
-                    .map(|n| n.get() as f64)
-                    .unwrap_or(1.0);
-                return (total / ncpus).min(100.0);
-            }
-        }
-        0.0
+        return macos_cpu_usage();
     }
-
-    // Default: no platform-specific impl available
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    0.0
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cpu_usage() -> f64 {
+    use std::fs;
+    use std::sync::Mutex;
+    static PREV: Mutex<Option<(u64, u64)>> = Mutex::new(None);
+
+    let Ok(content) = fs::read_to_string("/proc/stat") else {
+        return 0.0;
+    };
+    let Some(cpu_line) = content.lines().find(|l| l.starts_with("cpu ")) else {
+        return 0.0;
+    };
+    let fields: Vec<u64> = cpu_line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|s| s.parse::<u64>().ok())
+        .collect();
+    if fields.len() < 4 {
+        return 0.0;
+    }
+    let total: u64 = fields[0] + fields[1] + fields[2] + fields[3];
+    let idle = fields[3];
+    let mut prev = PREV.lock().unwrap();
+    if let Some((prev_total, prev_idle)) = *prev {
+        let total_delta = total.saturating_sub(prev_total);
+        let idle_delta = idle.saturating_sub(prev_idle);
+        *prev = Some((total, idle));
+        if total_delta > 0 {
+            return 100.0 * (total_delta.saturating_sub(idle_delta)) as f64 / total_delta as f64;
+        }
+    } else {
+        *prev = Some((total, idle));
+    }
+    0.0
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cpu_usage() -> f64 {
+    if let Ok(output) = std::process::Command::new("ps")
+        .args(["-A", "-o", "%cpu="])
+        .output()
+    {
+        if let Ok(stdout) = String::from_utf8(output.stdout) {
+            let total: f64 = stdout
+                .lines()
+                .filter_map(|l| l.trim().parse::<f64>().ok())
+                .sum();
+            let ncpus = std::thread::available_parallelism()
+                .map(|n| n.get() as f64)
+                .unwrap_or(1.0);
+            return (total / ncpus).min(100.0);
+        }
+    }
     0.0
 }
 

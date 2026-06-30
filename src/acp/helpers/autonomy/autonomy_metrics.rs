@@ -40,10 +40,12 @@ static AGENT_SWITCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AGENT_SWITCH_BY_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AGENT_SWITCH_BY_REPUTATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
 pub(crate) fn record_planner_guided_route() {
     PLANNER_GUIDED_ROUTE_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
 pub(crate) fn record_explicit_tool_route() {
     EXPLICIT_TOOL_ROUTE_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
@@ -163,6 +165,7 @@ pub(crate) fn record_vote_reputation_tiebreak() {
     VOTE_REPUTATION_TIEBREAK_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
 pub(crate) fn record_parallel_tool_fanout(batch_size: u64) {
     PARALLEL_TOOL_FANOUT_CALLS_TOTAL.fetch_add(1, Ordering::Relaxed);
     PARALLEL_TOOL_FANOUT_BATCH_TOTAL.fetch_add(batch_size, Ordering::Relaxed);

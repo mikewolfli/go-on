@@ -52,7 +52,6 @@ use crate::acp::r#impl::request;
 use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
 use crate::evaluation::TraceEvent;
-use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
 use crate::intelligence::token_cache::{
     estimate_messages_token_count, messages_to_text, ContextLengthClass,
@@ -71,16 +70,11 @@ use crate::rpc_protocol::{child_trace_context, RequestTraceContext};
 
 /// Collected output from the observe phase.
 pub(crate) struct ObserveOutput {
-    pub _flow: Arc<FlowManager>,
-    pub _registry: Arc<crate::agent::AgentRegistry>,
     pub tenant_id: String,
     pub user_id: Option<String>,
     pub phase: ResolvedPhase,
     pub phase_name: String,
     pub phase_origin: String,
-    pub _has_requested_phase: bool,
-    pub _has_controller_phase: bool,
-    pub _has_adaptive_phase: bool,
     pub resolved: crate::orchestration::flow::ResolvedRouting,
     pub schema_warnings: Vec<String>,
     pub schema_error: Option<String>,
@@ -98,7 +92,8 @@ pub(crate) struct ThinkOutput {
     pub capability_selection_reason: Option<String>,
     pub capability_optimization_hint: Option<Value>,
     pub configured_primary_agent: Option<String>,
-    pub _preferred_agent_from_request: Option<String>,
+    #[allow(dead_code)]
+    pub preferred_agent_from_request: Option<String>,
     pub conversation_id: String,
     pub branch_id: String,
     pub agent_messages: Vec<Message>,
@@ -106,7 +101,8 @@ pub(crate) struct ThinkOutput {
     pub base_agent_options: HashMap<String, Value>,
     pub risk_policy: RiskVotePolicy,
     pub risk_assessment: RiskAssessment,
-    pub _enable_high_risk_vote: bool,
+    #[allow(dead_code)]
+    pub enable_high_risk_vote: bool,
     pub enable_high_risk_multi_agent_vote: bool,
     pub min_vote_agents: usize,
     pub max_vote_agents: usize,
@@ -140,7 +136,6 @@ pub(crate) struct ActOutput {
     pub knowledge: Value,
     pub metacognitive_loop: Value,
     pub distillation: Value,
-    pub _task_contexts: Vec<TaskContext>,
 }
 
 // ── ThresholdLearner (INT-2) ──────────────────────────────────────────
@@ -206,27 +201,16 @@ pub(crate) async fn observe_phase(
     // ── Phase resolution ──────────────────────────────────────────
     let phase_res = resolve_request_phase(server, params, &flow, registry.as_ref()).await?;
 
-    // ── CapabilityBus sensing (retained for future extensibility) ──
-    let _capability_sensing = server.governance_deps.capability_bus.as_ref().map(|cb| {
-        cb.sense(&crate::governance::pua::TaskContext {
-            task_type: crate::governance::pua::TaskType::Other,
-            file_count: params.messages.len(),
-            risk_score: 0.5,
-        })
-    });
-    let _ = _capability_sensing;
+    // flow and registry are kept alive via server reference
+    drop(flow);
+    drop(registry);
 
     Ok(ObserveOutput {
-        _flow: flow,
-        _registry: registry,
         tenant_id,
         user_id,
         phase: phase_res.phase,
         phase_name: phase_res.phase_name,
         phase_origin: phase_res.phase_origin,
-        _has_requested_phase: phase_res.has_requested_phase,
-        _has_controller_phase: phase_res.has_controller_phase,
-        _has_adaptive_phase: phase_res.has_adaptive_phase,
         resolved: phase_res.resolved,
         schema_warnings: phase_res.schema_warnings,
         schema_error: phase_res.schema_error,
@@ -414,7 +398,7 @@ pub(crate) async fn think_phase(
         capability_selection_reason: agent_sel.capability_selection_reason,
         capability_optimization_hint: agent_sel.capability_optimization_hint,
         configured_primary_agent: agent_sel.configured_primary_agent,
-        _preferred_agent_from_request: agent_sel.preferred_agent_from_request,
+        preferred_agent_from_request: agent_sel.preferred_agent_from_request,
         conversation_id: agent_sel.conversation_id,
         branch_id: agent_sel.branch_id,
         agent_messages,
@@ -422,7 +406,7 @@ pub(crate) async fn think_phase(
         base_agent_options: agent_sel.base_agent_options,
         risk_policy: agent_sel.risk_policy,
         risk_assessment: agent_sel.risk_assessment,
-        _enable_high_risk_vote: agent_sel.enable_high_risk_vote,
+        enable_high_risk_vote: agent_sel.enable_high_risk_vote,
         enable_high_risk_multi_agent_vote: agent_sel.enable_high_risk_multi_agent_vote,
         min_vote_agents: agent_sel.min_vote_agents,
         max_vote_agents: agent_sel.max_vote_agents,
@@ -615,8 +599,6 @@ pub(crate) async fn act_phase(
             autonomy_loop_executed: false,
             selected_agent: String::new(),
             response_text: String::new(),
-            _reasoning_text: String::new(),
-            _selected_model_name: None,
             agent_attempts: Vec::new(),
         }
     };
@@ -659,6 +641,10 @@ pub(crate) async fn act_phase(
     }
 
     // Fallback + vote
+    let mut checkpoint = cognitive_empty_checkpoint();
+    let mut knowledge = Value::Null;
+    let mut metacognitive_loop = Value::Null;
+    let mut distillation = Value::Null;
     if !(cache_hit || autonomy_loop_executed && !response_text.trim().is_empty()) {
         let (fallback_result, vote_result, emit_final_vote) = execute_fallback_with_vote(
             server,
@@ -708,6 +694,7 @@ pub(crate) async fn act_phase(
                     total_chars,
                     0u64,
                     selected_model_name.clone(),
+                    Some(&response_text),
                 )
                 .await?;
             }
@@ -723,16 +710,6 @@ pub(crate) async fn act_phase(
         };
 
         // Error handling
-        // BLUE56-GAP-C04: Record execution in hyper-resilience engine before error handling
-        server
-            .resilience
-            .hyper_resilience
-            .record_execution(
-                &selected_agent,
-                !response_text.is_empty() && last_err.is_none(),
-            )
-            .await;
-
         if let Some(early_value) = handle_execution_errors(
             server,
             params,
@@ -761,19 +738,6 @@ pub(crate) async fn act_phase(
                     response_text = prompt.to_string();
                 }
             }
-            // ── Provenance recording (P2-12) ─────────────────────────────
-            let success = !response_text.is_empty() && last_err.is_none();
-            if let Some(ref ledger) = server.governance_deps.provenance_ledger {
-                let _ = ledger
-                    .record_provenance(
-                        &trace.trace_id,
-                        &extract_task_description(&params.messages),
-                        &selected_agent,
-                        success,
-                        act_started.elapsed().as_millis() as u64,
-                    )
-                    .await;
-            }
         }
         if let Some(err) = last_err.take() {
             return Err(err);
@@ -781,13 +745,15 @@ pub(crate) async fn act_phase(
 
         // Semantic cache populate
         if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
+            // Clone BEFORE acquiring write lock to minimize critical section.
+            let cached_response = Value::String(response_text.clone());
             server
                 .cache_deps
                 .cache
                 .semantic_cache
                 .write()
                 .unwrap_or_else(|p| p.into_inner())
-                .put(&input_text, Value::String(response_text.clone()));
+                .put(&input_text, cached_response);
         }
 
         // Post-success cleanup
@@ -807,21 +773,6 @@ pub(crate) async fn act_phase(
                 duration_ms: started.elapsed().as_millis() as u64,
             });
 
-        // BLUE56-GAP-C04: Record fallback/vote execution in hyper-resilience engine
-        server
-            .resilience
-            .hyper_resilience
-            .record_execution(
-                &selected_agent,
-                !response_text.is_empty() && last_err.is_none(),
-            )
-            .await;
-
-        // O-FIX4: Record global performance metric for this operation
-        let success = !response_text.is_empty() && last_err.is_none();
-        let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
-        record_global_operation(success, elapsed_ms);
-
         // Persistence
         persist_vector_memory(
             server,
@@ -837,7 +788,7 @@ pub(crate) async fn act_phase(
             role: "assistant".to_string(),
             content: response_text.clone(),
         });
-        let (mut checkpoint, _knowledge) = tokio::join!(
+        let (new_checkpoint_from_join, kn) = tokio::join!(
             request::create_checkpoint_record(
                 server,
                 &routing_out.conversation_id,
@@ -856,15 +807,15 @@ pub(crate) async fn act_phase(
                 &response_text
             ),
         );
-        let (metacognitive_loop, _distillation) = tokio::join!(
+        let (ml, dst) = tokio::join!(
             request::persist_checkpoint_metacognitive_loop(
                 server,
                 &routing_out.conversation_id,
                 &routing_out.branch_id,
-                &checkpoint.checkpoint_id,
+                &new_checkpoint_from_join.checkpoint_id,
                 json!({
                     "active": true, "schema_version": "blue25-metacognitive-loop-v1", "cycle_count": 1,
-                    "checkpoint_id": checkpoint.checkpoint_id, "last_reflection": format!("{}:{}", resolve_out.phase_name, selected_agent),
+                    "checkpoint_id": new_checkpoint_from_join.checkpoint_id, "last_reflection": format!("{}:{}", resolve_out.phase_name, selected_agent),
                     "reflection_trigger": "response_completed", "last_selected_agent": selected_agent, "response_chars": response_text.chars().count(),
                 })
             ),
@@ -880,7 +831,13 @@ pub(crate) async fn act_phase(
                 &response_text
             ),
         );
-        checkpoint.metacognitive_loop = Some(metacognitive_loop.clone());
+        checkpoint = crate::acp::ConversationCheckpoint {
+            metacognitive_loop: Some(ml.clone()),
+            ..new_checkpoint_from_join
+        };
+        knowledge = kn;
+        metacognitive_loop = ml;
+        distillation = dst;
 
         if stream_observer.is_some() {
             emit_stream_token_economy(
@@ -923,43 +880,12 @@ pub(crate) async fn act_phase(
                 tracing::warn!(target: "harness_bus", risk_score = output_v.risk_score, "post-execute: verification flagged quality issue");
             }
         }
-
-        // O-FIX4: Record global performance metric for the primary execution path
-        let success = !response_text.is_empty() && last_err.is_none();
-        let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
-        record_global_operation(success, elapsed_ms);
-
-        // ── Provenance recording (P2-12) ─────────────────────────────────
-        if let Some(ref ledger) = server.governance_deps.provenance_ledger {
-            let _ = ledger
-                .record_provenance(
-                    &trace.trace_id,
-                    &extract_task_description(&params.messages),
-                    &selected_agent,
-                    success,
-                    act_started.elapsed().as_millis() as u64,
-                )
-                .await;
-        }
     }
 
     // O-FIX4: Record global performance metric (cache-hit or fallback-early path)
     let success = !response_text.is_empty() && last_err.is_none();
     let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
     record_global_operation(success, elapsed_ms);
-
-    // ── Provenance recording (P2-12) ─────────────────────────────────────
-    if let Some(ref ledger) = server.governance_deps.provenance_ledger {
-        let _ = ledger
-            .record_provenance(
-                &trace.trace_id,
-                &extract_task_description(&params.messages),
-                &selected_agent,
-                success,
-                act_started.elapsed().as_millis() as u64,
-            )
-            .await;
-    }
 
     Ok(ActOutput {
         selected_agent,
@@ -976,11 +902,10 @@ pub(crate) async fn act_phase(
         used_multi_model_vote: false,
         used_multi_agent_vote: false,
         review_required: false,
-        checkpoint: cognitive_empty_checkpoint(),
-        knowledge: Value::Null,
-        metacognitive_loop: Value::Null,
-        distillation: Value::Null,
-        _task_contexts: task_contexts,
+        checkpoint,
+        knowledge,
+        metacognitive_loop,
+        distillation,
     })
 }
 
@@ -1067,7 +992,17 @@ async fn stream_cache_response(
         };
         let total = text.chars().count();
         emit_stream_chunk(server, Some(o), meta, text, 1, total).await?;
-        emit_stream_done(server, Some(o), meta, 1, total, 0u64, model.clone()).await?;
+        emit_stream_done(
+            server,
+            Some(o),
+            meta,
+            1,
+            total,
+            0u64,
+            model.clone(),
+            Some(text),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -1348,14 +1283,14 @@ pub(crate) async fn reflect_phase(
             optimization_hint: routing_out.capability_optimization_hint.clone(),
         },
         Vec::new(),
-        exec_out.agent_attempts.clone(),
+        std::mem::take(&mut exec_out.agent_attempts),
         risk_decision,
         exec_out.quota_failed_agents.clone(),
         routing_out.vector_context.clone(),
-        exec_out.knowledge.clone(),
-        exec_out.distillation.clone(),
-        exec_out.checkpoint.clone(),
-        exec_out.metacognitive_loop.clone(),
+        std::mem::take(&mut exec_out.knowledge),
+        std::mem::take(&mut exec_out.distillation),
+        std::mem::take(&mut exec_out.checkpoint),
+        std::mem::take(&mut exec_out.metacognitive_loop),
     )
     .await?;
 
@@ -1499,26 +1434,27 @@ pub(crate) async fn reflect_phase(
             .await;
     }
 
-    // ── Metacognitive persistence save (GAP-B53-56) ─────────────────────
-    {
-        use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
-        use std::path::PathBuf;
-        let storage_dir = PathBuf::from(".goon/metacognitive");
-        if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
-            if let Some(ref cb) = server.governance_deps.capability_bus {
-                let _ = persistence.save(&cb.metacognitive);
+    // ── Metacognitive persistence save (fire-and-forget) ──────────────────
+    if let Some(ref cb) = server.governance_deps.capability_bus {
+        let meta = cb.metacognitive.clone();
+        tokio::spawn(async move {
+            use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
+            let storage_dir = std::path::PathBuf::from(".goon/metacognitive");
+            if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
+                let _ = persistence.save(&meta);
             }
-        }
+        });
     }
 
-    // ── TripleFusion fusion cycle (BLUE64-B09) ──────────────────────────
+    // ── TripleFusion fusion cycle (fire-and-forget, non-blocking) ────────
     if let Some(ref cb) = server.governance_deps.capability_bus {
-        let fusion_bridge = crate::intelligence::triple_fusion::global_triple_fusion_bridge();
-        let triggers = fusion_bridge
-            .lock()
-            .await
-            .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
-        crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
+        let meta = cb.metacognitive.clone();
+        let cs = cb.consciousness.clone();
+        tokio::spawn(async move {
+            let fusion_bridge = crate::intelligence::triple_fusion::global_triple_fusion_bridge();
+            let triggers = fusion_bridge.lock().await.run_fusion_cycle(&meta, &cs);
+            crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
+        });
     }
 
     // ── Memory bridge: persist reflection outcome (GAP-B54-011) ────────

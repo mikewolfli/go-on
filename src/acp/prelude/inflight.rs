@@ -12,7 +12,7 @@ use std::sync::Arc;
 // See docs/log/log-20260625-1.md §Remaining Non-Issues.
 use std::sync::Mutex as StdMutex;
 
-use tracing::warn;
+use tracing::{trace, warn};
 
 // ============================================================================
 // Internal state
@@ -54,15 +54,29 @@ impl Default for InflightGuard {
 // ============================================================================
 
 /// Inflight limiter for request concurrency control
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct InflightLimiter {
     inner: StdMutex<InflightState>,
+    /// Maximum number of concurrent in-flight requests (0 = unlimited).
+    max_inflight: u32,
+}
+
+impl Default for InflightLimiter {
+    fn default() -> Self {
+        Self {
+            inner: StdMutex::new(InflightState::default()),
+            max_inflight: 0,
+        }
+    }
 }
 
 impl InflightLimiter {
-    /// Create a new inflight limiter
-    pub fn new(_max_inflight: u32) -> Self {
-        Self::default()
+    /// Create a new inflight limiter with the given maximum concurrency.
+    pub fn new(max_inflight: u32) -> Self {
+        Self {
+            inner: StdMutex::new(InflightState::default()),
+            max_inflight,
+        }
     }
 
     /// Try to enter the limiter, returning a guard on success.
@@ -76,10 +90,15 @@ impl InflightLimiter {
             warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
-        if let Some(limit) = global_limit {
-            if guard.global as u64 >= limit.max(1) {
-                return None;
+        let effective_global = global_limit.unwrap_or_else(|| {
+            if self.max_inflight > 0 {
+                self.max_inflight as u64
+            } else {
+                u64::MAX // unlimited
             }
+        });
+        if effective_global != u64::MAX && guard.global as u64 >= effective_global.max(1) {
+            return None;
         }
 
         let phase_count = guard.phase.get(phase_name).copied().unwrap_or(0);
@@ -121,6 +140,21 @@ impl InflightLimiter {
 
     /// Check if inflight limiter is healthy
     pub fn is_healthy(&self) -> bool {
-        true
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let healthy = if self.max_inflight == 0 {
+            true // unlimited
+        } else {
+            guard.global < self.max_inflight as usize
+        };
+        trace!(
+            "inflight health check: global={}, max_inflight={}, healthy={}",
+            guard.global,
+            self.max_inflight,
+            healthy
+        );
+        healthy
     }
 }

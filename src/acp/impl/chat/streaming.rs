@@ -129,6 +129,9 @@ pub(crate) async fn emit_stream_done(
     // Actual model name reported by the agent (e.g. "gemini-2.5-pro" for copilot).
     // Passed through to SSE payload so the GUI can display it.
     selected_model: Option<String>,
+    // Optional response text to include in the SSE done event so the GUI
+    // doesn't depend solely on a separate "result" event.
+    response: Option<&str>,
 ) -> Result<()> {
     let Some(observer) = observer else {
         return Ok(());
@@ -167,6 +170,11 @@ pub(crate) async fn emit_stream_done(
         if let Some(ref m) = selected_model {
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert("selected_model".to_string(), json!(m));
+            }
+        }
+        if let Some(response_text) = response {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("response".to_string(), json!(response_text));
             }
         }
         // Send failure is expected when client disconnects — non-critical.
@@ -263,6 +271,16 @@ pub(crate) struct StreamObserver {
 }
 
 impl StreamObserver {
+    /// Send an SSE frame through this observer, if SSE is configured.
+    /// Returns `true` if the frame was sent, `false` if no SSE sender is available.
+    pub(crate) async fn send_sse(&self, frame: StreamFrame) -> bool {
+        if let Some(sender) = &self.sse_sender {
+            sender.send(frame).await.is_ok()
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn jsonrpc(response_id: Option<Value>) -> Self {
         Self {
             jsonrpc_response_id: response_id,

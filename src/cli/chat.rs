@@ -5,7 +5,9 @@
 //! - Streaming agent chat with thinking/reasoning display
 //! - Tool execution (file read/write, search, code execution, etc.)
 //! - Skill invocation
-//! - Multi-turn conversation
+//! - Multi-turn conversation with history persistence
+//! - Ctrl+C interrupt handling
+//! - Session save/resume
 //! - Built-in commands
 //!
 //! Usage: `go-on -a` or `go-on --chat`
@@ -14,8 +16,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use serde::{Deserialize, Serialize};
+
 use anyhow::Result;
 use serde_json::{json, Value};
+use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
@@ -24,7 +29,7 @@ use crate::acp::helpers::autonomy::run_followup_after_tool_observation;
 use crate::acp::helpers::autonomy::terminal_chat_contract_snapshot;
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::config::AppConfig;
-use crate::flow::FlowManager;
+
 use crate::governance::status::quick_check_tool as governance_gate;
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::orchestration::autonomy_runtime::{
@@ -34,6 +39,28 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 
 /// Maximum number of characters from a tool result sent to the LLM.
 const MAX_TOOL_RESULT_CHARS: usize = 100_000;
+/// Session file name for conversation persistence.
+const SESSION_FILE: &str = ".goon-chat-session.json";
+/// Max lines to display for help text.
+const HELP_TEXT: &str = "\
+Commands:
+  /quit        Exit chat
+  /clear       Clear conversation history
+  /save        Save session to file
+  /load        Load session from file
+  /help        Show this help
+  /agents      List configured agents
+  /tools       List available tools
+  /skills      List available skills
+  /stats       Show conversation stats
+
+The AI agent has access to tools:
+  - Read/write files
+  - Search files and directories
+  - Execute shell commands
+  - Create and invoke skills
+  - Multi-turn conversation with context
+";
 
 /// Helper to produce ANSI escape codes; expands to empty string on Windows.
 macro_rules! ansi {
@@ -47,6 +74,14 @@ macro_rules! ansi {
             ""
         }
     }};
+}
+
+/// Session data for persistence.
+#[derive(Serialize, Deserialize)]
+struct ChatSession {
+    messages: Vec<Message>,
+    agent_name: String,
+    version: u32,
 }
 
 /// Run an interactive terminal chat session with full agent capabilities.
@@ -68,8 +103,6 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         Arc::clone(&capability_graph),
     )?);
 
-    let _flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
     let agent_names: Vec<String> = config.agents().keys().cloned().collect();
     let primary = agent_names[0].clone();
 
@@ -78,37 +111,52 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Agent '{primary}' not found in registry"))?;
 
     // ── Print banner ──
+    let version = env!("CARGO_PKG_VERSION");
     eprintln!("╔══════════════════════════════════════════════════════════╗");
-    eprintln!("║            go-on terminal chat mode                     ║");
+    eprintln!("║            go-on terminal chat v{:<34} ║", version);
     eprintln!("╠══════════════════════════════════════════════════════════╣");
     eprintln!("║  Agent: {:<46} ║", primary);
-    eprintln!("║  Tools: file read/write, search, code execution, skills ║");
-    eprintln!("║  Commands: /help  /quit  /clear  /agents               ║");
+    eprintln!("║  Tools: file r/w, search, code exec, skills           ║");
+    eprintln!("║  Commands: /help  /quit  /clear  /save  /load         ║");
     eprintln!("╚══════════════════════════════════════════════════════════╝");
     eprintln!();
 
     let mut messages: Vec<Message> = Vec::new();
-    let stdin = std::io::stdin();
     let mut input = String::new();
 
+    // ── Session persistence in current directory ──
+    let session_path = std::path::PathBuf::from(SESSION_FILE);
+
+    // ── Main chat loop with interrupt handling ──
     loop {
         input.clear();
         eprint!("🟢 {} > ", primary);
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
-        match stdin.read_line(&mut input) {
-            Ok(0) => {
-                eprintln!();
-                break;
+        // ── Read user input with Ctrl+C handling ──
+        let read_result = {
+            let stdin = std::io::stdin();
+            let mut line = String::new();
+            match tokio::select! {
+                result = async { stdin.read_line(&mut line).map(|_| line.clone()) } => {
+                    Some(result)
+                }
+                _ = signal::ctrl_c() => {
+                    eprintln!("\n{}Interrupted. Type /quit to exit, or continue typing.{}", ansi!("33"), ansi!("0"));
+                    None
+                }
             }
-            Ok(_) => {}
-            Err(e) => {
+        };
+
+        let line = match read_result {
+            Some(Ok(l)) => l.trim().to_string(),
+            Some(Err(e)) => {
                 eprintln!("Read error: {e}");
                 break;
             }
-        }
+            None => continue,
+        };
 
-        let line = input.trim();
         if line.is_empty() {
             continue;
         }
@@ -118,29 +166,95 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
             match cmd {
                 "quit" | "exit" | "q" => break,
                 "help" | "h" => {
-                    eprintln!("Commands:");
-                    eprintln!("  /quit        Exit chat");
-                    eprintln!("  /clear       Clear conversation history");
-                    eprintln!("  /help        Show this help");
-                    eprintln!("  /agents      List configured agents");
-                    eprintln!();
-                    eprintln!("The AI agent has access to tools:");
-                    eprintln!("  - Read/write files");
-                    eprintln!("  - Search files and directories");
-                    eprintln!("  - Execute shell commands");
-                    eprintln!("  - Create and invoke skills");
-                    eprintln!("  - Multi-turn conversation with context");
+                    eprint!("{}", HELP_TEXT);
                     continue;
                 }
                 "clear" => {
                     messages.clear();
-                    eprintln!("Conversation cleared.");
+                    eprintln!("{}Conversation cleared.{}", ansi!("32"), ansi!("0"));
+                    continue;
+                }
+                "save" => {
+                    let session = ChatSession {
+                        messages: messages.clone(),
+                        agent_name: primary.clone(),
+                        version: 1,
+                    };
+                    let json = serde_json::to_string_pretty(&session)?;
+                    std::fs::write(&session_path, &json)?;
+                    eprintln!("{}Session saved to {}{}", ansi!("32"), session_path.display(), ansi!("0"));
+                    continue;
+                }
+                "load" => {
+                    match std::fs::read_to_string(&session_path) {
+                        Ok(json) => {
+                            match serde_json::from_str::<ChatSession>(&json) {
+                                Ok(session) => {
+                                    messages = session.messages;
+                                    eprintln!(
+                                        "{}Session loaded: {} messages from '{}'{}",
+                                        ansi!("32"),
+                                        messages.len(),
+                                        session.agent_name,
+                                        ansi!("0")
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!("{}Failed to parse session: {}{}", ansi!("31"), e, ansi!("0"));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            eprintln!("{}No saved session found at {}{}", ansi!("33"), session_path.display(), ansi!("0"));
+                        }
+                    }
                     continue;
                 }
                 "agents" => {
                     for name in &agent_names {
                         eprintln!("  {name}");
                     }
+                    continue;
+                }
+                "tools" => {
+                    let registry = ToolRegistry::default();
+                    let names = registry.all_names();
+                    eprintln!("Available tools ({}):", names.len());
+                    for name in names {
+                        if let Some(profile) = registry.profile(&name) {
+                            eprintln!("  {:<25} [{}]", name, profile.capability);
+                        } else {
+                            eprintln!("  {name}");
+                        }
+                    }
+                    continue;
+                }
+                "skills" => {
+                    // List skills from the global skill registry if available
+                    let descriptor_list = crate::orchestration::tool::skill_registry()
+                        .and_then(|r| r.read().ok())
+                        .map(|guard| {
+                            guard.list()
+                        })
+                        .unwrap_or_default();
+                    if descriptor_list.is_empty() {
+                        eprintln!("No skills registered.");
+                    } else {
+                        eprintln!("Registered skills ({}):", descriptor_list.len());
+                        for s in &descriptor_list {
+                            eprintln!("  {:<25} score: {:.2}", s.name, s.score);
+                        }
+                    }
+                    continue;
+                }
+                "stats" => {
+                    let agent_msgs = messages.iter().filter(|m| m.role == "assistant").count();
+                    let user_msgs = messages.iter().filter(|m| m.role == "user").count();
+                    let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+                    eprintln!("Conversation stats:");
+                    eprintln!("  Messages: {} total ({} user, {} assistant)", messages.len(), user_msgs, agent_msgs);
+                    eprintln!("  Total characters: {}", total_chars);
+                    eprintln!("  Avg length: {} chars", if messages.len() > 0 { total_chars / messages.len() } else { 0 });
                     continue;
                 }
                 _ => {
@@ -153,18 +267,43 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         // ── Send user message ──
         messages.push(Message {
             role: "user".to_string(),
-            content: line.to_string(),
+            content: line,
         });
 
-        eprint!("🤖 ");
+        eprint!("{}🤖 {}", ansi!("1"), ansi!("0"));
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
         // ── Run agent with tool execution loop ──
         match run_agent_with_tools(&agent, &mut messages).await {
             Ok(()) => {}
             Err(e) => {
-                eprintln!("\n⚠️  Error: {e}");
+                eprintln!("\n{}⚠️  Error: {}{}", ansi!("31"), e, ansi!("0"));
             }
+        }
+
+        // ── Auto-save session every turn ──
+        if !messages.is_empty() {
+            let session = ChatSession {
+                messages: messages.clone(),
+                agent_name: primary.clone(),
+                version: 1,
+            };
+            if let Ok(json) = serde_json::to_string(&session) {
+                let _ = std::fs::write(&session_path, &json);
+            }
+        }
+    }
+
+    // ── Save session on clean exit ──
+    if !messages.is_empty() {
+        let session = ChatSession {
+            messages,
+            agent_name: primary.clone(),
+            version: 1,
+        };
+        if let Ok(json) = serde_json::to_string(&session) {
+            let _ = std::fs::write(&session_path, &json);
+            eprintln!("Session auto-saved to {}", session_path.display());
         }
     }
 
@@ -172,9 +311,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     Ok(())
 }
 
-/// Run a single agent turn with full tool execution support.
-/// Streams the response to stdout, executes any tool calls the agent makes,
-/// and appends the final assistant message to `messages`.
+/// Run a single agent turn: agent chat → tool execution → followup.
 async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message>) -> Result<()> {
     // ── Phase 1: Agent chat with streaming ──
     let (tx, mut rx) = mpsc::channel::<String>(2048);
@@ -189,55 +326,84 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
     let mut tool_calls: Vec<(String, String)> = Vec::new();
     let mut in_reasoning = false;
 
-    while let Some(token) = rx.recv().await {
-        // Tool call detection (agents emit __tool_call__:tool_name:args)
-        // Use splitn(3, ':') to handle colons inside JSON tool args correctly.
-        if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
-            tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-            eprintln!();
-            eprintln!("🔧 [Tool call: {tool_name}]");
-            continue;
-        }
+    // ── Streaming output with interrupt support ──
+    let mut output_line = String::new();
+    loop {
+        tokio::select! {
+            token = rx.recv() => {
+                match token {
+                    Some(token) => {
+                        // Tool call detection (agents emit __tool_call__:tool_name:args)
+                        if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
+                            tool_calls.push((tool_name.to_string(), tool_args.to_string()));
+                            if !output_line.is_empty() {
+                                eprintln!("{}", output_line);
+                                output_line.clear();
+                            }
+                            eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
+                            continue;
+                        }
 
-        // Reasoning content markers
-        if token == "\u{001E}" {
-            in_reasoning = true;
-            eprint!("{}", ansi!("90"));
-            continue;
-        }
-        if token == "\u{001F}" {
-            in_reasoning = false;
-            eprint!("{}", ansi!("0"));
-            eprintln!();
-            continue;
-        }
+                        // Reasoning content markers
+                        if token == "\u{001E}" {
+                            in_reasoning = true;
+                            if !output_line.is_empty() {
+                                eprintln!("{}", output_line);
+                                output_line.clear();
+                            }
+                            eprint!("{}", ansi!("90"));
+                            continue;
+                        }
+                        if token == "\u{001F}" {
+                            in_reasoning = false;
+                            eprint!("{}", ansi!("0"));
+                            eprintln!();
+                            continue;
+                        }
 
-        if in_reasoning {
-            eprint!("{}", token);
-            // Do NOT add reasoning tokens to response — they would pollute conversation history
-        } else {
-            response.push_str(&token);
-            print!("{}", token);
+                        if in_reasoning {
+                            eprint!("{}", token);
+                        } else {
+                            response.push_str(&token);
+                            output_line.push_str(&token);
+                            print!("{}", token);
+                        }
+                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                    }
+                    None => break,
+                }
+            }
+            _ = signal::ctrl_c() => {
+                eprintln!(
+                    "\n{}Interrupted agent response. Use /clear to reset.{}",
+                    ansi!("33"), ansi!("0")
+                );
+                // We can't cancel the chat task from here, but we break out
+                // of the streaming loop. The agent will complete in background.
+                break;
+            }
         }
-        std::io::Write::flush(&mut std::io::stdout()).ok();
+    }
+
+    if !output_line.is_empty() {
+        eprintln!();
     }
 
     if let Err(e) = chat_task.await {
         warn!("Agent chat task failed: {e}");
     }
-    eprintln!();
 
     // ── Phase 2: Execute any tool calls ──
     let mut followup_round_executed = false;
     if !tool_calls.is_empty() {
         eprintln!("{}── Tool execution ──{}", ansi!("33"), ansi!("0"));
         let mut tool_results: Vec<String> = Vec::new();
+        let mut has_failure = false;
 
         for (tool_name, tool_args_str) in &tool_calls {
-            eprintln!("  ⚡ {tool_name}...");
+            eprintln!("  {}⚡ {}{}...", ansi!("36"), tool_name, ansi!("0"));
             let parsed_args: Value = serde_json::from_str(tool_args_str).unwrap_or(json!({}));
 
-            // Execute the tool. We use a simple approach: map known tools to actions.
             match execute_simple_tool(tool_name, &parsed_args).await {
                 Ok(result_text) => {
                     let display = if result_text.len() > 500 {
@@ -254,7 +420,7 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
                     } else {
                         result_text.clone()
                     };
-                    eprintln!("    {}✓{} {display}", ansi!("32"), ansi!("0"));
+                    eprintln!("    {}✓{} {}", ansi!("32"), ansi!("0"), display);
                     let result_for_llm = if result_text.len() > MAX_TOOL_RESULT_CHARS {
                         format!(
                             "{}...\n[truncated: {} total chars, showing first {}]",
@@ -268,7 +434,8 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
                     tool_results.push(build_tool_result_block(tool_name, &result_for_llm, false));
                 }
                 Err(e) => {
-                    eprintln!("    {}✗ Error: {e}{}", ansi!("31"), ansi!("0"));
+                    has_failure = true;
+                    eprintln!("    {}✗ Error: {}{}", ansi!("31"), e, ansi!("0"));
                     tool_results.push(build_tool_result_block(tool_name, &e.to_string(), true));
                 }
             }
@@ -283,27 +450,56 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
             });
             messages.push(Message {
                 role: "user".to_string(),
-                content: build_tool_execution_followup_message(&tool_results, false),
+                content: build_tool_execution_followup_message(&tool_results, has_failure),
             });
 
             eprint!("{}── Agent follow-up ──{}\n🤖 ", ansi!("33"), ansi!("0"));
             std::io::Write::flush(&mut std::io::stdout()).ok();
 
-            let (followup_response, _, _) = run_followup_after_tool_observation(
-                Arc::clone(agent),
-                messages.clone(),
-                None,
-                None,
-                None,
-            )
-            .await?;
-            crate::acp::helpers::autonomy_metrics::record_tool_followup_attempt();
-            if followup_response.trim().is_empty() {
-                crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
-            } else {
-                crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
+            // Streaming follow-up
+            let (tx2, mut rx2) = mpsc::channel::<String>(2048);
+            let sender2 = StreamingSender::from(tx2);
+            let msgs2 = messages.clone();
+
+            let agent_ref2 = Arc::clone(agent);
+            let followup_task = tokio::spawn(async move {
+                agent_ref2.chat(msgs2, None, None, sender2).await
+            });
+
+            let mut followup_response = String::new();
+            let mut in_reasoning2 = false;
+            while let Some(token) = rx2.recv().await {
+                if token == "\u{001E}" {
+                    in_reasoning2 = true;
+                    eprint!("{}", ansi!("90"));
+                    continue;
+                }
+                if token == "\u{001F}" {
+                    in_reasoning2 = false;
+                    eprint!("{}", ansi!("0"));
+                    eprintln!();
+                    continue;
+                }
+                if in_reasoning2 {
+                    eprint!("{}", token);
+                } else {
+                    followup_response.push_str(&token);
+                    print!("{}", token);
+                }
+                std::io::Write::flush(&mut std::io::stdout()).ok();
             }
-            response = followup_response;
+            eprintln!();
+
+            if let Err(e) = followup_task.await {
+                warn!("Agent followup task failed: {e}");
+            }
+
+            if !followup_response.trim().is_empty() {
+                crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
+                response = followup_response;
+            } else {
+                crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
+            }
         }
     }
 
@@ -357,9 +553,6 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
     };
 
     // ── Normalize payload field names to what the canonical tools expect ──
-    // The old code accepted multiple field-name variants (path/file_path,
-    // pattern/query, command/cmd).  We normalise them here before routing
-    // through the registry so callers continue to work unchanged.
     let mut payload = args.clone();
     if let Some(v) = payload.get("file_path").and_then(|v| v.as_str()) {
         payload["path"] = json!(v);
@@ -368,7 +561,6 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
         payload["pattern"] = json!(v);
     }
     if let Some(v) = payload.get("directory").and_then(|v| v.as_str()) {
-        // list_directory uses "path" rather than "directory"
         if canonical_name == "list_directory" {
             payload["path"] = json!(v);
         } else {
@@ -514,7 +706,6 @@ mod tests {
     /// `name` field (read_file with traversal path).
     #[tokio::test]
     async fn test_execute_simple_tool_rejects_traversal() {
-        // Attempt to read a file outside workspace via path traversal
         let result =
             execute_simple_tool("read_file", &json!({"path": "../../../etc/passwd"})).await;
         assert!(

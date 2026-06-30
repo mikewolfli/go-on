@@ -612,27 +612,6 @@ impl TaskScheduler {
         }))
     }
 
-    /// Gracefully stop the aging background task and fault tolerance timer.
-    ///
-    /// Cancels the `CancellationToken` instances stored by
-    /// `start_aging_timer()` and `start_fault_tolerance_timer()`.  The
-    /// background tasks will exit on their next tick after cancellation.
-    /// This is safe to call multiple times; subsequent calls are no-ops.
-    #[allow(dead_code, reason = "Reserved for graceful server shutdown")]
-    pub fn shutdown(&self) {
-        if let Ok(mut stored) = self.aging_cancel.lock() {
-            if let Some(token) = stored.take() {
-                token.cancel();
-            }
-        }
-        if let Ok(mut stored) = self.ft_cancel.lock() {
-            if let Some(token) = stored.take() {
-                token.cancel();
-            }
-        }
-        info!("Scheduler shutdown initiated");
-    }
-
     /// Apply aging bonus to all pending (non-active) tasks.
     ///
     /// Uses snapshot-then-rebuild pattern: reads all tasks and the active set

@@ -393,17 +393,29 @@ pub fn migrate_weights(
 /// Currently empty — users should register their own migrations for
 /// their specific model schemas. This function serves as an extension
 /// point for future built-in migrations.
-pub fn register_builtin_migrations(_registry: &mut MigrationRegistry) {
-    // Built-in migrations go here as the project evolves.
-    //
-    // Example:
-    // ```ignore
-    // registry.register(1, 2, migrate_v1_to_v2);
-    // registry.register(2, 3, migrate_v2_to_v3);
-    // ```
-    //
-    // Where each migration function transforms ModelWeights from the
-    // source schema to the target schema.
+pub fn register_builtin_migrations(registry: &mut MigrationRegistry) {
+    // V1 -> V2: Normalize model weights to include default policy parameters
+    // and ensure q_table_snapshot has all expected entries.
+    registry.register(1, 2, |weights| {
+        let mut result = weights.clone();
+        result.version = 2;
+
+        // Ensure policy_params has sensible defaults for all required keys
+        let default_params: [(&str, f64); 4] = [
+            ("learning_rate", 0.1),
+            ("exploration_rate", 0.1),
+            ("discount_factor", 0.9),
+            ("epsilon", 0.05),
+        ];
+        for (key, default_val) in &default_params {
+            result
+                .policy_params
+                .entry(key.to_string())
+                .or_insert(*default_val);
+        }
+
+        Ok(result)
+    });
 }
 
 // ── Default version constants ──────────────────────────────────────────────

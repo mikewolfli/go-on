@@ -22,17 +22,22 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::tool::lock::{LockMode, ToolLockManager as TLM};
 
 /// Global tool lock manager for file access synchronization.
-static TOOL_LOCK_MANAGER: OnceLock<crate::orchestration::tool_lock::ToolLockManager> =
-    OnceLock::new();
+static TOOL_LOCK_MANAGER: OnceLock<TLM> = OnceLock::new();
 
-fn tool_lock_manager() -> &'static crate::orchestration::tool_lock::ToolLockManager {
-    TOOL_LOCK_MANAGER.get_or_init(crate::orchestration::tool_lock::ToolLockManager::new)
+fn tool_lock_manager() -> &'static TLM {
+    TOOL_LOCK_MANAGER.get_or_init(TLM::new)
 }
 
 /// Global skill registry reference for tools that need access to registered skills.
 static SKILL_REGISTRY: OnceLock<Arc<RwLock<SkillRegistry>>> = OnceLock::new();
+
+/// Get the global skill registry reference, if set.
+pub fn skill_registry() -> Option<&'static Arc<RwLock<SkillRegistry>>> {
+    SKILL_REGISTRY.get()
+}
 
 /// Set the global skill registry reference used by `SkillListTool` and other
 /// registry-aware tools. Call this once during server startup after the skill
@@ -105,6 +110,23 @@ pub struct ToolCapabilityProfile {
 pub trait Tool: Send + Sync + 'static {
     /// Returns the tool's unique name.
     fn name(&self) -> &'static str;
+
+    /// Returns a human-readable description of what this tool does.
+    /// Override this to provide rich descriptions for LLM function-calling schemas.
+    fn description(&self) -> &str {
+        ""
+    }
+
+    /// Returns the JSON Schema for this tool's input parameters.
+    /// Used when building OpenAI/Anthropic-compatible function-calling schemas.
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    }
+
     /// Executes the tool with the given input. Should emit tracing spans for performance analysis (implementations only).
     fn run(&self, input: &ToolInput) -> Result<ToolOutput>;
 
@@ -744,7 +766,7 @@ impl ToolRegistry {
             ToolCapabilityProfile {
                 capability: "image_generate".to_string(),
                 risk_level: ToolRiskLevel::Low,
-                timeout_budget_ms: 5_000,
+                timeout_budget_ms: 120_000,
                 retry_policy: RetryPolicy {
                     max_retries: 1,
                     retry_on_failure: true,
@@ -1160,9 +1182,9 @@ impl ToolRegistry {
             ToolCapabilityProfile {
                 capability: "port_scan".to_string(),
                 risk_level: ToolRiskLevel::Medium,
-                timeout_budget_ms: 60_000,
+                timeout_budget_ms: 300_000,
                 retry_policy: RetryPolicy {
-                    max_retries: 0,
+                    max_retries: 1,
                     retry_on_failure: false,
                 },
                 fallback_chain: Vec::new(),
@@ -1760,10 +1782,8 @@ impl Tool for ReadFileTool {
         // Non-blocking try_acquire read lock to prevent concurrent writes.
         // If lock is contended, read proceeds without lock — the OS file
         // system provides coherence for concurrent reads.
-        let _lock = tool_lock_manager().try_acquire(
-            &validated_path.to_string_lossy(),
-            crate::orchestration::tool_lock::LockMode::Read,
-        );
+        let _lock =
+            tool_lock_manager().try_acquire(&validated_path.to_string_lossy(), LockMode::Read);
 
         let content = std::fs::read_to_string(&validated_path)?;
         let elapsed = start.elapsed().as_millis() as u64;
@@ -1811,10 +1831,7 @@ impl Tool for WriteFileTool {
         // If lock is already held by another operation, return a transient
         // error so the TAO loop can retry.
         let _lock = tool_lock_manager()
-            .try_acquire(
-                &path_buf.to_string_lossy(),
-                crate::orchestration::tool_lock::LockMode::Write,
-            )
+            .try_acquire(&path_buf.to_string_lossy(), LockMode::Write)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "write lock contended for '{}' — another tool is modifying this file",
@@ -2391,16 +2408,12 @@ impl Tool for SkillExecuteTool {
     }
 
     /// Sync fallback: bridges to `run_async` via the dedicated skill runtime.
-    /// Uses a pre-created dedicated tokio runtime to avoid blocking tokio worker
-    /// threads with `block_in_place` (per principle rule #23).
-    /// Async callers should always use `run_async` directly for optimal performance.
-    /// Uses a cached static Arc to avoid allocating a new Arc on every call.
+    ///
+    /// Always uses the dedicated blocking runtime to avoid `block_in_place` + `block_on`
+    /// on hot paths (principle #23). Async callers should always use `run_async`
+    /// directly for optimal non-blocking execution.
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let input = input.clone();
-        // Always use the dedicated skill runtime. Because the runtime is created
-        // lazily via OnceLock (not inline), this does NOT trigger the
-        // "Cannot start a runtime from within a runtime" panic when called from
-        // an existing tokio runtime context.
         let rt = skill_runtime();
         rt.block_on(skill_execute_arc().run_async(input))
     }
@@ -2644,6 +2657,127 @@ struct ThinkResult {
     rationale: String,
 }
 
+/// Result of a single iteration's observe phase — tells the caller what to do next.
+#[derive(Debug)]
+enum IterationAction {
+    /// Continue to the next iteration.
+    Continue,
+    /// Tool completed successfully.
+    Complete(ToolOutput),
+    /// All candidates exhausted.
+    Failed {
+        reason: String,
+        last_output: Option<ToolOutput>,
+    },
+    /// Escalate to human review.
+    Escalate { reason: String, output: ToolOutput },
+}
+
+/// Shared post-Act phase: record the result, observe the output, and decide
+/// the next action. Called by both `execute_loop` and `execute_loop_async`
+/// to avoid duplicating the observe-and-match logic.
+fn handle_iteration(
+    task: &str,
+    trace: &mut LoopTrace,
+    start: Instant,
+    iteration: u32,
+    tr: &ThinkResult,
+    output: ToolOutput,
+    act_duration_ms: u64,
+    config: &LoopConfig,
+    retry_counts: &mut HashMap<String, u32>,
+) -> IterationAction {
+    // Record the act phase in the trace.
+    trace.iterations.push(LoopIteration {
+        stage: "act".to_string(),
+        tool: tr.tool.clone(),
+        success: output.success,
+        duration_ms: act_duration_ms,
+        detail: if output.success {
+            "execution ok".to_string()
+        } else {
+            output
+                .error
+                .clone()
+                .unwrap_or_else(|| "unknown error".to_string())
+        },
+    });
+
+    // ── Observe ──────────────────────────────────────────────
+    let observe_decision = observe(&output, &tr.tool, retry_counts, config, |tool, reason| {
+        trace.iterations.push(LoopIteration {
+            stage: "observe".to_string(),
+            tool,
+            success: false,
+            duration_ms: 0,
+            detail: reason,
+        });
+    });
+
+    match observe_decision {
+        LoopDecision::Continue => {
+            trace.iterations.push(LoopIteration {
+                stage: "think".to_string(),
+                tool: tr.tool.clone(),
+                success: true,
+                duration_ms: 0,
+                detail: "output ok, continuing".to_string(),
+            });
+            IterationAction::Continue
+        }
+        LoopDecision::Retry { tool, reason } => {
+            trace.iterations.push(LoopIteration {
+                stage: "think".to_string(),
+                tool: tool.clone(),
+                success: false,
+                duration_ms: 0,
+                detail: format!("retry: {}", reason),
+            });
+            IterationAction::Continue
+        }
+        LoopDecision::SwitchTool { from, to, reason } => {
+            debug!(from, to, reason, "TAO: switching tool");
+            trace.iterations.push(LoopIteration {
+                stage: "think".to_string(),
+                tool: from,
+                success: false,
+                duration_ms: 0,
+                detail: format!("switch to '{}': {}", to, reason),
+            });
+            IterationAction::Continue
+        }
+        LoopDecision::Complete(output) => {
+            trace.final_decision = "success".to_string();
+            trace.total_duration_ms = start.elapsed().as_millis() as u64;
+            info!(
+                task,
+                tool = tr.tool,
+                iterations = iteration + 1,
+                "TAO: completed"
+            );
+            IterationAction::Complete(output)
+        }
+        LoopDecision::Failed {
+            reason,
+            last_output,
+        } => {
+            trace.final_decision = "failed".to_string();
+            trace.total_duration_ms = start.elapsed().as_millis() as u64;
+            warn!(task, reason, "TAO: failed");
+            IterationAction::Failed {
+                reason,
+                last_output,
+            }
+        }
+        LoopDecision::Escalate { reason, output } => {
+            trace.final_decision = "escalated".to_string();
+            trace.total_duration_ms = start.elapsed().as_millis() as u64;
+            warn!(task, reason, "TAO: escalated");
+            IterationAction::Escalate { reason, output }
+        }
+    }
+}
+
 /// Run the Think-Act-Observe loop for a given task.
 ///
 /// # Arguments
@@ -2664,6 +2798,7 @@ pub fn execute_loop(
     input: &ToolInput,
     preferred_tools: &[String],
     config: &LoopConfig,
+    mut recommender: Option<&mut recommender::ToolRecommender>,
 ) -> (LoopDecision, LoopTrace) {
     let start = std::time::Instant::now();
     let mut trace = LoopTrace {
@@ -2683,7 +2818,13 @@ pub fn execute_loop(
     for iteration in 0..config.max_iterations {
         // ── Think ────────────────────────────────────────────────
         // Select the best tool candidate based on retry history.
-        let think_result = think(task, &tool_candidates, &retry_counts, config);
+        let think_result = think(
+            task,
+            &tool_candidates,
+            &retry_counts,
+            config,
+            recommender.as_deref(),
+        );
 
         let Some(tr) = think_result else {
             let decision = LoopDecision::Failed {
@@ -2745,89 +2886,35 @@ pub fn execute_loop(
         };
         let act_duration_ms = act_start.elapsed().as_millis() as u64;
 
-        trace.iterations.push(LoopIteration {
-            stage: "act".to_string(),
-            tool: tr.tool.clone(),
-            success: output.success,
-            duration_ms: act_duration_ms,
-            detail: if output.success {
-                "execution ok".to_string()
-            } else {
-                output
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "unknown error".to_string())
-            },
-        });
+        // Record usage statistics with the recommender when available.
+        if let Some(rec) = &mut recommender {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            rec.record_usage(&tr.tool, output.success, act_duration_ms, now, &[]);
+        }
 
         // ── Observe ──────────────────────────────────────────────
-        let observe_decision = observe(
-            &output,
-            &tr.tool,
-            &mut retry_counts,
+        match handle_iteration(
+            task,
+            &mut trace,
+            start,
+            iteration,
+            &tr,
+            output,
+            act_duration_ms,
             config,
-            |tool, reason| {
-                trace.iterations.push(LoopIteration {
-                    stage: "observe".to_string(),
-                    tool,
-                    success: false,
-                    duration_ms: 0,
-                    detail: reason,
-                });
-            },
-        );
-
-        match observe_decision {
-            LoopDecision::Continue => {
-                // Move to next iteration
-                trace.iterations.push(LoopIteration {
-                    stage: "think".to_string(),
-                    tool: tr.tool.clone(),
-                    success: true,
-                    duration_ms: 0,
-                    detail: "output ok, continuing".to_string(),
-                });
-                continue;
-            }
-            LoopDecision::Retry { tool, reason } => {
-                trace.iterations.push(LoopIteration {
-                    stage: "think".to_string(),
-                    tool: tool.clone(),
-                    success: false,
-                    duration_ms: 0,
-                    detail: format!("retry: {}", reason),
-                });
-                continue;
-            }
-            LoopDecision::SwitchTool { from, to, reason } => {
-                debug!(from, to, reason, "TAO: switching tool");
-                trace.iterations.push(LoopIteration {
-                    stage: "think".to_string(),
-                    tool: from,
-                    success: false,
-                    duration_ms: 0,
-                    detail: format!("switch to '{}': {}", to, reason),
-                });
-                continue;
-            }
-            LoopDecision::Complete(output) => {
-                trace.final_decision = "success".to_string();
-                trace.total_duration_ms = start.elapsed().as_millis() as u64;
-                info!(
-                    task,
-                    tool = tr.tool,
-                    iterations = iteration + 1,
-                    "TAO: completed"
-                );
+            &mut retry_counts,
+        ) {
+            IterationAction::Continue => continue,
+            IterationAction::Complete(output) => {
                 return (LoopDecision::Complete(output), trace);
             }
-            LoopDecision::Failed {
+            IterationAction::Failed {
                 reason,
                 last_output,
             } => {
-                trace.final_decision = "failed".to_string();
-                trace.total_duration_ms = start.elapsed().as_millis() as u64;
-                warn!(task, reason, "TAO: failed");
                 return (
                     LoopDecision::Failed {
                         reason,
@@ -2836,10 +2923,7 @@ pub fn execute_loop(
                     trace,
                 );
             }
-            LoopDecision::Escalate { reason, output } => {
-                trace.final_decision = "escalated".to_string();
-                trace.total_duration_ms = start.elapsed().as_millis() as u64;
-                warn!(task, reason, "TAO: escalated");
+            IterationAction::Escalate { reason, output } => {
                 return (LoopDecision::Escalate { reason, output }, trace);
             }
         }
@@ -2871,6 +2955,7 @@ pub async fn execute_loop_async(
     input: &ToolInput,
     preferred_tools: &[String],
     config: &LoopConfig,
+    mut recommender: Option<&mut recommender::ToolRecommender>,
 ) -> (LoopDecision, LoopTrace) {
     let start = std::time::Instant::now();
     let mut trace = LoopTrace {
@@ -2890,7 +2975,13 @@ pub async fn execute_loop_async(
     for iteration in 0..config.max_iterations {
         // ── Think ────────────────────────────────────────────────
         // Select the best tool candidate based on retry history.
-        let think_result = think(task, &tool_candidates, &retry_counts, config);
+        let think_result = think(
+            task,
+            &tool_candidates,
+            &retry_counts,
+            config,
+            recommender.as_deref(),
+        );
 
         let Some(tr) = think_result else {
             let decision = LoopDecision::Failed {
@@ -2954,89 +3045,35 @@ pub async fn execute_loop_async(
         };
         let act_duration_ms = act_start.elapsed().as_millis() as u64;
 
-        trace.iterations.push(LoopIteration {
-            stage: "act".to_string(),
-            tool: tr.tool.clone(),
-            success: output.success,
-            duration_ms: act_duration_ms,
-            detail: if output.success {
-                "execution ok".to_string()
-            } else {
-                output
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "unknown error".to_string())
-            },
-        });
+        // Record usage statistics with the recommender when available.
+        if let Some(rec) = &mut recommender {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            rec.record_usage(&tr.tool, output.success, act_duration_ms, now, &[]);
+        }
 
         // ── Observe ──────────────────────────────────────────────
-        let observe_decision = observe(
-            &output,
-            &tr.tool,
-            &mut retry_counts,
+        match handle_iteration(
+            task,
+            &mut trace,
+            start,
+            iteration,
+            &tr,
+            output,
+            act_duration_ms,
             config,
-            |tool, reason| {
-                trace.iterations.push(LoopIteration {
-                    stage: "observe".to_string(),
-                    tool,
-                    success: false,
-                    duration_ms: 0,
-                    detail: reason,
-                });
-            },
-        );
-
-        match observe_decision {
-            LoopDecision::Continue => {
-                // Move to next iteration
-                trace.iterations.push(LoopIteration {
-                    stage: "think".to_string(),
-                    tool: tr.tool.clone(),
-                    success: true,
-                    duration_ms: 0,
-                    detail: "output ok, continuing".to_string(),
-                });
-                continue;
-            }
-            LoopDecision::Retry { tool, reason } => {
-                trace.iterations.push(LoopIteration {
-                    stage: "think".to_string(),
-                    tool: tool.clone(),
-                    success: false,
-                    duration_ms: 0,
-                    detail: format!("retry: {}", reason),
-                });
-                continue;
-            }
-            LoopDecision::SwitchTool { from, to, reason } => {
-                debug!(from, to, reason, "TAO: switching tool");
-                trace.iterations.push(LoopIteration {
-                    stage: "think".to_string(),
-                    tool: from,
-                    success: false,
-                    duration_ms: 0,
-                    detail: format!("switch to '{}': {}", to, reason),
-                });
-                continue;
-            }
-            LoopDecision::Complete(output) => {
-                trace.final_decision = "success".to_string();
-                trace.total_duration_ms = start.elapsed().as_millis() as u64;
-                info!(
-                    task,
-                    tool = tr.tool,
-                    iterations = iteration + 1,
-                    "TAO: completed"
-                );
+            &mut retry_counts,
+        ) {
+            IterationAction::Continue => continue,
+            IterationAction::Complete(output) => {
                 return (LoopDecision::Complete(output), trace);
             }
-            LoopDecision::Failed {
+            IterationAction::Failed {
                 reason,
                 last_output,
             } => {
-                trace.final_decision = "failed".to_string();
-                trace.total_duration_ms = start.elapsed().as_millis() as u64;
-                warn!(task, reason, "TAO: failed");
                 return (
                     LoopDecision::Failed {
                         reason,
@@ -3045,10 +3082,7 @@ pub async fn execute_loop_async(
                     trace,
                 );
             }
-            LoopDecision::Escalate { reason, output } => {
-                trace.final_decision = "escalated".to_string();
-                trace.total_duration_ms = start.elapsed().as_millis() as u64;
-                warn!(task, reason, "TAO: escalated");
+            IterationAction::Escalate { reason, output } => {
                 return (LoopDecision::Escalate { reason, output }, trace);
             }
         }
@@ -3071,14 +3105,81 @@ pub async fn execute_loop_async(
 
 /// Think phase: select the best tool candidate.
 ///
-/// Picks the tool with the fewest retries; if all have been retried to the
-/// limit, returns `None` to signal exhaustion.
+/// Selection strategy (in order of priority):
+/// 1. If a `ToolRecommender` is available, consult it for task-based recommendations
+///    and pick the highest-scoring candidate.
+/// 2. Match tool names from keywords in the task description.
+/// 3. Fall back to the tool with the fewest retries.
+///
+/// Returns `None` if no candidates are available.
 fn think(
-    _task: &str,
+    task: &str,
     candidates: &[String],
     retry_counts: &HashMap<String, u32>,
     config: &LoopConfig,
+    recommender: Option<&recommender::ToolRecommender>,
 ) -> Option<ThinkResult> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Phase 1: consult the ToolRecommender when available
+    if let Some(rec) = recommender {
+        let context: Vec<String> = Vec::new();
+        let recommendations = rec.recommend(task, &context);
+        if !recommendations.is_empty() {
+            // Find the highest-scored recommendation that is in our candidate list
+            // and hasn't exhausted its retries.
+            for rec_candidate in &recommendations {
+                if candidates.contains(&rec_candidate.tool_name) {
+                    let retries = retry_counts
+                        .get(&rec_candidate.tool_name)
+                        .copied()
+                        .unwrap_or(0);
+                    if retries < config.max_retries_per_tool {
+                        let confidence = (rec_candidate.relevance_score.min(1.0)
+                            * (1.0
+                                - (retries as f64 / config.max_retries_per_tool as f64).min(1.0)))
+                        .max(0.1);
+                        return Some(ThinkResult {
+                            tool: rec_candidate.tool_name.clone(),
+                            confidence,
+                            rationale: format!(
+                                "recommender task=\"{}\" tool={} score={:.3} retries={} reason={}",
+                                task,
+                                rec_candidate.tool_name,
+                                rec_candidate.relevance_score,
+                                retries,
+                                rec_candidate.reason,
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 2: try to match tool names from task description keywords
+    if !task.is_empty() {
+        let task_lower = task.to_lowercase();
+        for candidate in candidates {
+            if task_lower.contains(&candidate.to_lowercase()) {
+                let retries = retry_counts.get(candidate).copied().unwrap_or(0);
+                let confidence =
+                    1.0 - (retries as f64 / config.max_retries_per_tool as f64).min(1.0);
+                return Some(ThinkResult {
+                    tool: candidate.clone(),
+                    confidence,
+                    rationale: format!(
+                        "keyword_match task=\"{}\" tool={} retries={}",
+                        task, candidate, retries,
+                    ),
+                });
+            }
+        }
+    }
+
+    // Phase 3: fall back to the tool with fewest retries
     let best = candidates
         .iter()
         .filter(|t| retry_counts.get(*t).copied().unwrap_or(0) < config.max_retries_per_tool)
@@ -3409,6 +3510,7 @@ mod tests {
             &input,
             &["always_pass".to_string()],
             &config,
+            None,
         );
 
         match decision {
@@ -3444,6 +3546,7 @@ mod tests {
             &input,
             &["always_fail".to_string(), "always_pass".to_string()],
             &config,
+            None,
         );
 
         match decision {
@@ -3481,6 +3584,7 @@ mod tests {
             &input,
             &["always_fail".to_string()],
             &config,
+            None,
         );
 
         match decision {
@@ -3515,6 +3619,7 @@ mod tests {
             &input,
             &["always_pass".to_string()],
             &config,
+            None,
         );
 
         // Tool succeeds but verification fails → should switch or fail.
@@ -3541,6 +3646,7 @@ mod tests {
             &input,
             &[], // no preferred tools — falls back to registry.names()
             &config,
+            None,
         );
 
         match decision {

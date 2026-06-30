@@ -23,6 +23,14 @@ pub(crate) async fn write_sse_headers(
 }
 
 /// Write a single SSE event frame to a socket.
+///
+/// # Performance
+///
+/// This function does NOT flush after every write — flushing is the caller's
+/// responsibility.  For high-frequency streaming (token chunks), the HTTP
+/// handler loop should call [`flush_sse`] periodically (every N events or
+/// after a batch).  This avoids one syscall per SSE event, which is the
+/// dominant cost in high-throughput streaming.
 pub(crate) async fn write_sse_event(
     socket: &mut (impl tokio::io::AsyncWrite + Unpin),
     event: &str,
@@ -36,11 +44,15 @@ pub(crate) async fn write_sse_event(
     frame.extend_from_slice(b"\ndata: ");
     serde_json::to_writer(&mut frame, payload)?;
     frame.extend_from_slice(b"\n\n");
-    tracing::debug!("ACP SSE event: {}", event);
     tcp_write_timeout(socket, &frame).await?;
-    // Release the buffer back to the pool immediately after writing;
-    // the flush below only synchronises the socket, not the buffer.
+    // Release the buffer back to the pool immediately after writing.
     crate::acp::r#impl::chat::release_sse_buffer(frame);
+    Ok(())
+}
+
+/// Flush pending SSE data to the socket.
+/// Call this periodically during streaming (e.g. every 10 events or every 10ms).
+pub(crate) async fn flush_sse(socket: &mut (impl tokio::io::AsyncWrite + Unpin)) -> Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
         .await
         .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?

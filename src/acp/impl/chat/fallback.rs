@@ -60,7 +60,6 @@ pub(crate) struct FallbackExecutionResult {
     pub last_err: Option<anyhow::Error>,
     pub agent_attempts: Vec<Value>,
     pub quota_failed_agents: Vec<String>,
-    pub _cache_hit: bool,
     pub high_risk_vote_jobs: Vec<HighRiskVoteJob>,
 }
 
@@ -437,7 +436,6 @@ pub(crate) async fn execute_fallback_agents(
         last_err,
         agent_attempts,
         quota_failed_agents,
-        _cache_hit: false,
         high_risk_vote_jobs,
     }
 }

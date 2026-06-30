@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use super::*;
 use crate::i18n::runtime::{t, tf};
 use crate::shared::secret_override::set_secret_override;

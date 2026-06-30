@@ -471,6 +471,25 @@ async fn route_http_post(
                     write_http_json_response(socket, 200, result, cors_headers).await?;
                 }
                 "/chat/stream" => {
+                    async fn handle_chat_stream_task_error(
+                        sse_tx: &tokio::sync::mpsc::Sender<
+                            crate::acp::r#impl::chat::streaming::StreamFrame,
+                        >,
+                        err: anyhow::Error,
+                    ) {
+                        let err_str = err.to_string();
+                        let _ = sse_tx
+                            .send(crate::acp::r#impl::chat::streaming::StreamFrame {
+                                event: "done",
+                                payload: serde_json::json!({
+                                    "done": true,
+                                    "error": err_str,
+                                    "response": "",
+                                    "agent": "system",
+                                }),
+                            })
+                            .await;
+                    }
                     let params: crate::acp::r#impl::chat::ChatParams =
                         match serde_json::from_value(body) {
                             Ok(value) => value,
@@ -486,7 +505,7 @@ async fn route_http_post(
                                 return Ok(());
                             }
                         };
-                    use super::sse::{write_sse_event, write_sse_headers};
+                    use super::sse::{flush_sse, write_sse_event, write_sse_headers};
                     write_sse_headers(socket, cors_headers).await?;
 
                     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -507,21 +526,18 @@ async fn route_http_post(
                         )
                         .await
                         {
-                            // Send error event to the SSE stream so the GUI
-                            // can display the error instead of hanging.
-                            let _ = sse_tx
-                                .send(crate::acp::r#impl::chat::streaming::StreamFrame {
-                                    event: "error",
-                                    payload: serde_json::json!({
-                                        "error": err.to_string(),
-                                    }),
-                                })
-                                .await;
+                            handle_chat_stream_task_error(&sse_tx, err).await;
                         }
                     });
 
                     // Add a 30-second overall timeout for the chat stream.
                     // If no events arrive (e.g., pipeline hang), abort and return error.
+                    // SSE flush interval: flush every 16 events to batch syscalls.
+                    // This avoids one `flush()` syscall per event, which is the #1
+                    // performance bottleneck in high-frequency token streaming.
+                    const SSE_FLUSH_INTERVAL: usize = 16;
+                    let mut sse_event_count: usize = 0;
+
                     let stream_timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
                     tokio::pin!(stream_timeout);
                     loop {
@@ -533,18 +549,28 @@ async fn route_http_post(
                                             task.abort();
                                             return Err(err);
                                         }
+                                        sse_event_count += 1;
+                                        // Periodic flush: every SSE_FLUSH_INTERVAL events.
+                                        // This batches syscalls while keeping latency low.
+                                        if sse_event_count % SSE_FLUSH_INTERVAL == 0 {
+                                            let _ = flush_sse(socket).await;
+                                        }
                                     }
-                                    None => break, // channel closed
+                                    None => break,
                                 }
                             }
                             _ = &mut stream_timeout => {
                                 task.abort();
                                 let payload = serde_json::json!({"error": "chat stream timed out after 30s"});
                                 let _ = write_sse_event(socket, "error", &payload).await;
+                                let _ = flush_sse(socket).await;
                                 return Ok(());
                             }
                         }
                     }
+
+                    // Final flush after all events are sent.
+                    let _ = flush_sse(socket).await;
 
                     // The spawned task has already sent any error events via the SSE channel.
                     // Await the task to ensure it finishes, but errors are already handled.
@@ -554,6 +580,7 @@ async fn route_http_post(
                             "chat",
                         );
                         let _ = write_sse_event(socket, "error", &payload).await;
+                        let _ = flush_sse(socket).await;
                     }
                 }
                 "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {

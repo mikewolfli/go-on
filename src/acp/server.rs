@@ -46,6 +46,7 @@ use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::reinforcement::ArtifactLedger;
+use crate::security::rate_limiter::GlobalRateLimiter;
 use crate::vector::VectorStore;
 
 /// Fire-and-forget outcome event for online_controller.
@@ -421,6 +422,8 @@ pub struct RateLimitContext {
     // SAFETY: StdMutex is never held across `.await` — `check_can_start()` and `start_task()`
     // are synchronous token-budget operations that complete and drop the guard before any `.await`.
     pub tenant_budget: Arc<StdMutex<crate::governance::hardening::TenantBudgetEnforcer>>,
+    /// Global per-tenant token-bucket rate limiter (migrated from OnceLock static).
+    pub global_rate_limiter: GlobalRateLimiter,
 }
 
 /// Registries for reusable system components
@@ -1408,6 +1411,9 @@ impl ServerBuilder {
                 tenant_budget: Arc::new(StdMutex::new(
                     crate::governance::hardening::TenantBudgetEnforcer::new(),
                 )),
+                global_rate_limiter: GlobalRateLimiter::new(
+                    crate::security::rate_limiter::RateLimitConfig::default(),
+                ),
             },
             registries: RegistryContext {
                 schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),

@@ -5,6 +5,7 @@
 //! `record_trace_event`).  Extracted from the parent `chat.rs` to reduce
 //! the monolithic file size.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -532,12 +533,23 @@ async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Re
 fn record_trace_event(
     _server: &AcpServer,
     _trace: &RequestTraceContext,
-    _event_type: &str,
-    _status: &str,
-    _stage: &str,
+    event_type: &str,
+    status: &str,
+    stage: &str,
     _inputs: Value,
     _outputs: Option<Value>,
     _duration_ms: u64,
 ) {
     // Trace sink will be extended with persistent storage in a follow-up.
+
+    static EVENTS_RECEIVED: AtomicU64 = AtomicU64::new(0);
+
+    let count = EVENTS_RECEIVED.fetch_add(1, Ordering::Relaxed);
+    debug!(
+        event_type = %event_type,
+        status = %status,
+        stage = %stage,
+        events_received = count,
+        "record_trace_event"
+    );
 }

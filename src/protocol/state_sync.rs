@@ -60,7 +60,7 @@ pub enum StateSyncEvent {
 impl StateSyncEvent {
     /// Human-readable summary for display in client status bars / notifications.
     /// Public API surface for state sync event consumers
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "public API for external crate consumers")]
     pub fn summary(&self) -> String {
         match self {
             StateSyncEvent::ModelsChanged { models } => {

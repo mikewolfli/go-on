@@ -223,11 +223,7 @@ full = [
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
 backend-postgres = ["dep:postgres", "dep:pgvector"]
 
-# Legacy aliases (kept for backward compatibility, no #[cfg] references in source)
-# DEPRECATED — use `local` / `multi-users-server` directly.
-# Will be removed in a future breaking release.
-local-acp-sqlite = ["local"]
-server-mcp-postgres = ["multi-users-server"]
+
 
 # Feature gates for conditional compilation (used by source code)
 vault = []

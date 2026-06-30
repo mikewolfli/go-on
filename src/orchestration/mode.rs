@@ -92,6 +92,7 @@ pub fn resolve_mode_runtime(
 ) -> std::result::Result<Box<dyn ModeRuntime>, String> {
     let kind = match mode.to_lowercase().as_str() {
         "ask" => ModeKind::Ask,
+        "plan" => ModeKind::Plan,
         "edit" => ModeKind::Edit,
         "agent" => ModeKind::Edit,
         "full_auto" => ModeKind::FullAuto,
@@ -377,6 +378,9 @@ pub type FullAutoModeRuntime = GenericModeRuntime;
 /// SafeGuard-mode runtime (automatic mode with approval gates).
 pub type SafeGuardModeRuntime = GenericModeRuntime;
 
+/// Plan-mode runtime (step-by-step planning without execution, like Claude Code's plan mode).
+pub type PlanModeRuntime = GenericModeRuntime;
+
 impl GenericModeRuntime {
     /// Create a new GenericModeRuntime with the given mode, registry, and agent.
     pub fn new(kind: ModeKind, registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
@@ -482,7 +486,7 @@ impl ModeStrategy for GenericModeRuntime {
     }
 
     fn use_chat(&self) -> bool {
-        matches!(self.kind, ModeKind::Ask)
+        matches!(self.kind, ModeKind::Ask | ModeKind::Plan)
     }
 
     fn pua_mode(&self) -> &str {

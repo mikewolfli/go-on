@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Structured capability signals passed from the request handler into
 /// the autonomy loop, replacing keyword-based heuristic preferences.
+#[allow(dead_code, reason = "public API for capability signal bridge")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CapabilitySignals {
     /// Agent recommended by the capability bus (if any)
@@ -28,6 +29,7 @@ pub struct CapabilitySignals {
 impl CapabilitySignals {
     /// Build a tool preference list from capability signals, falling back
     /// to task-type defaults when no capability-bus data is available.
+    #[allow(dead_code, reason = "public API for resolving tool preferences")]
     pub fn resolve_tool_preferences(&self, max_tools: usize) -> Vec<String> {
         if !self.preferred_tools.is_empty() {
             let mut tools = self.preferred_tools.clone();

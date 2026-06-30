@@ -229,12 +229,9 @@ impl BackendClient {
         &self.base_url
     }
 
-    /// Get the currently negotiated chat endpoint path (e.g. `/v1/chat/completions`).
-    ///
-    /// The GUI's own `chat_with_options()` always uses `/chat/stream` (native Go-On
-    /// endpoint accepting ChatParams format). This getter is provided for external
-    /// API consumers (SDK integrations, scripts, monitoring tools) that need to know
-    /// which protocol endpoint was negotiated during the ACP handshake.
+    /// For external API consumers.
+    /// Returns the discovered chat endpoint path (e.g. "/chat/stream").
+    // Public API for external SDK consumers — not called within this binary crate.
     #[allow(dead_code)]
     pub async fn get_chat_endpoint(&self) -> String {
         self.chat_endpoint.read().await.clone()

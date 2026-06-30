@@ -70,18 +70,7 @@ pub struct McpServerStdio {
     pub meta: Option<Meta>,
 }
 
-impl McpServerStdio {
-    #[allow(dead_code, reason = "Public API surface for MCP server consumers")]
-    pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            command: command.into(),
-            args: vec![],
-            env: vec![],
-            meta: None,
-        }
-    }
-}
+
 
 impl From<McpServerStdio> for McpServerConfig {
     fn from(s: McpServerStdio) -> Self {

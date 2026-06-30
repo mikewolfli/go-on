@@ -241,62 +241,6 @@ pub trait TriggerSource: Send + Sync + std::fmt::Debug {
 }
 
 // ---------------------------------------------------------------------------
-// MetacognitiveTriggerSource
-// ---------------------------------------------------------------------------
-
-/// A trigger source that monitors the system's own cognitive performance
-/// (e.g., decision latency, retry rates, planning depth).
-#[derive(Debug)]
-pub struct MetacognitiveTriggerSource {
-    /// Name of this source.
-    name: String,
-    /// Poll interval.
-    interval: Duration,
-    /// Thresholds for various metacognitive metrics.
-    #[allow(dead_code, reason = "F-GAP-49 — reserved for metacognitive thresholds")]
-    thresholds: HashMap<String, f64>,
-}
-
-#[allow(
-    dead_code,
-    reason = "F-GAP-49 — reserved for metacognitive trigger source impl"
-)]
-impl MetacognitiveTriggerSource {
-    /// Create a new metacognitive trigger source.
-    /// TODO-BLUE64: Activate in evolution_loop_builder when metacognitive data is available.
-    pub fn new(name: String, interval: Duration) -> Self {
-        let mut thresholds = HashMap::new();
-        thresholds.insert("decision_latency_ms".to_string(), 5000.0);
-        thresholds.insert("retry_rate".to_string(), 0.1);
-        thresholds.insert("planning_depth".to_string(), 3.0);
-        Self {
-            name,
-            interval,
-            thresholds,
-        }
-    }
-
-    /// Set a custom threshold for a metric.
-    #[allow(dead_code, reason = "F-GAP-49 — reserved for with_threshold")]
-    pub fn with_threshold(mut self, metric: &str, value: f64) -> Self {
-        self.thresholds.insert(metric.to_string(), value);
-        self
-    }
-}
-
-#[async_trait]
-impl TriggerSource for MetacognitiveTriggerSource {
-    async fn poll(&self) -> Vec<EvolutionTrigger> {
-        // In a real implementation, this would query the metacognitive
-        // monitoring subsystem. For now, return empty — triggers appear
-        // only when thresholds are actually crossed.
-        let _ = &self.name;
-        let _ = &self.interval;
-        Vec::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // AlertManagerTriggerSource
 // ---------------------------------------------------------------------------
 
@@ -445,16 +389,13 @@ pub struct DiagnosticTriggerSource {
     min_count: u64,
 }
 
-#[allow(
-    dead_code,
-    reason = "F-GAP-49 — reserved for diagnostic trigger source impl"
-)]
 impl DiagnosticTriggerSource {
     /// Create a new diagnostic trigger source with a shared error-counts map.
     ///
     /// When `external_counts` is `Some`, the source uses that shared map
     /// instead of creating its own, allowing the EvolutionLoop to inject
     /// error patterns from its own pipeline (e.g. verify failures).
+    #[cfg(test)]
     pub fn new(name: String, min_count: u64) -> Self {
         Self {
             name,
@@ -478,6 +419,8 @@ impl DiagnosticTriggerSource {
     }
 
     /// Returns the inner error-counts map reference for external wiring.
+    #[cfg(test)]
+    #[allow(dead_code, reason = "test-only accessor for evolution loop tests")]
     pub fn inner_counts(&self) -> &Arc<tokio::sync::Mutex<HashMap<String, u64>>> {
         &self.error_counts
     }
@@ -486,6 +429,7 @@ impl DiagnosticTriggerSource {
     ///
     /// Record an observed error pattern so that repeated errors
     /// automatically trigger evolution cycles.
+    #[cfg(test)]
     pub async fn record_error(&self, pattern: String) {
         let mut counts = self.error_counts.lock().await;
         *counts.entry(pattern).or_insert(0) += 1;
@@ -523,7 +467,6 @@ impl TriggerSource for DiagnosticTriggerSource {
 ///
 /// This is the default trigger source that ensures the evolution loop has
 /// at least one active source, preventing `NoTriggerSources` errors.
-#[allow(dead_code, reason = "F-GAP-49 — reserved for tick trigger source")]
 #[derive(Debug)]
 pub struct TickTriggerSource {
     /// Name of this source.
@@ -534,7 +477,6 @@ pub struct TickTriggerSource {
     last_trigger_ms: tokio::sync::Mutex<u64>,
 }
 
-#[allow(dead_code, reason = "F-GAP-49 — reserved for tick trigger source impl")]
 impl TickTriggerSource {
     /// Create a new tick trigger source that fires every `interval`.
     pub fn new(name: String, interval: Duration) -> Self {

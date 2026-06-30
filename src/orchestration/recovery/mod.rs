@@ -201,7 +201,6 @@ impl RecoveryAction {
     }
 
     /// Returns the action as a JSON value for evidence logging.
-    #[allow(dead_code, reason = "Public API surface for RecoveryAction consumers")]
     pub fn to_json(&self) -> Value {
         match self {
             RecoveryAction::Retry {

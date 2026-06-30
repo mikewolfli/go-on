@@ -11,10 +11,12 @@ use crate::acp::helpers::context::run_with_optional_timeout;
 use crate::agent::{Agent, Message};
 use crate::orchestration::planner_executor::Planner;
 
+#[allow(dead_code, reason = "reserved for planner_guided_tool_preferences")]
 fn contains_any(text: &str, terms: &[&str]) -> bool {
     terms.iter().any(|term| text.contains(term))
 }
 
+#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
 pub(crate) fn planner_guided_tool_preferences(
     task_id: &str,
     phase: &str,

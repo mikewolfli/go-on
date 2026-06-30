@@ -481,8 +481,6 @@ pub async fn new_acp_server(
     // BLUE48 Step 1: Initialize global embedding vector store for
     // semantic task classification in the Planner.
     if let Some(ref vs) = server.cache_deps.cache.vector_store {
-        crate::orchestration::planner_embedding::init_global_task_vector_store(Arc::clone(vs));
-
         // GAP-B58-B12: Pre-initialize AgentMemoryBus with VectorStore
         // so retrieve_memories() uses vector similarity instead of linear scan.
         crate::memory::agent_memory_bus::init_agent_memory_bus_with_vector_store(
@@ -682,8 +680,6 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     info!("memory health check completed (one-shot at startup)");
 
     // ── Wire security subsystems (GAP-B52, S-FIX3) ────────────────────
-    crate::security::wire_content_safety(&server.runtime_config);
-    crate::security::wire_prompt_injection(&server.runtime_config);
     crate::security::wire_cert_monitor(&server.runtime_config);
     crate::security::start_secret_rotation_if_configured(&server.runtime_config);
 

@@ -637,18 +637,33 @@ impl NativeToolBridge {
                     }
                 }
             }),
-            _ => json!({
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "description": format!("Execute the {} tool", tool_name),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
-                }
-            }),
+            _ => {
+                // Try getting schema from the Tool trait
+                self.registry.get(tool_name)
+                    .map(|tool| {
+                        let desc = tool.description();
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "description": if desc.is_empty() { format!("Execute the {} tool", tool_name) } else { desc.to_string() },
+                                "parameters": tool.input_schema(),
+                            }
+                        })
+                    })
+                    .unwrap_or_else(|| json!({
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "description": format!("Execute the {} tool", tool_name),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                                "required": []
+                            }
+                        }
+                    }))
+            }
         }
     }
 

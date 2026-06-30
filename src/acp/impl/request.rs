@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::Mutex as StdMutex;
 use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -227,8 +227,11 @@ pub async fn handle_request(
             .and_then(|p| p.get("tenant_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("default");
-        let limiter = crate::security::rate_limiter::global_rate_limiter();
-        if !limiter.try_consume_tenant(tenant, 1.0) {
+        if !server
+            .rate_limiting
+            .global_rate_limiter
+            .try_consume_tenant(tenant, 1.0)
+        {
             return send_error(
                 server,
                 request.id,
@@ -381,8 +384,6 @@ pub async fn handle_request(
     // ── Rate limiting (S-FIX1) ───────────────────────────────────────────
     // Apply global and per-tenant rate limits before dispatching the request.
     {
-        let rate_limiter = crate::security::rate_limiter::global_rate_limiter();
-
         // Global concurrency semaphore was removed (F-GAP-49).
         // Per-tenant throttling is retained below.
 
@@ -394,7 +395,11 @@ pub async fn handle_request(
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
-        if !rate_limiter.try_consume_tenant(tenant_id, 1.0) {
+        if !server
+            .rate_limiting
+            .global_rate_limiter
+            .try_consume_tenant(tenant_id, 1.0)
+        {
             anyhow::bail!("rate limit exceeded for tenant: {}", tenant_id);
         }
     }

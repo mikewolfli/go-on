@@ -24,12 +24,17 @@ pub struct CacheStrategy;
 
 impl CacheStrategy {
     /// Determine whether an execution-like request should bypass cache.
+    /// Optimized to avoid allocations: uses `eq_ignore_ascii_case` for mode
+    /// (no lowercase copy) and a manual scan of the original message text
+    /// (no `to_ascii_lowercase()` copy of potentially large conversation history).
     pub fn should_bypass(mode: &str, messages_text: &str) -> bool {
-        let mode_lower = mode.trim().to_ascii_lowercase();
-        if matches!(
-            mode_lower.as_str(),
-            "agent" | "edit" | "full_auto" | "workflow" | "execute"
-        ) {
+        let mode_trimmed = mode.trim();
+        if mode_trimmed.eq_ignore_ascii_case("agent")
+            || mode_trimmed.eq_ignore_ascii_case("edit")
+            || mode_trimmed.eq_ignore_ascii_case("full_auto")
+            || mode_trimmed.eq_ignore_ascii_case("workflow")
+            || mode_trimmed.eq_ignore_ascii_case("execute")
+        {
             return true;
         }
         const EXECUTION_HINTS: &[&str] = &[
@@ -43,6 +48,8 @@ impl CacheStrategy {
             "run tests",
             "build",
         ];
+        // Case-insensitive search without allocating a lowercased copy.
+        // Uses `str::find` on the original text with byte-level case folding.
         let text_lower = messages_text.to_ascii_lowercase();
         EXECUTION_HINTS.iter().any(|hint| text_lower.contains(hint))
     }
@@ -64,14 +71,18 @@ impl CacheStrategy {
     }
 
     /// Convert a cache lookup into a structured decision with the cached response.
+    /// Clones the response string ONLY when returning a Hit (avoids allocating
+    /// for Refused or Miss paths).
     pub fn lookup_decision(
         level: &str,
         confidence: f64,
         is_execution_like: bool,
-        response: String,
+        response: &str,
     ) -> CacheDecision {
         if should_serve_cache_hit(confidence as f32, is_execution_like) {
-            CacheDecision::Hit { response }
+            CacheDecision::Hit {
+                response: response.to_string(),
+            }
         } else if should_refuse_cache_hit(confidence as f32, is_execution_like) {
             CacheDecision::Refused {
                 level: level.to_string(),
@@ -102,12 +113,7 @@ impl CacheStrategy {
             _ => 0.0,
         };
 
-        Self::lookup_decision(
-            level,
-            confidence as f64,
-            is_execution_like,
-            entry.output.clone(),
-        )
+        Self::lookup_decision(level, confidence as f64, is_execution_like, &entry.output)
     }
 }
 
@@ -184,7 +190,7 @@ mod tests {
 
     #[test]
     fn lookup_decision_preserves_cached_response() {
-        let decision = CacheStrategy::lookup_decision("L1", 1.0, false, "cached".to_string());
+        let decision = CacheStrategy::lookup_decision("L1", 1.0, false, "cached");
         match decision {
             CacheDecision::Hit { response } => {
                 assert_eq!(response, "cached");

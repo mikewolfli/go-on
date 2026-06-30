@@ -17,20 +17,31 @@ use std::sync::{LazyLock, Mutex};
 use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
 
 /// Global counter of intelligence bridge interventions.
+#[allow(
+    dead_code,
+    reason = "public counter for intelligence bridge interventions"
+)]
 pub static INTEL_BRIDGE_INTERVENTIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Global counter of EvolutionGraph recommendations used.
+#[allow(
+    dead_code,
+    reason = "public counter for EvolutionGraph recommendations"
+)]
 pub static EVO_RECOMMENDATIONS_USED: AtomicU64 = AtomicU64::new(0);
 
 /// Global counter of ContinuousLearning insights applied.
+#[allow(dead_code, reason = "public counter for ContinuousLearning insights")]
 pub static CL_INSIGHTS_APPLIED: AtomicU64 = AtomicU64::new(0);
 
 // ── Global intelligence state ──────────────────────────────────────────────
 
+#[allow(dead_code, reason = "internal state for EvolutionGraph bridge")]
 static EVOLUTION_GRAPH: LazyLock<Mutex<EvolutionGraph>> =
     LazyLock::new(|| Mutex::new(EvolutionGraph::new()));
 
 /// Record a performance data point for an agent capability.
+#[allow(dead_code, reason = "public API for recording capability performance")]
 pub fn record_capability_performance(
     agent: &str,
     capability: &str,
@@ -79,6 +90,7 @@ pub fn record_capability_performance(
 ///
 /// Returns a list of (agent_name, capability, stage, trend) tuples sorted by
 /// maturity (Stable > Mature > Learning > New) and improving trend.
+#[allow(dead_code, reason = "public API for agent recommendations")]
 pub fn get_agent_recommendations() -> Vec<(String, String, EvolutionStage, TrendDirection)> {
     let graph = match EVOLUTION_GRAPH.lock() {
         Ok(g) => g,
@@ -128,6 +140,7 @@ pub fn get_agent_recommendations() -> Vec<(String, String, EvolutionStage, Trend
 // ── ContinuousLearning bridge ──────────────────────────────────────────────
 
 /// A lightweight snapshot of a learning insight for injection into the autonomy loop.
+#[allow(dead_code, reason = "public type for intelligence context data")]
 #[derive(Debug, Clone, Default)]
 pub struct IntelligenceContext {
     /// Recent learning insights from ContinuousLearning.
@@ -144,6 +157,7 @@ pub struct IntelligenceContext {
 ///
 /// Queries EvolutionGraph for agent recommendations and builds an
 /// intelligence context that can be injected into planning/execution.
+#[allow(dead_code, reason = "public API for gathering intelligence context")]
 pub fn gather_intelligence_context(task_objective: &str) -> IntelligenceContext {
     // For empty task objectives, return a fully inactive default context immediately.
     // No intelligence module should be queried when there is no task to guide the query.
@@ -197,6 +211,7 @@ pub fn gather_intelligence_context(task_objective: &str) -> IntelligenceContext 
 }
 
 /// Build an augmented system message with intelligence context for the agent.
+#[allow(dead_code, reason = "public API for building augmented context")]
 pub fn build_intelligence_augmented_context(ctx: &IntelligenceContext) -> Option<String> {
     if !ctx.intelligence_active {
         return None;

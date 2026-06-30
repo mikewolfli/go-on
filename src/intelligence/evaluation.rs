@@ -15,8 +15,8 @@ use std::time::Instant;
 /// When false (default), heuristic substring matching is used.
 /// When true, the system tries to use embedding/LLM-based analysis first,
 /// falling back to heuristics if the model is unavailable.
-static ENHANCED_SAFETY_MODE: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
-    std::sync::OnceLock::new();
+static ENHANCED_SAFETY_MODE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true); // GAP-B58-B15: default true
 
 /// Enable or disable enhanced (LLM/embedding) mode for safety evaluation.
 ///
@@ -24,39 +24,28 @@ static ENHANCED_SAFETY_MODE: std::sync::OnceLock<std::sync::atomic::AtomicBool> 
 /// analysis (simulating embedding-based checking) runs by default. The keyword-only
 /// fallback is still available for callers that explicitly disable enhanced mode.
 pub fn set_enhanced_safety_mode(enabled: bool) {
-    let cell = ENHANCED_SAFETY_MODE.get_or_init(|| {
-        std::sync::atomic::AtomicBool::new(true) // GAP-B58-B15: default true
-    });
-    cell.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    ENHANCED_SAFETY_MODE.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Check if enhanced safety mode is enabled.
 pub fn is_enhanced_safety_mode() -> bool {
-    ENHANCED_SAFETY_MODE
-        .get()
-        .map(|cell| cell.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or(false)
+    ENHANCED_SAFETY_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether to use embedding-based safety checking.
 /// When false (default), only the heuristic substring fallback is used.
 /// When true, `embedding_safety_check` is evaluated first.
-static EMBEDDING_SAFETY_CHECK_ENABLED: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
-    std::sync::OnceLock::new();
+static EMBEDDING_SAFETY_CHECK_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
 
 /// Enable or disable embedding-based safety checking.
 pub fn set_embedding_safety_check_enabled(enabled: bool) {
-    let cell =
-        EMBEDDING_SAFETY_CHECK_ENABLED.get_or_init(|| std::sync::atomic::AtomicBool::new(false));
-    cell.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    EMBEDDING_SAFETY_CHECK_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Check if embedding-based safety checking is enabled.
 pub fn is_embedding_safety_check_enabled() -> bool {
-    EMBEDDING_SAFETY_CHECK_ENABLED
-        .get()
-        .map(|cell| cell.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or(false)
+    EMBEDDING_SAFETY_CHECK_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether to use cosine similarity (TF-based) instead of Jaccard similarity
@@ -65,24 +54,20 @@ pub fn is_embedding_safety_check_enabled() -> bool {
 /// - `false` (default): [`embedding_safety_check`] with Jaccard similarity.
 /// - `true`: [`cosine_embedding_safety_check`] with TF cosine similarity,
 ///   which captures keyword co-occurrence density more precisely.
-static USE_COSINE_SIMILARITY: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
-    std::sync::OnceLock::new();
+static USE_COSINE_SIMILARITY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
 
 /// Enable or disable cosine similarity mode for pattern-based safety checks.
 ///
 /// When enabled, [`evaluate_safety_with_patterns`] uses TF-based cosine
 /// similarity instead of Jaccard set overlap.
 pub fn set_cosine_similarity_enabled(enabled: bool) {
-    let cell = USE_COSINE_SIMILARITY.get_or_init(|| std::sync::atomic::AtomicBool::new(false));
-    cell.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    USE_COSINE_SIMILARITY.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Check if cosine similarity mode is enabled.
 pub fn is_cosine_similarity_enabled() -> bool {
-    USE_COSINE_SIMILARITY
-        .get()
-        .map(|cell| cell.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or(false)
+    USE_COSINE_SIMILARITY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A simple embedding-based unsafe pattern detection.

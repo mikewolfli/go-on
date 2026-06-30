@@ -170,11 +170,6 @@ impl CodePatch {
         }
 
         // Apply insertions/updates
-        let _patch_map: HashMap<usize, &str> = self
-            .patched_lines
-            .iter()
-            .map(|(ln, s)| (*ln, s.as_str()))
-            .collect();
         let mut change_count = 0u64;
         for (ln, new_content) in &self.patched_lines {
             let idx = *ln;

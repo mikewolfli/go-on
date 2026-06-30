@@ -157,6 +157,7 @@ pub(crate) async fn run_agent_collecting(
                     total_chars,
                     stream_started.elapsed().as_millis() as u64,
                     selected_model.clone(),
+                    Some(&response),
                 )
                 .await?;
                 // ── Execute tool calls ────────────────────────────────

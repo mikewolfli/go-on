@@ -5,36 +5,27 @@
 //! Falls back to keyword matching when the vector store is unavailable.
 
 use crate::orchestration::planner_executor::TaskComplexity;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-/// Global vector store reference for embedding-based task classification.
-/// Set once during server startup; used by all `EmbeddingTaskClassifier` instances.
-static GLOBAL_TASK_VECTOR_STORE: OnceLock<Arc<crate::memory::vector::VectorStore>> =
-    OnceLock::new();
-
-/// Initialize the global task vector store for embedding-based classification.
-/// Call once during server startup after the vector store is created.
-pub fn init_global_task_vector_store(store: Arc<crate::memory::vector::VectorStore>) {
-    let _ = GLOBAL_TASK_VECTOR_STORE.set(store);
-}
-
-/// Embedding-based task classifier that uses a global `VectorStore`
+/// Embedding-based task classifier that uses an optional `VectorStore`
 /// for cosine similarity matching.
 ///
-/// When no global vector store is configured, classification degrades gracefully
+/// When no vector store is configured, classification degrades gracefully
 /// to heuristic keyword matching (the same logic used by `Planner::analyze_task`).
+///
+/// Previously relied on a global `OnceLock<Arc<VectorStore>>`; the store is now
+/// passed per-instance at construction time.
 #[derive(Default)]
 pub struct EmbeddingTaskClassifier {
-    /// Per-instance override vector store (takes precedence over global).
+    /// Optional vector store for embedding-based classification.
+    /// When `None`, falls back to keyword heuristic matching.
     vector_store: Option<Arc<crate::memory::vector::VectorStore>>,
 }
 
 impl EmbeddingTaskClassifier {
-    /// Resolve the active vector store: per-instance > global > None.
+    /// Resolve the active vector store: instance field or None.
     fn resolve_store(&self) -> Option<&crate::memory::vector::VectorStore> {
-        self.vector_store
-            .as_deref()
-            .or_else(|| GLOBAL_TASK_VECTOR_STORE.get().map(|arc| arc.as_ref()))
+        self.vector_store.as_deref()
     }
 
     /// Classify a task objective into a `TaskComplexity` level.

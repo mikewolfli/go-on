@@ -71,6 +71,7 @@ pub use crate::orchestration::flow;
 pub use crate::orchestration::flow_with_models;
 pub use crate::orchestration::mode;
 pub use crate::orchestration::orchestrator;
+pub use crate::orchestration::plan_output;
 pub use crate::orchestration::roles;
 pub use crate::orchestration::task_decomposer;
 pub use crate::orchestration::task_router;

@@ -388,7 +388,7 @@ impl MultimodalProcessor {
         match input {
             MultimodalInput::Text(text) => self.process_text(text).await,
             MultimodalInput::Image(data) => self.process_image(data).await,
-            MultimodalInput::Audio(data) => self.process_audio(data).await,
+            MultimodalInput::Audio(data) => self.process_audio(data),
             MultimodalInput::Video(data) => self.process_video(data).await,
             MultimodalInput::Document(data, ext) => self.process_document(data, ext).await,
         }
@@ -460,7 +460,7 @@ impl MultimodalProcessor {
 
     /// Process an audio input — delegates to the `AudioProcessor` when
     /// configured, otherwise returns an empty result.
-    async fn process_audio(&self, data: &[u8]) -> ProcessedContent {
+    fn process_audio(&self, data: &[u8]) -> ProcessedContent {
         if let Some(ref processor) = self.audio_processor {
             // AudioProcessor::transcribe is synchronous — no .await.
             // Detect audio format from magic bytes for broader compatibility.

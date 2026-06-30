@@ -25,7 +25,6 @@
 
 // anyhow not needed here — no fallible functions
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 use tracing::{error, info, warn};
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
@@ -105,30 +104,25 @@ impl SystemMemoryInfo {
 pub fn query_system_memory() -> SystemMemoryInfo {
     #[cfg(target_os = "macos")]
     {
-        query_macos_memory()
+        return query_macos_memory();
     }
-
     #[cfg(target_os = "linux")]
     {
-        query_linux_memory()
+        return query_linux_memory();
     }
-
     #[cfg(target_os = "windows")]
     {
-        query_windows_memory()
+        return query_windows_memory();
     }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        SystemMemoryInfo {
-            total_bytes: 0,
-            free_bytes: 0,
-            active_bytes: 0,
-            wired_bytes: 0,
-            swap_used_bytes: 0,
-            swap_total_bytes: 0,
-            pressure_level: 0,
-        }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    SystemMemoryInfo {
+        total_bytes: 0,
+        free_bytes: 0,
+        active_bytes: 0,
+        wired_bytes: 0,
+        swap_used_bytes: 0,
+        swap_total_bytes: 0,
+        pressure_level: 0,
     }
 }
 
@@ -400,8 +394,6 @@ fn query_windows_memory() -> SystemMemoryInfo {
 static RUNTIME_MEMORY_FREE_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_MEMORY_TOTAL_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
-static MEMORY_MONITOR_INITIALIZED: OnceLock<bool> = OnceLock::new();
-
 /// Get the last known free memory in MB (from the runtime monitor).
 pub fn runtime_free_mb() -> u64 {
     RUNTIME_MEMORY_FREE_MB.load(Ordering::Relaxed)
@@ -429,8 +421,6 @@ pub fn runtime_pressure_level() -> u8 {
 /// overhead was unnecessary since memory pressure is already
 /// visible through OS-level monitoring and periodic diagnostics.
 pub fn start_memory_monitor() {
-    MEMORY_MONITOR_INITIALIZED.set(true).unwrap_or(());
-
     let info = query_system_memory();
     let free_mb = info.free_mb();
     RUNTIME_MEMORY_FREE_MB.store(free_mb, Ordering::Relaxed);

@@ -17,9 +17,6 @@ use crate::agent::Agent;
 use crate::flow::ResolvedPhase;
 use crate::flow::ResolvedRouting;
 use crate::i18n::runtime::tf;
-use crate::orchestration::task_router::{TaskCharacteristics, TaskType};
-use crate::pua::PuaEnforcementPlan;
-use crate::reinforcement::{RequirementContractArtifact, TaskPlanArtifact};
 
 /// Default capacity for the agent switch state maps (per-phase entries).
 /// Prevents unbounded memory growth when many distinct phases are used.
@@ -56,10 +53,6 @@ pub struct AgentPreferenceResult {
     pub conversation_id: String,
     /// Resolved branch ID (defaults to `"main"` when absent).
     pub branch_id: String,
-    /// Requirement contract (from `params.requirement_contract` or a newly-created default).
-    pub _requirement_contract: RequirementContractArtifact,
-    /// Task plan artifact (from `params.plan` or a newly-created default).
-    pub _plan: TaskPlanArtifact,
 }
 
 // ── Agent Switch State (global, process-wide) ────────────────────────────
@@ -107,28 +100,6 @@ fn reorder_agents_with_priority(
     false
 }
 
-// ── Default requirement contract helper ──────────────────────────────────
-
-/// Create a default requirement contract with minimal fields.
-fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
-    RequirementContractArtifact {
-        generated_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
-        task: task.to_string(),
-        source: source.to_string(),
-        goal: String::new(),
-        scope: String::new(),
-        non_goals: Vec::new(),
-        acceptance_criteria: Vec::new(),
-        constraints: Vec::new(),
-        open_questions: Vec::new(),
-        ambiguity_score: 0,
-        user_confirmed: false,
-    }
-}
-
 /// Resolve agent preferences, switch state, conversation/branch IDs, and plan artifacts.
 ///
 /// This function encapsulates the **Agent Switch State & Preferred Agent Resolution**
@@ -142,7 +113,7 @@ fn default_requirement_contract(task: &str, source: &str) -> RequirementContract
 ///    - Stored forced fallback → probe primary first
 /// 5. Phase-level rate limiter check (RPM/burst)
 /// 6. Resolving `conversation_id` (with optional tenant namespace)
-/// 7. Resolving `branch_id`, `requirement_contract`, and `_plan` (TaskPlanArtifact)
+/// 7. Resolving `branch_id`
 ///
 /// # Side-effects
 /// - Modifies `resolved.agents` ordering via reorder_agents_with_priority
@@ -274,70 +245,16 @@ pub fn resolve_agent_preferences(
         raw_conversation_id
     };
 
-    // ── 7. Resolve branch_id, requirement_contract, and plan ─────────────
+    // ── 7. Resolve branch_id ───────────────────────────────────────
     let branch_id = params
         .branch_id
         .clone()
         .unwrap_or_else(|| "main".to_string());
-
-    let requirement_contract = if let Some(contract) = &params.requirement_contract {
-        contract.clone()
-    } else {
-        let task_description = crate::acp::r#impl::chat::extract_task_description(&params.messages);
-        default_requirement_contract(&task_description, "chat")
-    };
-
-    let plan = if let Some(existing_plan) = &params.plan {
-        existing_plan.clone()
-    } else {
-        TaskPlanArtifact {
-            generated_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64,
-            task: String::new(),
-            characteristics: TaskCharacteristics {
-                description: String::new(),
-                task_type: TaskType::BugFix,
-                complexity: 1,
-                required_capabilities: Vec::new(),
-                involves_multiple_modules: false,
-                is_time_critical: false,
-                needs_verification: false,
-                has_safety_concerns: false,
-            },
-            routing: crate::orchestration::task_router::RoutingDecision {
-                roles: Vec::new(),
-                requirements: Vec::new(),
-                predicted_success_rate: 1.0,
-                estimated_duration_seconds: 1000,
-                can_parallelize: Vec::new(),
-                risk_factors: Vec::new(),
-                recommended_safeguards: Vec::new(),
-                pua_enforcement: PuaEnforcementPlan {
-                    escalation_level: String::new(),
-                    mandatory_roles: Vec::new(),
-                    red_lines: Vec::new(),
-                    quality_compass: Vec::new(),
-                    mandatory_safeguards: Vec::new(),
-                    mandatory_evidence: Vec::new(),
-                    stage_requirements: Vec::new(),
-                },
-            },
-            decomposition: None,
-            planned_subtasks: Vec::new(),
-            sub_agent_recommended: false,
-            activation_reasons: Vec::new(),
-            action_checks_required: Vec::new(),
-        }
-    };
 
     Ok(AgentPreferenceResult {
         configured_primary_agent,
         preferred_agent_from_request,
         conversation_id,
         branch_id,
-        _requirement_contract: requirement_contract,
-        _plan: plan,
     })
 }

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::acp::prelude::functions::now_ts_ms;
 use crate::shared::token_bucket::TokenBucket;
@@ -73,6 +73,22 @@ impl PhaseRateLimiter {
 
     /// Check if rate limiter is healthy
     pub fn is_healthy(&self) -> bool {
-        true
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let healthy = if guard.is_empty() {
+            // No phases configured — nothing to rate-limit, considered healthy
+            true
+        } else {
+            // Healthy if all tracked token buckets have at least one token available
+            guard.values().all(|bucket| bucket.tokens >= 1.0)
+        };
+        trace!(
+            "rate_limiter health check: tracked_phases={}, healthy={}",
+            guard.len(),
+            healthy
+        );
+        healthy
     }
 }

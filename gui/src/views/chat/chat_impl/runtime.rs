@@ -754,6 +754,19 @@ impl ChatView {
                                                     .get("branch_id")
                                                     .and_then(|v| v.as_str())
                                                     .map(String::from);
+                                                // Capture plan_output from Plan mode responses
+                                                if let Some(plan_output) = val.get("plan_output") {
+                                                    if let Some(obj) = plan_output.as_object() {
+                                                        // Plan output is available for the UI to display
+                                                        // the structured plan steps and recommended mode
+                                                        let _ = serde_json::to_string(obj);
+                                                        #[cfg(debug_assertions)]
+                                                        eprintln!("[Plan] Captured plan output: {} mode, {} step(s)",
+                                                            obj.get("recommended_mode").and_then(|v| v.as_str()).unwrap_or("?"),
+                                                            obj.get("steps").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0)
+                                                        );
+                                                    }
+                                                }
                                             }
                                             "error" => {
                                                 if !buffered_token.is_empty()
@@ -875,19 +888,36 @@ impl ChatView {
                             send_pending(&tx, PendingResponse::UiMessage(warn_msg)).await;
                         }
 
-                        send_pending(
-                            &tx,
-                            PendingResponse::ChatCompleted {
-                                generation_id,
-                                content: final_content.unwrap_or_default(),
-                                thinking: final_thinking.unwrap_or_default(),
-                                agent: final_agent.unwrap_or_default(),
-                                model: final_used_model,
-                                conversation_id: final_conv_id,
-                                branch_id: final_branch_id,
-                            },
-                        )
-                        .await;
+                        let is_empty = final_content.as_ref().map_or(true, |c| c.is_empty());
+                        if is_empty && !final_agent.as_ref().is_some_and(|a| a.is_empty()) {
+                            // Response was empty even after successful streaming.
+                            // This happens when the backend sends a "done" event without
+                            // a "response" field. Send an error so the user sees feedback.
+                            send_pending(
+                                &tx,
+                                PendingResponse::Error {
+                                    generation_id: Some(generation_id),
+                                    message: "The model returned an empty response.
+The backend may be misconfigured or overloaded."
+                                        .to_string(),
+                                },
+                            )
+                            .await;
+                        } else {
+                            send_pending(
+                                &tx,
+                                PendingResponse::ChatCompleted {
+                                    generation_id,
+                                    content: final_content.unwrap_or_default(),
+                                    thinking: final_thinking.unwrap_or_default(),
+                                    agent: final_agent.unwrap_or_default(),
+                                    model: final_used_model,
+                                    conversation_id: final_conv_id,
+                                    branch_id: final_branch_id,
+                                },
+                            )
+                            .await;
+                        }
                     }
                     Err(err) => {
                         tracing::warn!(

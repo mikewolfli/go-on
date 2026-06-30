@@ -12,7 +12,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-#[cfg(test)]
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::warn;
@@ -122,15 +121,12 @@ impl ToolLockManager {
     }
 
     /// Maximum time to wait when acquiring a lock (default: 30 seconds).
-    #[cfg(test)]
-    const ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
     /// Initial backoff delay (microseconds).
-    #[cfg(test)]
     const BACKOFF_INITIAL_US: u64 = 10;
 
     /// Maximum backoff delay (milliseconds).
-    #[cfg(test)]
     const BACKOFF_MAX_MS: u64 = 100;
 
     /// Acquire a lock for `path` with the given `mode`.
@@ -154,7 +150,6 @@ impl ToolLockManager {
     /// # Panics
     ///
     /// Panics if the internal mutex is poisoned.
-    #[cfg(test)]
     pub fn acquire(&self, path: &str, mode: LockMode) -> Result<LockHandle, AcquireError> {
         // Fast path: try non-blocking first.
         if let Some(handle) = self.try_acquire(path, mode) {
@@ -190,14 +185,10 @@ impl ToolLockManager {
     /// `std::thread::sleep`. Suitable for calling from async contexts
     /// without spawning a blocking task.
     ///
-    /// NOTE: This method is test-only. Production code should use
-    /// `try_acquire()` which is non-blocking.
-    ///
     /// # Errors
     ///
     /// Returns [`AcquireError::Timeout`] if the lock cannot be acquired
     /// within [`ACQUIRE_TIMEOUT`](Self::ACQUIRE_TIMEOUT).
-    #[cfg(test)]
     pub async fn acquire_async(
         &self,
         path: &str,

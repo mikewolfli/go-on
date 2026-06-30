@@ -18,8 +18,8 @@ pub mod validate;
 
 // ── Re-exports for backward compatibility ─────────────────────────────────
 pub use observe::{
-    DiagnosticTriggerSource, EvolutionTrigger, MetacognitiveTriggerSource, MetricsPoint,
-    MetricsSnapshot, PubsubTriggerSource, RegressionDirection, TickTriggerSource, TriggerSource,
+    DiagnosticTriggerSource, EvolutionTrigger, MetricsPoint, MetricsSnapshot, PubsubTriggerSource,
+    RegressionDirection, TickTriggerSource, TriggerSource,
 };
 pub use propose::Analysis;
 pub use validate::{Approval, ApprovalMode};
@@ -111,8 +111,7 @@ impl EvolutionLoop {
         )))
     }
 
-    /// Register **all** built-in trigger sources (Tick, Metacognitive,
-    /// AlertManager, Diagnostic, Manual) for a fully wired evolution loop.
+    /// Register built-in trigger sources for a fully wired evolution loop.
     pub fn with_default_trigger_sources(self) -> Self {
         // Create a shared error-counts map so the evolution loop can
         // inject pipeline failures into the DiagnosticTriggerSource.
@@ -127,10 +126,6 @@ impl EvolutionLoop {
             .with_trigger_source(Box::new(TickTriggerSource::new(
                 "default_tick".to_string(),
                 Duration::from_secs(300),
-            )))
-            .with_trigger_source(Box::new(MetacognitiveTriggerSource::new(
-                "metacognitive_trigger".to_string(),
-                Duration::from_secs(600),
             )))
             .with_trigger_source(Box::new(observe::AlertManagerTriggerSource::new(
                 "alert_manager_trigger".to_string(),

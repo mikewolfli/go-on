@@ -341,8 +341,15 @@ pub fn store_copilot_token(token: &str) -> Result<()> {
 /// Does NOT fall back to config-provided keys to prevent secrets
 /// from being stored in plaintext config files.
 /// Returns `None` if the key is not found in the keyring.
-pub fn get_api_key_with_fallback(provider: &str, _config_key: Option<&str>) -> Option<String> {
-    get_api_key(provider)
+pub fn get_api_key_with_fallback(provider: &str, config_key: Option<&str>) -> Option<String> {
+    // First try: keyring lookup (with .env fallback already built into get_api_key)
+    if let Some(key) = get_api_key(provider) {
+        return Some(key);
+    }
+    // Fallback: use config-provided key from the settings
+    config_key
+        .filter(|k| !k.is_empty() && *k != REDACTED_API_KEY)
+        .map(|k| k.to_string())
 }
 
 // ── .env file sync (Hybrid storage: keyring + dotenv) ────────────────────

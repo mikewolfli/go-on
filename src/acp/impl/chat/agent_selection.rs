@@ -46,12 +46,10 @@ pub(crate) struct AgentSelectionOutcome {
     pub escalation_enabled: bool,
     pub escalation_models_per_agent: usize,
     pub escalation_max_agents: usize,
-    pub _model_is_specific: bool,
     pub unhealthy_fallback_agent: Option<String>,
     pub fallback_reason: Option<String>,
     pub council_decision: Option<Value>,
     pub candidate_agents: Vec<String>,
-    pub _routing_provenance: Vec<String>,
     pub vector_context: VectorContext,
 }
 
@@ -257,12 +255,10 @@ pub(crate) async fn select_and_score_agents(
         escalation_enabled: vote_config.escalation_enabled,
         escalation_models_per_agent: vote_config.escalation_models_per_agent,
         escalation_max_agents: vote_config.escalation_max_agents,
-        _model_is_specific: filter_result.model_is_specific,
         unhealthy_fallback_agent,
         fallback_reason,
         council_decision,
         candidate_agents,
-        _routing_provenance: routing_provenance.clone(),
         vector_context,
     })
 }
@@ -272,7 +268,5 @@ pub(crate) struct AutonomyOutcome {
     pub autonomy_loop_executed: bool,
     pub selected_agent: String,
     pub response_text: String,
-    pub _reasoning_text: String,
-    pub _selected_model_name: Option<String>,
     pub agent_attempts: Vec<Value>,
 }

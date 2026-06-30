@@ -50,6 +50,7 @@ pub mod agent_selection;
 pub mod fallback;
 pub mod knowledge;
 pub mod params;
+pub mod pipeline;
 pub mod session;
 pub mod streaming;
 pub mod tool_extraction;
@@ -271,30 +272,98 @@ pub async fn should_escalate_approval_strategy(
     phase: Option<&str>,
     options: Option<&PhaseOptions>,
 ) -> Result<bool> {
-    // Check various conditions that might require escalation
-    // This is a simplified implementation - the actual logic would be more complex
+    // ── 1. Governance policy evaluation (HarnessBus) ────────────────
+    // The canonical escalation path: consult the HarnessBus policy engine.
+    // If the policy engine denies the action, escalation is required.
+    if let Some(ref harness) = server.governance_deps.harness_bus {
+        let payload = serde_json::json!({
+            "mode": mode,
+            "phase": phase,
+            "message_count": messages.len(),
+            "total_content_length": messages.iter().map(|m| m.content.len()).sum::<usize>(),
+        });
+        let verdict = harness.validate_action("chat.escalate", &payload);
+        if !verdict.is_allowed() {
+            return Ok(true);
+        }
+    }
 
-    // 1. Check if mode requires escalation
-    let mode_requires_escalation = matches!(mode, "full_auto" | "safeguard");
+    // ── 2. Mode-based escalation ────────────────────────────────────
+    // Plan mode never escalates (planning is always safe).
+    // Ask mode never escalates (single-turn Q&A).
+    // Edit mode escalates only if high-risk or sensitive.
+    // FullAuto escalates only when complexity exceeds threshold.
+    // SafeGuard inherently requires escalation for human review.
+    let mode_requires_escalation = match mode {
+        "safeguard" => true,
+        "full_auto" => {
+            // FullAuto only escalates when there are complex instructions
+            // or sensitive content. Simple automation tasks don't need escalation.
+            let total_content_len: usize = messages.iter().map(|m| m.content.len()).sum();
+            let has_complex_indicators = messages.iter().any(|msg| {
+                let c = msg.content.to_lowercase();
+                c.contains("multiple steps")
+                    || c.contains("complex")
+                    || c.contains("critical")
+                    || c.contains("recursive")
+                    || (c.matches("```").count() > 2)
+            });
+            total_content_len > 2000 || has_complex_indicators
+        }
+        "edit" => {
+            // Edit mode escalates only for high-risk operations
+            messages.iter().any(|msg| {
+                let c = msg.content.to_lowercase();
+                c.contains("delete production")
+                    || c.contains("drop database")
+                    || c.contains("rm -rf")
+                    || c.contains("shutdown")
+            })
+        }
+        _ => false,
+    };
 
-    // 2. Check message content for sensitive keywords
+    // ── 3. Injection/probe detection ───────────────────────────────
+    let mut has_injection = false;
+    if let Some(ref detector) = server.governance_deps.injection_detector {
+        let joined: String = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        let warnings = detector.detect(&joined);
+        if !warnings.violations.is_empty() {
+            has_injection = true;
+            tracing::warn!(
+                target: "escalation",
+                violations = ?warnings.violations,
+                "prompt injection detected — escalating approval"
+            );
+        }
+    }
+
+    // ── 4. Sensitive content detection (safety checker) ────────────
     let has_sensitive_content = messages.iter().any(|msg| {
         let content = msg.content.to_lowercase();
-        content.contains("delete")
-            || content.contains("drop")
-            || content.contains("remove")
-            || content.contains("sensitive")
+        content.contains("password")
+            || content.contains("api_key")
+            || content.contains("secret_key")
+            || content.contains("token=")
+            || content.contains("authorization: bearer")
+            || content.contains("credentials")
             || content.contains("confidential")
+            || content.contains("ssn")
+            || content.contains("social security")
     });
 
-    // 3. Check conversation history if available
+    // ── 5. Conversation history ────────────────────────────────────
     let history_requires_escalation = if let Some(conv_id) = conversation_id {
         check_conversation_history_escalation(server, conv_id).await?
     } else {
         false
     };
 
-    // 4. Check phase-specific escalation rules
+    // ── 6. Phase-specific escalation rules ─────────────────────────
     let phase_requires_escalation = if let Some(phase_name) = phase {
         check_phase_escalation_rules(server, phase_name, options).await?
     } else {
@@ -302,6 +371,7 @@ pub async fn should_escalate_approval_strategy(
     };
 
     Ok(mode_requires_escalation
+        || has_injection
         || has_sensitive_content
         || history_requires_escalation
         || phase_requires_escalation)
@@ -437,154 +507,63 @@ pub(crate) async fn process_chat_request(
     span: Option<&OtelContext>,
     ctx: Option<ChatRequestContext>,
 ) -> Result<serde_json::Value> {
-    use crate::acp::r#impl::chat_phases::{act_phase, observe_phase, reflect_phase, think_phase};
-    let started = std::time::Instant::now();
-    let ctx = ctx.unwrap_or_else(|| ChatRequestContext::new(None));
+    use crate::acp::r#impl::chat::pipeline::ChatPipeline;
+    use crate::orchestration::plan_output::extract_plan_from_response;
 
-    // ── OTel: Ensure a parent span exists for the chat pipeline ─────
-    // If no span was provided by the caller, create a root span so that
-    // child spans for each phase still appear in the trace tree.
-    let parent_span = span.cloned().or_else(|| {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .start_root_span(
-                "acp.process_chat",
-                &trace.trace_id,
-                vec![opentelemetry::KeyValue::new(
-                    "request_id",
-                    trace.request_id.clone(),
-                )],
-            )
-    });
+    let outcome =
+        ChatPipeline::run(server, params, stream_observer.clone(), trace, span, ctx).await?;
+    let mut result = outcome.result;
 
-    // ── Phase 1: Observe (with OTel child span) ─────────────────────
-    let observe_cx = parent_span.as_ref().and_then(|parent| {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .start_child_span(parent, "chat.observe", vec![])
-    });
-    let mut resolve_out = observe_phase(server, params, ctx).await?;
-    if let Some(cx) = observe_cx {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .end_span(cx, vec![]);
+    // ── Plan output extraction ──────────────────────────────────────
+    // When in Plan mode, extract the structured plan from the chat response
+    // so it can be used for execution handoff (Edit/SafeGuard/FullAuto).
+    let is_plan_mode = params.mode.eq_ignore_ascii_case("plan");
+    if is_plan_mode {
+        let response_text = result
+            .get("response")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !response_text.is_empty() {
+            let plan_output = extract_plan_from_response(response_text, &params.mode);
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "plan_output".to_string(),
+                    serde_json::to_value(&plan_output).unwrap_or_default(),
+                );
+            }
+        }
     }
 
-    // ── Phase 2: Think (with OTel child span) ───────────────────────
-    let think_cx = parent_span.as_ref().and_then(|parent| {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
+    // Send final result SSE event so the GUI receives the response.
+    // This is necessary because the spawned task only handles errors;
+    // the Ok(result) is discarded. The event is sent here, after all
+    // phases succeed, so it won't be overwritten by error handlers.
+    if let Some(ref observer) = stream_observer {
+        let response_text = result
+            .get("response")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let agent = result.get("agent").and_then(|v| v.as_str()).unwrap_or("");
+        let plan_output_val = result.get("plan_output");
+        let mut payload = serde_json::json!({
+            "response": response_text,
+            "agent": agent,
+            "done": true,
+        });
+        if let Some(po) = plan_output_val {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("plan_output".to_string(), po.clone());
+            }
+        }
+        observer
+            .send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
+                event: "result",
+                payload,
             })
-            .start_child_span(parent, "chat.think", vec![])
-    });
-    let routing_out = think_phase(server, params, &mut resolve_out, trace).await?;
-    if let Some(cx) = think_cx {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .end_span(cx, vec![]);
+            .await;
     }
 
-    // ── Phase 3: Act (with OTel child span) ─────────────────────────
-    let act_cx = parent_span.as_ref().and_then(|parent| {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .start_child_span(parent, "chat.act", vec![])
-    });
-    let mut exec_out = act_phase(
-        server,
-        params,
-        trace,
-        stream_observer.clone(),
-        started,
-        &resolve_out,
-        &routing_out,
-    )
-    .await?;
-    if let Some(cx) = act_cx {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .end_span(cx, vec![]);
-    }
-
-    // ── Phase 4: Reflect (with OTel child span) ────────────────────
-    // The reflect phase receives the original span for downstream use
-    // (e.g., full_auto_executor span propagation).
-    let reflect_cx = parent_span.as_ref().and_then(|parent| {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .start_child_span(parent, "chat.reflect", vec![])
-    });
-    let result = reflect_phase(
-        server,
-        params,
-        trace,
-        span,
-        started,
-        stream_observer.clone(),
-        &resolve_out,
-        &routing_out,
-        &mut exec_out,
-    )
-    .await;
-    if let Some(cx) = reflect_cx {
-        server
-            .observability
-            .telemetry_runtime
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("telemetry_runtime mutex poisoned");
-                poisoned.into_inner()
-            })
-            .end_span(cx, vec![]);
-    }
-    result
+    Ok(result)
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -597,9 +576,6 @@ pub(crate) struct PhaseResolution {
     pub phase_name: String,
     pub phase_origin: String,
     pub resolved: crate::orchestration::flow::ResolvedRouting,
-    pub has_requested_phase: bool,
-    pub has_controller_phase: bool,
-    pub has_adaptive_phase: bool,
     pub schema_warnings: Vec<String>,
     pub schema_error: Option<String>,
     pub routing_provenance: Vec<String>,
@@ -758,9 +734,6 @@ pub(crate) async fn resolve_request_phase(
         phase_name,
         phase_origin,
         resolved,
-        has_requested_phase,
-        has_controller_phase,
-        has_adaptive_phase,
         schema_warnings,
         schema_error,
         routing_provenance,
@@ -806,8 +779,6 @@ pub(crate) async fn execute_autonomy_round(
             autonomy_loop_executed: false,
             selected_agent: String::new(),
             response_text: String::new(),
-            _reasoning_text: String::new(),
-            _selected_model_name: None,
             agent_attempts: Vec::new(),
         };
     }
@@ -816,9 +787,7 @@ pub(crate) async fn execute_autonomy_round(
     let autonomy_candidates = resolved.agents.clone();
     let mut agent_attempts: Vec<Value> = Vec::new();
     let mut response_text = String::new();
-    let mut reasoning_text = String::new();
     let mut selected_agent = String::new();
-    let mut selected_model_name: Option<String> = None;
     let mut autonomy_loop_executed = false;
 
     for (idx, (agent_name, agent)) in autonomy_candidates.into_iter().enumerate() {
@@ -869,8 +838,6 @@ pub(crate) async fn execute_autonomy_round(
                 if produced_response {
                     autonomy_loop_executed = true;
                     response_text = loop_result.response;
-                    reasoning_text = loop_result.reasoning;
-                    selected_model_name = loop_result.selected_model;
                     selected_agent = agent_name;
                     break;
                 }
@@ -900,8 +867,6 @@ pub(crate) async fn execute_autonomy_round(
         autonomy_loop_executed,
         selected_agent,
         response_text,
-        _reasoning_text: reasoning_text,
-        _selected_model_name: selected_model_name,
         agent_attempts,
     }
 }
@@ -1131,72 +1096,143 @@ pub(crate) async fn apply_review_gate_assemble(
     Ok(result)
 }
 
-/// Check conversation history for escalation requirements
+/// Maximum checkpoint count before a conversation is considered "long".
+const MAX_CHECKPOINTS_BEFORE_ESCALATION: usize = 20;
+
+/// Check conversation history for escalation requirements.
+///
+/// Evaluates whether a conversation's history warrants escalation:
+/// - Has the conversation had previous escalations?
+/// - Is the conversation unusually long (many checkpoints)?
+/// - Has the conversation had repeated failures or errors?
 async fn check_conversation_history_escalation(
     server: &AcpServer,
     conversation_id: &str,
 ) -> Result<bool> {
-    // This is a simplified implementation
-    // In reality, this would check the conversation store for history
     let conversation_state = server.session.conversation_state.lock().await;
 
-    // Check if conversation exists in checkpoints
-    let has_conversation = conversation_state
+    // Filter checkpoints scoped to this conversation only
+    let conversation_checkpoints: Vec<_> = conversation_state
         .checkpoints
         .iter()
-        .any(|checkpoint| checkpoint.conversation_id == conversation_id);
+        .filter(|cp| cp.conversation_id == conversation_id)
+        .collect();
 
-    if has_conversation {
-        // Check if conversation has had previous escalations
-        let has_previous_escalations = conversation_state
-            .checkpoints
-            .iter()
-            .any(|checkpoint| checkpoint.note.as_deref().unwrap_or("") == "escalation");
-
-        // Check conversation length (long conversations might need escalation)
-        let conversation_checkpoints: Vec<_> = conversation_state
-            .checkpoints
-            .iter()
-            .filter(|cp| cp.conversation_id == conversation_id)
-            .collect();
-        let is_long_conversation = conversation_checkpoints.len() > 10;
-
-        Ok(has_previous_escalations || is_long_conversation)
-    } else {
-        Ok(false) // New conversation, no history to check
+    if conversation_checkpoints.is_empty() {
+        return Ok(false); // New conversation, no history to check
     }
+
+    // ── Check if this conversation has had previous escalations ──
+    // Now correctly scoped to this conversation_id (was a bug: was scanning ALL checkpoints)
+    let has_previous_escalations = conversation_checkpoints
+        .iter()
+        .any(|cp| cp.note.as_deref().unwrap_or("") == "escalation");
+
+    // ── Check if conversation is unusually long ──────────────────
+    let is_long_conversation = conversation_checkpoints.len() > MAX_CHECKPOINTS_BEFORE_ESCALATION;
+
+    // ── Check for repeated failures in recent checkpoints ────────
+    let recent_failures = conversation_checkpoints
+        .iter()
+        .rev()
+        .take(5)
+        .filter(|cp| {
+            cp.note.as_deref().map_or(false, |n| {
+                n.contains("fail") || n.contains("error") || n.contains("reject")
+            })
+        })
+        .count();
+    let has_repeated_failures = recent_failures >= 3;
+
+    Ok(has_previous_escalations || is_long_conversation || has_repeated_failures)
 }
 
-/// Check phase-specific escalation rules
+/// Check phase-specific escalation rules.
+///
+/// Evaluates whether the current phase and its options warrant escalation:
+/// - "full_auto": Escalates only when review agents are configured or complexity is high.
+///   Full auto is designed to REDUCE human oversight, so always escalating is wrong.
+/// - "safeguard": Escalates based on explicit config or governance policy.
+/// - Other phases: Escalate only in edge cases (explicit flag or harness policy).
 async fn check_phase_escalation_rules(
-    _server: &AcpServer,
+    server: &AcpServer,
     phase: &str,
     options: Option<&PhaseOptions>,
 ) -> Result<bool> {
-    // Check phase-specific rules
-    // This is a simplified implementation
+    // ── Governance policy evaluation ────────────────────────────────
+    // Let the HarnessBus policy engine weigh in first
+    if let Some(ref harness) = server.governance_deps.harness_bus {
+        let verdict = harness.validate_action(
+            &format!("phase.{}.execute", phase),
+            &serde_json::json!({
+                "phase": phase,
+                "options": options.as_ref().map(|o| serde_json::json!({
+                    "autopilot_complexity": o.autopilot_complexity,
+                    "full_auto_review_agents": o.full_auto_review_agents,
+                })),
+            }),
+        );
+        if !verdict.is_allowed() {
+            return Ok(true);
+        }
+    }
 
     match phase {
         "full_auto" => {
-            // Full auto phase always requires careful consideration
-            Ok(true)
-        }
-        "safeguard" => {
-            // Safeguard phase might require escalation based on options
+            // FullAuto only escalates when:
+            // 1. Review agents are explicitly configured (someone wants oversight)
+            // 2. Autopilot complexity is high
+            // 3. Explicit require_escalation flag is set
             if let Some(opts) = options {
-                // Check if extra options indicate escalation needed
-                let requires_escalation = opts
+                let has_review_agents = opts
+                    .full_auto_review_agents
+                    .as_ref()
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+                let is_complex = opts
+                    .autopilot_complexity
+                    .as_deref()
+                    .map(|c| matches!(c, "high" | "complex" | "critical"))
+                    .unwrap_or(false);
+                let explicit_flag = opts
                     .extra
                     .get("require_escalation")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                Ok(requires_escalation)
+                Ok(has_review_agents || is_complex || explicit_flag)
+            } else {
+                Ok(false)
+            }
+        }
+        "safeguard" => {
+            // Safeguard escalates when:
+            // 1. Complexity is critical
+            // 2. Review agents are configured
+            // 3. Explicit flag is set
+            if let Some(opts) = options {
+                let is_critical = opts
+                    .autopilot_complexity
+                    .as_deref()
+                    .map(|c| c == "critical")
+                    .unwrap_or(false);
+                let has_review_agents = opts
+                    .full_auto_review_agents
+                    .as_ref()
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+                let explicit_flag = opts
+                    .extra
+                    .get("require_escalation")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(is_critical || has_review_agents || explicit_flag)
             } else {
                 Ok(false)
             }
         }
         _ => {
-            // Default phases don't require escalation
+            // Default phases: only escalate if governance policy requires it
+            // (already checked via HarnessBus above)
             Ok(false)
         }
     }

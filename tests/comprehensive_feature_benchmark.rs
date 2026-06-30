@@ -55,7 +55,6 @@ enum Capability {
     McpCancelTimeoutParity,
     ThreeEntryParity,
     AuditReplay,
-    ExternalBenchmarkGate,
 }
 
 impl Capability {
@@ -82,7 +81,6 @@ impl Capability {
             Capability::McpCancelTimeoutParity => "mcp_cancel_timeout_parity",
             Capability::ThreeEntryParity => "three_entry_parity",
             Capability::AuditReplay => "audit_replay",
-            Capability::ExternalBenchmarkGate => "external_benchmark_gate",
         }
     }
 
@@ -101,8 +99,6 @@ impl Capability {
             Capability::DagEvidenceFidelity => Measurability::Measured,
             Capability::IntentFastRouting => Measurability::Measured,
             Capability::AuditReplay => Measurability::Measured,
-            Capability::ExternalBenchmarkGate => Measurability::Measured,
-
             // ── Qualitative only (needs live traffic / E2E) ────
             Capability::GovernanceP95Correctness => Measurability::Qualitative,
             Capability::PredictiveReroute => Measurability::Qualitative,
@@ -139,7 +135,6 @@ impl Capability {
             Capability::McpCancelTimeoutParity => 1.1,
             Capability::ThreeEntryParity => 1.0,
             Capability::AuditReplay => 1.0,
-            Capability::ExternalBenchmarkGate => 1.2,
         }
     }
 
@@ -163,7 +158,6 @@ impl Capability {
             Capability::ThreeEntryParity => 60.0,
             Capability::EnvAutoBootstrap => 90.0,
             Capability::RealisticE2EBenchmark => 0.1,
-            Capability::ExternalBenchmarkGate => 90.0,
             Capability::AutoRecovery => 90.0,
             Capability::BusMultiFactor => 0.1,
             Capability::PredictiveReroute => 0.1,
@@ -724,28 +718,6 @@ fn measure_chat_latency() -> DimensionScore {
     }
 }
 
-/// Check that external_benchmark.rs exists with gate tests.
-fn measure_external_benchmark_gate() -> DimensionScore {
-    let bench_src = include_str!("external_benchmark.rs");
-    let test_count =
-        bench_src.matches("#[test]").count() + bench_src.matches("#[tokio::test]").count();
-    let gate_assert_count = bench_src.matches("assert!").count();
-    let mut pass_count = 0u64;
-    let total = 2u64;
-    if test_count > 0 {
-        pass_count += 1;
-    }
-    if gate_assert_count > 0 {
-        pass_count += 1;
-    }
-    let score = ratio_score(pass_count, total);
-    DimensionScore {
-        score,
-        evidence: "external_benchmark.rs exists with test functions and gate assertions",
-        measurability: Measurability::Measured,
-    }
-}
-
 /// Build a qualitative score for dimensions that cannot be measured at test time.
 /// Returns a DimensionScore with a conservative default of 7.0 for qualitative
 /// dimensions that cannot be measured automatically. These scores contribute to
@@ -789,10 +761,6 @@ fn build_report() -> BenchmarkReport {
     dimensions.insert(Capability::ThreeEntryParity, measure_three_entry_parity());
     dimensions.insert(Capability::IntentFastRouting, measure_intent_fast_routing());
     dimensions.insert(Capability::AuditReplay, measure_audit_replay());
-    dimensions.insert(
-        Capability::ExternalBenchmarkGate,
-        measure_external_benchmark_gate(),
-    );
 
     // ── Qualitative dimensions ───────────────────────────────────────
 

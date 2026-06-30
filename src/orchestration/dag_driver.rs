@@ -1,13 +1,16 @@
-/// Tool execution DAG — orchestrates tool calls with parallel fan-out
-/// and plan-topology execution levels.
-///
-/// Provides `build_tool_execution_dag`, `execute_tool_dag`, and helpers
-/// that execute tool calls in parallel (flat fan-out) or respecting
-/// plan dependency topology (level-by-level execution).
-///
-/// Uses [`CoreDag`](CoreDag) internally for plan-level execution ordering.
-/// Prefer `execute_tool_dag` for new code; it auto-selects the optimal
-/// execution strategy based on whether an [`ExecutionPlan`] is provided.
+//! Tool execution DAG — orchestrates tool calls with parallel fan-out
+//! and plan-topology execution levels.
+//!
+//! Provides `build_tool_execution_dag`, `execute_tool_dag`, and helpers
+//! that execute tool calls in parallel (flat fan-out) or respecting
+//! plan dependency topology (level-by-level execution).
+//!
+//! Uses [`CoreDag`](CoreDag) internally for plan-level execution ordering.
+//! Prefer `execute_tool_dag` for new code; it auto-selects the optimal
+//! execution strategy based on whether an [`ExecutionPlan`] is provided.
+
+#![allow(dead_code, reason = "public API for tool execution DAG")]
+
 use std::sync::Arc;
 
 use crate::i18n::runtime::tf;
@@ -25,20 +28,14 @@ use crate::orchestration::tool::{
 
 pub use crate::orchestration::core_dag::{DagExecutionTrace, DagNodeResult};
 
-/// Build tool execution as a Branch-Join DAG.
-/// Independent tools become Branch fans; dependent tools are sequenced.
-pub fn build_tool_execution_dag(tool_calls: &[(String, String)]) -> (ExNodeId, Vec<ExNodeId>) {
+/// Build tool execution node IDs for DAG-based execution.
+pub fn build_tool_execution_dag(tool_calls: &[(String, String)]) -> Vec<ExNodeId> {
     // Generate stable node IDs for each tool call.
-    let tool_node_ids: Vec<ExNodeId> = tool_calls
+    tool_calls
         .iter()
         .enumerate()
         .map(|(i, (name, _))| format!("tool-{}-{}", name, i))
-        .collect();
-    let branch_id: ExNodeId = tool_node_ids
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "branch-tools".to_string());
-    (branch_id, tool_node_ids)
+        .collect()
 }
 
 /// Execute tools as a Branch-Join DAG and return results with node states.
@@ -85,7 +82,7 @@ async fn execute_flat_fanout(
     // Collect fallback tool names from the tool calls themselves.
     let preferred_tools: Vec<String> = tool_calls.iter().map(|(name, _)| name.clone()).collect();
 
-    let (_branch_id, tool_node_ids) = build_tool_execution_dag(tool_calls);
+    let tool_node_ids = build_tool_execution_dag(tool_calls);
     let num_tools = tool_calls.len();
     let branch_count = if num_tools > 1 { 1 } else { 0 };
     let join_count = if num_tools > 1 { 1 } else { 0 };
@@ -348,7 +345,8 @@ fn create_tool_jobs(
                 };
                 // Use preferred_tools (tool names from the plan) instead of hardcoded `&[]`.
                 let (decision, _trace) =
-                    execute_loop_async(&tool_name, &registry, &input, &pref_tools, &cfg).await;
+                    execute_loop_async(&tool_name, &registry, &input, &pref_tools, &cfg, None)
+                        .await;
                 let (state, tool_output, error_payload) = match decision {
                     LoopDecision::Complete(ref output) => {
                         (ExNodeState::Completed, output.result.clone(), None)
@@ -546,11 +544,10 @@ mod tests {
             ("read_file".to_string(), "{}".to_string()),
             ("search".to_string(), "{}".to_string()),
         ];
-        let (branch_id, tool_ids) = build_tool_execution_dag(&calls);
-        // entry_points is now properly tracked: first entry point is the first tool's ID
-        assert_eq!(branch_id, "tool-read_file-0");
+        let tool_ids = build_tool_execution_dag(&calls);
         assert_eq!(tool_ids.len(), 2);
         assert!(tool_ids[0].starts_with("tool-"));
+        assert_eq!(tool_ids[0], "tool-read_file-0");
     }
 
     /// GAP-46-02: Verify that tools with plan-specified dependencies execute

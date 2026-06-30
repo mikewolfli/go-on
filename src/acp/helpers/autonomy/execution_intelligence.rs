@@ -1,3 +1,8 @@
+// execution_intelligence module: public API for autonomy loop integration
+// Retained for future wiring when enable_execution_intelligence is active
+#![allow(dead_code)]
+
+// Fluff to force LS re-analysis
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -8,33 +13,42 @@ use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::self_model::{SelfModelConfig, SelfModelCore};
 use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig};
 
+#[allow(
+    dead_code,
+    reason = "module is public API for external consumers; functions are wired when autonomy loop uses execution_intelligence"
+)]
 pub(crate) static EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct ExecutionPreCheck {
     pub should_degrade: bool,
+    /// Reason for degradation (set by tests; reserved for future production use).
+    #[allow(dead_code, reason = "read in #[cfg(test)] assertions")]
     pub reason: Option<String>,
-    pub _consecutive_failures: u32,
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub(crate) struct PostCheckOutcome {
     pub corrective_actions: Vec<String>,
 }
 
+#[allow(dead_code)]
 static WORLD_MODEL: OnceLock<WorldModel> = OnceLock::new();
+#[allow(dead_code)]
 static SELF_MODEL: OnceLock<SelfModelCore> = OnceLock::new();
 
 /// Returns the global shared MetacognitiveController singleton.
-/// Uses the central singleton defined in `crate::intelligence::metacognitive`
-/// so all consumers share the same observation/action/report state.
+#[allow(dead_code)]
 fn metacognitive() -> &'static MetacognitiveController {
     crate::intelligence::metacognitive::global_metacognitive_controller()
 }
 
+#[allow(dead_code)]
 fn world_model() -> &'static WorldModel {
     WORLD_MODEL.get_or_init(|| WorldModel::new(WorldModelConfig::default()))
 }
 
+#[allow(dead_code)]
 fn self_model() -> &'static SelfModelCore {
     SELF_MODEL.get_or_init(|| SelfModelCore::new(SelfModelConfig::default()))
 }
@@ -76,7 +90,6 @@ pub(crate) fn pre_check(
     ExecutionPreCheck {
         should_degrade,
         reason,
-        _consecutive_failures: consecutive_failures,
     }
 }
 
