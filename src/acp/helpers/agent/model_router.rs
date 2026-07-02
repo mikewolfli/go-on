@@ -29,6 +29,12 @@ pub(crate) struct FilterResult {
 #[derive(Debug)]
 pub(crate) struct HighRiskVoteConfig {
     /// Whether high-risk voting is enabled (policy enabled + high risk + specific model).
+    /// Used internally as a local variable to derive multi-agent vote config;
+    /// stored on the struct for completeness/debugging.
+    #[allow(
+        dead_code,
+        reason = "stored for config completeness; used locally in build fn"
+    )]
     pub(crate) enable_high_risk_vote: bool,
     /// Whether multi-agent voting is enabled.
     pub(crate) enable_high_risk_multi_agent_vote: bool,

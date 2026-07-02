@@ -48,6 +48,8 @@ pub struct AgentPreferenceResult {
     /// Primary agent from phase config's first entry or first runtime-resolved agent.
     pub configured_primary_agent: Option<String>,
     /// Explicit `preferred_agent` value from `params.options.extra`, if present.
+    /// Reserved for external SDK consumers; not read internally.
+    #[allow(dead_code, reason = "public API field for external consumers")]
     pub preferred_agent_from_request: Option<String>,
     /// Resolved conversation ID (with optional tenant namespace when user auth is enabled).
     pub conversation_id: String,

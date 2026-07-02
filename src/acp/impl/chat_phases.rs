@@ -92,8 +92,6 @@ pub(crate) struct ThinkOutput {
     pub capability_selection_reason: Option<String>,
     pub capability_optimization_hint: Option<Value>,
     pub configured_primary_agent: Option<String>,
-    #[allow(dead_code)]
-    pub preferred_agent_from_request: Option<String>,
     pub conversation_id: String,
     pub branch_id: String,
     pub agent_messages: Vec<Message>,
@@ -101,8 +99,6 @@ pub(crate) struct ThinkOutput {
     pub base_agent_options: HashMap<String, Value>,
     pub risk_policy: RiskVotePolicy,
     pub risk_assessment: RiskAssessment,
-    #[allow(dead_code)]
-    pub enable_high_risk_vote: bool,
     pub enable_high_risk_multi_agent_vote: bool,
     pub min_vote_agents: usize,
     pub max_vote_agents: usize,
@@ -398,7 +394,6 @@ pub(crate) async fn think_phase(
         capability_selection_reason: agent_sel.capability_selection_reason,
         capability_optimization_hint: agent_sel.capability_optimization_hint,
         configured_primary_agent: agent_sel.configured_primary_agent,
-        preferred_agent_from_request: agent_sel.preferred_agent_from_request,
         conversation_id: agent_sel.conversation_id,
         branch_id: agent_sel.branch_id,
         agent_messages,
@@ -406,7 +401,6 @@ pub(crate) async fn think_phase(
         base_agent_options: agent_sel.base_agent_options,
         risk_policy: agent_sel.risk_policy,
         risk_assessment: agent_sel.risk_assessment,
-        enable_high_risk_vote: agent_sel.enable_high_risk_vote,
         enable_high_risk_multi_agent_vote: agent_sel.enable_high_risk_multi_agent_vote,
         min_vote_agents: agent_sel.min_vote_agents,
         max_vote_agents: agent_sel.max_vote_agents,

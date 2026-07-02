@@ -40,6 +40,7 @@ impl Drop for InflightGuard {
     }
 }
 
+#[cfg(test)]
 impl Default for InflightGuard {
     fn default() -> Self {
         Self {

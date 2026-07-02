@@ -200,7 +200,7 @@ pub fn start_watcher(languages_dir: &Path, check_interval: Duration) -> Result<b
             Some(mgr) => {
                 // Clone the existing global manager so the watcher shares the same data.
                 // Deref first so we clone the I18nManager itself, not the &I18nManager reference.
-                Arc::new((*mgr).clone())
+                Arc::new(mgr.clone())
             }
             None => return Ok(false),
         }

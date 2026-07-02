@@ -31,7 +31,6 @@ pub(crate) struct AgentSelectionOutcome {
     pub capability_selection_reason: Option<String>,
     pub capability_optimization_hint: Option<Value>,
     pub configured_primary_agent: Option<String>,
-    pub preferred_agent_from_request: Option<String>,
     pub conversation_id: String,
     pub branch_id: String,
     pub agent_messages: Vec<Message>,
@@ -39,7 +38,6 @@ pub(crate) struct AgentSelectionOutcome {
     pub base_agent_options: HashMap<String, Value>,
     pub risk_policy: super::voting::RiskVotePolicy,
     pub risk_assessment: super::voting::RiskAssessment,
-    pub enable_high_risk_vote: bool,
     pub enable_high_risk_multi_agent_vote: bool,
     pub min_vote_agents: usize,
     pub max_vote_agents: usize,
@@ -146,7 +144,6 @@ pub(crate) async fn select_and_score_agents(
     let configured_primary_agent = agent_prefs.configured_primary_agent;
     let conversation_id = agent_prefs.conversation_id;
     let branch_id = agent_prefs.branch_id;
-    let preferred_agent_from_request = agent_prefs.preferred_agent_from_request;
 
     // ── Vector context & message assembly ─────────────────────────────
     let vector_context =
@@ -240,7 +237,6 @@ pub(crate) async fn select_and_score_agents(
         capability_selection_reason,
         capability_optimization_hint,
         configured_primary_agent,
-        preferred_agent_from_request,
         conversation_id,
         branch_id,
         agent_messages,
@@ -248,7 +244,6 @@ pub(crate) async fn select_and_score_agents(
         base_agent_options,
         risk_policy,
         risk_assessment,
-        enable_high_risk_vote: vote_config.enable_high_risk_vote,
         enable_high_risk_multi_agent_vote: vote_config.enable_high_risk_multi_agent_vote,
         min_vote_agents: vote_config.min_vote_agents,
         max_vote_agents: vote_config.max_vote_agents,
