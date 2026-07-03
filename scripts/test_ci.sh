@@ -35,19 +35,19 @@ echo "=== Step 2: Run tests ==="
 
 # 2a. Default profile (local)
 echo "--- Profile: local ---"
-cargo test --lib --features profile-local,backend-sqlite
-cargo test --bin go-on --features profile-local,backend-sqlite
+cargo test --lib --no-default-features --features local
+cargo test --bin go-on --no-default-features --features local
 
 # 2b. Simple server profile
 echo "--- Profile: simple-server ---"
-cargo clippy --no-default-features --features profile-simple-server,backend-sqlite -- -D warnings
-cargo test --no-default-features --features profile-simple-server,backend-sqlite --test cli_tests 2>/dev/null || echo "  ↪ simple-server cli_tests skipped (test may not exist for this profile)"
+cargo clippy --no-default-features --features simple-server -- -D warnings
+cargo test --no-default-features --features simple-server --test cli_tests 2>/dev/null || echo "  ↪ simple-server cli_tests skipped (test may not exist for this profile)"
 
 # 2c. Multi-users server profile
 echo "--- Profile: multi-users-server ---"
-cargo clippy --no-default-features --features profile-multi-users-server,backend-postgres -- -D warnings 2>/dev/null || \
+cargo clippy --no-default-features --features multi-users-server -- -D warnings 2>/dev/null || \
     echo "  ↪ multi-users-server clippy skipped (requires postgres deps on this machine)"
-cargo test --no-default-features --features profile-multi-users-server,backend-postgres --test cli_tests 2>/dev/null || echo "  ↪ multi-users-server cli_tests skipped (requires postgres deps)"
+cargo test --no-default-features --features multi-users-server --test cli_tests 2>/dev/null || echo "  ↪ multi-users-server cli_tests skipped (requires postgres deps)"
 
 echo "✅ Tests passed"
 

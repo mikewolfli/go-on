@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 /**
  * Configuration Manager for Go-On
  *
@@ -13,6 +12,9 @@ import * as path from "path";
 import * as os from "os";
 import * as vscode from "vscode";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { Logger } from "./logger";
+
+const log = Logger.forModule("configManager");
 
 export interface CacheConfig {
   enabled: boolean;
@@ -177,10 +179,7 @@ class ConfigManager {
       await fs.access(configPath);
       await this.loadFromFile(configPath);
     } catch (err) {
-      console.warn(
-        "configManager: Config file not found, creating default:",
-        err,
-      );
+      log.warn("Config file not found, creating default:", err);
       this.createDefaultConfig();
     }
   }
@@ -195,7 +194,7 @@ class ConfigManager {
     try {
       await fs.mkdir(configDir, { recursive: true });
     } catch (err) {
-      console.warn("[configManager] mkdir failed:", err);
+      log.warn("mkdir failed:", err);
       return path.join(homeDir, "config.toml");
     }
 
@@ -212,13 +211,12 @@ class ConfigManager {
         this.config = this.parseTOML(content);
       } catch (e) {
         const message = `Failed to parse TOML config: ${e}. Using defaults.`;
-        // eslint-disable-next-line no-console
-        console.warn(`configManager: ${message}`);
+        log.warn(message);
         void vscode.window.showErrorMessage(`Go-On: ${message}`);
         this.createDefaultConfig();
       }
     } catch (err) {
-      console.warn("[configManager] loadFromFile failed:", err);
+      log.warn("loadFromFile failed:", err);
       this.createDefaultConfig();
     }
   }
@@ -248,10 +246,7 @@ class ConfigManager {
       Object.keys(agents).length === 0 &&
       Object.keys(phases).length === 0
     ) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "configManager: TOML file appears empty or malformed, using defaults",
-      );
+      log.warn("TOML file appears empty or malformed, using defaults");
     }
 
     // Normalize known string-to-boolean fields from TOML (which may parse as strings)
@@ -263,9 +258,8 @@ class ConfigManager {
     if (isGoOnConfig(config)) {
       return config;
     }
-    // eslint-disable-next-line no-console
-    console.warn(
-      "configManager: parsed TOML does not conform to GoOnConfig shape, using defaults",
+    log.warn(
+      "parsed TOML does not conform to GoOnConfig shape, using defaults",
     );
     this.createDefaultConfig();
     return this.config as GoOnConfig;

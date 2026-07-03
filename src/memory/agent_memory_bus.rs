@@ -6,7 +6,8 @@
 //! to start, relevant past memories are retrieved and injected into the
 //! prompt context so the agent benefits from past experience.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use tokio::sync::Mutex;
 
 use crate::memory::memory::{MemoryClass, MemoryEntry, MemoryStore};
 use crate::memory::vector::VectorStore;
@@ -41,10 +42,9 @@ pub struct AgentMemoryBus {
 impl AgentMemoryBus {
     /// Create a new agent memory bus with a default `MemoryStore`.
     pub fn new_default() -> Self {
-        let store = Arc::new(Mutex::new(MemoryStore::new(Default::default())));
         Self {
-            store,
-            max_insights_per_task: 5,
+            store: Arc::new(Mutex::new(MemoryStore::new(Default::default()))),
+            max_insights_per_task: 3,
             vector_store: None,
             user_id: None,
         }
@@ -60,17 +60,11 @@ impl AgentMemoryBus {
     /// When `user_id` is provided, it tags the entry with that user_id
     /// to support multi-user isolation. Falls back to `self.user_id` when
     /// the parameter is `None`.
-    pub fn store_memory(&self, entry: MemoryEntry, user_id: Option<&str>) {
+    pub async fn store_memory(&self, entry: MemoryEntry, user_id: Option<&str>) {
         let uid = user_id.or(self.user_id.as_deref()).map(|s| s.to_string());
         let mut entry = entry;
         entry.user_id = uid;
-        let mut store = match self.store.lock() {
-            Ok(s) => s,
-            Err(poisoned) => {
-                warn!("AgentMemoryBus store poisoned, recovering");
-                poisoned.into_inner()
-            }
-        };
+        let mut store = self.store.lock().await;
         store.store(entry);
     }
 
@@ -81,7 +75,7 @@ impl AgentMemoryBus {
     ///
     /// The insight is stored as a `MemoryEntry` with class `Semantic` and
     /// the given `importance` (0.0 – 1.0).
-    pub fn store_insight(
+    pub async fn store_insight(
         &self,
         agent_name: &str,
         task_description: &str,
@@ -119,7 +113,7 @@ impl AgentMemoryBus {
             staleness: 0,
             user_id: None, // will be set by store_memory below
         };
-        self.store_memory(entry, user_id);
+        self.store_memory(entry, user_id).await;
     }
 
     /// Automatically store key insights after an agent completes a task.
@@ -127,7 +121,7 @@ impl AgentMemoryBus {
     /// This is the high‑level method called by the agent dispatch pipeline.
     /// It extracts up to `max_insights_per_task` insights from the response
     /// text and stores them in the bus.
-    pub fn store_agent_completion(
+    pub async fn store_agent_completion(
         &self,
         agent_name: &str,
         phase: &str,
@@ -166,7 +160,8 @@ impl AgentMemoryBus {
                 &entry_tags,
                 importance,
                 user_id,
-            );
+            )
+            .await;
         }
 
         info!(
@@ -186,7 +181,7 @@ impl AgentMemoryBus {
     /// uses vector similarity search via [`VectorStore::search`] with the
     /// `"agent_memory"` phase.  Otherwise falls back to the original linear
     /// substring/tag scan of the in-memory `Semantic` class.
-    pub fn retrieve_memories(
+    pub async fn retrieve_memories(
         &self,
         query: &str,
         limit: usize,
@@ -230,13 +225,7 @@ impl AgentMemoryBus {
 
         // Fallback: linear substring/tag scan with recency/importance weighting.
         // When effective_user_id is set, filter entries to only those belonging to this user.
-        let store = match self.store.lock() {
-            Ok(s) => s,
-            Err(poisoned) => {
-                warn!("AgentMemoryBus store poisoned, recovering");
-                poisoned.into_inner()
-            }
-        };
+        let store = self.store.lock().await;
 
         let all: Vec<MemoryEntry> = store.retrieve(MemoryClass::Semantic, usize::MAX);
         drop(store);
@@ -307,7 +296,7 @@ impl AgentMemoryBus {
     /// string that can be injected before an agent starts.
     ///
     /// Returns `None` when no relevant memories are found.
-    pub fn retrieve_context_for_agent(
+    pub async fn retrieve_context_for_agent(
         &self,
         agent_name: &str,
         phase: &str,
@@ -316,7 +305,7 @@ impl AgentMemoryBus {
         user_id: Option<&str>,
     ) -> Option<String> {
         let query = format!("{} {} {}", agent_name, phase, task_description);
-        let memories = self.retrieve_memories(&query, max_memories, user_id);
+        let memories = self.retrieve_memories(&query, max_memories, user_id).await;
 
         if memories.is_empty() {
             return None;
@@ -377,9 +366,8 @@ pub static AGENT_MEMORY_BUS: OnceLock<AgentMemoryBus> = OnceLock::new();
 #[cfg(all(test, not(feature = "backend-postgres")))]
 pub fn clear_agent_memory_bus() {
     if let Some(bus) = AGENT_MEMORY_BUS.get() {
-        if let Ok(mut store) = bus.store.lock() {
-            store.clear();
-        }
+        let mut store = bus.store.blocking_lock();
+        store.clear();
     }
 }
 
@@ -412,8 +400,8 @@ pub fn init_agent_memory_bus_with_vector_store(vs: Arc<VectorStore>, user_id: Op
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_store_and_retrieve() {
+    #[tokio::test]
+    async fn test_store_and_retrieve() {
         let bus = AgentMemoryBus::new_default();
 
         bus.store_insight(
@@ -423,21 +411,22 @@ mod tests {
             &["sql".to_string()],
             0.8,
             None,
-        );
+        )
+        .await;
 
-        let results = bus.retrieve_memories("sql", 10, None);
+        let results = bus.retrieve_memories("sql", 10, None).await;
         assert_eq!(results.len(), 1, "should find the stored memory by tag");
     }
 
-    #[test]
-    fn test_empty_retrieve() {
+    #[tokio::test]
+    async fn test_empty_retrieve() {
         let bus = AgentMemoryBus::new_default();
-        let results = bus.retrieve_memories("anything", 10, None);
+        let results = bus.retrieve_memories("anything", 10, None).await;
         assert!(results.is_empty(), "no memories should be found");
     }
 
-    #[test]
-    fn test_store_agent_completion_extracts_insights() {
+    #[tokio::test]
+    async fn test_store_agent_completion_extracts_insights() {
         let bus = AgentMemoryBus::new_default();
         bus.store_agent_completion(
             "test_agent",
@@ -446,13 +435,13 @@ mod tests {
             "First, I refactored the cache layer. Then I added connection pooling. Finally, I verified the throughput improved by 2x.",
             true,
             None,
-        );
-        let results = bus.retrieve_memories("cache", 10, None);
+        ).await;
+        let results = bus.retrieve_memories("cache", 10, None).await;
         assert!(!results.is_empty(), "should find memories about cache");
     }
 
-    #[test]
-    fn test_retrieve_context_for_agent() {
+    #[tokio::test]
+    async fn test_retrieve_context_for_agent() {
         let bus = AgentMemoryBus::new_default();
 
         bus.store_insight(
@@ -462,9 +451,12 @@ mod tests {
             &["parser".to_string(), "nested".to_string()],
             0.9,
             None,
-        );
+        )
+        .await;
 
-        let ctx = bus.retrieve_context_for_agent("agent_a", "coding", "fix parser bug", 5, None);
+        let ctx = bus
+            .retrieve_context_for_agent("agent_a", "coding", "fix parser bug", 5, None)
+            .await;
         assert!(ctx.is_some(), "should return context");
         let ctx_str = ctx.unwrap();
         assert!(

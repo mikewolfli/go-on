@@ -41,26 +41,39 @@ pub enum StateSyncEvent {
 /// endpoint and forwards parsed events into a provided channel.
 ///
 /// The listener retries indefinitely with exponential backoff on disconnect.
+///
+/// Returns a `JoinHandle` that can be aborted to stop the listener (e.g. during
+/// app shutdown or when the backend URL changes).
 pub fn start_state_sync_listener(
     base_url: &str,
     event_tx: std::sync::mpsc::Sender<StateSyncEvent>,
-) {
+    cancel: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
     let url = format!("{}/v1/state/events", base_url.trim_end_matches('/'));
     tokio::spawn(async move {
         let client = reqwest::Client::new();
         loop {
-            match listen_sse_once(&client, &url, &event_tx).await {
-                Ok(()) => {
-                    // Clean disconnect — retry after a brief pause
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    eprintln!("state sync listener: cancelled, shutting down");
+                    return;
                 }
-                Err(e) => {
-                    eprintln!("state sync listener error: {}; retrying in 10s", e);
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                result = listen_sse_once(&client, &url, &event_tx) => {
+                    match result {
+                        Ok(()) => {
+                            // Clean disconnect — retry after a brief pause
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        }
+                        Err(e) => {
+                            eprintln!("state sync listener error: {}; retrying in 10s", e);
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        }
+                    }
                 }
             }
         }
-    });
+    })
 }
 
 /// Connect to the SSE stream once, parse frames, and forward parsed events.

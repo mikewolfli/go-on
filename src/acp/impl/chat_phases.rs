@@ -384,7 +384,8 @@ pub(crate) async fn think_phase(
         agent_sel.capability_selected_agent.as_deref(),
         &params.messages,
         &mut agent_messages,
-    );
+    )
+    .await;
 
     Ok(ThinkOutput {
         capability_selected_agent: agent_sel.capability_selected_agent,
@@ -415,7 +416,7 @@ pub(crate) async fn think_phase(
     })
 }
 
-fn inject_agent_memory_bus(
+async fn inject_agent_memory_bus(
     _server: &AcpServer,
     user_id: Option<&str>,
     phase_name: &str,
@@ -433,6 +434,7 @@ fn inject_agent_memory_bus(
             5,
             user_id,
         )
+        .await
     {
         agent_messages.insert(
             0,
@@ -1338,7 +1340,8 @@ pub(crate) async fn reflect_phase(
         params,
         &exec_out.response_text,
         &exec_out.last_err,
-    );
+    )
+    .await;
 
     // BrainLoop post-execution reflection
     if let Some(ref harness) = server.governance_deps.harness_bus {
@@ -1647,7 +1650,7 @@ fn capability_bus_feedback(
     }
 }
 
-fn store_agent_memory_bus_completion(
+async fn store_agent_memory_bus_completion(
     selected_agent: &str,
     user_id: Option<&str>,
     phase_name: &str,
@@ -1665,7 +1668,8 @@ fn store_agent_memory_bus_completion(
             response_text,
             success,
             user_id,
-        );
+        )
+        .await;
     }
 }
 

@@ -1,4 +1,4 @@
-use super::send_with_retry;
+use super::try_send_msg;
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use crate::views::security_prefs::{self, SecurityPrefs};
@@ -127,7 +127,7 @@ impl SecurityView {
                                     Ok(_) => restart_requested,
                                     Err(e) => format!("{}: {e}", restart_failed),
                                 };
-                                send_with_retry(&tx, msg);
+                                try_send_msg(&tx, msg);
                                 ctx_clone.request_repaint();
                             });
                         }

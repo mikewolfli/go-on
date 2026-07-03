@@ -35,10 +35,10 @@ struct StepHeader {
 /// A simple representation of a STEP entity.
 #[cfg(feature = "cad-step")]
 struct StepEntity {
-    #[allow(dead_code, reason = "F-GAP reserved: entity id tracking")]
+    #[allow(dead_code, reason = "F-GAP reserved for future STEP parsing")]
     id: i64,
     type_name: String,
-    #[allow(dead_code, reason = "F-GAP reserved: raw line dump")]
+    #[allow(dead_code, reason = "F-GAP reserved for future STEP parsing")]
     raw: String,
 }
 

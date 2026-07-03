@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { RuntimeManagerLike } from "./managerTypes";
 import { t, MessageKeys } from "./i18n";
-import { getNonce } from "./utils";
+import { getErrorMessage, getNonce } from "./utils";
 
 interface WorkflowStep {
   type: "chat" | "code" | "delay";
@@ -131,10 +131,6 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
-
   private async _createWorkflow(workflowData: WorkflowData): Promise<void> {
     const workflows = this.context.workspaceState.get<WorkflowStore>(
       "go-on-workflows",
@@ -204,7 +200,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       workflow.status = "failed";
       await this.context.workspaceState.update("go-on-workflows", workflows);
-      const message = this.getErrorMessage(error);
+      const message = getErrorMessage(error);
 
       this._view?.webview.postMessage({
         type: "workflowStatusUpdate",

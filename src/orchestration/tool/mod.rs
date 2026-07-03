@@ -392,6 +392,32 @@ impl ToolRegistry {
                 fallback_chain: Vec::new(),
             },
         );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CreateDirectoryTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_create_directory".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CopyPathTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_copy".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["file_move".to_string()],
+            },
+        );
 
         // ── Office document tools (feature-gated) ──────────────────
         #[cfg(feature = "document-excel")]
@@ -1326,13 +1352,12 @@ impl ToolRegistry {
         );
 
         // ── Backward-compatibility aliases ───────────────────────
-        // These names exist in the governance evaluator's allowlist but
-        // were never registered as standalone Tool implementations.
-        // Each alias maps to an existing tool with the same functionality.
-        registry.register_alias("create_directory", "write_file");
+        // These names exist in the governance evaluator's allowlist.
+        // Some now have their own Tool implementations; others alias
+        // to existing tools with the same functionality.
+        // create_directory and copy_path have dedicated implementations above.
         registry.register_alias("delete_path", "file_delete");
         registry.register_alias("move_path", "file_move");
-        registry.register_alias("copy_path", "write_file");
         registry.register_alias("execute_command", "shell_exec");
         registry.register_alias("terminal", "shell_exec");
         registry.register_alias("bash", "shell_exec");

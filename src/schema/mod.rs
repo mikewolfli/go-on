@@ -77,6 +77,8 @@ impl ProtocolVersion {
     pub const V2: Self = Self(2);
     pub const V3: Self = Self(3);
     pub const LATEST: Self = Self::V3;
+    // NOTE: When adding future versions (V4, V5, ...), update
+    // `supported_versions()` below and bump `LATEST` to the newest constant.
 
     /// Return an ordered list of all supported versions (ascending).
     pub fn supported_versions() -> &'static [Self] {

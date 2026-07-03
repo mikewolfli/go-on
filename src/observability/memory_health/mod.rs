@@ -104,15 +104,15 @@ impl SystemMemoryInfo {
 pub fn query_system_memory() -> SystemMemoryInfo {
     #[cfg(target_os = "macos")]
     {
-        return query_macos_memory();
+        query_macos_memory()
     }
     #[cfg(target_os = "linux")]
     {
-        return query_linux_memory();
+        query_linux_memory()
     }
     #[cfg(target_os = "windows")]
     {
-        return query_windows_memory();
+        query_windows_memory()
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     SystemMemoryInfo {

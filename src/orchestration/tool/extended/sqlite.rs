@@ -11,7 +11,6 @@ use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 #[cfg(feature = "backend-sqlite")]
 use anyhow::{Context, Result};
 #[cfg(feature = "backend-sqlite")]
-#[cfg(feature = "backend-sqlite")]
 use tracing::info;
 
 #[cfg(feature = "backend-sqlite")]

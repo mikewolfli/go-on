@@ -5,10 +5,11 @@ use std::time::Duration;
 use super::validate_input_size;
 use super::BackendClient;
 
-// Unified strategy: unlimited retries with exponential backoff + jitter + 30s max interval.
+// Unified strategy: bounded retries with exponential backoff + jitter + 30s max interval.
+// 20 attempts @ 30s max cap ≈ 5 minutes of retrying before giving up.
 // See contracts/cross-client-sync.md for the full specification.
-pub(super) const QUICK_RPC_ATTEMPTS: usize = 1000;
-pub(super) const FULL_RPC_ATTEMPTS: usize = 1000;
+pub(super) const QUICK_RPC_ATTEMPTS: usize = 20;
+pub(super) const FULL_RPC_ATTEMPTS: usize = 20;
 
 impl BackendClient {
     fn is_retryable_status(status: reqwest::StatusCode) -> bool {

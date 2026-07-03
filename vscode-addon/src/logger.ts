@@ -5,12 +5,44 @@ import * as vscode from "vscode";
  * Created lazily on first use.
  */
 let _outputChannel: vscode.OutputChannel | undefined;
+let _disposed = false;
 
 function getOutputChannel(): vscode.OutputChannel {
-  if (!_outputChannel) {
-    _outputChannel = vscode.window.createOutputChannel("Go-On Logger");
+  if (_disposed || !_outputChannel) {
+    // After dispose, return a no-op fallback to prevent:
+    // 1. Re-creating a channel that was intentionally disposed
+    // 2. Writing to a disposed channel from pending callbacks
+    return _outputChannel ?? createNoopChannel();
   }
   return _outputChannel;
+}
+
+/** A minimal no-op OutputChannel used as a safe fallback after dispose. */
+function createNoopChannel(): vscode.OutputChannel {
+  return {
+    append: (_value: string) => {
+      /* no-op */
+    },
+    appendLine: (_value: string) => {
+      /* no-op */
+    },
+    replace: (_value: string) => {
+      /* no-op */
+    },
+    clear: () => {
+      /* no-op */
+    },
+    show: (..._args: unknown[]) => {
+      /* no-op */
+    },
+    hide: () => {
+      /* no-op */
+    },
+    dispose: () => {
+      /* no-op */
+    },
+    name: "Go-On Logger (disposed)",
+  };
 }
 
 /**
@@ -23,7 +55,6 @@ function getOutputChannel(): vscode.OutputChannel {
  * Use `Logger.forModule(moduleName)` to get a scoped logger instance.
  */
 export class Logger {
-  // eslint-disable-next-line no-unused-vars
   private constructor(private readonly moduleName: string) {}
 
   /**
@@ -74,6 +105,7 @@ export class Logger {
  * Dispose the shared output channel (call on extension deactivation).
  */
 export function disposeLogger(): void {
+  _disposed = true;
   if (_outputChannel) {
     _outputChannel.dispose();
     _outputChannel = undefined;

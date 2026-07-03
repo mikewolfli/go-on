@@ -1,5 +1,6 @@
 use go_on::i18n::{current_language, init_i18n, set_language, t, tf, Language};
 
+#[test]
 fn run_tests() {
     // 初始化i18n系统
     let languages_dir = std::env::temp_dir().join("go-on-i18n-test");
@@ -132,13 +133,7 @@ fn run_tests() {
     println!("\n=== Test Completed Successfully ===");
 }
 
-fn main() {
-    run_tests();
-}
-
 // ── T10: Test wrapper for `cargo test` ─────────────────────────────────────
-// This allows running the i18n binary test as a standard `cargo test` target.
-#[cfg(test)]
 mod tests {
     use super::*;
 

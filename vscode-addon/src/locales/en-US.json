@@ -869,5 +869,18 @@
     "releaseReadiness": "Release Readiness",
     "qualityBaseline": "Quality Baseline",
     "observabilityAlerts": "Observability Alerts"
+  },
+  "workspaceContext": {
+    "notRunning": "Go-On runtime is not running. Please start it first via the chat view.",
+    "noActiveEditor": "No active editor.",
+    "noCodeSelected": "No code selected. Select code in the editor first.",
+    "noWorkspaceFolder": "No workspace folder open.",
+    "searchPrompt": "Search code symbols by name or keyword",
+    "sentSelection": "Sent {0} lines of {1} code to Go-On.",
+    "sentFile": "Sent file {0} ({1} lines) to Go-On.",
+    "searchPlaceholder": "e.g. ToolRegistry, handle_request, SandboxLevel",
+    "searchComplete": "Semantic search completed for '{0}'. Results shown in editor.",
+    "contextSent": "Workspace context sent to Go-On.",
+    "explainAction": "Explain with Go-On"
   }
 }

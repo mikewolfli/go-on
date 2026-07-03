@@ -216,8 +216,7 @@ export class FramedReader {
   }
 
   private _outputLine(msg: string): void {
-    // eslint-disable-next-line no-console
-    console.log(msg);
+    log.info(msg);
   }
 }
 

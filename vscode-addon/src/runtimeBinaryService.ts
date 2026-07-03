@@ -505,7 +505,7 @@ export async function ensureGoOnBinary(
       releaseTag,
     ]),
   );
-  if (TRUSTED_RUNTIME_SHA256 === null) {
+  if (TRUSTED_RUNTIME_SHA256.length === 0) {
     void vscode.window.showWarningMessage(
       "[go-on] SHA-256 verification relies on checksums.txt from the same release server. " +
         "Set TRUSTED_RUNTIME_SHA256 at the top of runtimeBinaryService.ts for a pinned hash that " +

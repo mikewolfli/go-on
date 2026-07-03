@@ -257,6 +257,7 @@ export function registerCoreCommands(
         "session.clear",
         "memory.clear",
         "agent.remove",
+        "shutdown",
       ];
       if (DESTRUCTIVE_METHODS.includes(method)) {
         const confirmed = await vscode.window.showWarningMessage(

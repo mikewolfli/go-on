@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
 
+/**
+ * Cache for the in-flight runtime-ready promise so that concurrent calls
+ * to `ensureRuntimeReadyAfterChatOpen` share a single download/startup
+ * sequence instead of each creating their own.
+ */
+let _runtimeReadyPromise: Promise<void> | null = null;
+
 export interface RuntimeBootstrapDeps {
   ensureBinary: (
     _workspaceRoot: string | undefined,
@@ -15,31 +22,41 @@ export async function ensureRuntimeReadyAfterChatOpen(
   context: vscode.ExtensionContext,
   deps: RuntimeBootstrapDeps,
 ): Promise<void> {
-  // Each call manages its own promise — no shared mutable state.
-  // Previously a module-level `runtimeReadyPromise` was overwritten on each
-  // call, causing call A to await call B's promise if B started before A
-  // resolved. Bug 6: removed the shared promise.
-  const promise = (async () => {
-    const config = vscode.workspace.getConfiguration("go-on");
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  // Deduplicate concurrent calls: if a runtime-ready promise is already
+  // in-flight, all callers await the same one. This prevents duplicate
+  // downloads when the user rapidly opens multiple chat views.
+  if (_runtimeReadyPromise) {
+    await _runtimeReadyPromise;
+    return;
+  }
 
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: i18n.getMessage(MessageKeys.runtimeDownloading),
-        cancellable: false,
-      },
-      async () => {
-        await deps.ensureBinary(workspaceRoot, config, context);
-      },
-    );
+  _runtimeReadyPromise = (async () => {
+    try {
+      const config = vscode.workspace.getConfiguration("go-on");
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-    if (config.get<boolean>("autoStart", false) && !deps.isRunning()) {
-      await vscode.commands.executeCommand(deps.startCommandId);
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: i18n.getMessage(MessageKeys.runtimeDownloading),
+          cancellable: false,
+        },
+        async () => {
+          await deps.ensureBinary(workspaceRoot, config, context);
+        },
+      );
+
+      if (config.get<boolean>("autoStart", false) && !deps.isRunning()) {
+        await vscode.commands.executeCommand(deps.startCommandId);
+      }
+    } finally {
+      // Clear the cached promise so a future call that genuinely needs
+      // a fresh check (e.g. after the runtime was stopped) can proceed.
+      _runtimeReadyPromise = null;
     }
   })();
 
-  await promise;
+  await _runtimeReadyPromise;
 }
 
 export async function ensureGoOnStarted(

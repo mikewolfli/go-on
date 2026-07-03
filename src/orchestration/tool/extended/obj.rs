@@ -31,7 +31,7 @@ fn parse_triple(tokens: &[&str], start: usize) -> Option<(f64, f64, f64)> {
 
 /// Parse a single OBJ texture coordinate pair from tokens.
 #[cfg(feature = "cad-obj")]
-#[allow(dead_code, reason = "F-GAP reserved: OBJ uv parsing")]
+#[allow(dead_code, reason = "F-GAP reserved for future OBJ parsing")]
 fn parse_pair(tokens: &[&str], start: usize) -> Option<(f64, f64)> {
     let u = tokens.get(start)?.parse::<f64>().ok()?;
     let v = tokens.get(start + 1)?.parse::<f64>().ok()?;
@@ -41,7 +41,7 @@ fn parse_pair(tokens: &[&str], start: usize) -> Option<(f64, f64)> {
 /// Parse a face element string like "1", "1/2", "1/2/3", or "1//3"
 /// into vertex/texture/normal indices (1-based). Returns `None` on parse failure.
 #[cfg(feature = "cad-obj")]
-#[allow(dead_code, reason = "F-GAP reserved: OBJ face parsing")]
+#[allow(dead_code, reason = "F-GAP reserved for future OBJ parsing")]
 fn parse_face_element(s: &str) -> Option<(i64, Option<i64>, Option<i64>)> {
     let parts: Vec<&str> = s.split('/').collect();
     let v = parts[0].parse::<i64>().ok()?;

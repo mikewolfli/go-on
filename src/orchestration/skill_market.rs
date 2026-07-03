@@ -327,34 +327,9 @@ impl SkillMarketRegistry {
         }
         drop(installations);
 
-        // Resolve dependencies
-        if !item.dependencies.is_empty() {
-            info!(
-                "Skill '{}' has {} dependencies to resolve",
-                name,
-                item.dependencies.len()
-            );
-            for (dep_name, version_constraint) in &item.dependencies {
-                let dep_skills = self.skills.read().await;
-                let dep = dep_skills.iter().find(|s| s.name == *dep_name);
-                if let Some(_dep_item) = dep {
-                    info!(
-                        "Dependency '{}' ({}) found for skill '{}'",
-                        dep_name, version_constraint, name
-                    );
-                    // Recursively install dependency if not already installed
-                    let dep_installed = {
-                        let inst = self.installations.read().await;
-                        inst.iter().any(|i| i.name == *dep_name && i.enabled)
-                    };
-                    if !dep_installed {
-                        drop(dep_skills);
-                        // Note: in production, this would recurse properly
-                        info!("Dependency '{}' needs to be installed first", dep_name);
-                    }
-                }
-            }
-        }
+        // Resolve dependencies with recursive installation.
+        // Uses a boxed helper to avoid the Rust async recursion error (E0733).
+        self.install_dependencies(&item, name).await?;
 
         // Create installation record
         let install_dir = self.cache_dir.join(&item.name);
@@ -401,6 +376,60 @@ impl SkillMarketRegistry {
         );
 
         Ok(installation)
+    }
+
+    /// Recursively install dependencies for a skill.
+    ///
+    /// Extracted as a separate `Box::pin`'d helper to avoid the Rust async
+    /// recursion error (E0733) — `install_skill` is `async fn` and calls itself.
+    async fn install_dependencies(&self, item: &SkillMarketItem, parent_name: &str) -> Result<()> {
+        if item.dependencies.is_empty() {
+            return Ok(());
+        }
+
+        info!(
+            "Skill '{}' has {} dependencies to resolve",
+            parent_name,
+            item.dependencies.len()
+        );
+
+        for (dep_name, version_constraint) in &item.dependencies {
+            let dep_skills = self.skills.read().await;
+            let dep = dep_skills.iter().find(|s| s.name == *dep_name).cloned();
+            if let Some(_dep_item) = dep {
+                info!(
+                    "Dependency '{}' ({}) found for skill '{}'",
+                    dep_name, version_constraint, parent_name
+                );
+                let dep_installed = {
+                    let inst = self.installations.read().await;
+                    inst.iter().any(|i| i.name == *dep_name && i.enabled)
+                };
+                drop(dep_skills);
+                if !dep_installed {
+                    info!(
+                        "Installing dependency '{}' for skill '{}'",
+                        dep_name, parent_name
+                    );
+                    // Use a boxed future for the recursive call to avoid E0733
+                    let fut = Box::pin(self.install_skill(dep_name));
+                    fut.await.with_context(|| {
+                        format!(
+                            "Failed to install dependency '{}' required by '{}'",
+                            dep_name, parent_name
+                        )
+                    })?;
+                }
+            } else {
+                anyhow::bail!(
+                    "Dependency '{}' (required by '{}') not found in marketplace",
+                    dep_name,
+                    parent_name
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Uninstall a skill.
@@ -456,10 +485,14 @@ impl SkillMarketRegistry {
         installations.iter().filter(|i| i.name == name).count() as u64
     }
 
-    /// Fetch the community index from a GitHub-hosted index file.
+    /// Fetch the community skill index from a remote URL (GitHub raw or other host).
     ///
-    /// When `data-export` feature is enabled, parses `goon-skill-index.yaml`.
-    /// Otherwise, falls back to JSON parsing.
+    /// Parses the response as JSON first (always available). Falls back to YAML
+    /// parsing when the `data-export` feature is enabled, supporting both
+    /// `goon-skill-index.yaml` and `skill-index.json` formats.
+    ///
+    /// The remote index must conform to the `SkillIndex` schema (a JSON object
+    /// with a `skills` array).
     pub async fn fetch_github_index(&self, raw_url: &str) -> Result<Vec<SkillMarketItem>> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -533,17 +566,17 @@ impl SkillMarketRegistry {
         Ok(items)
     }
 
-    // ── Built-in sample skills ──────────────────────────────────────────
+    // ── Built-in sample skills (aligned with skills/ directory names) ────
 
     fn builtin_skills() -> Vec<SkillMarketItem> {
         vec![
             SkillMarketItem {
-                name: "code-review".to_string(),
+                name: "code-reviewer".to_string(),
                 description: "Automated code review with best-practice checks".to_string(),
                 version: "1.2.0".to_string(),
                 author: "go-on-team".to_string(),
                 source: SkillSource::Registry {
-                    name: "code-review".to_string(),
+                    name: "code-reviewer".to_string(),
                     version: "1.2.0".to_string(),
                 },
                 tags: vec![
@@ -560,12 +593,12 @@ impl SkillMarketRegistry {
                 dependencies: HashMap::new(),
             },
             SkillMarketItem {
-                name: "commit-message".to_string(),
+                name: "commit-message-generator".to_string(),
                 description: "Generates conventional commit messages from diffs".to_string(),
                 version: "1.0.0".to_string(),
                 author: "go-on-team".to_string(),
                 source: SkillSource::Registry {
-                    name: "commit-message".to_string(),
+                    name: "commit-message-generator".to_string(),
                     version: "1.0.0".to_string(),
                 },
                 tags: vec![
@@ -582,15 +615,13 @@ impl SkillMarketRegistry {
                 dependencies: HashMap::new(),
             },
             SkillMarketItem {
-                name: "refactor-helper".to_string(),
+                name: "refactoring-advisor".to_string(),
                 description: "Suggests and applies safe code refactorings".to_string(),
-                version: "0.9.0".to_string(),
-                author: "community".to_string(),
-                source: SkillSource::GitHub {
-                    owner: "go-on-community".to_string(),
-                    repo: "skills".to_string(),
-                    path: "refactor-helper".to_string(),
-                    branch: "main".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "refactoring-advisor".to_string(),
+                    version: "1.0.0".to_string(),
                 },
                 tags: vec![
                     "code".to_string(),
@@ -601,11 +632,11 @@ impl SkillMarketRegistry {
                 rating: 3.8,
                 updated_at: "2026-04-28".to_string(),
                 verified: false,
-                min_go_on_version: "1.2.0".to_string(),
+                min_go_on_version: "1.0.0".to_string(),
                 compatible_providers: vec!["openai".to_string(), "anthropic".to_string()],
                 dependencies: {
                     let mut deps = HashMap::new();
-                    deps.insert("code-review".to_string(), ">=1.0.0".to_string());
+                    deps.insert("code-reviewer".to_string(), ">=1.0.0".to_string());
                     deps
                 },
             },
@@ -632,13 +663,13 @@ impl SkillMarketRegistry {
                 dependencies: HashMap::new(),
             },
             SkillMarketItem {
-                name: "doc-generator".to_string(),
-                description: "Generates Rustdoc/markdown documentation from source".to_string(),
+                name: "api-docs-generator".to_string(),
+                description: "Generates API documentation from source code".to_string(),
                 version: "1.1.0".to_string(),
-                author: "community".to_string(),
-                source: SkillSource::Url {
-                    url: "https://skills.go-on.dev/doc-generator/v1.1.0".to_string(),
-                    sha256: Some("abc123def456".to_string()),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "api-docs-generator".to_string(),
+                    version: "1.1.0".to_string(),
                 },
                 tags: vec!["doc".to_string(), "code".to_string(), "utility".to_string()],
                 install_count: 678,
@@ -649,7 +680,482 @@ impl SkillMarketRegistry {
                 compatible_providers: vec![],
                 dependencies: {
                     let mut deps = HashMap::new();
-                    deps.insert("code-review".to_string(), ">=1.0.0".to_string());
+                    deps.insert("code-reviewer".to_string(), ">=1.0.0".to_string());
+                    deps
+                },
+            },
+            SkillMarketItem {
+                name: "changelog-generator".to_string(),
+                description: "Generates changelogs from git history and commit messages"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "changelog-generator".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec!["git".to_string(), "release".to_string(), "doc".to_string()],
+                install_count: 534,
+                rating: 4.1,
+                updated_at: "2026-05-12".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "ci-pipeline-generator".to_string(),
+                description: "Generates CI/CD pipeline configurations for popular platforms"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "ci-pipeline-generator".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "ci".to_string(),
+                    "devops".to_string(),
+                    "automation".to_string(),
+                ],
+                install_count: 789,
+                rating: 4.3,
+                updated_at: "2026-05-18".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "context-summarizer".to_string(),
+                description: "Summarizes conversation context to manage token budgets".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "context-summarizer".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "context".to_string(),
+                    "token".to_string(),
+                    "utility".to_string(),
+                ],
+                install_count: 1102,
+                rating: 4.4,
+                updated_at: "2026-05-14".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "data-transformer".to_string(),
+                description: "Transforms data between formats (JSON, CSV, YAML, TOML)".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "data-transformer".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "data".to_string(),
+                    "transform".to_string(),
+                    "utility".to_string(),
+                ],
+                install_count: 445,
+                rating: 4.0,
+                updated_at: "2026-05-08".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "decision-logger".to_string(),
+                description: "Logs and tracks architectural and design decisions (ADR)".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "decision-logger".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "doc".to_string(),
+                    "architecture".to_string(),
+                    "tracking".to_string(),
+                ],
+                install_count: 312,
+                rating: 3.9,
+                updated_at: "2026-04-25".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "dependency-analyzer".to_string(),
+                description: "Analyzes project dependencies for conflicts and updates".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "dependency-analyzer".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "deps".to_string(),
+                    "analysis".to_string(),
+                    "security".to_string(),
+                ],
+                install_count: 567,
+                rating: 4.2,
+                updated_at: "2026-05-09".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "dockerfile-generator".to_string(),
+                description: "Generates optimized Dockerfiles for various languages".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "dockerfile-generator".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "docker".to_string(),
+                    "devops".to_string(),
+                    "deploy".to_string(),
+                ],
+                install_count: 890,
+                rating: 4.5,
+                updated_at: "2026-05-16".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "error-recovery-planner".to_string(),
+                description: "Creates recovery plans for common error patterns".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "error-recovery-planner".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "error".to_string(),
+                    "recovery".to_string(),
+                    "debug".to_string(),
+                ],
+                install_count: 234,
+                rating: 3.7,
+                updated_at: "2026-04-20".to_string(),
+                verified: false,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "knowledge-retriever".to_string(),
+                description: "Retrieves and synthesizes knowledge from local documentation"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "knowledge-retriever".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "knowledge".to_string(),
+                    "search".to_string(),
+                    "utility".to_string(),
+                ],
+                install_count: 423,
+                rating: 4.1,
+                updated_at: "2026-05-07".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "log-analyzer".to_string(),
+                description: "Analyzes application logs to identify patterns and issues"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "log-analyzer".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "log".to_string(),
+                    "analysis".to_string(),
+                    "debug".to_string(),
+                ],
+                install_count: 678,
+                rating: 4.3,
+                updated_at: "2026-05-11".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "progress-tracker".to_string(),
+                description: "Tracks task progress and generates status reports".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "progress-tracker".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "progress".to_string(),
+                    "tracking".to_string(),
+                    "report".to_string(),
+                ],
+                install_count: 345,
+                rating: 3.9,
+                updated_at: "2026-04-30".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "prompt-optimizer".to_string(),
+                description: "Optimizes AI prompts for better results and lower token usage"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "prompt-optimizer".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "prompt".to_string(),
+                    "optimize".to_string(),
+                    "utility".to_string(),
+                ],
+                install_count: 901,
+                rating: 4.6,
+                updated_at: "2026-05-19".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "regex-builder".to_string(),
+                description: "Builds and tests regular expressions from natural language"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "regex-builder".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "regex".to_string(),
+                    "utility".to_string(),
+                    "tool".to_string(),
+                ],
+                install_count: 567,
+                rating: 4.2,
+                updated_at: "2026-05-13".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "self-reviewer".to_string(),
+                description: "Self-review tool output for correctness and quality".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "self-reviewer".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "review".to_string(),
+                    "quality".to_string(),
+                    "verify".to_string(),
+                ],
+                install_count: 312,
+                rating: 4.0,
+                updated_at: "2026-05-06".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "skill-creator".to_string(),
+                description: "Creates new skills with manifests and templates".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "skill-creator".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec!["skill".to_string(), "create".to_string(), "dev".to_string()],
+                install_count: 234,
+                rating: 4.1,
+                updated_at: "2026-05-04".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "sql-query-helper".to_string(),
+                description: "Helps write and optimize SQL queries from natural language"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "sql-query-helper".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "sql".to_string(),
+                    "database".to_string(),
+                    "query".to_string(),
+                ],
+                install_count: 456,
+                rating: 4.3,
+                updated_at: "2026-05-17".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "task-planner".to_string(),
+                description: "Plans and decomposes complex tasks into subtasks".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "task-planner".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "plan".to_string(),
+                    "task".to_string(),
+                    "decompose".to_string(),
+                ],
+                install_count: 789,
+                rating: 4.4,
+                updated_at: "2026-05-20".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "web-scraper".to_string(),
+                description: "Scrapes web pages and extracts structured data".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "web-scraper".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec!["web".to_string(), "scrape".to_string(), "data".to_string()],
+                install_count: 1234,
+                rating: 4.6,
+                updated_at: "2026-05-22".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            // ── New skills ───────────────────────────────────────────────────
+            SkillMarketItem {
+                name: "code-execution-sandbox".to_string(),
+                description: "Safely executes code snippets in a sandboxed environment with \
+                     timeout, resource limits, and output capture"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "code-execution-sandbox".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "code".to_string(),
+                    "execution".to_string(),
+                    "sandbox".to_string(),
+                    "security".to_string(),
+                ],
+                install_count: 345,
+                rating: 4.3,
+                updated_at: "2026-07-01".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: HashMap::new(),
+            },
+            SkillMarketItem {
+                name: "project-analyzer".to_string(),
+                description: "Analyzes full project structure, dependencies, architecture \
+                     patterns, and generates comprehensive reports"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "project-analyzer".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "analysis".to_string(),
+                    "architecture".to_string(),
+                    "dependencies".to_string(),
+                    "project".to_string(),
+                ],
+                install_count: 567,
+                rating: 4.5,
+                updated_at: "2026-07-01".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: {
+                    let mut deps = HashMap::new();
+                    deps.insert("dependency-analyzer".to_string(), ">=1.0.0".to_string());
+                    deps
+                },
+            },
+            SkillMarketItem {
+                name: "api-tester".to_string(),
+                description: "Tests API endpoints with configurable requests, assertions, \
+                     and response validation"
+                    .to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on-team".to_string(),
+                source: SkillSource::Registry {
+                    name: "api-tester".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                tags: vec![
+                    "api".to_string(),
+                    "testing".to_string(),
+                    "http".to_string(),
+                    "validation".to_string(),
+                ],
+                install_count: 789,
+                rating: 4.4,
+                updated_at: "2026-07-01".to_string(),
+                verified: true,
+                min_go_on_version: "1.0.0".to_string(),
+                compatible_providers: vec![],
+                dependencies: {
+                    let mut deps = HashMap::new();
+                    deps.insert("code-reviewer".to_string(), ">=1.0.0".to_string());
                     deps
                 },
             },
@@ -716,19 +1222,19 @@ mod tests {
         registry.refresh().await.expect("refresh");
 
         let installation = registry
-            .install_skill("code-review")
+            .install_skill("code-reviewer")
             .await
             .expect("install should succeed");
-        assert_eq!(installation.name, "code-review");
+        assert_eq!(installation.name, "code-reviewer");
         assert!(installation.enabled);
 
-        assert!(registry.is_installed("code-review").await);
+        assert!(registry.is_installed("code-reviewer").await);
 
         registry
-            .uninstall_skill("code-review")
+            .uninstall_skill("code-reviewer")
             .await
             .expect("uninstall should succeed");
-        assert!(!registry.is_installed("code-review").await);
+        assert!(!registry.is_installed("code-reviewer").await);
     }
 
     #[tokio::test]
@@ -737,10 +1243,10 @@ mod tests {
         registry.refresh().await.expect("refresh");
 
         registry
-            .install_skill("code-review")
+            .install_skill("code-reviewer")
             .await
             .expect("first install");
-        let result = registry.install_skill("code-review").await;
+        let result = registry.install_skill("code-reviewer").await;
         assert!(result.is_err(), "duplicate install should fail");
     }
 

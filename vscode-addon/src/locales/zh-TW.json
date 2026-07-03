@@ -869,5 +869,18 @@
     "releaseReadiness": "發布就緒",
     "qualityBaseline": "品質基線",
     "observabilityAlerts": "可觀測性警報"
+  },
+  "workspaceContext": {
+    "notRunning": "Go-On 執行環境未運行。請先透過聊天檢視啟動。",
+    "noActiveEditor": "沒有啟用的編輯器。",
+    "noCodeSelected": "未選取程式碼。請先在編輯器中選取程式碼。",
+    "noWorkspaceFolder": "沒有開啟的工作區資料夾。",
+    "searchPrompt": "按名稱或關鍵字搜尋程式碼符號",
+    "sentSelection": "已將 {0} 行 {1} 程式碼傳送至 Go-On。",
+    "sentFile": "已將檔案 {0}（{1} 行）傳送至 Go-On。",
+    "searchPlaceholder": "例如：ToolRegistry, handle_request, SandboxLevel",
+    "searchComplete": "已完成 '{0}' 的語意搜尋。結果顯示於編輯器中。",
+    "contextSent": "工作區上下文已傳送至 Go-On。",
+    "explainAction": "使用 Go-On 解釋"
   }
 }

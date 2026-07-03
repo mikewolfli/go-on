@@ -6,6 +6,6 @@ edition = "2021"
 [dependencies]
 go-on = { path = ".." }
 
-[[bin]]
+[[test]]
 name = "test_i18n"
 path = "test.rs"

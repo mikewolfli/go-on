@@ -231,22 +231,7 @@ impl ProvidersView {
                                     .resizable(false)
                                     .collapsible(false)
                                     .show(ui.ctx(), |ui| {
-                                        let copilot_hash = section_hash!(
-                                            state.as_str(),
-                                            &self.copilot_verification_uri,
-                                            &self.copilot_user_code,
-                                            &self.copilot_status,
-                                            self.copilot_poll_attempts,
-                                            self.copilot_poll_interval,
-                                            self.copilot_slow_down_count,
-                                            &self.copilot_last_poll_result,
-                                            &self.copilot_access_token,
-                                        );
-
-                                        let _ = COPILOT_AUTH_CACHE.with(|c| {
-                                            c.borrow().check_size("copilot_auth", copilot_hash)
-                                        });
-                                        let resp = egui::Frame::NONE.show(ui, |ui| {
+                                        egui::Frame::NONE.show(ui, |ui| {
                                             match state.as_str() {
                                                 "requesting" => {
                                                     ui.horizontal(|ui| {
@@ -343,13 +328,6 @@ impl ProvidersView {
                                                 }
                                                 _ => {}
                                             }
-                                        });
-                                        COPILOT_AUTH_CACHE.with(|c| {
-                                            c.borrow_mut().store_size(
-                                                "copilot_auth",
-                                                copilot_hash,
-                                                resp.response.rect.size(),
-                                            )
                                         });
                                     });
                                 if !open {

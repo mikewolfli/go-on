@@ -68,6 +68,8 @@ pub struct GoOnApp {
     pub ui_state: GlobalUiState,
     /// Receiver for cross-client state sync events (config reload, models changed, etc.)
     state_sync_rx: Option<std::sync::mpsc::Receiver<StateSyncEvent>>,
+    /// Cancellation token for the state sync listener task.
+    state_sync_cancel: tokio_util::sync::CancellationToken,
     /// Frame counter used to rate-limit periodic UI state persistence.
     frame_count: u64,
 }
@@ -770,6 +772,8 @@ impl Drop for GoOnApp {
                 let _ = child.wait();
             });
         }
+        // Cancel the cross-client state sync listener so the SSE task shuts down.
+        self.state_sync_cancel.cancel();
         self.crash.backend_crash_count = 0;
     }
 }

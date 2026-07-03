@@ -1,4 +1,4 @@
-use super::send_with_retry;
+use super::try_send_msg;
 use crate::backend::{BackendClient, ErrorGroup, HealthStatus, MetricsWindowPoint, ProviderStatus};
 use crate::i18n::I18n;
 use crate::widgets::cache::CachedView;
@@ -139,14 +139,14 @@ impl MonitorView {
                                 let trends_json = serde_json::to_string(&series)
                                     .unwrap_or_else(|_| "[]".to_string());
                                 let metrics = format!("window={window} points={}", series.len());
-                                send_with_retry(&tx, format!("__metrics__:{metrics}"));
-                                send_with_retry(&tx, format!("__trends__:{trends_json}"));
+                                try_send_msg(&tx, format!("__metrics__:{metrics}"));
+                                try_send_msg(&tx, format!("__trends__:{trends_json}"));
                             }
                             Ok(Err(err)) => {
-                                send_with_retry(&tx, format!("__metrics_error__:{err}"));
+                                try_send_msg(&tx, format!("__metrics_error__:{err}"));
                             }
                             Err(_) => {
-                                send_with_retry(&tx, "__metrics_error__:timeout".to_string());
+                                try_send_msg(&tx, "__metrics_error__:timeout".to_string());
                             }
                         }
 
@@ -162,13 +162,13 @@ impl MonitorView {
                                     "groups": groups,
                                     "sample_failures_count": failures.len()
                                 });
-                                send_with_retry(&tx, format!("__errors_summary__:{summary_json}"));
+                                try_send_msg(&tx, format!("__errors_summary__:{summary_json}"));
                             }
                             Ok(Err(err)) => {
-                                send_with_retry(&tx, format!("__metrics_error__:{err}"));
+                                try_send_msg(&tx, format!("__metrics_error__:{err}"));
                             }
                             Err(_) => {
-                                send_with_retry(&tx, "__metrics_error__:timeout".to_string());
+                                try_send_msg(&tx, "__metrics_error__:timeout".to_string());
                             }
                         }
                         ctx_clone.request_repaint();
@@ -316,9 +316,9 @@ impl MonitorView {
                                                 (format!("__metrics_error__:{e}"), String::new())
                                             }
                                         };
-                                        send_with_retry(&tx, payload.0);
+                                        try_send_msg(&tx, payload.0);
                                         if !payload.1.is_empty() {
-                                            send_with_retry(&tx, payload.1);
+                                            try_send_msg(&tx, payload.1);
                                         }
                                         ctx_clone.request_repaint();
                                     });
@@ -366,9 +366,9 @@ impl MonitorView {
                                                 (format!("__metrics_error__:{e}"), String::new())
                                             }
                                         };
-                                        send_with_retry(&tx, payload.0);
+                                        try_send_msg(&tx, payload.0);
                                         if !payload.1.is_empty() {
-                                            send_with_retry(&tx, payload.1);
+                                            try_send_msg(&tx, payload.1);
                                         }
                                         ctx_clone.request_repaint();
                                     });

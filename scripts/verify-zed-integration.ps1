@@ -5,8 +5,8 @@ param(
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir = Resolve-Path (Join-Path $ScriptDir "..")
 $SettingsFile = Join-Path $RootDir ".zed/settings.json"
-$DocEn = Join-Path $RootDir "DOC/en/src/zed.md"
-$DocZh = Join-Path $RootDir "DOC/zh-CN/src/zed.md"
+$DocEn = Join-Path $RootDir "docs/en/src/zed.md"
+$DocZh = Join-Path $RootDir "docs/zh-CN/src/zed.md"
 
 function Pass([string]$Message) { Write-Host "[PASS] $Message" }
 function Fail([string]$Message) { Write-Host "[FAIL] $Message"; exit 1 }

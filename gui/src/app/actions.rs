@@ -901,7 +901,12 @@ top_k = 2
         // ── Start cross-client state sync SSE listener ────────────────
         let (state_sync_tx, state_sync_rx) = std::sync::mpsc::channel();
         let sync_url = config.backend_url.clone();
-        crate::state_sync::start_state_sync_listener(&sync_url, state_sync_tx);
+        let state_sync_cancel = tokio_util::sync::CancellationToken::new();
+        let _state_sync_handle = crate::state_sync::start_state_sync_listener(
+            &sync_url,
+            state_sync_tx,
+            state_sync_cancel.child_token(),
+        );
 
         let mut app = Self {
             config_store: ConfigStore::new(config),
@@ -924,6 +929,7 @@ top_k = 2
             last_prompts_lang: lang,
             ui_state,
             state_sync_rx: Some(state_sync_rx),
+            state_sync_cancel,
             frame_count: 0,
         };
 

@@ -168,7 +168,7 @@ pub async fn run_autonomy_loop(
 }
 
 /// Compute and return a predictive reroute score.
-#[allow(dead_code, reason = "used in #[cfg(test)]")]
+#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
 pub fn compute_predictive_reroute(
     consecutive_failures: u32,
     _avg_latency: f64,
@@ -192,7 +192,7 @@ pub fn compute_predictive_reroute(
 }
 
 /// Decision result from the predictive reroute analysis.
-#[allow(dead_code, reason = "used in #[cfg(test)]")]
+#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
 pub struct RerouteDecision {
     pub should_reroute: bool,
     pub score: f64,

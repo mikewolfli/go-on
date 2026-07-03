@@ -435,6 +435,29 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": []
             })),
         },
+        "create_directory" => McpTool {
+            name: name.to_string(),
+            description: Some("Create a new directory (including parent directories if needed)".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path to create"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "copy_path" => McpTool {
+            name: name.to_string(),
+            description: Some("Copy a file or directory from source to destination".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Source path"},
+                    "destination": {"type": "string", "description": "Destination path"}
+                },
+                "required": ["source", "destination"]
+            })),
+        },
         other => McpTool {
             name: other.to_string(),
             description: Some("Registered MCP tool".to_string()),

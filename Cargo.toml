@@ -26,11 +26,6 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
 fastrand = "2"
 toml = "1.1.0"
-	# deadpool-postgres and tokio-postgres were declared here but never used
-	# by any crate member. Kept as comment in case multi-users-server profile
-	# is re-implemented with direct postgres dependency in the future.
-	# deadpool-postgres = { version = "0.14" }
-	# tokio-postgres = { version = "0.7" }
 
 [package]
 name = "go-on"

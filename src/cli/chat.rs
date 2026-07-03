@@ -13,8 +13,10 @@
 //! Usage: `go-on -a` or `go-on --chat`
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +45,25 @@ const SESSION_FILE: &str = ".goon-chat-session.json";
 
 /// Threshold at which we prompt the user to compact the conversation.
 const COMPACT_PROMPT_THRESHOLD: usize = 30;
+
+/// Debounce flag for session auto-save — prevents concurrent disk writes.
+static SAVE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Cached ToolRegistry — created once to avoid recreating ~100 tools per call.
+static TOOL_REGISTRY: OnceLock<ToolRegistry> = OnceLock::new();
+
+/// Returns the global ToolRegistry reference.
+fn tool_registry() -> &'static ToolRegistry {
+    TOOL_REGISTRY.get_or_init(ToolRegistry::default)
+}
+
+/// RAII guard that resets SAVE_IN_FLIGHT on drop (prevents permanent lock).
+struct AutoSaveGuard;
+impl Drop for AutoSaveGuard {
+    fn drop(&mut self) {
+        SAVE_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
 
 /// Max lines to display for help text.
 const HELP_TEXT: &str = "\
@@ -338,7 +359,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     // Keep the first message (system context) and last 2 exchanges,
                     // summarize everything in between.
                     let keep_front = 1.min(messages.len());
-                    let keep_back = 4.min(messages.len().saturating_sub(keep_front));
+                    let keep_back = 2.min(messages.len().saturating_sub(keep_front));
                     let compact_range = keep_front..(messages.len() - keep_back);
                     let compact_count = compact_range.len();
                     if compact_count == 0 {
@@ -353,7 +374,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     messages.insert(
                         1,
                         Message {
-                            role: "system".to_string(),
+                            role: "user".to_string(),
                             content: summary,
                         },
                     );
@@ -367,16 +388,22 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     continue;
                 }
                 "diff" => {
-                    let path_filter = cmd
-                        .strip_prefix("diff ")
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty());
-                    let mut git_cmd = std::process::Command::new("git");
+                    // Handle both "/diff" and "/diff <path>"
+                    let cmd_str = cmd; // borrow for the check below
+                    let path_filter = if cmd_str == "diff" {
+                        None
+                    } else {
+                        cmd_str
+                            .strip_prefix("diff ")
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                    };
+                    let mut git_cmd = tokio::process::Command::new("git");
                     git_cmd.arg("diff");
                     if let Some(filter) = path_filter {
                         git_cmd.arg("--").arg(filter);
                     }
-                    match git_cmd.output() {
+                    match git_cmd.output().await {
                         Ok(out) => {
                             let diff = String::from_utf8_lossy(&out.stdout);
                             if diff.trim().is_empty() {
@@ -410,9 +437,10 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                 "commit" => {
                     eprintln!("Generating commit message...");
                     // Check git status to determine what to commit
-                    match std::process::Command::new("git")
+                    match tokio::process::Command::new("git")
                         .args(["status", "--short"])
                         .output()
+                        .await
                     {
                         Ok(out) => {
                             let s = String::from_utf8_lossy(&out.stdout);
@@ -433,9 +461,10 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         }
                     }
                     // Stage all and commit with a generic message
-                    match std::process::Command::new("git")
+                    match tokio::process::Command::new("git")
                         .args(["add", "-A"])
                         .output()
+                        .await
                     {
                         Ok(out) if !out.status.success() => {
                             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -453,9 +482,10 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         .unwrap_or_default()
                         .as_secs();
                     let msg = format!("feat: go-on chat auto-commit {}", now);
-                    match std::process::Command::new("git")
+                    match tokio::process::Command::new("git")
                         .args(["commit", "-m", &msg])
                         .output()
+                        .await
                     {
                         Ok(out) if out.status.success() => {
                             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -510,9 +540,10 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     continue;
                 }
                 "review" => {
-                    let diff = match std::process::Command::new("git")
+                    let diff = match tokio::process::Command::new("git")
                         .args(["diff", "--stat"])
                         .output()
+                        .await
                     {
                         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
                         Err(_) => String::new(),
@@ -523,9 +554,10 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     }
                     eprintln!("{}── Changes to review ──{}", ansi!("1"), ansi!("0"));
                     eprintln!("{}", diff);
-                    let detailed = match std::process::Command::new("git")
+                    let detailed = match tokio::process::Command::new("git")
                         .args(["diff"])
                         .output()
+                        .await
                     {
                         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
                         Err(_) => String::new(),
@@ -542,9 +574,18 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         }
                     }
                     if detailed.lines().count() > 60 {
-                        eprintln!("{}... ({} more lines){}  Use /diff for full view", ansi!("90"), detailed.lines().count() - 60, ansi!("0"));
+                        eprintln!(
+                            "{}... ({} more lines){}  Use /diff for full view",
+                            ansi!("90"),
+                            detailed.lines().count() - 60,
+                            ansi!("0")
+                        );
                     }
-                    eprintln!("{}Use /commit to stage and commit these changes.{}", ansi!("33"), ansi!("0"));
+                    eprintln!(
+                        "{}Use /commit to stage and commit these changes.{}",
+                        ansi!("33"),
+                        ansi!("0")
+                    );
                     continue;
                 }
                 _ => {
@@ -581,16 +622,16 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
             }
         }
 
-        // ── Auto-save session every turn ──
-        if !messages.is_empty() {
-            let session = ChatSession {
-                messages: messages.clone(),
-                agent_name: primary.clone(),
-                version: 1,
-            };
-            if let Ok(json) = serde_json::to_string(&session) {
-                let _ = std::fs::write(&session_path, &json);
-            }
+        // ── Auto-save session every turn (non-blocking, debounced) ──
+        if !messages.is_empty() && !SAVE_IN_FLIGHT.load(Ordering::Acquire) {
+            let json = serde_json::to_string(&messages).unwrap_or_default();
+            let path = session_path.clone();
+            let guard = AutoSaveGuard;
+            tokio::spawn(async move {
+                tokio::fs::write(&path, &json).await.ok();
+                // Guard moved into task — SAVE_IN_FLIGHT resets only after write completes.
+                drop(guard);
+            });
         }
 
         // ── Prompt to compact if conversation is long ──
@@ -607,15 +648,14 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
 
     // ── Save session on clean exit ──
     if !messages.is_empty() {
-        let session = ChatSession {
-            messages,
-            agent_name: primary.clone(),
-            version: 1,
-        };
-        if let Ok(json) = serde_json::to_string(&session) {
-            let _ = std::fs::write(&session_path, &json);
-            eprintln!("Session auto-saved to {}", session_path.display());
-        }
+        let json = serde_json::to_string(&messages).unwrap_or_default();
+        let path = session_path;
+        tokio::task::spawn_blocking(move || {
+            let _ = std::fs::write(&path, &json);
+        })
+        .await
+        .ok();
+        eprintln!("Session auto-saved");
     }
 
     eprintln!("Goodbye!");
@@ -633,9 +673,14 @@ async fn run_agent_with_tools(
     let estimated_prompt_tokens = (prompt_chars / 4) as u64;
     let (tx, mut rx) = mpsc::channel::<String>(2048);
     let sender = StreamingSender::from(tx);
+    // Clone the messages for the spawned agent task. The agent runs concurrently
+    // with streaming output, so the clone is required to avoid a borrow conflict.
     let msgs = messages.clone();
     let options: Option<HashMap<String, Value>> = None;
 
+    // ── Cancellation support for Ctrl+C ──
+    // The JoinHandle::abort() cancels the spawned task when the user presses Ctrl+C.
+    // This prevents zombie agent tasks from accumulating in the background.
     let agent_ref = Arc::clone(agent);
     let chat_task = tokio::spawn(async move { agent_ref.chat(msgs, None, options, sender).await });
 
@@ -695,8 +740,8 @@ async fn run_agent_with_tools(
                     "\n{}Interrupted agent response. Use /clear to reset.{}",
                     ansi!("33"), ansi!("0")
                 );
-                // We can't cancel the chat task from here, but we break out
-                // of the streaming loop. The agent will complete in background.
+                // Abort the agent task to prevent zombie background tasks
+                chat_task.abort();
                 break;
             }
         }
@@ -706,8 +751,17 @@ async fn run_agent_with_tools(
         eprintln!();
     }
 
-    if let Err(e) = chat_task.await {
-        warn!("Agent chat task failed: {e}");
+    // Await the task — if it was aborted, JoinError is expected
+    match chat_task.await {
+        Ok(Ok(())) => {} // completed normally
+        Ok(Err(e)) => warn!("Agent chat failed: {e}"),
+        Err(e) => {
+            if e.is_cancelled() {
+                debug!("Agent chat cancelled by user");
+            } else {
+                warn!("Agent chat task panicked: {e}");
+            }
+        }
     }
 
     // ── Markdown re-render of full response ──
@@ -816,25 +870,42 @@ async fn run_agent_with_tools(
 
             let mut followup_response = String::new();
             let mut in_reasoning2 = false;
-            while let Some(token) = rx2.recv().await {
-                if token == "\u{001E}" {
-                    in_reasoning2 = true;
-                    eprint!("{}", ansi!("90"));
-                    continue;
+            loop {
+                tokio::select! {
+                    token = rx2.recv() => {
+                        match token {
+                            Some(token) => {
+                                if token == "\u{001E}" {
+                                    in_reasoning2 = true;
+                                    eprint!("{}", ansi!("90"));
+                                    continue;
+                                }
+                                if token == "\u{001F}" {
+                                    in_reasoning2 = false;
+                                    eprint!("{}", ansi!("0"));
+                                    eprintln!();
+                                    continue;
+                                }
+                                if in_reasoning2 {
+                                    eprint!("{}", token);
+                                } else {
+                                    followup_response.push_str(&token);
+                                    print!("{}", token);
+                                }
+                                std::io::Write::flush(&mut std::io::stdout()).ok();
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = signal::ctrl_c() => {
+                        eprintln!(
+                            "\n{}Interrupted follow-up response.{}  [P3]",
+                            ansi!("33"), ansi!("0")
+                        );
+                        followup_task.abort();
+                        break;
+                    }
                 }
-                if token == "\u{001F}" {
-                    in_reasoning2 = false;
-                    eprint!("{}", ansi!("0"));
-                    eprintln!();
-                    continue;
-                }
-                if in_reasoning2 {
-                    eprint!("{}", token);
-                } else {
-                    followup_response.push_str(&token);
-                    print!("{}", token);
-                }
-                std::io::Write::flush(&mut std::io::stdout()).ok();
             }
             eprintln!();
 
@@ -924,6 +995,9 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
         payload["command"] = json!(v);
     }
 
+    // ── Resolve base dir for path traversal protection ──
+    let allowed_base_dir = std::env::current_dir().ok();
+
     // ── Build ToolInput envelope and execute via ToolRegistry ──
     let input = ToolInput {
         task_id: "execute_simple_tool".to_string(),
@@ -933,27 +1007,25 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
         constraints: None,
         evidence: None,
         payload,
-        allowed_base_dir: None,
+        allowed_base_dir,
     };
 
     let canonical_owned = canonical_name.to_string();
 
     // Use the profile's timeout budget when available, otherwise default to
     // 300 seconds (matching the most generous old bash timeout).
-    let registry = ToolRegistry::default();
-    let timeout_ms = registry
+    let timeout_ms = tool_registry()
         .profile(&canonical_owned)
         .map(|p| p.timeout_budget_ms)
         .unwrap_or(300_000);
     let timeout_dur = Duration::from_millis(timeout_ms.max(5_000));
 
     // Run the blocking tool logic on a dedicated blocking thread so we don't
-    // starve the async runtime.  The ToolRegistry is created inside the closure
-    // so everything is owned and Send.
+    // starve the async runtime. Uses the cached global registry.
     let output = timeout(timeout_dur, async {
+        let registry_ref = tool_registry();
         tokio::task::spawn_blocking(move || {
-            let registry = ToolRegistry::default();
-            registry.run_with_fallback(&canonical_owned, &input)
+            registry_ref.run_with_fallback(&canonical_owned, &input)
         })
         .await
         .map_err(|e| anyhow::anyhow!("tool blocking task failed: {e}"))?
@@ -1038,6 +1110,538 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
             }
             if let Some(code) = exit_code {
                 buf.push_str(&format!("\nexit code: {code}"));
+            }
+            Ok(buf)
+        }
+        "apply_patch" => {
+            let r = output.result.as_ref();
+            let applied = r.and_then(|r| r["applied"].as_bool()).unwrap_or(false);
+            let checked = r.and_then(|r| r["checked"].as_bool()).unwrap_or(false);
+            let stdout = r.and_then(|r| r["stdout"].as_str()).unwrap_or("");
+            let stderr = r.and_then(|r| r["stderr"].as_str()).unwrap_or("");
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64());
+            let mut buf = String::new();
+            if applied {
+                buf.push_str("patch applied successfully");
+            } else if checked {
+                buf.push_str("patch check completed");
+            }
+            if !stdout.is_empty() {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(stdout);
+            }
+            if !stderr.is_empty() {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(stderr);
+            }
+            if let Some(code) = exit_code {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(&format!("exit code: {code}"));
+            }
+            Ok(buf)
+        }
+        "run_tests" => {
+            let r = output.result.as_ref();
+            let stdout = r.and_then(|r| r["stdout"].as_str()).unwrap_or("");
+            let stderr = r.and_then(|r| r["stderr"].as_str()).unwrap_or("");
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64());
+            let command = r.and_then(|r| r["command"].as_str()).unwrap_or("");
+            let mut buf = String::new();
+            if !stdout.is_empty() {
+                buf.push_str(stdout);
+            }
+            if !stderr.is_empty() {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(stderr);
+            }
+            if let Some(code) = exit_code {
+                buf.push_str(&format!("\nexit code: {code}"));
+            }
+            buf.push_str(&format!("\ncommand: {command}"));
+            Ok(buf)
+        }
+        "inspect_git_diff" => {
+            let r = output.result.as_ref();
+            let diff = r.and_then(|r| r["diff"].as_str()).unwrap_or("");
+            let stderr = r.and_then(|r| r["stderr"].as_str()).unwrap_or("");
+            let staged = r.and_then(|r| r["staged"].as_bool()).unwrap_or(false);
+            let mut buf = String::new();
+            if staged {
+                buf.push_str("(staged diff)");
+            } else {
+                buf.push_str("(unstaged diff)");
+            }
+            if !diff.is_empty() {
+                buf.push('\n');
+                buf.push_str(diff);
+            }
+            if !stderr.is_empty() {
+                buf.push('\n');
+                buf.push_str(stderr);
+            }
+            Ok(buf)
+        }
+        "grep" => {
+            let r = output.result.as_ref();
+            let matches = r
+                .and_then(|r| r["matches"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|m| {
+                            let file = m["file"].as_str().unwrap_or("");
+                            let line = m["line"].as_u64().unwrap_or(0);
+                            let content = m["content"].as_str().unwrap_or("");
+                            format!("{}:{}  {}", file, line, content)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let total = r.and_then(|r| r["total_matches"].as_u64()).unwrap_or(0);
+            let scanned = r.and_then(|r| r["files_scanned"].as_u64()).unwrap_or(0);
+            let truncated = r.and_then(|r| r["truncated"].as_bool()).unwrap_or(false);
+            let mut buf = matches.join("\n");
+            buf.push_str(&format!(
+                "\n---\n{} match(es) in {} file(s)",
+                total, scanned
+            ));
+            if truncated {
+                buf.push_str(" (truncated — more matches available)");
+            }
+            Ok(buf)
+        }
+        "git" => {
+            let r = output.result.as_ref();
+            let stdout = r.and_then(|r| r["stdout"].as_str()).unwrap_or("");
+            let stderr = r.and_then(|r| r["stderr"].as_str()).unwrap_or("");
+            let subcommand = r.and_then(|r| r["subcommand"].as_str()).unwrap_or("");
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64());
+            let mut buf = String::new();
+            buf.push_str(&format!("git {}", subcommand));
+            if !stdout.is_empty() {
+                buf.push('\n');
+                buf.push_str(stdout);
+            }
+            if !stderr.is_empty() {
+                buf.push('\n');
+                buf.push_str(stderr);
+            }
+            if let Some(code) = exit_code {
+                buf.push_str(&format!("\nexit code: {code}"));
+            }
+            Ok(buf)
+        }
+        "skill_list" => {
+            let skills: Vec<String> = output
+                .result
+                .as_ref()
+                .and_then(|r| r["skills"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|s| {
+                            let name = s["name"].as_str().unwrap_or("unknown");
+                            let desc = s["description"].as_str().unwrap_or("");
+                            let score = s["score"].as_f64().unwrap_or(0.0);
+                            let calls = s["total_calls"].as_u64().unwrap_or(0);
+                            format!("  {name:30} {desc:50} (score: {score:.2}, calls: {calls})")
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if skills.is_empty() {
+                Ok("No skills registered".to_string())
+            } else {
+                let mut buf = String::from("Available skills:\n");
+                buf.push_str(&skills.join("\n"));
+                Ok(buf)
+            }
+        }
+        "skill_execute" => {
+            let r = output.result.as_ref();
+            let skill_name = r.and_then(|r| r["skill"].as_str()).unwrap_or("unknown");
+            let skill_output = r.and_then(|r| r.get("output"));
+            let mut buf = format!("skill '{}' executed successfully", skill_name);
+            if let Some(out) = skill_output {
+                let formatted = match out {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => serde_json::to_string_pretty(other).unwrap_or_default(),
+                };
+                if !formatted.is_empty() {
+                    buf.push('\n');
+                    buf.push_str(&formatted);
+                }
+            }
+            Ok(buf)
+        }
+        "diagnostics" => {
+            let r = output.result.as_ref();
+            let error_count = r.and_then(|r| r["error_count"].as_u64()).unwrap_or(0);
+            let warning_count = r.and_then(|r| r["warning_count"].as_u64()).unwrap_or(0);
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64()).unwrap_or(-1);
+            let diagnostics = r
+                .and_then(|r| r["diagnostics"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|d| d.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut buf = format!(
+                "Diagnostics: {} errors, {} warnings (exit: {})",
+                error_count, warning_count, exit_code
+            );
+            for diag in &diagnostics {
+                buf.push('\n');
+                buf.push_str(diag);
+            }
+            let truncated = r
+                .and_then(|r| r["stderr_truncated"].as_bool())
+                .unwrap_or(false);
+            if truncated {
+                buf.push_str("\n(diagnostics truncated to 100 lines)");
+            }
+            Ok(buf)
+        }
+        "environment_info" => {
+            let r = output.result.as_ref();
+            let os_family = r
+                .and_then(|r| r["os"]["family"].as_str())
+                .unwrap_or("unknown");
+            let arch = r
+                .and_then(|r| r["os"]["arch"].as_str())
+                .unwrap_or("unknown");
+            let hostname = r.and_then(|r| r["os"]["hostname"].as_str()).unwrap_or("");
+            let project_root = r.and_then(|r| r["project"]["root"].as_str()).unwrap_or("");
+            let tooling = r
+                .and_then(|r| r["tooling"].as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| {
+                            v.as_bool().map(|present| {
+                                format!("  {k}: {}", if present { "✓" } else { "✗" })
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut buf = format!(
+                "OS: {os_family} ({arch})\nHostname: {hostname}\nProject: {project_root}\nTooling:"
+            );
+            for line in &tooling {
+                buf.push('\n');
+                buf.push_str(line);
+            }
+            Ok(buf)
+        }
+        "cargo_check" => {
+            let r = output.result.as_ref();
+            let error_count = r.and_then(|r| r["error_count"].as_u64()).unwrap_or(0);
+            let warning_count = r.and_then(|r| r["warning_count"].as_u64()).unwrap_or(0);
+            let raw_stderr = r.and_then(|r| r["raw_stderr"].as_str()).unwrap_or("");
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64());
+            let errors = r
+                .and_then(|r| r["errors"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| e["rendered"].as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let warnings = r
+                .and_then(|r| r["warnings"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|w| w["rendered"].as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut buf = format!(
+                "cargo check: {} errors, {} warnings\n",
+                error_count, warning_count
+            );
+            for err in &errors {
+                buf.push_str(&format!("\n── ERROR ──\n{err}"));
+            }
+            for warn in &warnings {
+                buf.push_str(&format!("\n── WARNING ──\n{warn}"));
+            }
+            if !raw_stderr.is_empty() && errors.is_empty() && warnings.is_empty() {
+                buf.push_str(raw_stderr);
+            }
+            if let Some(code) = exit_code {
+                buf.push_str(&format!("\nexit code: {code}"));
+            }
+            Ok(buf)
+        }
+        "cargo_test" => {
+            let r = output.result.as_ref();
+            let stdout = r.and_then(|r| r["stdout"].as_str()).unwrap_or("");
+            let stderr = r.and_then(|r| r["stderr"].as_str()).unwrap_or("");
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64());
+            let filter = r.and_then(|r| r["filter"].as_str()).unwrap_or("");
+            let mut buf = String::new();
+            if !filter.is_empty() {
+                buf.push_str(&format!("filter: {filter}"));
+            }
+            if !stdout.is_empty() {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(stdout);
+            }
+            if !stderr.is_empty() {
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(stderr);
+            }
+            if let Some(code) = exit_code {
+                buf.push_str(&format!("\nexit code: {code}"));
+            }
+            Ok(buf)
+        }
+        "copy_path" => {
+            let r = output.result.as_ref();
+            let source = r.and_then(|r| r["source"].as_str()).unwrap_or("unknown");
+            let destination = r
+                .and_then(|r| r["destination"].as_str())
+                .unwrap_or("unknown");
+            let is_dir = r.and_then(|r| r["is_directory"].as_bool()).unwrap_or(false);
+            if is_dir {
+                Ok(format!("copied directory: {source} → {destination}"))
+            } else {
+                Ok(format!("copied file: {source} → {destination}"))
+            }
+        }
+        "create_directory" => {
+            let r = output.result.as_ref();
+            let path = r
+                .and_then(|r| r["created_path"].as_str())
+                .unwrap_or("unknown");
+            let exists = r
+                .and_then(|r| r["already_exists"].as_bool())
+                .unwrap_or(false);
+            if exists {
+                Ok(format!("directory already exists: {path}"))
+            } else {
+                Ok(format!("created directory: {path}"))
+            }
+        }
+        "date_time" => {
+            let r = output.result.as_ref();
+            let operation = r.and_then(|r| r["operation"].as_str()).unwrap_or("");
+            match operation {
+                "now" => {
+                    let iso = r.and_then(|r| r["iso_8601"].as_str()).unwrap_or("");
+                    let unix = r.and_then(|r| r["unix_seconds"].as_u64()).unwrap_or(0);
+                    Ok(format!("now: {iso}  (unix: {unix})"))
+                }
+                "format" => {
+                    let iso = r.and_then(|r| r["iso_8601"].as_str()).unwrap_or("");
+                    let ts = r.and_then(|r| r["input_timestamp"].as_u64()).unwrap_or(0);
+                    Ok(format!("formatted: {iso}  (input: {ts})"))
+                }
+                "diff" => {
+                    let human = r.and_then(|r| r["diff_human"].as_str()).unwrap_or("");
+                    let secs = r.and_then(|r| r["diff_seconds"].as_u64()).unwrap_or(0);
+                    let from_iso = r.and_then(|r| r["from_iso"].as_str()).unwrap_or("");
+                    let to_iso = r.and_then(|r| r["to_iso"].as_str()).unwrap_or("");
+                    Ok(format!(
+                        "diff: {human} ({secs}s)\n  from: {from_iso}\n  to:   {to_iso}"
+                    ))
+                }
+                "parse" => {
+                    let input = r.and_then(|r| r["input"].as_str()).unwrap_or("");
+                    let unix = r.and_then(|r| r["unix_seconds"].as_u64()).unwrap_or(0);
+                    let iso = r.and_then(|r| r["iso_8601"].as_str()).unwrap_or("");
+                    Ok(format!("parsed '{input}' → {iso} (unix: {unix})"))
+                }
+                _ => Ok(
+                    serde_json::to_string_pretty(&output.result.unwrap_or_default())
+                        .unwrap_or_default(),
+                ),
+            }
+        }
+        "find_files" => {
+            let files: Vec<String> = output
+                .result
+                .as_ref()
+                .and_then(|r| r["files"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let count = output
+                .result
+                .as_ref()
+                .and_then(|r| r["count"].as_u64())
+                .unwrap_or(0);
+            let truncated = output
+                .result
+                .as_ref()
+                .and_then(|r| r["truncated"].as_bool())
+                .unwrap_or(false);
+            if files.is_empty() {
+                Ok("No files matching pattern".to_string())
+            } else {
+                let mut buf = files.join("\n");
+                buf.push_str(&format!("\n---\n{count} file(s) found"));
+                if truncated {
+                    buf.push_str(" (truncated — more results available)");
+                }
+                Ok(buf)
+            }
+        }
+        "compress" => {
+            let r = output.result.as_ref();
+            let input_path = r.and_then(|r| r["input_path"].as_str()).unwrap_or("");
+            let output_path = r.and_then(|r| r["output_path"].as_str()).unwrap_or("");
+            let input_size = r.and_then(|r| r["input_size_bytes"].as_u64()).unwrap_or(0);
+            let output_size = r.and_then(|r| r["output_size_bytes"].as_u64()).unwrap_or(0);
+            let ratio = r
+                .and_then(|r| r["compression_ratio_pct"].as_str())
+                .unwrap_or("0.0");
+            Ok(format!(
+                "compressed: {input_path} → {output_path}\n  {input_size} → {output_size} bytes ({ratio}%)",
+            ))
+        }
+        "decompress" => {
+            let r = output.result.as_ref();
+            let input_path = r.and_then(|r| r["input_path"].as_str()).unwrap_or("");
+            let output_path = r.and_then(|r| r["output_path"].as_str()).unwrap_or("");
+            let input_size = r.and_then(|r| r["input_size_bytes"].as_u64()).unwrap_or(0);
+            let output_size = r.and_then(|r| r["output_size_bytes"].as_u64()).unwrap_or(0);
+            Ok(format!(
+                "decompressed: {input_path} → {output_path}\n  {input_size} → {output_size} bytes",
+            ))
+        }
+        // ── Extended tools added for completeness ──
+        "file_move" => {
+            let r = output.result.as_ref();
+            let source = r.and_then(|r| r["source"].as_str()).unwrap_or("unknown");
+            let destination = r
+                .and_then(|r| r["destination"].as_str())
+                .unwrap_or("unknown");
+            Ok(format!("moved: {source} → {destination}"))
+        }
+        "file_delete" => {
+            let r = output.result.as_ref();
+            let path = r
+                .and_then(|r| r["deleted_path"].as_str())
+                .unwrap_or("unknown");
+            let is_dir = r.and_then(|r| r["is_directory"].as_bool()).unwrap_or(false);
+            if is_dir {
+                Ok(format!("deleted directory: {path}"))
+            } else {
+                Ok(format!("deleted file: {path}"))
+            }
+        }
+        "skill_create" => {
+            let r = output.result.as_ref();
+            let name = r.and_then(|r| r["skill"].as_str()).unwrap_or("unknown");
+            let desc = r.and_then(|r| r["description"].as_str()).unwrap_or("");
+            Ok(format!("created skill: {name}\n  {desc}"))
+        }
+        "skill_reload" => {
+            let r = output.result.as_ref();
+            let registered = r.and_then(|r| r["registered"].as_u64()).unwrap_or(0);
+            let skipped = r.and_then(|r| r["skipped"].as_u64()).unwrap_or(0);
+            let errors = r
+                .and_then(|r| r["errors"].as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let total = r.and_then(|r| r["total_skills"].as_u64()).unwrap_or(0);
+            Ok(format!(
+                "skills reloaded: {registered} new, {skipped} skipped, {errors} errors (total: {total})"
+            ))
+        }
+        "http_request" => {
+            let r = output.result.as_ref();
+            let status = r.and_then(|r| r["status"].as_u64()).unwrap_or(0);
+            let url = r.and_then(|r| r["url"].as_str()).unwrap_or("");
+            let method = r.and_then(|r| r["method"].as_str()).unwrap_or("");
+            let body = r.and_then(|r| r["body"].as_str()).unwrap_or("");
+            let mut buf = format!("HTTP {method} {url} → {status}");
+            if !body.is_empty() {
+                buf.push('\n');
+                // Truncate very long bodies
+                if body.len() > 2000 {
+                    buf.push_str(&body[..2000]);
+                    buf.push_str("\n... (body truncated)");
+                } else {
+                    buf.push_str(body);
+                }
+            }
+            Ok(buf)
+        }
+        "dns_lookup" => {
+            let r = output.result.as_ref();
+            let hostname = r.and_then(|r| r["hostname"].as_str()).unwrap_or("");
+            let addresses = r
+                .and_then(|r| r["addresses"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|a| a.as_str().map(|s| format!("  {s}")))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let count = r.and_then(|r| r["count"].as_u64()).unwrap_or(0);
+            let elapsed = r.and_then(|r| r["elapsed_ms"].as_u64()).unwrap_or(0);
+            let mut buf = format!("DNS lookup: {hostname} ({count} address(es), {elapsed}ms)");
+            for addr in &addresses {
+                buf.push('\n');
+                buf.push_str(addr);
+            }
+            Ok(buf)
+        }
+        "ping" => {
+            let r = output.result.as_ref();
+            let host = r.and_then(|r| r["host"].as_str()).unwrap_or("");
+            let stdout = r.and_then(|r| r["stdout"].as_str()).unwrap_or("");
+            let stderr = r.and_then(|r| r["stderr"].as_str()).unwrap_or("");
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64());
+            let elapsed = r.and_then(|r| r["elapsed_ms"].as_u64()).unwrap_or(0);
+            let mut buf = format!("ping {host} ({elapsed}ms)");
+            if !stdout.is_empty() {
+                buf.push('\n');
+                buf.push_str(stdout);
+            }
+            if !stderr.is_empty() {
+                buf.push('\n');
+                buf.push_str(stderr);
+            }
+            if let Some(code) = exit_code {
+                buf.push_str(&format!("\nexit code: {code}"));
+            }
+            Ok(buf)
+        }
+        "port_scan" => {
+            let r = output.result.as_ref();
+            let host = r.and_then(|r| r["host"].as_str()).unwrap_or("");
+            let open_count = r.and_then(|r| r["open_count"].as_u64()).unwrap_or(0);
+            let scanned = r.and_then(|r| r["scanned_count"].as_u64()).unwrap_or(0);
+            let elapsed = r.and_then(|r| r["elapsed_ms"].as_u64()).unwrap_or(0);
+            let open_ports = r
+                .and_then(|r| r["open_ports"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| p["port"].as_u64().map(|n| format!("  port {n}")))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut buf = format!("Port scan: {host} — {open_count}/{scanned} open ({elapsed}ms)");
+            for line in &open_ports {
+                buf.push('\n');
+                buf.push_str(line);
             }
             Ok(buf)
         }

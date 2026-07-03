@@ -1,10 +1,12 @@
-/* eslint-disable no-console */
 import * as path from "path";
 import * as vscode from "vscode";
 import { spawn } from "child_process";
 import { RuntimeManagerLike } from "./managerTypes";
 import { t, MessageKeys } from "./i18n";
 import { getErrorMessage } from "./utils";
+import { Logger } from "./logger";
+
+const log = Logger.forModule("chatView");
 import { getChatHtml } from "./chatHtmlTemplate";
 
 type ChatRole = "user" | "assistant" | "error" | "system";
@@ -197,7 +199,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           messages: [message],
         });
       } catch (err) {
-        console.warn("[chatView] checkpoint.create failed:", err);
+        log.warn("checkpoint.create failed:", err);
       }
     }
   }
@@ -430,12 +432,14 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         // Streaming path
         const tokenAccumulator: string[] = [];
 
-        // Send a placeholder assistant message to the UI immediately
+        // Start the stream processor first to create the abort signal,
+        // then notify the UI — ordering prevents a race where the UI
+        // expects a signal that isn't ready yet.
+        const signal = this.streamProcessor.start();
+
         this._view.webview.postMessage({
           type: "streamStart",
         });
-
-        const signal = this.streamProcessor.start();
 
         try {
           responseText = await this.manager.sendStreamingRequest(
@@ -522,7 +526,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
               Promise.resolve(
                 vscode.commands.executeCommand("go-on.openSettings"),
               ).catch((err: unknown) => {
-                console.error("Failed to open settings:", err);
+                log.error("Failed to open settings:", err);
               });
             }
             return;
@@ -617,7 +621,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           Promise.resolve(
             vscode.commands.executeCommand("go-on.openSettings"),
           ).catch((err: unknown) => {
-            console.error("Failed to open settings:", err);
+            log.error("Failed to open settings:", err);
           });
         }
         return;
@@ -641,7 +645,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     try {
       this._view?.webview.postMessage(message);
     } catch (err) {
-      console.warn("[chatView] postMessage failed:", err);
+      log.warn("postMessage failed:", err);
     }
   }
 
@@ -704,7 +708,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             try {
               result = JSON.stringify(JSON.parse(code), null, 2);
             } catch (err) {
-              console.warn("[chatView] JSON preview parse failed:", err);
+              log.warn("JSON preview parse failed:", err);
               result = "⚠️ Only JSON expressions are supported for preview";
             }
           } catch (e: unknown) {
@@ -975,7 +979,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           }
         }
       } catch (err) {
-        console.warn("[chatView] _switchSession failed:", err);
+        log.warn("_switchSession failed:", err);
       }
     }
 

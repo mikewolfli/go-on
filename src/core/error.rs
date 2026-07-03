@@ -12,7 +12,6 @@
 //!
 //! Each error type provides detailed context and supports error chaining.
 
-use anyhow::anyhow;
 use thiserror::Error;
 
 /// Main application error type
@@ -139,82 +138,6 @@ pub enum ResourceError {
 /// Convenience type alias for Result<T, AppError>
 pub type Result<T> = std::result::Result<T, AppError>;
 
-/// Extension trait for error context
-pub trait ErrorContext {
-    /// Add context to an error
-    fn context(self, context: &str) -> Self;
-}
-
-impl ErrorContext for AppError {
-    fn context(self, context: &str) -> Self {
-        match self {
-            AppError::Proxy(err) => AppError::Proxy(match err {
-                ProxyError::InvalidRequest(msg) => {
-                    ProxyError::InvalidRequest(format!("{}: {}", context, msg))
-                }
-                ProxyError::UnknownMethod(msg) => {
-                    ProxyError::UnknownMethod(format!("{}: {}", context, msg))
-                }
-                ProxyError::PhaseNotFound(msg) => {
-                    ProxyError::PhaseNotFound(format!("{}: {}", context, msg))
-                }
-                ProxyError::AgentNotFound(msg) => {
-                    ProxyError::AgentNotFound(format!("{}: {}", context, msg))
-                }
-                ProxyError::Internal(msg) => ProxyError::Internal(format!("{}: {}", context, msg)),
-                ProxyError::RateLimitExceeded(msg) => {
-                    ProxyError::RateLimitExceeded(format!("{}: {}", context, msg))
-                }
-                ProxyError::CircuitBreakerOpen(msg) => {
-                    ProxyError::CircuitBreakerOpen(format!("{}: {}", context, msg))
-                }
-                ProxyError::Timeout(msg) => ProxyError::Timeout(format!("{}: {}", context, msg)),
-            }),
-            AppError::Validation(err) => AppError::Validation(match err {
-                ValidationError::InvalidConfig(msg) => {
-                    ValidationError::InvalidConfig(format!("{}: {}", context, msg))
-                }
-                ValidationError::MissingField(msg) => {
-                    ValidationError::MissingField(format!("{}: {}", context, msg))
-                }
-                ValidationError::InvalidFormat(msg) => {
-                    ValidationError::InvalidFormat(format!("{}: {}", context, msg))
-                }
-                ValidationError::OutOfRange(msg) => {
-                    ValidationError::OutOfRange(format!("{}: {}", context, msg))
-                }
-            }),
-            AppError::Network(err) => AppError::Network(match err {
-                NetworkError::ConnectionFailed(msg) => {
-                    NetworkError::ConnectionFailed(format!("{}: {}", context, msg))
-                }
-                NetworkError::RequestTimeout(msg) => {
-                    NetworkError::RequestTimeout(format!("{}: {}", context, msg))
-                }
-                NetworkError::Http(code, msg) => {
-                    NetworkError::Http(code, format!("{}: {}", context, msg))
-                }
-                NetworkError::Ssl(msg) => NetworkError::Ssl(format!("{}: {}", context, msg)),
-            }),
-            AppError::Resource(err) => AppError::Resource(match err {
-                ResourceError::FileSystem(msg) => {
-                    ResourceError::FileSystem(format!("{}: {}", context, msg))
-                }
-                ResourceError::Memory(msg) => {
-                    ResourceError::Memory(format!("{}: {}", context, msg))
-                }
-                ResourceError::Database(msg) => {
-                    ResourceError::Database(format!("{}: {}", context, msg))
-                }
-                ResourceError::ResourceExhausted(msg) => {
-                    ResourceError::ResourceExhausted(format!("{}: {}", context, msg))
-                }
-            }),
-            AppError::External(err) => AppError::External(anyhow!("{}: {}", context, err)),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,19 +164,6 @@ mod tests {
                 assert_eq!(msg, "something went wrong");
             }
             _ => panic!("expected ProxyError::Internal"),
-        }
-    }
-
-    #[test]
-    fn test_error_context() {
-        let error = AppError::Proxy(ProxyError::InvalidRequest("bad input".to_string()));
-        let error_with_context = error.context("request processing");
-
-        match error_with_context {
-            AppError::Proxy(ProxyError::InvalidRequest(msg)) => {
-                assert_eq!(msg, "request processing: bad input");
-            }
-            _ => panic!("expected ProxyError::InvalidRequest with context"),
         }
     }
 

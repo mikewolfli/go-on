@@ -54,7 +54,7 @@ mod test_suite {
             },
         );
 
-        let phases = phase_names
+        let phases: HashMap<String, PhaseConfig> = phase_names
             .iter()
             .map(|name| {
                 (
@@ -68,12 +68,11 @@ mod test_suite {
                     },
                 )
             })
-            .map(|(name, _)| name)
             .collect();
 
         let flow = FlowConfig {
             name: default_phase.to_string(),
-            phases,
+            phases: phases.keys().cloned().collect(),
             workflow_type: crate::config::WorkflowType::Auto,
         };
 
@@ -85,7 +84,7 @@ mod test_suite {
                 role_registry: HashMap::new(),
             },
             flow,
-            phases: HashMap::new(),
+            phases,
             runtime: None,
             cache: None,
             vector: Some(vector_config_fixture()),

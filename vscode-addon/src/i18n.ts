@@ -22,11 +22,11 @@ import { Logger } from "./logger";
 
 const log = Logger.forModule("i18n");
 
-interface I18nMessages {
+export interface I18nMessages {
   [key: string]: string | I18nMessages;
 }
 
-type Language = "en_US" | "zh_CN" | "zh_TW";
+export type Language = "en_US" | "zh_CN" | "zh_TW";
 
 // Message keys enumeration for autocomplete and type safety
 export const MessageKeys = {
@@ -414,6 +414,19 @@ export const MessageKeys = {
   quickSetupStep1Title: "messages.quickSetupStep1Title",
   apiKeyConfigured: "messages.apiKeyConfigured",
   setupFailed: "messages.setupFailed",
+
+  // Workspace Context
+  workspaceNotRunning: "workspaceContext.notRunning",
+  workspaceNoActiveEditor: "workspaceContext.noActiveEditor",
+  workspaceNoCodeSelected: "workspaceContext.noCodeSelected",
+  workspaceNoWorkspaceFolder: "workspaceContext.noWorkspaceFolder",
+  workspaceSearchPrompt: "workspaceContext.searchPrompt",
+  workspaceSentSelection: "workspaceContext.sentSelection",
+  workspaceSentFile: "workspaceContext.sentFile",
+  workspaceSearchPlaceholder: "workspaceContext.searchPlaceholder",
+  workspaceSearchComplete: "workspaceContext.searchComplete",
+  workspaceContextSent: "workspaceContext.contextSent",
+  workspaceExplainAction: "workspaceContext.explainAction",
 } as const;
 
 class I18nManager {

@@ -247,7 +247,7 @@ impl ToolLockManager {
     }
 
     /// Inner acquire logic — mutates the table if the lock is available.
-    fn try_acquire_inner(table: &mut MutexGuard<LockTable>, path: &str, mode: LockMode) -> bool {
+    fn try_acquire_inner(table: &mut LockTable, path: &str, mode: LockMode) -> bool {
         let entry = table.locks.entry(path.to_string()).or_insert(LockEntry {
             readers: 0,
             writer: false,

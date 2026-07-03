@@ -160,7 +160,7 @@ impl SemanticResponseCache {
     }
 
     /// Cache a response
-    pub fn put(&mut self, request: &str, response: Value) {
+    pub fn put(&self, request: &str, response: Value) {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
@@ -207,7 +207,7 @@ impl SemanticResponseCache {
     }
 
     /// Warm up the cache with known entries
-    pub fn warmup(&mut self, requests: Vec<(String, Value)>) {
+    pub fn warmup(&self, requests: Vec<(String, Value)>) {
         for (request, response) in requests {
             self.put(&request, response);
             self.total_warmups.fetch_add(1, Ordering::Relaxed);
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_exact_match() {
-        let mut cache = SemanticResponseCache::new(SemanticCacheConfig::default());
+        let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
         cache.put("hello world", json!({"response": "hi"}));
         let result = cache.get("hello world");
         assert!(result.is_some());
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_ttl_expiry() {
-        let mut cache = SemanticResponseCache::new(SemanticCacheConfig {
+        let cache = SemanticResponseCache::new(SemanticCacheConfig {
             default_ttl_seconds: 0, // Immediate expiry
             ..Default::default()
         });
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_lru_eviction() {
-        let mut cache = SemanticResponseCache::new(SemanticCacheConfig {
+        let cache = SemanticResponseCache::new(SemanticCacheConfig {
             max_entries: 2,
             ..Default::default()
         });
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_warmup() {
-        let mut cache = SemanticResponseCache::new(SemanticCacheConfig::default());
+        let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
         cache.warmup(vec![("q1".into(), json!("a1")), ("q2".into(), json!("a2"))]);
         assert_eq!(cache.total_warmups.load(Ordering::Relaxed), 2);
         assert!(cache.get("q1").is_some());
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_stats() {
-        let mut cache = SemanticResponseCache::new(SemanticCacheConfig::default());
+        let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
         cache.put("test", json!("value"));
         let _ = cache.get("test");
         let _ = cache.get("nope");

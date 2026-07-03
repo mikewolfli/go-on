@@ -412,28 +412,55 @@ async fn main() -> eframe::Result<()> {
         eframe::Renderer::Wgpu
     };
 
+    // Load CJK font on a blocking thread to avoid stalling the main thread
+    // with synchronous filesystem I/O (read_dir / read) during startup.
+    // The result is shared via an Arc<Mutex>; if the background task hasn't
+    // completed by the time eframe needs fonts, we fall through to a sync load.
+    let cjk_fonts: std::sync::Arc<std::sync::Mutex<Option<egui::FontDefinitions>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    {
+        let cjk_fonts = cjk_fonts.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut fonts = egui::FontDefinitions::default();
+            let found = load_cjk_font(&mut fonts);
+            if !found {
+                eprintln!("WARNING: No CJK font found! Text may show as boxes.");
+            }
+            *cjk_fonts.lock().unwrap() = Some(fonts);
+        });
+    }
+
     let run_with_renderer = |renderer: eframe::Renderer, cfg: crate::config::AppConfig| {
+        // Clone the Arc before the inner move closure so the outer closure
+        // retains its reference for potential fallback calls.
+        let cjk = cjk_fonts.clone();
         eframe::run_native(
             "Go-On GUI",
             build_options(renderer),
             Box::new(move |cc| {
-                let mut fonts = egui::FontDefinitions::default();
-                if !load_cjk_font(&mut fonts) {
-                    eprintln!("WARNING: No CJK font found! Text may show as boxes.");
-                }
+                // Try to take the CJK fonts loaded on the background thread.
+                // If not ready yet, do a synchronous load as fallback.
+                let fonts = cjk.lock().unwrap().take().unwrap_or_else(|| {
+                    let mut f = egui::FontDefinitions::default();
+                    load_cjk_font(&mut f);
+                    f
+                });
                 cc.egui_ctx.set_fonts(fonts);
                 Ok(Box::new(GoOnApp::new(cfg)))
             }),
         )
     };
 
-    let result = run_with_renderer(preferred_renderer, config.clone()).or_else(|first_err| {
-        eprintln!(
-            "WARN: Renderer {:?} failed: {}. Retrying with {:?}.",
-            preferred_renderer, first_err, fallback_renderer
-        );
-        run_with_renderer(fallback_renderer, config)
-    });
+    let result = match run_with_renderer(preferred_renderer, config.clone()) {
+        Ok(()) => Ok(()),
+        Err(first_err) => {
+            eprintln!(
+                "WARN: Renderer {:?} failed: {}. Retrying with {:?}.",
+                preferred_renderer, first_err, fallback_renderer
+            );
+            run_with_renderer(fallback_renderer, config)
+        }
+    };
     match result {
         Ok(_) => Ok(()),
         Err(e) => {

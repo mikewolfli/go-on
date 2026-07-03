@@ -11,7 +11,7 @@ export function getNonce(): string {
 /**
  * Type guard that checks whether a value is a non-null object (Record).
  */
-export function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 

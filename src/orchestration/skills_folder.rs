@@ -11,8 +11,19 @@
 //!
 //! Results are searchable via `skill-finder`.
 
+/// Index of skills sources from URL files in the `skills/` folder.
+///
+/// Scans a config-local `skills/` directory for `.txt` / `.list` files
+/// containing one skill-source URL per line. Lines starting with `#` or
+/// `//` are treated as comments.
+///
+/// NOTE: This module is test-only scaffolding designed for indexing skill
+/// source URLs. Production skill discovery is handled by `skill_discovery`
+/// and `skill_import`. The module is gated behind `#[cfg(test)]` because it
+/// has no production callers today — it is built and tested for integration
+/// test coverage.
 #[cfg(test)]
-pub mod implementation {
+pub mod folder_index {
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -22,7 +33,10 @@ pub mod implementation {
     /// Name of the skills folder.
     const SKILLS_DIR: &str = "skills";
 
-    /// Index of skills sources from URL files in the `skills/` folder.
+    /// Index of skill-source URLs discovered in the `skills/` folder.
+    ///
+    /// Scans `.txt` and `.list` files (by extension) for URL lines.
+    /// Comments (`#` or `//`) and blank lines are ignored.
     pub struct SkillsFolderIndex {
         /// Known source URLs.
         sources: HashSet<String>,
@@ -100,7 +114,7 @@ pub mod implementation {
             self.sources.is_empty()
         }
     }
-} // mod implementation
+} // mod folder_index
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -108,7 +122,7 @@ pub mod implementation {
 
 #[cfg(test)]
 mod tests {
-    use super::implementation::*;
+    use super::folder_index::*;
     use std::fs;
     use tempfile::TempDir;
 

@@ -81,6 +81,9 @@ export class StatusMonitor {
 
   private startHealthMonitoring() {
     this.stopHealthMonitoring();
+    // Reset failure counter when (re)starting monitoring so a
+    // previous failure streak doesn't carry over into the new interval.
+    this.consecutiveFailures = 0;
     const config = vscode.workspace.getConfiguration("go-on");
     const interval =
       config.get<number>("health.interval", DEFAULT_HEALTH_INTERVAL_SECONDS) *
@@ -152,8 +155,7 @@ export class StatusMonitor {
         (dep: Record<string, unknown>) => dep?.name === "provider_dependencies",
       );
       const providerDetails = providerComponent?.details as
-        | { ready?: number; total?: number; [key: string]: unknown }
-        | undefined;
+        { ready?: number; total?: number; [key: string]: unknown } | undefined;
       const hasProviderConfig =
         providerDetails !== undefined && (providerDetails.total ?? 0) > 0;
       const providerReady =

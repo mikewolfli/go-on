@@ -147,6 +147,7 @@ pub async fn start_background_tasks(
     server: &super::server::AcpServer,
     shutdown_notify: Arc<Notify>,
 ) -> Result<()> {
+    #[allow(dead_code, reason = "reserved for future background monitoring")]
     let memory_cache = {
         let _inner = server
             .cache_deps

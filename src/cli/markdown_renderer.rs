@@ -211,10 +211,7 @@ fn render_inline(text: &str) -> String {
         // Inline code: `...`
         if let Some(rest) = remaining.strip_prefix('`') {
             pos += 1;
-            let end = rest
-                .find('`')
-                .map(|i| i + 1)
-                .unwrap_or_else(|| rest.len());
+            let end = rest.find('`').map(|i| i + 1).unwrap_or_else(|| rest.len());
             let code = &rest[..end];
             out.push_str(&format!("{}{}{}", ansi("90"), code, ansi("0")));
             pos += end;
@@ -424,22 +421,26 @@ fn heading_level(trimmed: &str) -> Option<usize> {
 }
 
 /// Estimate terminal width (default 80, use actual if available).
+/// Cached with OnceLock to avoid spawning a subprocess on every call.
 fn terminal_width() -> usize {
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        if let Ok(out) = Command::new("stty").arg("size").output() {
-            if out.status.success() {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                if let Some((_, cols)) = stdout.trim().split_once(' ') {
-                    if let Ok(c) = cols.parse::<usize>() {
-                        return c;
+    static WIDTH: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *WIDTH.get_or_init(|| {
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            if let Ok(out) = Command::new("stty").arg("size").output() {
+                if out.status.success() {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    if let Some((_, cols)) = stdout.trim().split_once(' ') {
+                        if let Ok(c) = cols.parse::<usize>() {
+                            return c;
+                        }
                     }
                 }
             }
         }
-    }
-    80
+        80
+    })
 }
 
 /// ANSI helper (same as the macro in chat.rs but as a function for use in this module).

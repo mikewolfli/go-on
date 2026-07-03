@@ -95,6 +95,7 @@ Thumbs.db
 # IDE and editor files
 .trae/
 .vscode/
+.zed/
 .idea/
 *.swp
 *.swo

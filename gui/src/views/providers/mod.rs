@@ -12,18 +12,12 @@ mod render;
 use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
-use crate::section_hash;
 use crate::views::security_prefs;
 use crate::widgets::cache::CachedView;
 use serde_json::Value;
-use std::cell::RefCell;
 use std::sync::mpsc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-
-thread_local! {
-    static COPILOT_AUTH_CACHE: RefCell<CachedView> = RefCell::new(CachedView::new());
-}
 
 pub struct ProvidersView {
     /// Selected provider name from a predefined list (for Add)

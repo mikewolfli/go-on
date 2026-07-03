@@ -5,7 +5,7 @@ use std::sync::mpsc;
 /// will fetch fresh state from the backend.
 ///
 /// No retry loop with thread::sleep is used to avoid blocking the UI thread.
-pub(crate) fn send_with_retry(tx: &mpsc::SyncSender<String>, msg: String) {
+pub(crate) fn try_send_msg(tx: &mpsc::SyncSender<String>, msg: String) {
     if tx.try_send(msg).is_err() {
         eprintln!("WARN: channel full — message dropped");
     }

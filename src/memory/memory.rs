@@ -234,9 +234,12 @@ impl MemoryStore {
     }
 
     pub fn retrieve(&self, class: MemoryClass, limit: usize) -> Vec<MemoryEntry> {
-        self.entries
-            .values()
-            .filter(|e| e.class == class && self.policy.should_retain(e))
+        self.entries_by_class
+            .get(&class)
+            .into_iter()
+            .flat_map(|tree| tree.values())
+            .filter_map(|id| self.entries.get(id))
+            .filter(|e| self.policy.should_retain(e))
             .take(limit)
             .cloned()
             .collect()

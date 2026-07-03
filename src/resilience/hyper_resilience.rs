@@ -1382,6 +1382,7 @@ pub struct RecoveryStep {
     /// Step timeout in milliseconds.
     pub timeout_ms: u64,
     /// Whether this step is reversible.
+    #[allow(dead_code, reason = "reserved for future rollback support")]
     pub reversible: bool,
 }
 

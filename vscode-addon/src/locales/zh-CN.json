@@ -869,5 +869,18 @@
     "releaseReadiness": "发布就绪",
     "qualityBaseline": "质量基线",
     "observabilityAlerts": "可观测性告警"
+  },
+  "workspaceContext": {
+    "notRunning": "Go-On 运行时未运行。请先通过聊天视图启动。",
+    "noActiveEditor": "没有活动的编辑器。",
+    "noCodeSelected": "未选择代码。请先在编辑器中选择代码。",
+    "noWorkspaceFolder": "没有打开的工作区文件夹。",
+    "searchPrompt": "按名称或关键字搜索代码符号",
+    "sentSelection": "已将 {0} 行 {1} 代码发送到 Go-On。",
+    "sentFile": "已将文件 {0}（{1} 行）发送到 Go-On。",
+    "searchPlaceholder": "例如：ToolRegistry, handle_request, SandboxLevel",
+    "searchComplete": "已完成 '{0}' 的语义搜索。结果显示在编辑器中。",
+    "contextSent": "工作区上下文已发送到 Go-On。",
+    "explainAction": "使用 Go-On 解释"
   }
 }

@@ -229,13 +229,9 @@ impl BackendClient {
         &self.base_url
     }
 
-    /// For external API consumers.
-    /// Returns the discovered chat endpoint path (e.g. "/chat/stream").
-    // Public API for external SDK consumers — not called within this binary crate.
-    #[allow(dead_code)]
-    pub async fn get_chat_endpoint(&self) -> String {
-        self.chat_endpoint.read().await.clone()
-    }
+    // get_chat_endpoint was removed — it was #[allow(dead_code)] dead code
+    // with no external consumers. If needed in the future, add it back with
+    // a cargo feature flag.
 }
 
 // ── Health & Status ─────────────────────────────────────────────────────────

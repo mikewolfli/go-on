@@ -5,12 +5,12 @@
 //! image processing, data serialization, and compression utilities.
 
 pub mod archive;
-pub mod code_index;
 #[cfg(feature = "barcode-tools")]
 pub mod barcode;
 #[cfg(feature = "cad-utils")]
 pub mod cad;
 pub mod cargo;
+pub mod code_index;
 pub mod compress;
 #[cfg(feature = "data-export")]
 pub mod csv_utils;
@@ -86,12 +86,12 @@ pub mod time;
 pub mod web;
 
 pub use archive::{ArchiveExtractTool, ArchiveInspectTool};
-pub use code_index::CodeIndexTool;
 #[cfg(feature = "barcode-tools")]
 pub use barcode::QrCodeTool;
 #[cfg(feature = "cad-utils")]
 pub use cad::CadConvertTool;
 pub use cargo::{CargoCheckTool, CargoTestTool};
+pub use code_index::CodeIndexTool;
 pub use compress::{CompressTool, DecompressTool};
 #[cfg(feature = "data-export")]
 pub use csv_utils::{CsvAnalyzeTool, CsvTransformTool};
@@ -107,7 +107,9 @@ pub use dxf_tool::DxfReadTool;
 #[cfg(feature = "document-email")]
 pub use email::EmailParseTool;
 pub use environment_info::EnvironmentInfoTool;
-pub use filesystem::{FileDeleteTool, FileMoveTool, ListDirectoryTool};
+pub use filesystem::{
+    CopyPathTool, CreateDirectoryTool, FileDeleteTool, FileMoveTool, ListDirectoryTool,
+};
 #[cfg(feature = "cam-gcode")]
 pub use gcode::GcodeReadTool;
 #[cfg(feature = "cad-geo")]

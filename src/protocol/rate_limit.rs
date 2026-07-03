@@ -69,7 +69,7 @@ impl RateLimitMiddleware {
 
     /// Perform lazy eviction: remove idle tenant entries.
     fn lazy_evict(&self, buckets: &mut HashMap<String, TokenBucket>) {
-        if buckets.len() > self.max_tenants {
+        if buckets.len() >= self.max_tenants {
             buckets.retain(|_, bucket| !bucket.is_idle(self.idle_timeout));
         }
     }

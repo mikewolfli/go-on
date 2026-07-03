@@ -193,3 +193,143 @@ impl Tool for FileDeleteTool {
         })
     }
 }
+
+// ── CreateDirectoryTool ──────────────────────────────────────────────────────
+
+pub struct CreateDirectoryTool;
+
+impl Tool for CreateDirectoryTool {
+    fn name(&self) -> &'static str {
+        "create_directory"
+    }
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let path = input.payload["path"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
+
+        let validated = sanitize_path_for_write(input, path)?;
+
+        if validated.exists() {
+            if validated.is_dir() {
+                return Ok(ToolOutput {
+                    success: true,
+                    result: Some(serde_json::json!({
+                        "created_path": validated.to_string_lossy(),
+                        "already_exists": true,
+                    })),
+                    error: None,
+                    verification: Some("directory_created".to_string()),
+                    audit_log: Some(format!("Directory already exists: {}", validated.display())),
+                    pua_report: Some(tool_execution_report(
+                        "create_directory",
+                        Some("directory_created"),
+                    )),
+                });
+            }
+            anyhow::bail!("{} is not a directory", validated.display());
+        }
+
+        fs::create_dir_all(&validated).context("failed to create directory")?;
+
+        info!(
+            path = %validated.display(),
+            "tool: directory created"
+        );
+
+        Ok(ToolOutput {
+            success: true,
+            result: Some(serde_json::json!({
+                "created_path": validated.to_string_lossy(),
+                "already_exists": false,
+            })),
+            error: None,
+            verification: Some("directory_created".to_string()),
+            audit_log: Some(format!("Created directory: {}", validated.display())),
+            pua_report: Some(tool_execution_report(
+                "create_directory",
+                Some("directory_created"),
+            )),
+        })
+    }
+}
+
+// ── CopyPathTool ────────────────────────────────────────────────────────────
+
+pub struct CopyPathTool;
+
+impl Tool for CopyPathTool {
+    fn name(&self) -> &'static str {
+        "copy_path"
+    }
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let source = input.payload["source"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_source_path")))?;
+        let destination = input.payload["destination"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_destination_path")))?;
+
+        let source_path = sanitize_path(input, source)?;
+        let dest_path = sanitize_path_for_write(input, destination)?;
+
+        if !source_path.exists() {
+            anyhow::bail!("{}", tf("error.source_not_found", &[("source", source)]));
+        }
+
+        // Create parent directories if they don't exist
+        if let Some(parent) = dest_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .context("failed to create destination parent directories")?;
+            }
+        }
+
+        if source_path.is_dir() {
+            copy_dir_recursive(&source_path, &dest_path)?;
+        } else {
+            fs::copy(&source_path, &dest_path).context("failed to copy file")?;
+        }
+
+        info!(
+            source = %source_path.display(),
+            dest = %dest_path.display(),
+            "tool: path copied successfully"
+        );
+
+        Ok(ToolOutput {
+            success: true,
+            result: Some(serde_json::json!({
+                "source": source_path.to_string_lossy(),
+                "destination": dest_path.to_string_lossy(),
+                "is_directory": source_path.is_dir(),
+            })),
+            error: None,
+            verification: Some("path_copied".to_string()),
+            audit_log: Some(format!(
+                "Copied '{}' -> '{}'",
+                source_path.display(),
+                dest_path.display()
+            )),
+            pua_report: Some(tool_execution_report("copy_path", Some("path_copied"))),
+        })
+    }
+}
+
+/// Recursively copy a directory from source to destination.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    fs::create_dir_all(dst).context("failed to create destination directory")?;
+    for entry in fs::read_dir(src).context("failed to read source directory")? {
+        let entry = entry?;
+        let entry_type = entry.file_type()?;
+        let file_name = entry.file_name();
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+
+        if entry_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path).context("failed to copy file in directory")?;
+        }
+    }
+    Ok(())
+}

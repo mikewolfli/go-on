@@ -42,7 +42,7 @@ export interface StateSyncCallbacks {
 }
 
 /** Human-readable summary of a state sync event. */
-export function stateSyncEventSummary(event: StateSyncEvent): string {
+function stateSyncEventSummary(event: StateSyncEvent): string {
   switch (event.type) {
     case "models_changed":
       return `Models changed (${event.models.length} models)`;

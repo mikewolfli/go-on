@@ -42,7 +42,7 @@ impl Bulkhead {
     /// This method is a public API intended for runtime configuration.
     /// The binary build does not invoke it yet; it is kept as a tested,
     /// meaningful public method for future wiring.
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "public API reserved for runtime configuration")]
     pub fn set_limit(&self, provider: &str, limit: usize) {
         let mut map = match self.semaphores.write() {
             Ok(map) => map,

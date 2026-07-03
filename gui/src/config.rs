@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
-use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -418,20 +416,20 @@ pub fn load_app_config() -> AppConfig {
 /// (the original AppConfig is NOT modified — a clone is used).
 /// Debounce guard — prevents flushing config to disk more than once per
 /// DEBOUNCE_MS window when multiple UI events trigger saves in quick succession.
-static CONFIG_SAVE_DEBOUNCE: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
+/// Uses AtomicU64 (nanosecond timestamp) instead of Mutex for lock-free reads.
+static CONFIG_SAVE_DEBOUNCE_NS: AtomicU64 = AtomicU64::new(0);
 const CONFIG_DEBOUNCE_MS: u64 = 100;
 
 pub fn save_app_config(config: &AppConfig) -> bool {
-    {
-        let mut last = CONFIG_SAVE_DEBOUNCE.lock().unwrap();
-        let now = Instant::now();
-        if let Some(last_time) = *last {
-            if now.duration_since(last_time).as_millis() < CONFIG_DEBOUNCE_MS as u128 {
-                return true; // skip — too soon since last save
-            }
-        }
-        *last = Some(now);
+    let now_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let last_ns = CONFIG_SAVE_DEBOUNCE_NS.load(Ordering::Relaxed);
+    if last_ns != 0 && (now_ns - last_ns) < CONFIG_DEBOUNCE_MS * 1_000_000 {
+        return true; // skip — too soon since last save
     }
+    CONFIG_SAVE_DEBOUNCE_NS.store(now_ns, Ordering::Relaxed);
     save_to_toml(config)
 }
 
