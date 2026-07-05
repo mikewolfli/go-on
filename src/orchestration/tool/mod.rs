@@ -1351,6 +1351,36 @@ impl ToolRegistry {
             },
         );
 
+        // ── File diff tool ───────────────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DiffTool,
+            ToolCapabilityProfile {
+                capability: "file_diff".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Read file lines tool ────────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ReadFileLinesTool,
+            ToolCapabilityProfile {
+                capability: "file_read_lines".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["read_file".to_string()],
+            },
+        );
+
         // ── Backward-compatibility aliases ───────────────────────
         // These names exist in the governance evaluator's allowlist.
         // Some now have their own Tool implementations; others alias

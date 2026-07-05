@@ -454,7 +454,11 @@ impl CausalBayesianGraph {
                 }
 
                 sim_prob *= chosen.probability;
-                sim_path.push(self.find_edge_index(sim_node, chosen.effect_idx).unwrap());
+                if let Some(edge_idx) = self.find_edge_index(sim_node, chosen.effect_idx) {
+                    sim_path.push(edge_idx);
+                } else {
+                    tracing::warn!("causal_bayesian_graph: edge not found between sim_node and effect_idx, skipping");
+                }
                 sim_node = chosen.effect_idx;
 
                 // Check target
@@ -511,6 +515,7 @@ impl CausalBayesianGraph {
                 Some(idx) => &mut current.children[idx],
                 None => {
                     current.children.push(MctsNode::new(child_idx));
+                    // SAFETY: `.push()` happened immediately above, so `last_mut()` is guaranteed to exist
                     current.children.last_mut().unwrap()
                 }
             };

@@ -1,6 +1,10 @@
 ---
 name: decision-logger
 description: Record architectural and design trade-off decisions so the agent doesn't re-analyze the same choices. Especially useful for long-running projects.
+version: 1.0.0
+author: go-on-team
+tags: [decision, logging, architecture, adr]
+min_go_on_version: 1.0.0
 ---
 
 # Decision Logger

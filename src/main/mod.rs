@@ -260,7 +260,7 @@ async fn run() -> Result<()> {
     };
 
     // Wrap config for hot-reload watchdog
-    let active_config: Arc<tokio::sync::RwLock<AppConfig>> =
+    let _active_config: Arc<tokio::sync::RwLock<AppConfig>> =
         Arc::new(tokio::sync::RwLock::new((*config).clone()));
 
     // Config hot-reload watchdog is disabled (see NOTE below).
@@ -269,8 +269,6 @@ async fn run() -> Result<()> {
     // during ServerBuilder::build(). Enabling this can be reverted once the
     // root cause is identified.
     // When enabled, create WatchDog and spawn it here.
-    let _active_config = active_config; // kept for when hot-reload is re-enabled
-
     // ── Graceful shutdown notify (shared with all background tasks) ──
     let shutdown_notify = Arc::new(Notify::new());
     let sig_shutdown = shutdown_notify.clone();
@@ -323,7 +321,8 @@ async fn run() -> Result<()> {
             && !std::env::args().any(|a| a == "--setup" || a == "--init"),
     };
     if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
-        let config = Arc::new(AppConfig::load(&config_path)?);
+        let cp = config_path.clone();
+        let config = Arc::new(tokio::task::spawn_blocking(move || AppConfig::load(&cp)).await??);
         tokio::select! {
             result = server::start_server(config.clone(), &cli, &config_path, Some(cl_agent_handle.clone())) => {
                 result?;

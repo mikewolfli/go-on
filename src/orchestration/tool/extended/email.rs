@@ -99,7 +99,6 @@ fn parse_eml(raw: &str) -> (std::collections::HashMap<String, String>, String) {
         idx + 2
     } else {
         // No body
-        let _ = raw.len();
         return (headers, body);
     };
 

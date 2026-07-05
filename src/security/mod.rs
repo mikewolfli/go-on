@@ -113,7 +113,10 @@ pub fn wire_cert_monitor(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            check_cert_expiry(&cert_path);
+            let cp = cert_path.clone();
+            tokio::task::spawn_blocking(move || check_cert_expiry(&cp))
+                .await
+                .ok();
         }
     });
 

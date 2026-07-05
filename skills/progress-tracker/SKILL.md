@@ -1,6 +1,10 @@
 ---
 name: progress-tracker
 description: Persist completed and blocked steps across multi-turn agent invocations. Avoid re-analyzing already-resolved subtasks. Use when a task spans multiple agent turns.
+version: 1.0.0
+author: go-on-team
+tags: [progress, tracking, report, status]
+min_go_on_version: 1.0.0
 ---
 
 # Progress Tracker

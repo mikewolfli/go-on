@@ -1,6 +1,10 @@
 ---
 name: self-reviewer
 description: Agent reviews its own work before presenting to the user. Catches errors, style violations, and omissions before the user sees the output.
+version: 1.0.0
+author: go-on-team
+tags: [review, quality, self-check, verification]
+min_go_on_version: 1.0.0
 ---
 
 # Self Reviewer

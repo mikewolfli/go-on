@@ -17,6 +17,7 @@ pub mod csv_utils;
 #[cfg(feature = "data-export")]
 pub mod data_serialization;
 pub mod diagnostics;
+pub mod diff;
 #[cfg(feature = "document-docx")]
 pub mod docx;
 #[cfg(feature = "cad-dxf")]
@@ -68,6 +69,7 @@ pub mod office;
 pub mod pdf;
 #[cfg(feature = "cad-ply")]
 pub mod ply;
+pub mod read_lines;
 pub mod rss;
 pub mod search;
 pub mod shell;
@@ -100,6 +102,7 @@ pub use data_serialization::{
     CsvReadTool, CsvWriteTool, TomlReadTool, TomlWriteTool, YamlReadTool, YamlWriteTool,
 };
 pub use diagnostics::DiagnosticsTool;
+pub use diff::DiffTool;
 #[cfg(feature = "document-docx")]
 pub use docx::ReadDocxTool;
 #[cfg(feature = "cad-dxf")]
@@ -144,6 +147,7 @@ pub use office::{ReadPptTool, WritePptTool};
 pub use pdf::{PdfMergeTool, PdfSplitTool, ReadPdfTool};
 #[cfg(feature = "cad-ply")]
 pub use ply::PlyReadTool;
+pub use read_lines::ReadFileLinesTool;
 pub use rss::RssReadTool;
 pub use search::{FindFilesTool, GrepTool};
 pub use shell::ShellExecTool;

@@ -1103,7 +1103,10 @@ impl FederatedRL {
 
         let completed_ms = now_millis();
         {
-            let round = inner.rounds.get_mut(round_id).unwrap();
+            let round = inner
+                .rounds
+                .get_mut(round_id)
+                .ok_or_else(|| FederatedError::RoundNotFound(round_id.to_string()))?;
             round.status = DistillationStatus::Completed;
             round.completed_ms = completed_ms;
             round.merged_policy = Some(merged_policy);
@@ -1111,7 +1114,11 @@ impl FederatedRL {
 
         inner.last_merge_ms = completed_ms;
 
-        Ok(inner.rounds.get(round_id).unwrap().clone())
+        inner
+            .rounds
+            .get(round_id)
+            .cloned()
+            .ok_or_else(|| FederatedError::RoundNotFound(round_id.to_string()))
     }
 
     // ── Round querying ────────────────────────────────────────────────────

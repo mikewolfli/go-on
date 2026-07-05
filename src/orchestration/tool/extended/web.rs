@@ -75,7 +75,7 @@ impl Tool for WebScrapeTool {
         }
 
         let title = document
-            .select(&scraper::Selector::parse("title").unwrap())
+            .select(&scraper::Selector::parse("title").expect("valid CSS selector 'title'"))
             .next()
             .map(|e| e.text().collect::<String>());
 

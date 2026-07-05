@@ -427,12 +427,7 @@ pub(crate) fn build_completeness_report(
         .as_ref()
         .map(|vector| vector.enabled)
         .unwrap_or(false);
-    if config
-        .vector
-        .as_ref()
-        .map(|vector| vector.enabled)
-        .unwrap_or(false)
-    {
+    if vector_enabled {
         if vector_enabled == recommended_vector {
             score += 5.0;
         } else {

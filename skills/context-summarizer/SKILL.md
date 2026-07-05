@@ -1,6 +1,10 @@
 ---
 name: context-summarizer
 description: Summarize long conversations or task histories to fit within token windows. Enables the agent to maintain context across sessions without hitting token limits.
+version: 1.0.0
+author: go-on-team
+tags: [context, summarization, token, utility]
+min_go_on_version: 1.0.0
 ---
 
 # Context Summarizer

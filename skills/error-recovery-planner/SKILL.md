@@ -1,6 +1,10 @@
 ---
 name: error-recovery-planner
 description: Analyze build, test, and runtime failures and propose structured recovery plans. Use when the agent encounters errors it cannot immediately resolve.
+version: 1.0.0
+author: go-on-team
+tags: [error, recovery, planning, debug]
+min_go_on_version: 1.0.0
 ---
 
 # Error Recovery Planner

@@ -236,8 +236,6 @@ impl ReputationStore {
     }
 }
 
-// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -759,12 +759,13 @@ impl ChatView {
                                                     if let Some(obj) = plan_output.as_object() {
                                                         // Plan output is available for the UI to display
                                                         // the structured plan steps and recommended mode
-                                                        let _ = serde_json::to_string(obj);
                                                         #[cfg(debug_assertions)]
-                                                        eprintln!("[Plan] Captured plan output: {} mode, {} step(s)",
-                                                            obj.get("recommended_mode").and_then(|v| v.as_str()).unwrap_or("?"),
-                                                            obj.get("steps").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0)
-                                                        );
+                                                        {
+                                                            eprintln!("[Plan] Captured plan output: {} mode, {} step(s)",
+                                                                obj.get("recommended_mode").and_then(|v| v.as_str()).unwrap_or("?"),
+                                                                obj.get("steps").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0)
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }

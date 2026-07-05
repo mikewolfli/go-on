@@ -27,6 +27,9 @@ mod unit_tests {
     use std::sync::{Arc, Mutex};
 
     #[cfg(not(feature = "backend-postgres"))]
+    use serial_test::serial;
+
+    #[cfg(not(feature = "backend-postgres"))]
     use async_trait::async_trait;
     #[cfg(not(feature = "backend-postgres"))]
     use serde_json::json;
@@ -48,14 +51,16 @@ mod unit_tests {
         std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
     /// Reset all global state that can accumulate across test runs.
-    /// Acquires the serialization lock to prevent parallel interference.
     #[cfg(not(feature = "backend-postgres"))]
-    fn reset_global_state() {
-        let _guard = CHAT_TEST_SERIAL
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        reset_agent_switch_state_for_test();
-        clear_agent_memory_bus();
+    async fn reset_global_state() {
+        // Acquire serial lock, reset sync state, then release before async operations.
+        {
+            let _guard = CHAT_TEST_SERIAL
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            reset_agent_switch_state_for_test();
+        } // guard dropped here — no lock held across .await
+        clear_agent_memory_bus().await;
     }
     #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::server::ServerBuilder;
@@ -200,8 +205,9 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[serial]
     async fn process_chat_request_wires_vector_context_and_checkpoint_tree() {
-        reset_global_state();
+        reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
         let vector_path = temp.path().join("vector.sqlite3");
         let vector_store = Arc::new(
@@ -343,8 +349,9 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[serial]
     async fn process_chat_request_wires_harness_and_capability_bus_closed_loop() {
-        reset_global_state();
+        reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
         let vector_path = temp.path().join("e2e_vector.sqlite3");
         let vector_store = Arc::new(
@@ -457,8 +464,9 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[serial]
     async fn process_chat_request_skips_empty_agent_output_and_uses_next_agent() {
-        reset_global_state();
+        reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let seen_messages = Arc::new(Mutex::new(Vec::new()));
@@ -549,8 +557,9 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[serial]
     async fn process_chat_request_all_empty_outputs_returns_specific_error() {
-        reset_global_state();
+        reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let mut registry = AgentRegistry::new();
@@ -622,8 +631,9 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[serial]
     async fn process_chat_request_specific_model_without_match_keeps_phase_agents() {
-        reset_global_state();
+        reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let seen_messages = Arc::new(Mutex::new(Vec::new()));
@@ -689,8 +699,9 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[serial]
     async fn process_chat_request_high_risk_multi_candidate_emits_council_decision() {
-        reset_global_state();
+        reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let mut registry = AgentRegistry::new();
@@ -786,8 +797,9 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
+    #[serial]
     async fn process_chat_request_execute_mode_exposes_stable_autonomy_contract() {
-        reset_global_state();
+        reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let mut registry = AgentRegistry::new();

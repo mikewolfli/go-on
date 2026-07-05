@@ -196,22 +196,25 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
         // ── Read user input with Ctrl+C handling ──
-        let read_result = {
-            let stdin = std::io::stdin();
-            let mut line = String::new();
-            tokio::select! {
-                result = async { stdin.read_line(&mut line).map(|_| line.clone()) } => {
-                    Some(result)
+        let read_result: Option<Result<String, std::io::Error>> = tokio::select! {
+            result = tokio::task::spawn_blocking(|| {
+                let stdin = std::io::stdin();
+                let mut line = String::new();
+                stdin.read_line(&mut line).map(|_| line.trim().to_string())
+            }) => {
+                match result {
+                    Ok(inner) => Some(inner),
+                    Err(_) => Some(Ok(String::new())),
                 }
-                _ = signal::ctrl_c() => {
-                    eprintln!("\n{}Interrupted. Type /quit to exit, or continue typing.{}", ansi!("33"), ansi!("0"));
-                    None
-                }
+            }
+            _ = signal::ctrl_c() => {
+                eprintln!("\n{}Interrupted. Type /quit to exit, or continue typing.{}", ansi!("33"), ansi!("0"));
+                None
             }
         };
 
         let line = match read_result {
-            Some(Ok(l)) => l.trim().to_string(),
+            Some(Ok(l)) => l,
             Some(Err(e)) => {
                 eprintln!("Read error: {e}");
                 break;
@@ -243,7 +246,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         version: 1,
                     };
                     let json = serde_json::to_string_pretty(&session)?;
-                    std::fs::write(&session_path, &json)?;
+                    tokio::fs::write(&session_path, &json).await?;
                     eprintln!(
                         "{}Session saved to {}{}",
                         ansi!("32"),
@@ -253,7 +256,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     continue;
                 }
                 "load" => {
-                    match std::fs::read_to_string(&session_path) {
+                    match tokio::fs::read_to_string(&session_path).await {
                         Ok(json) => match serde_json::from_str::<ChatSession>(&json) {
                             Ok(session) => {
                                 messages = session.messages;
@@ -292,7 +295,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     continue;
                 }
                 "tools" => {
-                    let registry = ToolRegistry::default();
+                    let registry = tool_registry();
                     let names = registry.all_names();
                     eprintln!("Available tools ({}):", names.len());
                     for name in names {
@@ -624,6 +627,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
 
         // ── Auto-save session every turn (non-blocking, debounced) ──
         if !messages.is_empty() && !SAVE_IN_FLIGHT.load(Ordering::Acquire) {
+            SAVE_IN_FLIGHT.store(true, Ordering::Release);
             let json = serde_json::to_string(&messages).unwrap_or_default();
             let path = session_path.clone();
             let guard = AutoSaveGuard;

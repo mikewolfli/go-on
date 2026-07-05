@@ -141,7 +141,7 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "goon_metrics_window_query" | "goon_metrics_errors_summary"
         | "goon_provider_capabilities" | "prompts_list" | "prompts_get"
         | "workflow_execute" | "workflow_ask" | "workflow_generate"
-        | "import_skill"
+        | "import_skill" | "skill_reload"
         | "semantic_search"
         // ── CAD read tools (read-only 3d/2d format parsing) ──
         | "dxf_read" | "stl_read" | "obj_read" | "step_read" | "ply_read" | "iges_read"

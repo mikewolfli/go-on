@@ -4,7 +4,7 @@
 //! and reporting warnings/errors in a structured format.
 
 use crate::governance::pua::tool_execution_report;
-use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
+use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
 use std::process::Command;
 use tracing::debug;
@@ -27,12 +27,14 @@ impl Tool for DiagnosticsTool {
             .and_then(|v| v.as_str())
             .unwrap_or(".");
 
+        let current_dir = sanitize_path(input, directory)?;
+
         debug!(directory = %directory, "tool: diagnostics");
 
         // Run `cargo check` and capture stderr (where diagnostics appear).
         let output = Command::new("cargo")
             .args(["check", "--message-format=short"])
-            .current_dir(directory)
+            .current_dir(&current_dir)
             .output()
             .context("failed to execute `cargo check` — is cargo installed?")?;
 

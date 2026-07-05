@@ -179,11 +179,67 @@ impl QuickCheckResult {
 
 fn tool_category(name: &str) -> Option<ToolCategory> {
     match name {
-        "read_file" | "read" => Some(ToolCategory::ReadOnly),
-        "write_file" | "write" | "create" => Some(ToolCategory::Write),
-        "search_files" | "grep" | "search" => Some(ToolCategory::ReadOnly),
-        "list_files" | "ls" => Some(ToolCategory::ReadOnly),
-        "bash" | "execute_command" | "run" => Some(ToolCategory::Shell),
+        // ── Read operations ──
+        "read_file" | "read"
+        | "search_files" | "grep" | "search" | "list_files" | "ls"
+        | "list_directory" | "find_files" | "find_path"
+        | "inspect_git_diff" | "date_time"
+        | "skill_list" | "skill_reload"
+        | "archive_inspect" | "jsonl_read" | "diagnostics"
+        | "environment_info" | "rss_read"
+        | "code_index_search" | "semantic_search"
+        | "dns_lookup" | "ping" | "port_scan"
+        // ── Document read tools ──
+        | "read_excel" | "read_ppt" | "read_docx" | "read_pdf"
+        | "csv_read" | "csv_analyze" | "toml_read" | "yaml_read"
+        | "email_parse" | "web_scrape" | "invoice_parse"
+        // ── CAD read tools ──
+        | "dxf_read" | "stl_read" | "obj_read" | "step_read"
+        | "ply_read" | "iges_read" | "gltf_read" | "svg_read"
+        | "obj_model_read" | "gcode_read" | "gpx_read"
+        | "geo_util" | "cad_convert"
+        // ── Image read tools ──
+        | "image_analyze" | "qrcode_generate"
+        // ── SQL query ──
+        | "sqlite_query" => Some(ToolCategory::ReadOnly),
+
+        // ── Write operations ──
+        "write_file" | "write" | "create"
+        | "apply_patch"
+        | "create_directory" | "delete_path" | "move_path"
+        | "file_move" | "file_delete"
+        | "copy_path"
+        | "compress" | "decompress" | "archive_extract"
+        | "jsonl_write"
+        | "csv_write" | "csv_transform" | "toml_write" | "yaml_write"
+        | "write_docx" | "write_excel" | "write_ppt"
+        | "pdf_merge" | "pdf_split"
+        | "svg_generate" | "svg_export" | "stl_generate"
+        | "image_generate" | "image_resize" | "image_convert"
+        | "skill_create"
+        // ── Game write tools ──
+        | "game_mod_install" | "game_replay_recorder"
+        | "game_save_manager" | "game_screen_capture"
+        | "game_auto_grind" | "game_keyboard_input"
+        | "game_mouse_input" | "game_state_modify"
+        // ── Workflow management tools ──
+        | "goon_workflow_run_cancel" | "goon_workflow_run_pause"
+        | "goon_workflow_run_resume" | "goon_skill_update"
+        | "goon_skill_version_rollback" => Some(ToolCategory::Write),
+
+        // ── Shell operations ──
+        "bash" | "execute_command" | "run"
+        | "shell_exec" | "terminal"
+        | "run_tests" | "cargo_test" | "cargo_check"
+        | "skill_execute" => Some(ToolCategory::Shell),
+
+        // ── Network operations ──
+        "http_request"
+        | "git"
+        | "game_launch" | "game_monitor" | "game_online_status"
+        | "goon_provider_test_completion"
+        | "goon_provider_test_connection" => Some(ToolCategory::Shell),
+
         _ => None,
     }
 }
@@ -314,19 +370,131 @@ pub fn quick_check_tool(tool_name: &str, args: &Value) -> Result<(), String> {
 /// Collect the set of known tool names (for introspection / status).
 pub fn known_tool_names() -> BTreeSet<&'static str> {
     let mut set = BTreeSet::new();
-    set.insert("read_file");
-    set.insert("read");
-    set.insert("write_file");
-    set.insert("write");
-    set.insert("create");
-    set.insert("search_files");
-    set.insert("grep");
-    set.insert("search");
-    set.insert("list_files");
-    set.insert("ls");
-    set.insert("bash");
-    set.insert("execute_command");
-    set.insert("run");
+    // Read tools
+    for &name in &[
+        "read_file",
+        "read",
+        "search_files",
+        "grep",
+        "search",
+        "list_files",
+        "ls",
+        "list_directory",
+        "find_files",
+        "find_path",
+        "inspect_git_diff",
+        "date_time",
+        "skill_list",
+        "skill_reload",
+        "archive_inspect",
+        "jsonl_read",
+        "diagnostics",
+        "environment_info",
+        "rss_read",
+        "code_index_search",
+        "semantic_search",
+        "dns_lookup",
+        "ping",
+        "port_scan",
+        "read_excel",
+        "read_ppt",
+        "read_docx",
+        "read_pdf",
+        "csv_read",
+        "csv_analyze",
+        "toml_read",
+        "yaml_read",
+        "email_parse",
+        "web_scrape",
+        "invoice_parse",
+        "dxf_read",
+        "stl_read",
+        "obj_read",
+        "step_read",
+        "ply_read",
+        "iges_read",
+        "gltf_read",
+        "svg_read",
+        "obj_model_read",
+        "gcode_read",
+        "gpx_read",
+        "geo_util",
+        "cad_convert",
+        "image_analyze",
+        "qrcode_generate",
+        "sqlite_query",
+    ] {
+        set.insert(name);
+    }
+    // Write tools
+    for &name in &[
+        "write_file",
+        "write",
+        "create",
+        "apply_patch",
+        "create_directory",
+        "delete_path",
+        "move_path",
+        "file_move",
+        "file_delete",
+        "copy_path",
+        "compress",
+        "decompress",
+        "archive_extract",
+        "jsonl_write",
+        "csv_write",
+        "csv_transform",
+        "toml_write",
+        "yaml_write",
+        "write_docx",
+        "write_excel",
+        "write_ppt",
+        "pdf_merge",
+        "pdf_split",
+        "svg_generate",
+        "svg_export",
+        "stl_generate",
+        "image_generate",
+        "image_resize",
+        "image_convert",
+        "skill_create",
+        "game_mod_install",
+        "game_replay_recorder",
+        "game_save_manager",
+        "game_screen_capture",
+        "game_auto_grind",
+        "game_keyboard_input",
+        "game_mouse_input",
+        "game_state_modify",
+        "goon_workflow_run_cancel",
+        "goon_workflow_run_pause",
+        "goon_workflow_run_resume",
+        "goon_skill_update",
+        "goon_skill_version_rollback",
+    ] {
+        set.insert(name);
+    }
+    // Shell/exec tools
+    for &name in &[
+        "bash",
+        "execute_command",
+        "run",
+        "shell_exec",
+        "terminal",
+        "run_tests",
+        "cargo_test",
+        "cargo_check",
+        "skill_execute",
+        "http_request",
+        "git",
+        "game_launch",
+        "game_monitor",
+        "game_online_status",
+        "goon_provider_test_completion",
+        "goon_provider_test_connection",
+    ] {
+        set.insert(name);
+    }
     set
 }
 

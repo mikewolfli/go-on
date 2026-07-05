@@ -786,29 +786,9 @@ impl AuditEntryBuilder {
         self
     }
 
-    /// Set the tool name.
-    #[allow(
-        dead_code,
-        reason = "Builder pattern — reserved for future audit enrichment"
-    )]
-    pub fn tool(mut self, tool: &str) -> Self {
-        self.tool = Some(tool.to_string());
-        self
-    }
-
     /// Set the input payload.
     pub fn inputs(mut self, inputs: serde_json::Value) -> Self {
         self.inputs = inputs;
-        self
-    }
-
-    /// Set the output payload.
-    #[allow(
-        dead_code,
-        reason = "Builder pattern — reserved for future audit enrichment"
-    )]
-    pub fn outputs(mut self, outputs: serde_json::Value) -> Self {
-        self.outputs = Some(outputs);
         self
     }
 
@@ -821,46 +801,6 @@ impl AuditEntryBuilder {
     /// Set the confidence score.
     pub fn confidence(mut self, confidence: f32) -> Self {
         self.confidence = Some(confidence);
-        self
-    }
-
-    /// Set the data classification label.
-    #[allow(
-        dead_code,
-        reason = "Builder pattern — reserved for future audit enrichment"
-    )]
-    pub fn data_classification(mut self, dc: &str) -> Self {
-        self.data_classification = Some(dc.to_string());
-        self
-    }
-
-    /// Add a compliance tag.
-    #[allow(
-        dead_code,
-        reason = "Builder pattern — reserved for future audit enrichment"
-    )]
-    pub fn compliance_tag(mut self, tag: &str) -> Self {
-        self.compliance_tags.push(tag.to_string());
-        self
-    }
-
-    /// Set the retention policy.
-    #[allow(
-        dead_code,
-        reason = "Builder pattern — reserved for future audit enrichment"
-    )]
-    pub fn retention_policy(mut self, rp: &str) -> Self {
-        self.retention_policy = Some(rp.to_string());
-        self
-    }
-
-    /// Set the correlation ID.
-    #[allow(
-        dead_code,
-        reason = "Builder pattern — reserved for future audit enrichment"
-    )]
-    pub fn correlation_id(mut self, cid: &str) -> Self {
-        self.correlation_id = Some(cid.to_string());
         self
     }
 
@@ -944,7 +884,6 @@ mod tests {
     fn test_audit_entry() {
         let entry = AuditEntryBuilder::new("task-001", "chat", "allow")
             .agent("agent-a")
-            .tool("read_file")
             .inputs(serde_json::json!({"input": "test"}))
             .confidence(0.95)
             .build();
