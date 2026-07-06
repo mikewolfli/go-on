@@ -15,6 +15,9 @@ impl Tool for GitTool {
     fn name(&self) -> &'static str {
         "git"
     }
+    fn description(&self) -> &str {
+        "Execute safe git operations (status, diff, log, add, branch, show, stash, tag)"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let subcommand = input.payload["subcommand"]
             .as_str()

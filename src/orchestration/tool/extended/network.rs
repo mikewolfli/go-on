@@ -18,6 +18,9 @@ impl Tool for DnsLookupTool {
     fn name(&self) -> &'static str {
         "dns_lookup"
     }
+    fn description(&self) -> &str {
+        "Perform DNS lookup to resolve a hostname to IP addresses"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let hostname = input.payload["hostname"]
             .as_str()
@@ -92,6 +95,9 @@ pub struct PingTool;
 impl Tool for PingTool {
     fn name(&self) -> &'static str {
         "ping"
+    }
+    fn description(&self) -> &str {
+        "Ping a remote host to check network connectivity"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let host = input.payload["host"]
@@ -185,6 +191,9 @@ pub struct PortScanTool;
 impl Tool for PortScanTool {
     fn name(&self) -> &'static str {
         "port_scan"
+    }
+    fn description(&self) -> &str {
+        "Scan TCP ports on a remote host"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let host = input.payload["host"]

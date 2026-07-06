@@ -49,7 +49,9 @@ impl Drop for SecurityE2eContext {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-/// Full security validation across all five security control planes.
+/// Security validation across available security control planes.
+/// Currently tests: prompt injection detection, audit integrity (hash chain),
+/// secret rotation. mTLS and request signing tests are pending.
 #[tokio::test]
 async fn test_security_all_controls() {
     let ctx = SecurityE2eContext::new();

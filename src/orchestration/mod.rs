@@ -16,7 +16,7 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG
 ))]
 pub mod council; // F-GAP-15
 pub mod dag_driver; // Tool execution DAG — orchestrates tool calls with parallel fan-out and plan-topology
-pub mod diagnostic_feedback; // F-GAP-51: Reserved for full diagnostic integration
+pub mod diagnostic_feedback;
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod flow_with_models;
@@ -43,10 +43,6 @@ pub mod skill;
 pub mod skill_discovery;
 pub mod skill_import;
 pub mod skill_market;
-// Skills folder scanner — test-only utility for indexing skill source URLs.
-// Production skill discovery is handled by `skill_discovery` and `skill_import`.
-#[cfg(test)]
-pub mod skills_folder;
 pub mod startup_context;
 pub mod task_decomposer;
 pub mod task_graph_store;

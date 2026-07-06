@@ -18,6 +18,8 @@ pub enum ProtocolModeError {
 
 impl ProtocolMode {
     /// Priority order for negotiation (higher = more preferred).
+    /// Not yet wired into production path.
+    #[allow(dead_code)]
     pub fn priority(self) -> u32 {
         match self {
             ProtocolMode::Adaptive => 5,
@@ -29,6 +31,8 @@ impl ProtocolMode {
     }
 
     /// Fallback chain: if current protocol fails, what to try next.
+    /// Not yet wired into production path.
+    #[allow(dead_code)]
     pub fn fallback(self) -> Option<ProtocolMode> {
         match self {
             ProtocolMode::AcpHttp => Some(ProtocolMode::AcpStdio),

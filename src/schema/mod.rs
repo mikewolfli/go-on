@@ -102,6 +102,9 @@ impl ProtocolVersion {
     /// Iterates the server's supported versions in **descending** order
     /// (V3 → V2 → V1) so that the *highest* mutually-supported version wins.
     /// Returns `None` when no common version is found.
+    ///
+    /// Currently only called from tests and the GUI backend (which is a separate crate).
+    #[allow(dead_code)]
     pub fn select_highest_common(client_versions: &[Self]) -> Option<Self> {
         Self::supported_versions()
             .iter()

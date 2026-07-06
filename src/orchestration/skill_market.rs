@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::{Arc, OnceLock, RwLock as StdRwLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -251,11 +251,14 @@ impl SkillMarketRegistry {
     /// Fetch skills from the remote registry API.
     async fn fetch_remote_skills(&self) -> Result<Vec<SkillMarketItem>> {
         let url = format!("{}/api/v1/skills", self.registry_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .user_agent("go-on-skill-market/1.0")
-            .build()
-            .context("failed to create HTTP client for remote fetch")?;
+        static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+        let client = HTTP_CLIENT.get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .user_agent("go-on-skill-market/1.0")
+                .build()
+                .expect("failed to create HTTP client for remote fetch")
+        });
 
         let response = client
             .get(&url)
@@ -494,11 +497,14 @@ impl SkillMarketRegistry {
     /// The remote index must conform to the `SkillIndex` schema (a JSON object
     /// with a `skills` array).
     pub async fn fetch_github_index(&self, raw_url: &str) -> Result<Vec<SkillMarketItem>> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .user_agent("go-on-skill-market/1.0")
-            .build()
-            .context("failed to build HTTP client")?;
+        static GITHUB_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+        let client = GITHUB_CLIENT.get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .user_agent("go-on-skill-market/1.0")
+                .build()
+                .expect("failed to create HTTP client for GitHub fetch")
+        });
 
         let response = client
             .get(raw_url)

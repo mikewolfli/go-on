@@ -301,19 +301,7 @@ impl ToolRegistry {
                 fallback_chain: vec!["search_files".to_string()],
             },
         );
-        registry.register_with_profile(
-            crate::orchestration::tool_extended::FindFilesTool,
-            ToolCapabilityProfile {
-                capability: "file_discovery".to_string(),
-                risk_level: ToolRiskLevel::Low,
-                timeout_budget_ms: 10_000,
-                retry_policy: RetryPolicy {
-                    max_retries: 1,
-                    retry_on_failure: true,
-                },
-                fallback_chain: vec!["search_files".to_string()],
-            },
-        );
+
         registry.register_with_profile(
             crate::orchestration::tool_extended::GitTool,
             ToolCapabilityProfile {

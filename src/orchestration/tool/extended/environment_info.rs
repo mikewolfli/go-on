@@ -20,6 +20,10 @@ impl Tool for EnvironmentInfoTool {
         "environment_info"
     }
 
+    fn description(&self) -> &str {
+        "Get OS family, architecture, hostname, project root, and available tooling"
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // Determine project root from payload or use an allowed base directory.
         let project_root = input

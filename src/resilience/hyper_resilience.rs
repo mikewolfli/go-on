@@ -801,20 +801,26 @@ impl HyperResilienceEngine {
         };
 
         // Persist a recovery plan to the store (P3-8)
-        if let Some(ref store) = self.plan_store {
-            let plan = RecoveryPlan::new(
-                format!("{}-{}", report.target, report.initiated_ms),
-                format!("Auto-healing {:?} on {}", report.action, report.target),
-                "auto".to_string(),
-                vec![RecoveryStep {
-                    description: format!("{:?} execution", report.action),
-                    action: report.action.clone(),
-                    target: report.target.clone(),
-                    timeout_ms: test_duration_ms,
-                    reversible: false,
-                }],
-            );
-            if let Err(e) = store.save(&plan) {
+        // Build plan (cheap data construction), then save via spawn_blocking
+        // to avoid blocking tokio worker with std::fs::write.
+        let plan = RecoveryPlan::new(
+            format!("{}-{}", report.target, report.initiated_ms),
+            format!("Auto-healing {:?} on {}", report.action, report.target),
+            "auto".to_string(),
+            vec![RecoveryStep {
+                description: format!("{:?} execution", report.action),
+                action: report.action.clone(),
+                target: report.target.clone(),
+                timeout_ms: test_duration_ms,
+                reversible: false,
+            }],
+        );
+        if let Some(store) = self.plan_store.clone() {
+            let plan = plan.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || store.save(&plan))
+                .await
+                .unwrap_or_else(|_| Err(std::io::Error::other("spawn_blocking failed")))
+            {
                 tracing::warn!(
                     target: "resilience",
                     "failed to save recovery plan: {}",

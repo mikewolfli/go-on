@@ -259,16 +259,6 @@ async fn run() -> Result<()> {
         None => return Ok(()),
     };
 
-    // Wrap config for hot-reload watchdog
-    let _active_config: Arc<tokio::sync::RwLock<AppConfig>> =
-        Arc::new(tokio::sync::RwLock::new((*config).clone()));
-
-    // Config hot-reload watchdog is disabled (see NOTE below).
-    // NOTE: Temporarily disabled to debug startup deadlock on macOS.
-    // The notify kqueue watcher appears to deadlock with the tokio runtime
-    // during ServerBuilder::build(). Enabling this can be reverted once the
-    // root cause is identified.
-    // When enabled, create WatchDog and spawn it here.
     // ── Graceful shutdown notify (shared with all background tasks) ──
     let shutdown_notify = Arc::new(Notify::new());
     let sig_shutdown = shutdown_notify.clone();

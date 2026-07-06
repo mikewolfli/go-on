@@ -17,6 +17,9 @@ impl Tool for ListDirectoryTool {
     fn name(&self) -> &'static str {
         "list_directory"
     }
+    fn description(&self) -> &str {
+        "List files and directories in a given path"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -89,6 +92,9 @@ impl Tool for FileMoveTool {
     fn name(&self) -> &'static str {
         "file_move"
     }
+    fn description(&self) -> &str {
+        "Move or rename a file from source to destination"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let source = input.payload["source"]
             .as_str()
@@ -146,6 +152,9 @@ impl Tool for FileDeleteTool {
     fn name(&self) -> &'static str {
         "file_delete"
     }
+    fn description(&self) -> &str {
+        "Delete a file (requires confirmation)"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -201,6 +210,9 @@ pub struct CreateDirectoryTool;
 impl Tool for CreateDirectoryTool {
     fn name(&self) -> &'static str {
         "create_directory"
+    }
+    fn description(&self) -> &str {
+        "Create a new directory (and all parent directories)"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
@@ -260,6 +272,9 @@ pub struct CopyPathTool;
 impl Tool for CopyPathTool {
     fn name(&self) -> &'static str {
         "copy_path"
+    }
+    fn description(&self) -> &str {
+        "Copy a file or directory from source to destination"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let source = input.payload["source"]

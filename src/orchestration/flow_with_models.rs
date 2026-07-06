@@ -84,16 +84,16 @@ impl FlowModelSelector {
                 // and config requests it, falling back to criteria-based.
                 if let Some(desc) = task_description {
                     if config.model_selection_mode() == "semantic" {
-                        return AgentModelSelection {
-                            selected_model: select_model_semantic(
-                                ctx,
-                                &available,
-                                desc,
-                                strategy.clone(),
-                            ),
-                            selection_strategy: strategy,
-                            task_complexity,
-                        };
+                        let semantic =
+                            select_model_semantic(ctx, &available, desc, strategy.clone());
+                        if semantic.is_some() {
+                            return AgentModelSelection {
+                                selected_model: semantic,
+                                selection_strategy: strategy,
+                                task_complexity,
+                            };
+                        }
+                        // Semantic match returned None — fall through to criteria-based
                     }
                 }
                 let criteria = Self::build_selection_criteria(task_complexity, task_description);

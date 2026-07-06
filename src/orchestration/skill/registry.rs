@@ -464,6 +464,61 @@ impl SkillRegistry {
         self.save_prompt_skills_to_disk()
     }
 
+    /// Shared helper: register a single [`ParsedSkillFile`] as a `PromptBasedSkill`.
+    ///
+    /// Handles hot-reload (unregister old), registration, mtime tracking, and
+    /// prompt skill data persistence. Used by both `discover_and_register_local_skills`
+    /// and the background refresh task to eliminate DRY violation.
+    fn register_parsed_skill(&mut self, pf: ParsedSkillFile) -> Result<()> {
+        // Hot-reload: unregister if the skill name is already taken
+        if self.known_skill_names().contains(&pf.manifest.name) {
+            info!(
+                "Hot-reloading skill '{}' from '{}'",
+                pf.manifest.name,
+                pf.md_path.display()
+            );
+            self.unregister(&pf.manifest.name);
+        }
+
+        let prompt_text = pf
+            .manifest
+            .prompt_template
+            .clone()
+            .unwrap_or_else(|| pf.manifest.description.clone());
+
+        let parsed_schema = schema_value_to_map(&pf.manifest.input_schema);
+        let skill = PromptBasedSkill {
+            name: pf.manifest.name.clone(),
+            description: pf.manifest.description.clone(),
+            prompt_template: prompt_text,
+            input_schema: parsed_schema.clone(),
+            timeout_secs: 30,
+            max_retries: 2,
+        };
+
+        self.register(Arc::new(skill))?;
+
+        // Record the mtime so subsequent refresh ticks skip this file
+        self.skill_file_mtimes.insert(pf.md_path, pf.current_mtime);
+
+        // Track the imported skill data for persistence
+        self.prompt_skill_data.insert(
+            pf.manifest.name.clone(),
+            SavedPromptSkill {
+                name: pf.manifest.name.clone(),
+                description: pf.manifest.description.clone(),
+                prompt_template: pf.manifest.prompt_template.unwrap_or_default(),
+                input_schema: parsed_schema,
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            },
+        );
+
+        Ok(())
+    }
+
     /// Discover and register local skills from `~/.agents/skills/` directory.
     ///
     /// Scans each subdirectory of the agents skills directory for a `SKILL.md`
@@ -582,63 +637,20 @@ impl SkillRegistry {
                 }
             };
 
-            // ── Hot-reload check ──
-            // If we get here, the file's mtime has changed (or it's a new file).
-            // If the skill name is already registered, this is a hot-reload (update).
-            // Unregister the old version first so the new one can be registered below.
-            if self.skills.contains_key(&manifest.name) {
-                info!(
-                    "Hot-reloading skill '{}' from '{}' (file modified)",
-                    manifest.name,
-                    md_path.display()
-                );
-                self.unregister(&manifest.name);
-            }
-
-            // Create PromptBasedSkill from the parsed manifest
-            let prompt_text = manifest
-                .prompt_template
-                .clone()
-                .unwrap_or_else(|| manifest.description.clone());
-
-            let parsed_schema = schema_value_to_map(&manifest.input_schema);
-            let skill = PromptBasedSkill {
-                name: manifest.name.clone(),
-                description: manifest.description.clone(),
-                prompt_template: prompt_text,
-                input_schema: parsed_schema.clone(),
-                timeout_secs: 30,
-                max_retries: 2,
+            let pf = ParsedSkillFile {
+                md_path,
+                current_mtime,
+                manifest,
             };
 
-            match self.register(Arc::new(skill)) {
+            let skill_name = pf.manifest.name.clone();
+            match self.register_parsed_skill(pf) {
                 Ok(()) => {
                     registered += 1;
-                    // Record the mtime so subsequent refresh ticks skip this file
-                    self.skill_file_mtimes.insert(md_path, current_mtime);
-                    // Track the imported skill data for persistence
-                    self.prompt_skill_data.insert(
-                        manifest.name.clone(),
-                        SavedPromptSkill {
-                            name: manifest.name.clone(),
-                            description: manifest.description,
-                            prompt_template: manifest.prompt_template.unwrap_or_default(),
-                            input_schema: parsed_schema,
-                            created_at: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs() as i64,
-                        },
-                    );
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to register skill '{}' from {}: {}",
-                        manifest.name,
-                        md_path.display(),
-                        e
-                    );
-                    errors.push(format!("{}: registration error: {}", manifest.name, e));
+                    warn!("Failed to register skill '{}': {}", skill_name, e);
+                    errors.push(format!("{}: registration error: {}", skill_name, e));
                     skipped += 1;
                 }
             }
@@ -866,62 +878,9 @@ pub fn spawn_skill_refresh_task(
                 Ok(mut guard) => {
                     let mut registered = 0usize;
                     for pf in parsed_files {
-                        // Hot-reload: unregister if the name is already taken
-                        if guard.known_skill_names().contains(&pf.manifest.name) {
-                            info!(
-                                "Hot-reloading skill '{}' from '{}'",
-                                pf.manifest.name,
-                                pf.md_path.display()
-                            );
-                            guard.unregister(&pf.manifest.name);
-                        }
-
-                        let prompt_text = pf
-                            .manifest
-                            .prompt_template
-                            .clone()
-                            .unwrap_or_else(|| pf.manifest.description.clone());
-
-                        let parsed_schema = schema_value_to_map(&pf.manifest.input_schema);
-                        let skill = PromptBasedSkill {
-                            name: pf.manifest.name.clone(),
-                            description: pf.manifest.description.clone(),
-                            prompt_template: prompt_text,
-                            input_schema: parsed_schema,
-                            timeout_secs: 30,
-                            max_retries: 2,
-                        };
-
-                        match guard.register(Arc::new(skill)) {
-                            Ok(()) => {
-                                registered += 1;
-                                guard.skill_file_mtimes.insert(pf.md_path, pf.current_mtime);
-                                guard.prompt_skill_data.insert(
-                                    pf.manifest.name.clone(),
-                                    SavedPromptSkill {
-                                        name: pf.manifest.name.clone(),
-                                        description: pf.manifest.description,
-                                        prompt_template: pf
-                                            .manifest
-                                            .prompt_template
-                                            .unwrap_or_default(),
-                                        input_schema: HashMap::new(),
-                                        created_at: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_secs()
-                                            as i64,
-                                    },
-                                );
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to register skill '{}' from {}: {}",
-                                    pf.manifest.name,
-                                    pf.md_path.display(),
-                                    e
-                                );
-                            }
+                        match guard.register_parsed_skill(pf) {
+                            Ok(()) => registered += 1,
+                            Err(e) => warn!("Failed to register skill: {}", e),
                         }
                     }
                     if registered > 0 {

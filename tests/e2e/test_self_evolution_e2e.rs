@@ -29,9 +29,7 @@ impl EvolutionE2eContext {
     fn new(session_id: &str) -> Self {
         let workdir = std::env::temp_dir().join(format!("go-on-e2e-evol-{}", session_id));
         let _ = std::fs::create_dir_all(&workdir);
-        Self {
-            workdir,
-        }
+        Self { workdir }
     }
 }
 
@@ -250,9 +248,4 @@ async fn test_self_evolution_error_path_no_triggers_auto_approval() {
         Approval::approved("auto-rollback".into(), Some("health check failed".into()));
     assert!(rollback_approval.is_approved());
     assert_eq!(rollback_approval.by, "auto-rollback");
-
-    // Verify the sandbox executor configuration.
-    // The sandbox should have a positive iteration budget.
-    // (saved before sandbox was moved into EvolutionLoop above)
-    // iteration budget checked statically — always positive
 }

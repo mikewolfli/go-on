@@ -12,7 +12,6 @@ use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::intelligence::continuous_learning::AgentInjector;
 use crate::protocol::access_mode::resolve_access_selection;
-use crate::protocol::negotiator::{ProtocolMode as NegProtocolMode, ProtocolNegotiator};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
@@ -240,18 +239,9 @@ pub(crate) async fn start_server(
         access_selection.configured_mode.as_str()
     };
 
-    // ── ProtocolNegotiator ───────────────────────────────────────────
-    // Create negotiator with the resolved mode and log the negotiated result.
-    let negotiator_mode = NegProtocolMode::from_str(dispatch_mode).unwrap_or_else(|e| {
-        tracing::error!("fatal: invalid dispatch mode '{}': {:?}", dispatch_mode, e);
-        std::process::exit(1);
-    });
-    let mut negotiator = ProtocolNegotiator::new(negotiator_mode);
-    let negotiated = negotiator.negotiate(None, None);
-    info!(
-        "protocol negotiated: mode={}, version={}, auto_detected={}",
-        negotiated.mode, negotiated.version, negotiated.auto_detected
-    );
+    // Protocol mode has been fully resolved by resolve_access_selection above.
+    // Log the final dispatch mode for observability.
+    info!("dispatch mode resolved: {}", dispatch_mode);
 
     // Delegate to the transport factory for protocol-mode-specific server construction
     crate::acp::transport_factory::dispatch_server(
@@ -284,13 +274,9 @@ pub(crate) async fn handle_chat_mode(
         return Ok(());
     }
 
-    // ── ProtocolNegotiator: chat mode uses ACP stdio ────────────────
-    let mut negotiator = ProtocolNegotiator::new(NegProtocolMode::AcpStdio);
-    let negotiated = negotiator.negotiate(None, None);
-    debug!(
-        "chat mode protocol: mode={}, version={}",
-        negotiated.mode, negotiated.version
-    );
+    // Chat mode uses ACP stdio — the protocol negotiator is not needed
+    // here because the terminal chat bypasses the ACP transport layer.
+    debug!("chat mode: starting terminal chat");
 
     crate::cli::chat::run_terminal_chat(config).await
 }

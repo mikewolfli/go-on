@@ -19,6 +19,9 @@ impl Tool for DiagnosticsTool {
     fn name(&self) -> &'static str {
         "diagnostics"
     }
+    fn description(&self) -> &str {
+        "Check project diagnostics (errors, warnings) for a directory"
+    }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input

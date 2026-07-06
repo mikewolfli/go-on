@@ -15,6 +15,9 @@ impl Tool for CargoCheckTool {
     fn name(&self) -> &'static str {
         "cargo_check"
     }
+    fn description(&self) -> &str {
+        "Run cargo check on a Rust project directory"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input.payload["directory"].as_str().unwrap_or(".");
         let current_dir = sanitize_path(input, directory)?;
@@ -104,6 +107,9 @@ pub struct CargoTestTool;
 impl Tool for CargoTestTool {
     fn name(&self) -> &'static str {
         "cargo_test"
+    }
+    fn description(&self) -> &str {
+        "Run cargo test with an optional test filter"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let directory = input.payload["directory"].as_str().unwrap_or(".");

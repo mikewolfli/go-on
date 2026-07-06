@@ -40,10 +40,7 @@ fn test_cli_version_flag() {
         status.success(),
         "Expected --version to exit successfully, got: {stderr}"
     );
-    assert!(
-        !stdout.is_empty() || status.success(),
-        "Version output should not be empty"
-    );
+    assert!(!stdout.is_empty(), "Version output should not be empty");
 }
 
 #[test]

@@ -19,7 +19,8 @@ use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::autonomy_runtime::{
-    build_tool_execution_followup_message, build_tool_result_block,
+    build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
+    REASONING_END, REASONING_START, TOKEN_THINKING_PREFIX,
 };
 
 use super::streaming::{
@@ -93,14 +94,9 @@ pub(crate) async fn run_agent_collecting(
                 continue;
             }
 
-            // Check for tool call tokens (prefixed with __tool_call__)
-            if let Some(tool_call_data) = token.strip_prefix("__tool_call__:") {
-                // Format: __tool_call__:<tool_name>:<json_arguments>
-                if let Some(colon_pos) = tool_call_data.find(':') {
-                    let tool_name = &tool_call_data[..colon_pos];
-                    let tool_args = &tool_call_data[colon_pos + 1..];
-                    tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-                }
+            // Check for tool call tokens using shared parser
+            if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
+                tool_calls.push((tool_name.to_string(), tool_args.to_string()));
                 continue;
             }
 
@@ -113,8 +109,13 @@ pub(crate) async fn run_agent_collecting(
                 anyhow::bail!(t("error.chat.stream_output_limits"));
             }
 
+            // Check for structured reasoning markers (control chars)
+            if token == REASONING_START || token == REASONING_END {
+                continue;
+            }
+
             // Check for reasoning tokens (prefixed with __thinking__)
-            if let Some(reasoning_token) = token.strip_prefix("__thinking__") {
+            if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                 reasoning_buffer.push_str(reasoning_token);
             } else {
                 response.push_str(&token);
@@ -123,7 +124,7 @@ pub(crate) async fn run_agent_collecting(
             chunk_index += 1;
             total_chars += next_chars;
 
-            let display_token = if token.starts_with("__thinking__") {
+            let display_token = if token.starts_with(TOKEN_THINKING_PREFIX) {
                 ""
             } else {
                 &token

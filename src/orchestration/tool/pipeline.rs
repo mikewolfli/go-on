@@ -185,7 +185,7 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "image_generate"
         | "image_resize"
         | "image_convert"
-        | "skill-creator"
+        | "skill-creator" | "skill_create"
         | "stl_generate"
         | "svg_export"
         | "svg_generate"

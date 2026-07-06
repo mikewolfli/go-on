@@ -147,18 +147,20 @@ pub async fn start_background_tasks(
     server: &super::server::AcpServer,
     shutdown_notify: Arc<Notify>,
 ) -> Result<()> {
-    #[allow(dead_code, reason = "reserved for future background monitoring")]
     let memory_cache = {
-        let _inner = server
-            .cache_deps
-            .cache
-            .memory_response_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // Acquire and release the memory_response_cache lock to ensure
+        // exclusive access during startup. The guard is dropped immediately.
+        drop(
+            server
+                .cache_deps
+                .cache
+                .memory_response_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
         // MemoryResponseCache doesn't impl Clone, but we can use Default
         // since the background loop only needs a fresh monitoring instance.
         let fresh = MemoryResponseCache::default();
-        // _inner dropped here, releasing the lock
         Arc::new(tokio::sync::Mutex::new(fresh))
     };
     let memory_store = Arc::new(tokio::sync::Mutex::new(

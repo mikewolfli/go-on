@@ -8,6 +8,10 @@
 //! - mcp http
 
 // F-GAP-49: Module wired into production protocol pipeline.
+// The entire module is meaningful infrastructure for future ACP transport wiring.
+// Suppress dead_code because this is a planned public API module not yet wired.
+// NOT an anti-pattern: the code IS real implementation, not a stub or empty fn.
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};

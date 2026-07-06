@@ -83,6 +83,8 @@ impl FullAutoFlow {
         let descriptors = registry.list();
         drop(registry); // Release the lock as early as possible.
 
+        let effective_threshold = self.effective_min_match_score();
+
         let mut matches: Vec<SkillMatch> = descriptors
             .into_iter()
             .filter_map(|desc| {
@@ -109,7 +111,6 @@ impl FullAutoFlow {
                     + desc_score * WEIGHT_DESCRIPTION
                     + desc.score * WEIGHT_RUNTIME;
 
-                let effective_threshold = self.effective_min_match_score();
                 if composite < effective_threshold {
                     return None;
                 }
@@ -342,6 +343,18 @@ impl FullAutoFlow {
         let semaphore = Arc::clone(&self.semaphore);
 
         // Build a list of (skill_match, skill) pairs, filtering out missing skills
+        // Snapshot the registry once to avoid per-iteration lock acquisition.
+        let registry_snapshot: std::collections::HashMap<String, Arc<dyn Skill>> = {
+            let registry = self.skill_registry.read().unwrap_or_else(|poisoned| {
+                warn!("skill_registry lock poisoned – recovered data");
+                poisoned.into_inner()
+            });
+            matched_skills
+                .iter()
+                .filter_map(|m| registry.get(&m.name).map(|s| (m.name.clone(), s)))
+                .collect()
+        };
+
         let mut skills_to_run: Vec<(SkillMatch, Arc<dyn Skill>, Value)> = Vec::new();
         for skill_match in &matched_skills {
             if execution_log.len() + skills_to_run.len() >= self.config.max_execution_steps {
@@ -354,13 +367,7 @@ impl FullAutoFlow {
                 }
             }
 
-            let skill_opt = {
-                let registry = self.skill_registry.read().unwrap_or_else(|poisoned| {
-                    warn!("skill_registry lock poisoned – recovered data");
-                    poisoned.into_inner()
-                });
-                registry.get(&skill_match.name)
-            };
+            let skill_opt = registry_snapshot.get(&skill_match.name).cloned();
 
             match skill_opt {
                 Some(skill) => {
@@ -417,7 +424,7 @@ impl FullAutoFlow {
                     let duration_ms = elapsed.as_millis() as u64;
 
                     let step = ExecutionStep {
-                        skill_name: "parallel-execution".to_string(),
+                        skill_name: skill_name.to_string(),
                         input: json!(null),
                         output: output.clone(),
                         success: true,
@@ -439,6 +446,16 @@ impl FullAutoFlow {
 
                     self.model_selector.record_result(skill_name, true);
                     self.record_match_outcome(true, false, false);
+                    // Wire up ToolRecommender stats recording (GAP-46-12)
+                    if let Ok(mut recommender) = self.tool_recommender.lock() {
+                        recommender.record_usage(
+                            skill_name,
+                            true,
+                            duration_ms,
+                            flow_start.elapsed().as_millis() as u64,
+                            &[],
+                        );
+                    }
                 }
                 Ok((Err(e), elapsed)) => {
                     let duration_ms = elapsed.as_millis() as u64;
@@ -448,7 +465,7 @@ impl FullAutoFlow {
                     errors.push(msg);
 
                     let step = ExecutionStep {
-                        skill_name: "parallel-execution".to_string(),
+                        skill_name: skill_name.to_string(),
                         input: json!(null),
                         output: json!(null),
                         success: false,
@@ -460,6 +477,16 @@ impl FullAutoFlow {
 
                     self.model_selector.record_result(skill_name, false);
                     self.record_match_outcome(false, true, false);
+                    // Wire up ToolRecommender stats recording
+                    if let Ok(mut recommender) = self.tool_recommender.lock() {
+                        recommender.record_usage(
+                            skill_name,
+                            false,
+                            duration_ms,
+                            flow_start.elapsed().as_millis() as u64,
+                            &[],
+                        );
+                    }
                 }
                 Err(join_err) => {
                     warn!("Parallel skill execution panicked: {}", join_err);
@@ -526,11 +553,16 @@ impl FullAutoFlow {
         );
 
         // ── BrainLoop re-execution (GAP-46-07) ─────────────────────────
-        // Re-run failed or skipped steps through the BrainLoop so that
-        // the brain loop receives real execution data rather than being a
-        // dead module. The complexity estimator dynamically tunes the
-        // iteration budget for each task.
-        if !execution_log.is_empty() {
+        // Only re-run failed/skipped steps through the BrainLoop to avoid
+        // wasting iteration budget on work that already completed successfully.
+        let failed_indices: Vec<usize> = execution_log
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.success)
+            .map(|(i, _)| i)
+            .collect();
+
+        if !failed_indices.is_empty() {
             let complexity = self.complexity_estimator.estimate(task);
             info!(
                 "ComplexityEstimator: level={:?} (score={}), recommended_iterations={}",
@@ -546,56 +578,43 @@ impl FullAutoFlow {
             };
 
             let bl = BrainLoop::new(bl_config);
-            let bl_steps: Vec<BrainLoopStep> = execution_log
+            let bl_steps: Vec<BrainLoopStep> = failed_indices
                 .iter()
-                .enumerate()
-                .map(|(i, s)| BrainLoopStep {
-                    id: format!("bl-step-{i}"),
-                    phase: BrainLoopPhase::Executing,
-                    description: s.skill_name.clone(),
-                    input: s.input.to_string(),
-                    output: if s.success {
-                        s.output.to_string()
-                    } else {
-                        String::new()
-                    },
-                    context: None,
-                    started_ms: s.timestamp_ms,
-                    completed_ms: s.timestamp_ms + s.duration_ms,
-                    duration_ms: s.duration_ms,
-                    status: if s.success {
-                        StepStatus::Done
-                    } else {
-                        StepStatus::Skipped
-                    },
+                .map(|&i| {
+                    let s = &execution_log[i];
+                    BrainLoopStep {
+                        id: format!("bl-step-{i}"),
+                        phase: BrainLoopPhase::Executing,
+                        description: s.skill_name.clone(),
+                        input: s.input.to_string(),
+                        output: String::new(), // Failed — no prior output
+                        context: None,
+                        started_ms: s.timestamp_ms,
+                        completed_ms: s.timestamp_ms + s.duration_ms,
+                        duration_ms: s.duration_ms,
+                        status: StepStatus::Skipped,
+                    }
                 })
                 .collect();
+
+            info!(
+                "BrainLoop: re-executing {} failed/skipped steps",
+                bl_steps.len()
+            );
 
             match bl.start_plan(task, bl_steps).await {
                 Ok(plan_id) => {
                     debug!("BrainLoop plan `{plan_id}` started for task");
 
-                    // Execute every step through the BrainLoop, not just the first one.
-                    // Failed/skipped steps receive empty outputs; successful steps
-                    // propagate their prior output through the loop.
-                    for i in 0..execution_log.len() {
+                    for &i in &failed_indices {
                         let step_id = format!("bl-step-{i}");
-                        let step_output = execution_log
-                            .get(i)
-                            .filter(|s| s.success)
-                            .map(|s| s.output.to_string())
-                            .unwrap_or_default();
-
-                        if let Err(e) = bl.execute_step(&plan_id, &step_id, &step_output).await {
+                        if let Err(e) = bl.execute_step(&plan_id, &step_id, "").await {
                             warn!("BrainLoop step `{step_id}` execution failed: {e}");
                             errors.push(format!("BrainLoop re-execution failed for step {i}: {e}"));
                         }
                     }
 
-                    // Mark the plan as completed so the BrainLoop has a clean
-                    // terminal state for profiling / persistence.
                     if let Err(e) = bl.complete_plan(&plan_id).await {
-                        // Non-fatal — the steps were already recorded.
                         warn!("BrainLoop complete_plan failed: {e}");
                     }
 

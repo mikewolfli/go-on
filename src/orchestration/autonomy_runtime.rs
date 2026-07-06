@@ -6,6 +6,16 @@
 pub const TOKEN_TOOL_CALL_PREFIX: &str = "__tool_call__:";
 pub const TOKEN_MODEL_USED_PREFIX: &str = "__model_used__:";
 pub const TOKEN_THINKING_PREFIX: &str = "__thinking__";
+
+/// Reasoning/thinking start marker — sent as a single-character token
+/// to mark the beginning of a reasoning block in streaming output.
+/// Uses ASCII Record Separator (0x1E).
+pub const REASONING_START: &str = "\u{1E}";
+/// Reasoning/thinking end marker — sent as a single-character token
+/// to mark the end of a reasoning block in streaming output.
+/// Uses ASCII Unit Separator (0x1F).
+pub const REASONING_END: &str = "\u{1F}";
+
 pub const TOOL_EXECUTION_RESULTS_OPEN: &str = "[Tool execution results]";
 pub const TOOL_EXECUTION_RESULTS_CLOSE: &str = "[/Tool execution results]";
 

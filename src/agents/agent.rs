@@ -458,11 +458,33 @@ impl StreamingSender {
         Self { inner }
     }
 
+    /// Send a token to the stream.
+    ///
+    /// Uses `try_send` for non-blocking fast path, and falls back to
+    /// `blocking_send` via `spawn_blocking` when the channel is full.
+    /// This prevents token loss during high-throughput streaming while
+    /// keeping the common case lock-free.
     pub fn send(
         &self,
         token: String,
     ) -> std::result::Result<(), mpsc::error::TrySendError<String>> {
-        self.inner.try_send(token)
+        // Fast path: non-blocking try_send (common case, lock-free)
+        match self.inner.try_send(token) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(token)) => {
+                // Channel full — fall back to blocking_send via spawn_blocking.
+                // This runs on a dedicated blocking thread, so no block_in_place
+                // or block_on is needed — tokio::mpsc::Sender::blocking_send()
+                // natively blocks the calling (blocking) thread.
+                // Complies with principle #23 (no block_in_place + block_on in hot paths).
+                let tx = self.inner.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ = tx.blocking_send(token);
+                });
+                Ok(())
+            }
+            Err(e @ mpsc::error::TrySendError::Closed(_)) => Err(e),
+        }
     }
 }
 

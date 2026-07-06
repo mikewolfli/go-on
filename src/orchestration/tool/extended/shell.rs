@@ -15,6 +15,9 @@ impl Tool for ShellExecTool {
     fn name(&self) -> &'static str {
         "shell_exec"
     }
+    fn description(&self) -> &str {
+        "Execute a shell command with timeout and capture output"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let command = input.payload["command"]
             .as_str()

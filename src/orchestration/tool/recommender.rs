@@ -3,7 +3,6 @@
 //! Recommends tools based on task descriptions, historical usage statistics,
 //! and co‑occurrence patterns learned from the DiscoveryCenter.
 
-use serde_json::Value;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -13,14 +12,12 @@ use std::collections::HashMap;
 /// Historical usage statistics for a single tool.
 #[derive(Debug, Clone)]
 pub struct ToolUsageStats {
-    /// Name of the tool.
-    pub _tool_name: String,
     /// Total number of calls to this tool.
     pub total_calls: u64,
     /// Number of calls that completed successfully.
     pub success_calls: u64,
     /// Average execution duration in milliseconds.
-    pub _avg_duration_ms: f64,
+    pub avg_duration_ms: f64,
     /// Timestamp (ms) of the most recent call.
     pub last_used_ms: u64,
     /// Map of other tool names to co‑occurrence counts.
@@ -68,8 +65,6 @@ pub struct ToolRecommendation {
     pub relevance_score: f64,
     /// Human‑readable explanation for why this tool was recommended.
     pub reason: String,
-    /// Suggested argument shape, if the recommender can infer defaults.
-    pub _suggested_args: Option<Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -112,18 +107,17 @@ impl ToolRecommender {
             .tool_stats
             .entry(tool_name.to_string())
             .or_insert_with(|| ToolUsageStats {
-                _tool_name: tool_name.to_string(),
                 total_calls: 0,
                 success_calls: 0,
-                _avg_duration_ms: 0.0,
+                avg_duration_ms: 0.0,
                 last_used_ms: 0,
                 co_occurrence: HashMap::new(),
             });
 
         // Update rolling average duration.
         let total = entry.total_calls as f64;
-        entry._avg_duration_ms =
-            (entry._avg_duration_ms * total + duration_ms as f64) / (total + 1.0);
+        entry.avg_duration_ms =
+            (entry.avg_duration_ms * total + duration_ms as f64) / (total + 1.0);
 
         entry.total_calls += 1;
         if success {
@@ -275,7 +269,6 @@ impl ToolRecommender {
                 tool_name: tool.clone(),
                 relevance_score: *score,
                 reason: reason.clone(),
-                _suggested_args: None,
             });
         }
 
@@ -284,7 +277,6 @@ impl ToolRecommender {
                 tool_name: tool.clone(),
                 relevance_score: *score,
                 reason: reason.clone(),
-                _suggested_args: None,
             });
         }
 
@@ -330,6 +322,11 @@ pub fn get_tool_stats<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper: verify floating-point close equality.
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
+    }
 
     fn build_recommender() -> ToolRecommender {
         let mut rec = ToolRecommender::new();
@@ -442,5 +439,225 @@ mod tests {
             grep_score,
             write_score
         );
+    }
+
+    // ── record_usage direct tests ──────────────────────────────────
+
+    #[test]
+    fn record_usage_creates_new_entry() {
+        let mut rec = ToolRecommender::new();
+        rec.record_usage("my_tool", true, 42, 1000, &[]);
+
+        let stats = rec.tool_stats.get("my_tool").expect("entry should exist");
+        assert_eq!(stats.total_calls, 1);
+        assert_eq!(stats.success_calls, 1);
+        assert!(approx_eq(stats.avg_duration_ms, 42.0));
+        assert_eq!(stats.last_used_ms, 1000);
+        assert!(stats.co_occurrence.is_empty());
+    }
+
+    #[test]
+    fn record_usage_updates_rolling_average() {
+        let mut rec = ToolRecommender::new();
+        rec.record_usage("latency_tool", true, 100, 1, &[]);
+        rec.record_usage("latency_tool", false, 200, 2, &[]);
+
+        let stats = rec.tool_stats.get("latency_tool").expect("entry");
+        assert_eq!(stats.total_calls, 2);
+        assert_eq!(stats.success_calls, 1);
+        // Rolling average: (100*1 + 200) / 2 = 150.0
+        assert!(
+            approx_eq(stats.avg_duration_ms, 150.0),
+            "expected 150.0, got {}",
+            stats.avg_duration_ms
+        );
+    }
+
+    #[test]
+    fn record_usage_tracks_co_occurrence() {
+        let mut rec = ToolRecommender::new();
+        rec.record_usage("a", true, 10, 1, &["b".to_string(), "c".to_string()]);
+        rec.record_usage("a", true, 20, 2, &["b".to_string()]);
+
+        let stats = rec.tool_stats.get("a").expect("entry");
+        assert_eq!(*stats.co_occurrence.get("b").unwrap_or(&0), 2);
+        assert_eq!(*stats.co_occurrence.get("c").unwrap_or(&0), 1);
+    }
+
+    // ── success_rate edge cases ─────────────────────────────────────
+
+    #[test]
+    fn success_rate_zero_calls_returns_zero() {
+        let stats = ToolUsageStats {
+            total_calls: 0,
+            success_calls: 0,
+            avg_duration_ms: 0.0,
+            last_used_ms: 0,
+            co_occurrence: HashMap::new(),
+        };
+        assert!(approx_eq(stats.success_rate(), 0.0));
+    }
+
+    #[test]
+    fn success_rate_all_failures_returns_zero() {
+        let stats = ToolUsageStats {
+            total_calls: 5,
+            success_calls: 0,
+            avg_duration_ms: 100.0,
+            last_used_ms: 1000,
+            co_occurrence: HashMap::new(),
+        };
+        assert!(approx_eq(stats.success_rate(), 0.0));
+    }
+
+    #[test]
+    fn success_rate_all_success_returns_one() {
+        let stats = ToolUsageStats {
+            total_calls: 3,
+            success_calls: 3,
+            avg_duration_ms: 50.0,
+            last_used_ms: 2000,
+            co_occurrence: HashMap::new(),
+        };
+        assert!(approx_eq(stats.success_rate(), 1.0));
+    }
+
+    // ── Pattern and recommendation edge cases ────────────────────────
+
+    #[test]
+    fn no_patterns_registered_returns_empty() {
+        let rec = ToolRecommender::new();
+        let results = rec.recommend("search the code", &[]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn single_keyword_still_matches() {
+        let mut rec = ToolRecommender::new();
+        rec.add_pattern(TaskToolPattern {
+            keywords: vec!["search".to_string()],
+            tools: vec!["grep_tool".to_string()],
+            weight: 1.0,
+        });
+        let results = rec.recommend("search", &[]);
+        assert!(!results.is_empty());
+        assert_eq!(results[0].tool_name, "grep_tool");
+    }
+
+    #[test]
+    fn no_keyword_match_returns_empty() {
+        let mut rec = ToolRecommender::new();
+        rec.add_pattern(TaskToolPattern {
+            keywords: vec!["database".to_string()],
+            tools: vec!["sql_tool".to_string()],
+            weight: 1.0,
+        });
+        let results = rec.recommend("search the code", &[]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn non_alphanumeric_keywords_are_stripped() {
+        let mut rec = ToolRecommender::new();
+        rec.add_pattern(TaskToolPattern {
+            keywords: vec!["find".to_string()],
+            tools: vec!["find_tool".to_string()],
+            weight: 1.0,
+        });
+        // Leading/trailing punctuation should be stripped.
+        let results = rec.recommend("<<find>>", &[]);
+        assert!(
+            !results.is_empty(),
+            "should match after stripping punctuation"
+        );
+    }
+
+    #[test]
+    fn context_boosts_co_occurrence() {
+        let mut rec = ToolRecommender::new();
+        rec.add_pattern(TaskToolPattern {
+            keywords: vec!["code".to_string()],
+            tools: vec!["grep".to_string()],
+            weight: 1.0,
+        });
+        // Seed co-occurrence: grep and read_file used together.
+        rec.record_usage("grep", true, 10, 1000, &["read_file".to_string()]);
+
+        // Recommend without context.
+        let results_no_ctx = rec.recommend("code search", &[]);
+        // Recommend with grep (the partner) in context — read_file should get a boost.
+        let results_with_ctx = rec.recommend("code search", &["grep".to_string()]);
+
+        let score_no_ctx = results_no_ctx
+            .iter()
+            .find(|r| r.tool_name == "read_file")
+            .map(|r| r.relevance_score)
+            .unwrap_or(0.0);
+        let score_with_ctx = results_with_ctx
+            .iter()
+            .find(|r| r.tool_name == "read_file")
+            .map(|r| r.relevance_score)
+            .unwrap_or(0.0);
+        assert!(
+            score_with_ctx > score_no_ctx,
+            "context should boost score: {} (no ctx) < {} (with ctx)",
+            score_no_ctx,
+            score_with_ctx
+        );
+    }
+
+    #[test]
+    fn recency_bonus_decays_over_time() {
+        let mut rec = ToolRecommender::new();
+        rec.add_pattern(TaskToolPattern {
+            keywords: vec!["test".to_string()],
+            tools: vec!["recent_tool".to_string(), "old_tool".to_string()],
+            weight: 1.0,
+        });
+        // recent_tool used just now vs old_tool used 15 min ago.
+        rec.record_usage("recent_tool", true, 10, 1_000_000, &[]);
+        rec.record_usage("old_tool", true, 10, 100_000, &[]);
+
+        let results = rec.recommend("run test", &[]);
+        let recent_score = results
+            .iter()
+            .find(|r| r.tool_name == "recent_tool")
+            .map(|r| r.relevance_score)
+            .unwrap_or(0.0);
+        let old_score = results
+            .iter()
+            .find(|r| r.tool_name == "old_tool")
+            .map(|r| r.relevance_score)
+            .unwrap_or(0.0);
+        assert!(
+            recent_score > old_score,
+            "recent tool should score higher: recent={}, old={}",
+            recent_score,
+            old_score
+        );
+    }
+
+    // ── add_pattern edge cases ───────────────────────────────────────
+
+    #[test]
+    fn add_pattern_with_empty_keywords_still_registers() {
+        let mut rec = ToolRecommender::new();
+        rec.add_pattern(TaskToolPattern {
+            keywords: vec![],
+            tools: vec!["orphan_tool".to_string()],
+            weight: 0.5,
+        });
+        // Empty keywords means match_ratio will be 0, so no recommendations.
+        let results = rec.recommend("anything", &[]);
+        assert!(results.is_empty());
+        // But the pattern is still registered.
+        assert_eq!(rec.task_patterns.len(), 1);
+    }
+
+    #[test]
+    fn default_impl_creates_empty_recommender() {
+        let rec = ToolRecommender::default();
+        assert!(rec.task_patterns.is_empty());
+        assert!(rec.tool_stats.is_empty());
     }
 }

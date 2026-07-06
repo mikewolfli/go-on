@@ -149,7 +149,7 @@ pub use pdf::{PdfMergeTool, PdfSplitTool, ReadPdfTool};
 pub use ply::PlyReadTool;
 pub use read_lines::ReadFileLinesTool;
 pub use rss::RssReadTool;
-pub use search::{FindFilesTool, GrepTool};
+pub use search::GrepTool;
 pub use shell::ShellExecTool;
 #[cfg(feature = "backend-sqlite")]
 pub use sqlite::SqliteQueryTool;
@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn find_files_finds_rs_files() {
+    fn search_files_finds_rs_files() {
         let tmp = TempDir::new().expect("temp dir");
         std::fs::write(tmp.path().join("a.rs"), "fn main() {}").unwrap();
         std::fs::write(tmp.path().join("b.txt"), "text").unwrap();
@@ -249,7 +249,7 @@ mod tests {
             task_id: "t1".to_string(),
             phase: "act".to_string(),
             agent_role: "coder".to_string(),
-            objective: "find".to_string(),
+            objective: "search".to_string(),
             constraints: None,
             evidence: None,
             payload: serde_json::json!({
@@ -259,8 +259,10 @@ mod tests {
             allowed_base_dir: Some(tmp.path().to_path_buf()),
         };
 
-        let tool = FindFilesTool;
-        let output = tool.run(&input).expect("find_files should succeed");
+        // SearchFilesTool is the canonical search tool (find_files merged into it)
+        let output = crate::orchestration::tool::SearchFilesTool
+            .run(&input)
+            .expect("search_files should succeed");
         assert!(output.success);
         let result = output.result.unwrap();
         let files = result["files"].as_array().unwrap();

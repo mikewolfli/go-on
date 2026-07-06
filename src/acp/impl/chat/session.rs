@@ -528,7 +528,7 @@ async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Re
     crate::acp::r#impl::io::send_result(server, id, result).await
 }
 
-/// Record a trace event.
+/// Record a trace event with metrics counter.
 #[allow(clippy::too_many_arguments)]
 fn record_trace_event(
     _server: &AcpServer,
@@ -540,11 +540,9 @@ fn record_trace_event(
     _outputs: Option<Value>,
     _duration_ms: u64,
 ) {
-    // Trace sink will be extended with persistent storage in a follow-up.
-
     static EVENTS_RECEIVED: AtomicU64 = AtomicU64::new(0);
-
     let count = EVENTS_RECEIVED.fetch_add(1, Ordering::Relaxed);
+
     debug!(
         event_type = %event_type,
         status = %status,

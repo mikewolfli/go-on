@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -502,11 +502,14 @@ fn allowlist_match(pattern: &str, value: &str) -> bool {
 }
 
 async fn download_bytes(url: &str) -> Result<Vec<u8>> {
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(SKILL_IMPORT_CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(SKILL_IMPORT_REQUEST_TIMEOUT_SECS))
-        .build()
-        .context("failed to build reqwest client")?;
+    static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+    let client = HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .connect_timeout(Duration::from_secs(SKILL_IMPORT_CONNECT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(SKILL_IMPORT_REQUEST_TIMEOUT_SECS))
+            .build()
+            .expect("failed to build reqwest client for skill import")
+    });
     let response = client
         .get(url)
         .send()

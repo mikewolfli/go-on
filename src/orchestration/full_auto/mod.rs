@@ -33,6 +33,7 @@ pub use intent::TaskIntent;
 pub use report::{AutoExecutionReport, ExecutionStep, SkillMatch};
 use std::sync::{Arc, Mutex, RwLock as StdRwLock};
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
@@ -275,9 +276,9 @@ impl FullAutoFlow {
     /// Enable the skill marketplace, allowing the flow to search for
     /// external skills during the discovery phase.
     ///
-    /// Caller-available builder method — callers should invoke
-    /// `enable_skill_market()` before `run()` for external skill discovery.
-    pub fn enable_skill_market(&mut self) {
+    /// Returns an error if the marketplace registry cannot be created
+    /// (e.g. temp directory unwritable, DNS resolution failure).
+    pub fn enable_skill_market(&mut self) -> Result<()> {
         let cache_dir = std::env::temp_dir().join("go-on-skill-market");
         self.skill_market = Some(
             SkillMarketRegistry::new(
@@ -285,9 +286,10 @@ impl FullAutoFlow {
                 cache_dir,
                 self.skill_registry.clone(),
             )
-            .expect("failed to create skill market registry"),
+            .map_err(|e| anyhow::anyhow!("failed to create skill market registry: {e}"))?,
         );
         tracing::info!("Skill marketplace enabled for discovery phase");
+        Ok(())
     }
 }
 

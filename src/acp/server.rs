@@ -748,7 +748,7 @@ impl AcpServer {
 
     /// Create a `FullAutoFlow` using this server's real skill and tool registries.
     pub fn full_auto_flow(&self) -> crate::orchestration::full_auto::FullAutoFlow {
-        crate::orchestration::full_auto::FullAutoFlow::new_with_registries(
+        crate::orchestration::full_auto::FullAutoFlow::new(
             self.orchestration_deps.skill_registry.clone(),
             self.tool_registry.clone(),
         )

@@ -543,7 +543,7 @@ pub(crate) fn get_memory_usage() -> u64 {
 fn get_cpu_usage() -> f64 {
     #[cfg(target_os = "linux")]
     {
-        return linux_cpu_usage();
+        linux_cpu_usage()
     }
     #[cfg(target_os = "macos")]
     {

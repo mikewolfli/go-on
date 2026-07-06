@@ -25,7 +25,8 @@ fn lang_color(lang: &str) -> &'static str {
 /// Returns a `String` with embedded ANSI escape codes suitable for
 /// writing to a terminal that supports basic ANSI (all modern terminals).
 pub fn render_markdown(text: &str) -> String {
-    let mut out = String::new();
+    // Pre-allocate ~10% more than input for ANSI escape overhead
+    let mut out = String::with_capacity(text.len() + text.len() / 10 + 16);
     let mut in_code_block = false;
     let mut code_lang = String::new();
     let mut code_content = String::new();
@@ -201,7 +202,8 @@ pub fn render_markdown(text: &str) -> String {
 
 /// Render inline formatting: bold, italic, inline code, links.
 fn render_inline(text: &str) -> String {
-    let mut out = String::new();
+    // Pre-allocate for ANSI overhead
+    let mut out = String::with_capacity(text.len() + text.len() / 10 + 16);
     let s = text;
     let mut pos = 0;
 
@@ -283,9 +285,10 @@ fn render_inline(text: &str) -> String {
             }
         }
 
-        // Plain character
-        out.push(s[pos..].chars().next().unwrap());
-        pos += s[pos..].chars().next().unwrap().len_utf8();
+        // Plain character — compute once to avoid iterating twice
+        let c = s[pos..].chars().next().unwrap();
+        out.push(c);
+        pos += c.len_utf8();
     }
 
     out

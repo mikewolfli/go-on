@@ -28,6 +28,9 @@ impl Tool for HttpRequestTool {
     fn name(&self) -> &'static str {
         "http_request"
     }
+    fn description(&self) -> &str {
+        "Make HTTP requests (GET/POST/PUT/DELETE) to external APIs"
+    }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // Primary: url from function call arguments.
         // Fallback: extract URL from the task objective when the AI model
