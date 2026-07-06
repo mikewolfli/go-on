@@ -29,7 +29,7 @@ pub use crate::orchestration::context::OrchestrationContext;
 ///
 /// Call after each model request completes to keep dynamic estimates fresh.
 pub fn record_model_execution(
-    ctx: &OrchestrationContext,
+    ctx: &mut OrchestrationContext,
     model_id: &str,
     success: bool,
     latency_ms: u64,

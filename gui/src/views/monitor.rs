@@ -1,7 +1,6 @@
 use super::try_send_msg;
 use crate::backend::{BackendClient, ErrorGroup, HealthStatus, MetricsWindowPoint, ProviderStatus};
 use crate::i18n::I18n;
-use crate::widgets::cache::CachedView;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -22,7 +21,6 @@ pub struct MonitorView {
     last_metrics_load: Instant,
     pub auto_refresh_interval: u64,
     consecutive_metrics_failures: u32,
-    pub cached_view: CachedView,
 }
 
 impl MonitorView {
@@ -50,7 +48,6 @@ impl MonitorView {
             last_metrics_load: Instant::now(),
             auto_refresh_interval: 30,
             consecutive_metrics_failures: 0,
-            cached_view: CachedView::new(),
         }
     }
 
@@ -175,7 +172,7 @@ impl MonitorView {
                     });
                 }
 
-                let resp = egui::Frame::NONE.show(ui, |ui| {
+                let _resp = egui::Frame::NONE.show(ui, |ui| {
                     ui.heading(i18n.t("monitor.health"));
                     ui.separator();
                     ui.add_space(8.0);
@@ -567,8 +564,6 @@ impl MonitorView {
                         }
                     }
                 });
-                self.cached_view
-                    .store_size("monitor", 0, resp.response.rect.size());
             });
     }
 }

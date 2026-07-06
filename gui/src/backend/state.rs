@@ -196,11 +196,6 @@ impl AbortController {
     pub async fn wait_for_abort(&self) {
         self.notify.notified().await;
     }
-
-    /// Reset the signal for reuse.
-    pub fn reset(&self) {
-        self.cancelled.store(false, Ordering::SeqCst);
-    }
 }
 
 impl Default for AbortController {
@@ -218,8 +213,6 @@ pub struct TokenProgress {
     pub tokens_received: usize,
     /// Total bytes processed from the wire.
     pub bytes_processed: usize,
-    /// Input token count reported by telemetry.
-    pub input_tokens: usize,
     /// Output token count reported by telemetry.
     pub output_tokens: usize,
     /// Total token count reported by telemetry.

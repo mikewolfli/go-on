@@ -8,8 +8,16 @@
 //! Uses [`CoreDag`](CoreDag) internally for plan-level execution ordering.
 //! Prefer `execute_tool_dag` for new code; it auto-selects the optimal
 //! execution strategy based on whether an [`ExecutionPlan`] is provided.
+//!
+//! # Note
+//! All production paths use `execute_loop_async` in `ToolRegistry` directly.
+//! The DAG executor is kept as a public API for external/advanced consumers
+//! and integration tests.
 
-#![allow(dead_code, reason = "public API for tool execution DAG")]
+#![allow(
+    dead_code,
+    reason = "public API for tool execution DAG (test consumers)"
+)]
 
 use std::sync::Arc;
 

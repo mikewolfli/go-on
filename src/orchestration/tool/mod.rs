@@ -1070,8 +1070,8 @@ impl ToolRegistry {
             },
         );
 
-        // ── 3D model (STL) reader tool (feature-gated) ────────────
-        #[cfg(feature = "model-3d")]
+        // ── 3D model (STL) reader tool (feature-gated, not when cad-stl already provides it) ─
+        #[cfg(all(feature = "model-3d", not(feature = "cad-stl")))]
         registry.register_with_profile(
             crate::orchestration::tool_extended::StlReadTool,
             ToolCapabilityProfile {
@@ -1379,7 +1379,7 @@ impl ToolRegistry {
         registry.register_alias("execute_command", "shell_exec");
         registry.register_alias("terminal", "shell_exec");
         registry.register_alias("bash", "shell_exec");
-        registry.register_alias("find_path", "find_files");
+        registry.register_alias("find_path", "search_files");
         registry.register_alias("semantic_search", "code_index_search");
 
         registry

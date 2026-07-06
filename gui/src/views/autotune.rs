@@ -3,7 +3,6 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::i18n::I18n;
-use crate::widgets::cache::CachedView;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AutoTuneState {
@@ -28,7 +27,6 @@ pub struct AutoTuneView {
     state: AutoTuneState,
     /// Timestamp of the last successful save, used to show a brief "Saved ✓" flash.
     saved_at: Option<std::time::Instant>,
-    cached_view: CachedView,
 }
 
 impl AutoTuneView {
@@ -36,7 +34,6 @@ impl AutoTuneView {
         Self {
             state: Self::load_state(),
             saved_at: None,
-            cached_view: CachedView::new(),
         }
     }
 
@@ -74,78 +71,70 @@ impl AutoTuneView {
                 ui.label(i18n.t("autotune.hint"));
                 ui.separator();
 
-                let hash = 0_u64;
+                let mut changed = false;
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut self.state.temperature, 0.0..=2.0)
+                            .text(i18n.t("autotune.temperature")),
+                    )
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut self.state.top_p, 0.1..=1.0)
+                            .text(i18n.t("autotune.topP")),
+                    )
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut self.state.max_tokens, 128..=8192)
+                            .text(i18n.t("autotune.maxTokens")),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut self.state.aggressive, i18n.t("autotune.aggressive"))
+                    .changed();
 
-                self.cached_view
-                    .check_or_render(ui, "autotune", hash, |ui| {
-                        let mut changed = false;
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.state.temperature, 0.0..=2.0)
-                                    .text(i18n.t("autotune.temperature")),
-                            )
-                            .changed();
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.state.top_p, 0.1..=1.0)
-                                    .text(i18n.t("autotune.topP")),
-                            )
-                            .changed();
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.state.max_tokens, 128..=8192)
-                                    .text(i18n.t("autotune.maxTokens")),
-                            )
-                            .changed();
-                        changed |= ui
-                            .checkbox(&mut self.state.aggressive, i18n.t("autotune.aggressive"))
-                            .changed();
+                if ui.button(i18n.t("autotune.resetDefaults")).clicked() {
+                    self.state = AutoTuneState::default();
+                    changed = true;
+                }
 
-                        if ui.button(i18n.t("autotune.resetDefaults")).clicked() {
-                            self.state = AutoTuneState::default();
-                            changed = true;
-                        }
-
-                        if changed {
-                            // Inline save_state to avoid borrowing &self while cached_view is mutably borrowed
-                            let path = AutoTuneView::state_path();
-                            if let Some(parent) = path.parent() {
-                                if let Err(e) = std::fs::create_dir_all(parent) {
-                                    eprintln!("Failed to create autotune state dir: {e}");
-                                } else {
-                                    match serde_json::to_string_pretty(&self.state) {
-                                        Ok(content) => {
-                                            if let Err(e) =
-                                                crate::fs_util::atomic_write(&path, &content)
-                                            {
-                                                eprintln!(
-                                                    "Failed to write autotune state {}: {e}",
-                                                    path.display()
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Failed to serialize autotune state: {e}")
-                                        }
+                if changed {
+                    let path = AutoTuneView::state_path();
+                    if let Some(parent) = path.parent() {
+                        if let Err(e) = std::fs::create_dir_all(parent) {
+                            eprintln!("Failed to create autotune state dir: {e}");
+                        } else {
+                            match serde_json::to_string_pretty(&self.state) {
+                                Ok(content) => {
+                                    if let Err(e) = crate::fs_util::atomic_write(&path, &content) {
+                                        eprintln!(
+                                            "Failed to write autotune state {}: {e}",
+                                            path.display()
+                                        );
                                     }
                                 }
+                                Err(e) => {
+                                    eprintln!("Failed to serialize autotune state: {e}")
+                                }
                             }
-                            self.saved_at = Some(std::time::Instant::now());
                         }
+                    }
+                    self.saved_at = Some(std::time::Instant::now());
+                }
 
-                        // Show a brief "Saved ✓" flash for 2 seconds after any change.
-                        if let Some(at) = self.saved_at {
-                            if at.elapsed() < std::time::Duration::from_secs(2) {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(60, 180, 100),
-                                    i18n.t("autotune.saved"),
-                                );
-                                ui.ctx().request_repaint();
-                            } else {
-                                self.saved_at = None;
-                            }
-                        }
-                    });
+                // Show a brief "Saved ✓" flash for 2 seconds after any change.
+                if let Some(at) = self.saved_at {
+                    if at.elapsed() < std::time::Duration::from_secs(2) {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(60, 180, 100),
+                            i18n.t("autotune.saved"),
+                        );
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.saved_at = None;
+                    }
+                }
             });
     }
 }

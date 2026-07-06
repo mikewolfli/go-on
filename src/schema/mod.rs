@@ -85,32 +85,9 @@ impl ProtocolVersion {
         &[Self::V1, Self::V2, Self::V3]
     }
 
-    /// Create a version from a raw numeric value.
-    #[cfg(test)]
-    pub fn from_u16(v: u16) -> Self {
-        Self(v)
-    }
-
     /// Return the underlying numeric version.
     pub fn as_u16(self) -> u16 {
         self.0
-    }
-
-    /// Select the highest common version between the server's supported set and
-    /// the client's list.
-    ///
-    /// Iterates the server's supported versions in **descending** order
-    /// (V3 → V2 → V1) so that the *highest* mutually-supported version wins.
-    /// Returns `None` when no common version is found.
-    ///
-    /// Currently only called from tests and the GUI backend (which is a separate crate).
-    #[allow(dead_code)]
-    pub fn select_highest_common(client_versions: &[Self]) -> Option<Self> {
-        Self::supported_versions()
-            .iter()
-            .rev()
-            .find(|sv| client_versions.contains(sv))
-            .copied()
     }
 }
 
@@ -146,6 +123,10 @@ pub struct EnvVariable {
     pub meta: Option<Meta>,
 }
 
+/// HTTP header — name/value pair with optional metadata.
+/// Used in MCP HTTP/SSE transport configurations.
+/// Currently only consumed by schema::mcp protocol-spec types.
+#[allow(dead_code, reason = "used by protocol-spec mcp.rs types")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpHeader {

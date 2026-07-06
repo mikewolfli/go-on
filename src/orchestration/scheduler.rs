@@ -101,8 +101,12 @@ use queue::SchedulerState;
 pub struct TaskScheduler {
     config: SchedulerConfig,
     /// Merged scheduler state (queues + task_map) protected by a single RwLock.
-    /// Using std::sync::RwLock because all access is from synchronous code;
-    /// tokio::sync::RwLock would require .blocking_*() and a runtime context.
+    /// Using std::sync::RwLock (and std::sync::Mutex for other fields) because
+    /// critical sections are short (hash lookups / field swaps) and never held
+    /// across .await points. tokio::sync variants are unnecessary here since
+    /// they would add overhead for no benefit — the sync primitives are only
+    /// briefly locked within synchronous scopes, even when called from an
+    /// async context (e.g. apply_aging inside tokio::spawn).
     state: RwLock<SchedulerState>,
     /// Active task permits: task_id → (global_permit, role_permit).
     /// Holding these permits consumes semaphore capacity.

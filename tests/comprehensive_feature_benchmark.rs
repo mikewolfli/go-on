@@ -40,7 +40,6 @@ enum Capability {
     DagEvidenceFidelity,
     GovernanceP95Correctness,
     ChatHotpathDecomposition,
-    ChatLatency,
     PredictiveReroute,
     BusMultiFactor,
     RealisticE2EBenchmark,
@@ -66,7 +65,6 @@ impl Capability {
             Capability::DagEvidenceFidelity => "dag_evidence_fidelity",
             Capability::GovernanceP95Correctness => "governance_p95_correctness",
             Capability::ChatHotpathDecomposition => "chat_hotpath_decomposition",
-            Capability::ChatLatency => "chat_latency",
             Capability::PredictiveReroute => "predictive_reroute",
             Capability::BusMultiFactor => "capability_bus_multi_factor",
             Capability::RealisticE2EBenchmark => "realistic_e2e_benchmark",
@@ -91,7 +89,6 @@ impl Capability {
             Capability::ProfileMatrix3 => Measurability::Measured,
             Capability::PlannerDagReality => Measurability::Measured,
             Capability::ChatHotpathDecomposition => Measurability::Measured,
-            Capability::ChatLatency => Measurability::Measured,
             Capability::FastPathCache => Measurability::Measured,
             Capability::AutoRecovery => Measurability::Measured,
             Capability::FullAutoClosure => Measurability::Measured,
@@ -120,7 +117,6 @@ impl Capability {
             Capability::DagEvidenceFidelity => 1.2,
             Capability::GovernanceP95Correctness => 1.1,
             Capability::ChatHotpathDecomposition => 0.9,
-            Capability::ChatLatency => 1.0,
             Capability::PredictiveReroute => 1.0,
             Capability::BusMultiFactor => 1.0,
             Capability::RealisticE2EBenchmark => 1.0,
@@ -153,7 +149,6 @@ impl Capability {
             Capability::ChatHotpathDecomposition => 50.0,
             Capability::FastPathCache => 80.0,
             Capability::DagEvidenceFidelity => 90.0,
-            Capability::ChatLatency => 90.0,
             Capability::ProtocolMatrix5 => 90.0,
             Capability::ThreeEntryParity => 60.0,
             Capability::EnvAutoBootstrap => 90.0,
@@ -702,30 +697,6 @@ fn measure_audit_replay() -> DimensionScore {
     }
 }
 
-/// Measure actual chat request processing latency using a simple baseline.
-/// Uses `Instant` to record real elapsed time, normalised so lower is better.
-fn measure_chat_latency() -> DimensionScore {
-    let start = std::time::Instant::now();
-    // Perform a lightweight computation baseline (no I/O or sleep):
-    // compute a Fibonacci number to simulate processing work.
-    let mut a: u64 = 0;
-    let mut b: u64 = 1;
-    for _ in 0..100_000 {
-        let c = a.wrapping_add(b);
-        a = b;
-        b = c;
-    }
-    std::hint::black_box(b);
-    let elapsed = start.elapsed();
-    // Normalise: lower is better, 1.0 = instant (<1ms), 0.0 = >=1s.
-    let score = (1.0 - (elapsed.as_secs_f64() / 1.0).min(1.0)).max(0.0);
-    DimensionScore {
-        score: score * 100.0,
-        evidence: "Chat latency measured via Fibonacci computation baseline (no sleep)",
-        measurability: Measurability::Measured,
-    }
-}
-
 /// Build a qualitative score for dimensions that cannot be measured at test time.
 /// Returns a DimensionScore with a conservative default of 7.0 for qualitative
 /// dimensions that cannot be measured automatically. These scores contribute to
@@ -762,7 +733,6 @@ fn build_report() -> BenchmarkReport {
         Capability::ChatHotpathDecomposition,
         measure_chat_hotpath_decomposition(),
     );
-    dimensions.insert(Capability::ChatLatency, measure_chat_latency());
     dimensions.insert(Capability::FastPathCache, measure_fast_path_cache());
     dimensions.insert(Capability::AutoRecovery, measure_auto_recovery());
     dimensions.insert(Capability::FullAutoClosure, measure_full_auto_closure());

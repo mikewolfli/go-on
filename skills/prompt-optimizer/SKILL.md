@@ -11,6 +11,34 @@ min_go_on_version: 1.0.0
 
 Analyzes existing prompts or constructs new ones following prompt engineering best practices. Provides structured feedback on system prompts, user prompts, and few-shot examples to improve output quality, reduce token usage, and eliminate ambiguity.
 
+## Tags
+
+prompt, optimization, LLM
+
+## Description
+
+Analyzes system prompts and user prompts for token efficiency, clarity, and effectiveness. Deconstructs prompts into components (system role, instructions, context, examples, output format, constraints), scores them across 5 clarity dimensions, and suggests restructuring, compression, and templating improvements.
+
+## Usage
+
+Invoke by providing a prompt string and the desired action. The optimizer will return structured analysis or an improved version.
+
+- `/prompt-optimize analyze` — Score the prompt across clarity, specificity, efficiency, structure, and robustness
+- `/prompt-optimize improve` — Rewrite the prompt following best practices (chain-of-thought, role prompting, XML tagging)
+- `/prompt-optimize optimize` — Reduce token count while preserving semantic meaning
+- `/prompt-optimize build` — Construct a new prompt from a goal description
+
+## Output
+
+Returns a structured evaluation or improved prompt depending on the action:
+
+1. **Action: analyze** — A dimension-by-dimension scorecard (1-10) with specific improvement suggestions for each dimension
+2. **Action: improve** — A fully rewritten prompt following best practices, with a diff showing key changes
+3. **Action: optimize** — A token-reduced version of the original prompt with compression ratio
+4. **Action: build** — A complete prompt constructed from scratch aligned to the stated goal
+
+All outputs include a token count comparison (before vs. after) and model-specific recommendations when a target model is specified.
+
 ## How It Works
 
 1. **Analyze** — Deconstructs the prompt into components: system role, instructions, context, examples, output format, constraints

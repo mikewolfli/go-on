@@ -327,44 +327,38 @@ impl SessionCompressor {
             return String::from("(no messages to summarize)");
         }
 
-        // Extract key decisions, findings, and errors from messages.
-        let decisions: Vec<&str> = messages
-            .iter()
-            .filter(|m| {
-                m.content.contains("decide")
-                    || m.content.contains("decision")
-                    || m.content.contains("choose")
-                    || m.content.contains("plan")
-                    || m.content.contains("will")
-            })
-            .map(|m| m.content.as_str())
-            .take(5)
-            .collect();
+        // Single pass: classify each message into decisions, findings, or errors.
+        let mut decisions: Vec<&str> = Vec::with_capacity(5);
+        let mut findings: Vec<&str> = Vec::with_capacity(5);
+        let mut errors: Vec<&str> = Vec::with_capacity(5);
 
-        let findings: Vec<&str> = messages
-            .iter()
-            .filter(|m| {
-                m.content.contains("found")
-                    || m.content.contains("result")
-                    || m.content.contains("discover")
-                    || m.content.contains("observation")
-            })
-            .map(|m| m.content.as_str())
-            .take(5)
-            .collect();
-
-        let errors: Vec<&str> = messages
-            .iter()
-            .filter(|m| {
-                m.content.contains("error")
-                    || m.content.contains("fail")
-                    || m.content.contains("panic")
-                    || m.content.contains("timeout")
-                    || m.content.contains("crash")
-            })
-            .map(|m| m.content.as_str())
-            .take(5)
-            .collect();
+        for m in messages {
+            let content = m.content.as_str();
+            if decisions.len() < 5
+                && (content.contains("decide")
+                    || content.contains("decision")
+                    || content.contains("choose")
+                    || content.contains("plan")
+                    || content.contains("will"))
+            {
+                decisions.push(content);
+            } else if findings.len() < 5
+                && (content.contains("found")
+                    || content.contains("result")
+                    || content.contains("discover")
+                    || content.contains("observation"))
+            {
+                findings.push(content);
+            } else if errors.len() < 5
+                && (content.contains("error")
+                    || content.contains("fail")
+                    || content.contains("panic")
+                    || content.contains("timeout")
+                    || content.contains("crash"))
+            {
+                errors.push(content);
+            }
+        }
 
         let mut parts: Vec<String> = Vec::new();
 

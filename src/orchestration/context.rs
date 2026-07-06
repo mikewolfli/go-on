@@ -56,7 +56,7 @@ impl OrchestrationContext {
     /// Record a model execution outcome.
     /// Updates both LivePerformanceFeed and HotFailover for automatic
     /// model switching on repeated failures.
-    pub fn record_model_execution(&self, model_id: &str, success: bool, latency_ms: u64) {
+    pub fn record_model_execution(&mut self, model_id: &str, success: bool, latency_ms: u64) {
         if success {
             self.performance_feed.record_success(model_id, latency_ms);
         } else {
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn record_model_execution_success_updates_feed() {
-        let ctx = OrchestrationContext::new();
+        let mut ctx = OrchestrationContext::new();
         ctx.record_model_execution("model-a", true, 100);
 
         // After recording a success, the feed should reflect it
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn record_model_execution_failure_updates_feed() {
-        let ctx = OrchestrationContext::new();
+        let mut ctx = OrchestrationContext::new();
         ctx.record_model_execution("model-b", false, 50);
 
         let feed = ctx.performance_feed();
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn record_model_execution_mixed_outcomes_no_panic() {
-        let ctx = OrchestrationContext::new();
+        let mut ctx = OrchestrationContext::new();
         for i in 0..10 {
             let success = i % 2 == 0;
             ctx.record_model_execution("model-c", success, (i as u64) * 10);
@@ -148,23 +148,21 @@ mod tests {
 
     #[test]
     fn failover_tracks_model_failures() {
-        let ctx = OrchestrationContext::new();
-        let failover = ctx.failover();
+        let mut ctx = OrchestrationContext::new();
 
         // Record failures via the orchestration context
         ctx.record_model_execution("model-d", false, 200);
 
         // The failover should mark the model as blacklisted
         assert!(
-            failover.is_blacklisted("model-d"),
+            ctx.failover().is_blacklisted("model-d"),
             "failed model should be blacklisted"
         );
     }
 
     #[test]
     fn failover_integration_success_records() {
-        let ctx = OrchestrationContext::new();
-        let failover = ctx.failover();
+        let mut ctx = OrchestrationContext::new();
 
         // Record successes — failover should NOT blacklist
         for _ in 0..5 {
@@ -172,7 +170,7 @@ mod tests {
         }
 
         assert!(
-            !failover.is_blacklisted("model-e"),
+            !ctx.failover().is_blacklisted("model-e"),
             "successful model should not be blacklisted"
         );
     }
@@ -182,9 +180,10 @@ mod tests {
     #[test]
     fn concurrent_record_model_execution_no_race() {
         use std::sync::Arc;
+        use std::sync::Mutex;
         use std::thread;
 
-        let ctx = Arc::new(OrchestrationContext::new());
+        let ctx = Arc::new(Mutex::new(OrchestrationContext::new()));
         let mut handles = Vec::new();
 
         for i in 0..4 {
@@ -192,7 +191,11 @@ mod tests {
             handles.push(thread::spawn(move || {
                 for j in 0..25 {
                     let model = format!("concurrent-model-{}-{}", i, j);
-                    ctx_clone.record_model_execution(&model, j % 2 == 0, (j as u64) * 5);
+                    ctx_clone.lock().unwrap().record_model_execution(
+                        &model,
+                        j % 2 == 0,
+                        (j as u64) * 5,
+                    );
                 }
             }));
         }
@@ -203,6 +206,8 @@ mod tests {
 
         // After 100 concurrent calls, the feed should still be queryable
         let _rate = ctx
+            .lock()
+            .unwrap()
             .performance_feed()
             .get_success_rate("concurrent-model-0-0");
     }
@@ -210,9 +215,10 @@ mod tests {
     #[test]
     fn concurrent_record_model_execution_same_model_no_race() {
         use std::sync::Arc;
+        use std::sync::Mutex;
         use std::thread;
 
-        let ctx = Arc::new(OrchestrationContext::new());
+        let ctx = Arc::new(Mutex::new(OrchestrationContext::new()));
         let mut handles = Vec::new();
 
         // All threads write to the same model — stress-test internal locking
@@ -220,7 +226,11 @@ mod tests {
             let ctx_clone = Arc::clone(&ctx);
             handles.push(thread::spawn(move || {
                 for j in 0..50 {
-                    ctx_clone.record_model_execution("hot-model", j % 2 == 0, (j as u64) % 100);
+                    ctx_clone.lock().unwrap().record_model_execution(
+                        "hot-model",
+                        j % 2 == 0,
+                        (j as u64) % 100,
+                    );
                 }
             }));
         }
@@ -230,8 +240,18 @@ mod tests {
         }
 
         // After concurrent writes, the feed should have a success rate
-        let rate = ctx.performance_feed().get_success_rate("hot-model");
+        let rate = ctx
+            .lock()
+            .unwrap()
+            .performance_feed()
+            .get_success_rate("hot-model");
         assert!(rate.is_some());
-        assert_eq!(ctx.performance_feed().get_request_count("hot-model"), 400);
+        assert_eq!(
+            ctx.lock()
+                .unwrap()
+                .performance_feed()
+                .get_request_count("hot-model"),
+            400
+        );
     }
 }

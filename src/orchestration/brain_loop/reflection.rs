@@ -12,6 +12,9 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::agent::{Agent, AgentRegistry, Message, StreamingSender};
+use crate::orchestration::autonomy_runtime::{
+    TOKEN_MODEL_USED_PREFIX, TOKEN_THINKING_PREFIX, TOKEN_TOOL_CALL_PREFIX,
+};
 use crate::orchestration::core_dag::TaskContext;
 use crate::orchestration::diagnostic_feedback::DiagnosticFeedbackEngine;
 
@@ -417,13 +420,13 @@ impl DeepReasoningEngine {
         let mut response = String::new();
         while let Some(token) = rx.recv().await {
             // Skip control tokens
-            if token.starts_with("__model_used__:") {
+            if token.starts_with(TOKEN_MODEL_USED_PREFIX) {
                 continue;
             }
-            if token.starts_with("__tool_call__:") {
+            if token.starts_with(TOKEN_TOOL_CALL_PREFIX) {
                 continue;
             }
-            if let Some(reasoning) = token.strip_prefix("__thinking__") {
+            if let Some(reasoning) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                 response.push_str(reasoning);
             } else {
                 response.push_str(&token);

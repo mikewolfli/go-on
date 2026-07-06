@@ -37,43 +37,27 @@ use common::{binary_path, find_free_port, suite_mutex, CrossProcessLock};
 
 const LOCK_NAME: &str = "acp-rpc";
 
-/// A guard that wraps a child process spawned directly (without RpcHarness).
-///
-/// 1. Acquires the cross-process file lock so this child process is serialised
-///    against child processes from *other* test binaries, preventing CPU
-///    contention and artificial timeouts.
-/// 2. Kills the child on `Drop` so that panicking tests cannot orphan processes.
+/// Auto-kills child process on drop.
 struct ChildGuard {
-    child: Option<Child>,
-    _cross_process_lock: CrossProcessLock,
+    pub child: Child,
 }
 
 impl ChildGuard {
-    fn spawn(command: &mut Command) -> Self {
-        let _cross_process_lock = CrossProcessLock::new(LOCK_NAME, 60);
-        let child = command.spawn().expect("failed to spawn child process");
-        Self {
-            child: Some(child),
-            _cross_process_lock,
-        }
+    fn from_child(child: Child) -> Self {
+        Self { child }
     }
 
-    fn kill(mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+    fn kill(&self) {
+        let _ = std::process::Command::new("kill")
+            .arg(self.child.id().to_string())
+            .spawn();
     }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            if let Ok(None) = child.try_wait() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -764,42 +748,6 @@ fallback = false
     fs::write(path, config).expect("failed to write workflow dual review config file");
 }
 
-#[expect(
-    dead_code,
-    reason = "Config variant for autotune-enabled tests; kept for future use"
-)]
-fn write_autotune_enabled_config(path: &Path, state_path: &Path) {
-    let escaped_state_path = state_path.display().to_string().replace('\\', "\\\\");
-    let config = format!(
-        r#"default_phase = "coding"
-
-[flow]
-name = "Autotune Enabled"
-phases = ["coding"]
-
-[runtime]
-maintenance_interval_seconds = 30
-health_interval_seconds = 45
-shutdown_drain_seconds = 7
-
-[agents.local_echo]
-type = "local_echo"
-
-[phases.coding]
-description = "Coding"
-agents = ["local_echo"]
-fallback = true
-
-[autotune]
-enabled = true
-state_path = "{state_path}"
-"#,
-        state_path = escaped_state_path,
-    );
-
-    fs::write(path, config).expect("failed to write autotune-enabled config file");
-}
-
 fn write_http_stream_config(path: &Path, bind_addr: &str) {
     let config = format!(
         r#"default_phase = "coding"
@@ -1176,15 +1124,17 @@ fn http_chat_stream_emits_sse_and_persists_knowledge() {
     let bind_addr = format!("127.0.0.1:{}", find_free_port());
     write_http_stream_config(&config_path, &bind_addr);
 
-    let guard = ChildGuard::spawn(
-        Command::new(binary_path())
-            .arg("--config")
+    let guard = {
+        let mut cmd = Command::new(binary_path());
+        cmd.arg("--config")
             .arg(&config_path)
             .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
             .env("GO_ON_SKIP_MEMORY_CHECK", "true")
             .stdout(Stdio::null())
-            .stderr(Stdio::null()),
-    );
+            .stderr(Stdio::null());
+        let child = cmd.spawn().expect("failed to spawn server");
+        ChildGuard::from_child(child)
+    };
 
     let started = Instant::now();
     loop {
@@ -1258,16 +1208,18 @@ fn http_chat_completions_updates_health_metrics_and_emits_latency_log() {
     let bind_addr = format!("127.0.0.1:{}", find_free_port());
     write_http_stream_config(&config_path, &bind_addr);
 
-    let mut child = ChildGuard::spawn(
-        Command::new(binary_path())
-            .arg("--config")
+    let mut child = {
+        let mut cmd = Command::new(binary_path());
+        cmd.arg("--config")
             .arg(&config_path)
             .arg("--verbose")
             .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
             .env("GO_ON_SKIP_MEMORY_CHECK", "true")
             .stdout(Stdio::null())
-            .stderr(Stdio::piped()),
-    );
+            .stderr(Stdio::piped());
+        let c = cmd.spawn().expect("failed to spawn server");
+        ChildGuard::from_child(c)
+    };
 
     let started = Instant::now();
     loop {
@@ -1321,18 +1273,13 @@ fn http_chat_completions_updates_health_metrics_and_emits_latency_log() {
         "expected /health metrics.total_requests >= 1 after completion request"
     );
 
-    // Capture stderr before killing the child
+    // Capture stderr before dropping child (Drop kills + waits)
     let mut stderr_text = String::new();
-    if let Some(ref mut child) = child.child {
-        // Give the process a moment to flush logs before killing
-        thread::sleep(Duration::from_millis(200));
-        let _ = child.kill();
-        let _ = child.wait();
-        if let Some(mut stderr) = child.stderr.take() {
-            let _ = stderr.read_to_string(&mut stderr_text);
-        }
+    // Give the process a moment to flush logs
+    thread::sleep(Duration::from_millis(200));
+    if let Some(ref mut stderr) = child.child.stderr {
+        let _ = stderr.read_to_string(&mut stderr_text);
     }
-    child.child = None; // Prevent double-wait in Drop
 
     // Check for any structured log line — the exact key may vary by build
     // (e.g. "request_complete", "agent_selection", "chat.stream.done").
@@ -1341,6 +1288,7 @@ fn http_chat_completions_updates_health_metrics_and_emits_latency_log() {
         !stderr_text.is_empty(),
         "expected non-empty stderr from the child process; the server may have failed to start"
     );
+    // child is dropped here, which kills and waits via Drop
 }
 
 #[test]

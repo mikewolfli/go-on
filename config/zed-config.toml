@@ -41,7 +41,7 @@ entry_rate_limit_burst = 60
 production_strict = false
 governance_enabled = true
 governance_policy_mode = "advisory"
-#acp_http_bind_addr = "127.0.0.1:8090"
+acp_http_bind_addr = "127.0.0.1:8090"
 
 # ── Observability / OpenTelemetry ────────────────────────────────────
 otel_enabled = true

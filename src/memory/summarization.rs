@@ -9,6 +9,9 @@ use std::sync::Arc;
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::memory::embedding_provider::local_hash_embed;
 use crate::memory::memory_persistence::{MemoryEntry, MemoryTier};
+use crate::orchestration::autonomy_runtime::{
+    TOKEN_MODEL_USED_PREFIX, TOKEN_THINKING_PREFIX, TOKEN_TOOL_CALL_PREFIX,
+};
 
 /// Configuration for memory summarization.
 #[derive(Debug, Clone)]
@@ -207,10 +210,12 @@ pub async fn llm_summarize(entries: &[MemoryEntry], agent: Option<&Arc<dyn Agent
 
         let mut response = String::new();
         while let Some(token) = rx.recv().await {
-            if token.starts_with("__model_used__:") || token.starts_with("__tool_call__:") {
+            if token.starts_with(TOKEN_MODEL_USED_PREFIX)
+                || token.starts_with(TOKEN_TOOL_CALL_PREFIX)
+            {
                 continue;
             }
-            if let Some(reasoning) = token.strip_prefix("__thinking__") {
+            if let Some(reasoning) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                 response.push_str(reasoning);
             } else {
                 response.push_str(&token);

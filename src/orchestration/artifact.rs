@@ -10,7 +10,7 @@
 use anyhow;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -132,6 +132,11 @@ pub struct ArtifactLayer {
     max_artifacts: usize,
     /// Runtime profile metrics.
     profile: Arc<Mutex<ArtifactProfile>>,
+    /// Atomic counter for active (non-expired) artifacts — avoids O(n) scans.
+    active_artifacts: AtomicU32,
+    /// Per-producer reference counts so we can derive unique producer counts
+    /// in O(1) instead of O(n log n).
+    producer_counts: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl Default for ArtifactLayer {
@@ -156,6 +161,8 @@ impl ArtifactLayer {
                 active_artifacts: 0,
                 producers: 0,
             })),
+            active_artifacts: AtomicU32::new(0),
+            producer_counts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -304,22 +311,63 @@ impl ArtifactLayer {
         let mut artifact = artifact;
         artifact.id = generate_id();
 
+        // Capture a consistent "now" for active checks in this store call.
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // Check whether the new artifact is active before pushing.
+        let new_is_active = artifact.created_ms + artifact.ttl_ms > now_ms;
+        let new_producer = artifact.producer.clone();
+
         let mut artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         let id = artifact.id.clone();
         artifacts.push(artifact);
 
+        // Update counters for the newly pushed artifact.
+        if new_is_active {
+            self.active_artifacts.fetch_add(1, Ordering::Relaxed);
+        }
+        {
+            let mut counts = lock_mutex_recover(self.producer_counts.as_ref(), "producer_counts");
+            *counts.entry(new_producer).or_insert(0) += 1;
+        }
+
         // Enforce retention limit: remove oldest entries when over cap.
         if artifacts.len() > self.max_artifacts {
             let excess = artifacts.len() - self.max_artifacts;
-            artifacts.drain(0..excess);
+            let drained: Vec<Artifact> = artifacts.drain(0..excess).collect();
+
+            // Update counters for each drained artifact.
+            for a in &drained {
+                if a.created_ms + a.ttl_ms > now_ms {
+                    self.active_artifacts.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+            {
+                let mut counts =
+                    lock_mutex_recover(self.producer_counts.as_ref(), "producer_counts");
+                for a in &drained {
+                    if let Some(c) = counts.get_mut(&a.producer) {
+                        *c -= 1;
+                        if *c == 0 {
+                            counts.remove(&a.producer);
+                        }
+                    }
+                }
+            }
         }
 
-        // Update profile.
+        // Update profile from incremental counters (no full Vec scan).
         {
             let mut profile = lock_mutex_recover(self.profile.as_ref(), "profile");
             profile.total_artifacts = artifacts.len() as u32;
-            profile.active_artifacts = profile_total_active(&artifacts);
-            profile.producers = profile_unique_producers(&artifacts);
+            profile.active_artifacts = self.active_artifacts.load(Ordering::Relaxed);
+            {
+                let counts = lock_mutex_recover(self.producer_counts.as_ref(), "producer_counts");
+                profile.producers = counts.len() as u32;
+            }
         }
 
         Ok(id)
@@ -383,13 +431,40 @@ impl ArtifactLayer {
         };
 
         let mut artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
-        artifacts.retain(|a| a.created_ms + a.ttl_ms > now);
 
-        // Update profile.
+        // Partition into kept and expired, collecting expired for counter maintenance.
+        let mut expired: Vec<Artifact> = Vec::new();
+        let mut i = 0;
+        while i < artifacts.len() {
+            if artifacts[i].created_ms + artifacts[i].ttl_ms <= now {
+                expired.push(artifacts.swap_remove(i));
+            } else {
+                i += 1;
+            }
+        }
+
+        // Update counters for removed expired artifacts.
+        {
+            let mut counts = lock_mutex_recover(self.producer_counts.as_ref(), "producer_counts");
+            for a in &expired {
+                self.active_artifacts.fetch_sub(1, Ordering::Relaxed);
+                if let Some(c) = counts.get_mut(&a.producer) {
+                    *c -= 1;
+                    if *c == 0 {
+                        counts.remove(&a.producer);
+                    }
+                }
+            }
+        }
+
+        // Update profile from incremental counters (no full Vec scan).
         let mut profile = lock_mutex_recover(self.profile.as_ref(), "profile");
         profile.total_artifacts = artifacts.len() as u32;
-        profile.active_artifacts = profile_total_active(&artifacts);
-        profile.producers = profile_unique_producers(&artifacts);
+        profile.active_artifacts = self.active_artifacts.load(Ordering::Relaxed);
+        {
+            let counts = lock_mutex_recover(self.producer_counts.as_ref(), "producer_counts");
+            profile.producers = counts.len() as u32;
+        }
     }
 
     /// Returns a snapshot of the current profile metrics.
@@ -397,28 +472,6 @@ impl ArtifactLayer {
         let profile = lock_mutex_recover(self.profile.as_ref(), "profile");
         profile.clone()
     }
-}
-
-// ── Helper functions (not public) ───────────────────────────────────────────
-
-/// Returns the number of artifacts that are not yet expired.
-fn profile_total_active(artifacts: &[Artifact]) -> u32 {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    artifacts
-        .iter()
-        .filter(|a| a.created_ms + a.ttl_ms > now)
-        .count() as u32
-}
-
-/// Returns the number of unique producer names among the given artifacts.
-fn profile_unique_producers(artifacts: &[Artifact]) -> u32 {
-    let mut producers: Vec<&str> = artifacts.iter().map(|a| a.producer.as_str()).collect();
-    producers.sort();
-    producers.dedup();
-    producers.len() as u32
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

@@ -5,6 +5,8 @@
 
 use serde_json::Value;
 
+use crate::orchestration::autonomy_runtime::TOKEN_TOOL_CALL_PREFIX;
+
 /// Extract model tool calls from response
 pub(crate) fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
     // Parse only explicit tool-call markers; never synthesize placeholder calls.
@@ -155,8 +157,8 @@ pub(crate) fn extract_tool_calls_from_response(response: &str, max_calls: usize)
         }
 
         let marker_value = trimmed
-            .strip_prefix("__tool_call__")
-            .map(|value| value.trim_start_matches(':').trim())
+            .strip_prefix(TOKEN_TOOL_CALL_PREFIX)
+            .map(str::trim)
             .or_else(|| trimmed.strip_prefix("tool_call:").map(str::trim))
             .or_else(|| trimmed.strip_prefix("tool:").map(str::trim));
 

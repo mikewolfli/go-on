@@ -524,7 +524,7 @@ pub(crate) async fn process_chat_request(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if !response_text.is_empty() {
-            let plan_output = extract_plan_from_response(response_text, &params.mode);
+            let plan_output = extract_plan_from_response(response_text);
             if let Some(obj) = result.as_object_mut() {
                 obj.insert(
                     "plan_output".to_string(),

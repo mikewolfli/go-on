@@ -10,7 +10,7 @@
 use crate::intelligence::consciousness::{AwarenessMetricType, ConsciousnessMetrics};
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::orchestration::self_evolution::evolution_loop::{EvolutionTrigger, RegressionDirection};
-use std::sync::atomic::{AtomicU64, Ordering};
+
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
@@ -38,10 +38,10 @@ impl Default for TripleFusionConfig {
 /// The triple fusion bridge that synchronises data across the three systems.
 pub struct TripleFusionBridge {
     config: TripleFusionConfig,
-    /// Running count of fusion cycles executed (atomic for interior mutability).
-    fusion_cycles: AtomicU64,
+    /// Running count of fusion cycles executed.
+    fusion_cycles: u64,
     /// Timestamp (ms since epoch) of the last metacognitive sync.
-    last_sync_time_ms: AtomicU64,
+    last_sync_time_ms: u64,
 }
 
 // ── Global singleton ──────────────────────────────────────────────────────
@@ -72,15 +72,14 @@ impl TripleFusionBridge {
     /// Return the number of fusion cycles executed so far.
     pub fn fusion_cycles(&self) -> u64 {
         self.fusion_cycles
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Create a new triple fusion bridge.
     pub fn new(config: TripleFusionConfig) -> Self {
         Self {
             config,
-            fusion_cycles: AtomicU64::new(0),
-            last_sync_time_ms: AtomicU64::new(0),
+            fusion_cycles: 0,
+            last_sync_time_ms: 0,
         }
     }
 
@@ -92,7 +91,7 @@ impl TripleFusionBridge {
     /// The sync is gated by `metacognitive_sync_interval_ms` — consecutive calls
     /// within the interval are no-ops to avoid overwhelming the consciousness system.
     pub fn sync_metacognitive_to_consciousness(
-        &self,
+        &mut self,
         metacognitive: &MetacognitiveController,
         consciousness: &ConsciousnessMetrics,
     ) {
@@ -100,11 +99,11 @@ impl TripleFusionBridge {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let last_sync = self.last_sync_time_ms.load(Ordering::Relaxed);
+        let last_sync = self.last_sync_time_ms;
         if now_ms.saturating_sub(last_sync) < self.config.metacognitive_sync_interval_ms {
             return;
         }
-        self.last_sync_time_ms.store(now_ms, Ordering::Relaxed);
+        self.last_sync_time_ms = now_ms;
 
         let observations = metacognitive.list_observations(false);
         let unresolved_count = observations.iter().filter(|o| !o.is_resolved).count() as f64;
@@ -208,11 +207,11 @@ impl TripleFusionBridge {
     ///
     /// Returns the number of evolution triggers generated.
     pub fn run_fusion_cycle(
-        &self,
+        &mut self,
         metacognitive: &MetacognitiveController,
         consciousness: &ConsciousnessMetrics,
     ) -> Vec<EvolutionTrigger> {
-        self.fusion_cycles.fetch_add(1, Ordering::Relaxed);
+        self.fusion_cycles += 1;
 
         // Phase 1
         self.sync_metacognitive_to_consciousness(metacognitive, consciousness);
@@ -236,7 +235,7 @@ mod tests {
     #[test]
     fn test_fusion_cycle_increments_counter() {
         let config = TripleFusionConfig::default();
-        let bridge = TripleFusionBridge::new(config);
+        let mut bridge = TripleFusionBridge::new(config);
         let mc = MetacognitiveController::new(MetacognitiveConfig::default());
         let consciousness = ConsciousnessMetrics::new(Default::default());
 

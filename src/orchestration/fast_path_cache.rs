@@ -392,31 +392,44 @@ impl FastPathCache {
     /// Returns a JSON value with entry counts, total hit counts, average
     /// hits per entry, TTL, and max-entries setting.
     pub fn cache_metrics_snapshot(&self) -> Value {
-        let intent_cache = self
-            .intent_cache
-            .lock()
-            .expect("intent_cache lock poisoned");
-        let skill_cache = self.skill_cache.lock().expect("skill_cache lock poisoned");
-        let env_cache = self.env_cache.lock().expect("env_cache lock poisoned");
-
-        let intent_total: usize = intent_cache.len();
-        let intent_hits: u64 = intent_cache.values().map(|e| e.hit_count).sum();
+        // Acquire and release each cache lock separately so that only one
+        // lock is held at a time — avoids any lock-ordering dependency.
+        let (intent_total, intent_hits) = {
+            let cache = self
+                .intent_cache
+                .lock()
+                .expect("intent_cache lock poisoned");
+            (
+                cache.len(),
+                cache.values().map(|e| e.hit_count).sum::<u64>(),
+            )
+        };
         let intent_avg = if intent_total > 0 {
             intent_hits as f64 / intent_total as f64
         } else {
             0.0
         };
 
-        let skill_total: usize = skill_cache.len();
-        let skill_hits: u64 = skill_cache.values().map(|e| e.hit_count).sum();
+        let (skill_total, skill_hits) = {
+            let cache = self.skill_cache.lock().expect("skill_cache lock poisoned");
+            (
+                cache.len(),
+                cache.values().map(|e| e.hit_count).sum::<u64>(),
+            )
+        };
         let skill_avg = if skill_total > 0 {
             skill_hits as f64 / skill_total as f64
         } else {
             0.0
         };
 
-        let env_total: usize = env_cache.len();
-        let env_hits: u64 = env_cache.values().map(|e| e.hit_count).sum();
+        let (env_total, env_hits) = {
+            let cache = self.env_cache.lock().expect("env_cache lock poisoned");
+            (
+                cache.len(),
+                cache.values().map(|e| e.hit_count).sum::<u64>(),
+            )
+        };
         let env_avg = if env_total > 0 {
             env_hits as f64 / env_total as f64
         } else {
@@ -460,17 +473,22 @@ impl FastPathCache {
     ///
     /// Removes roughly 25 % of the oldest entries (at least 1) to avoid
     /// churn on every insert when the cache is at capacity.
+    ///
+    /// Uses `select_nth_unstable_by` (O(n) average via quickselect) instead
+    /// of a full O(n log n) sort to find the oldest entries.
     fn evict_if_needed<T: Clone>(cache: &mut HashMap<u64, CacheEntry<T>>, max_entries: usize) {
         if cache.len() < max_entries {
             return;
         }
-        let to_remove = (max_entries / 4).max(1);
-        // Collect keys sorted by created_at to evict the oldest.
-        // Using a Vec of (u64, Instant) is acceptable here because eviction
-        // is rare (only when at capacity) and bounded by max_entries.
+        let to_remove = (cache.len() / 4).max(1);
         let mut entries: Vec<(u64, Instant)> =
             cache.iter().map(|(k, v)| (*k, v.created_at)).collect();
-        entries.sort_by_key(|a| a.1);
+        // Partial partition: move the `to_remove` oldest entries to the front
+        // without fully sorting the rest (O(n) average case).
+        let n = entries.len();
+        if to_remove < n {
+            entries.select_nth_unstable_by(to_remove, |a, b| a.1.cmp(&b.1));
+        }
         for (key, _) in entries.iter().take(to_remove) {
             cache.remove(key);
         }

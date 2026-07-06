@@ -300,7 +300,7 @@ pub(crate) async fn execute_fallback_agents(
                     // BLUE56-B05: Record failure in HotFailover (global singleton)
                     {
                         use crate::intelligence::hot_failover::HOT_FAILOVER_INSTANCE;
-                        if let Ok(failover) = HOT_FAILOVER_INSTANCE.lock() {
+                        if let Ok(mut failover) = HOT_FAILOVER_INSTANCE.lock() {
                             failover.record_failure(&agent_name);
                         }
                     }

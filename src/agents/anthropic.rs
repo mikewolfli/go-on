@@ -4,16 +4,16 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::time::sleep;
 use tracing::warn;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::{chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg};
+use crate::agents::agent::{
+    chat_request_failed_msg, retry_chat_once,
+};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_events, SseEventAction,
 };
@@ -494,31 +494,17 @@ impl Agent for AnthropicAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
-        let mut last_error: Option<anyhow::Error> = None;
         let chat_messages = messages;
 
-        for attempt in 0..=2 {
-            match self
-                .chat_once(&chat_messages, &principles, &options, sender.clone())
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    let err_msg = err.to_string();
-                    if is_non_retryable_4xx(&err_msg) {
-                        return Err(err.into());
-                    }
-                    last_error = Some(err);
-                    if attempt < 2 {
-                        sleep(Duration::from_secs(1_u64 << attempt)).await;
-                    }
-                }
-            }
-        }
-
-        Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("claude")))
-            .into())
+        retry_chat_once(
+            || async {
+                self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                    .await
+                    .map_err(Into::into)
+            },
+            3,
+        )
+        .await
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {

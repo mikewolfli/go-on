@@ -88,11 +88,6 @@ impl LifecycleState {
         self.shutdown_requested = true;
     }
 
-    /// Check if server is shutting down
-    pub fn is_shutting_down(&self) -> bool {
-        self.shutdown_requested
-    }
-
     /// Get a snapshot of the lifecycle state
     pub fn snapshot(&self) -> LifecycleSnapshot {
         let now = now_ts();

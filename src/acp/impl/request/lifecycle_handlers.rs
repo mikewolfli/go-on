@@ -209,7 +209,6 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         .collect::<Vec<_>>();
 
     let rate_limiter_buckets = with_acp_lock(
-        "phase_rate_limiter",
         server.resilience.phase_rate_limiter.as_ref(),
         |guard| {
             guard

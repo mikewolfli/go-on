@@ -20,7 +20,7 @@ use tracing::warn;
 ///
 /// Handles poisoned mutexes gracefully, recovering the state and continuing.
 /// No wait-time instrumentation (removed for performance — see module docs).
-pub fn with_acp_lock<T, R, F>(_name: &'static str, mutex: &StdMutex<T>, operation: F) -> R
+pub fn with_acp_lock<T, R, F>(mutex: &StdMutex<T>, operation: F) -> R
 where
     F: FnOnce(&mut T) -> R,
 {
@@ -29,8 +29,7 @@ where
         Err(poisoned) => {
             warn!(
                 target: "acp::locks",
-                "ACP lock '{}' was poisoned; continuing with recovered state",
-                _name
+                "ACP lock was poisoned; continuing with recovered state",
             );
             let mut guard = poisoned.into_inner();
             operation(&mut guard)
@@ -41,11 +40,7 @@ where
 /// Acquire a `tokio::sync::Mutex` (async version).
 ///
 /// No wait-time instrumentation (removed for performance — see module docs).
-pub async fn with_acp_lock_async<T, R, F>(
-    _name: &'static str,
-    mutex: &TokioMutex<T>,
-    operation: F,
-) -> R
+pub async fn with_acp_lock_async<T, R, F>(mutex: &TokioMutex<T>, operation: F) -> R
 where
     F: FnOnce(&mut T) -> R,
 {

@@ -22,42 +22,46 @@ pub struct LanguageWatcher {
     should_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Call `f` for every `.json` file found directly inside `watch_dir`.
+fn for_each_json_in_dir(watch_dir: &std::path::Path, mut f: impl FnMut(&std::path::Path)) {
+    if let Ok(entries) = std::fs::read_dir(watch_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+                f(&path);
+            }
+        }
+    }
+}
+
 /// Check if any language file has been modified, comparing against recorded times.
 fn check_for_changes_in_dir(
     watch_dir: &std::path::Path,
     file_times: &std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
 ) -> bool {
-    if let Ok(entries) = std::fs::read_dir(watch_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-
-            match std::fs::metadata(&path) {
-                Ok(metadata) => match metadata.modified() {
-                    Ok(modified) => {
-                        if !file_times.contains_key(&path) {
-                            return true; // New file
+    let mut changed = false;
+    for_each_json_in_dir(watch_dir, |path| {
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                if let Ok(modified) = metadata.modified() {
+                    if !file_times.contains_key(path) {
+                        changed = true; // New file
+                    } else if let Some(&old_time) = file_times.get(path) {
+                        if modified > old_time {
+                            changed = true; // File modified
                         }
-                        if let Some(&old_time) = file_times.get(&path) {
-                            if modified > old_time {
-                                return true; // File modified
-                            }
-                        }
-                    }
-                    Err(_) => continue,
-                },
-                Err(_) => {
-                    // File was deleted
-                    if file_times.contains_key(&path) {
-                        return true;
                     }
                 }
             }
+            Err(_) => {
+                // File was deleted
+                if file_times.contains_key(path) {
+                    changed = true;
+                }
+            }
         }
-    }
-    false
+    });
+    changed
 }
 
 /// Rebuild the file-times map from the current files in the watch directory.
@@ -66,18 +70,13 @@ fn update_file_times_in_dir(
     file_times: &mut std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
 ) {
     file_times.clear();
-    if let Ok(entries) = std::fs::read_dir(watch_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-                if let Ok(metadata) = std::fs::metadata(&path) {
-                    if let Ok(modified) = metadata.modified() {
-                        file_times.insert(path, modified);
-                    }
-                }
+    for_each_json_in_dir(watch_dir, |path| {
+        if let Ok(metadata) = std::fs::metadata(path) {
+            if let Ok(modified) = metadata.modified() {
+                file_times.insert(path.to_path_buf(), modified);
             }
         }
-    }
+    });
 }
 
 impl LanguageWatcher {
@@ -99,20 +98,13 @@ impl LanguageWatcher {
     /// Update tracked file modification times
     fn update_file_times(&mut self) -> Result<()> {
         self.file_times.clear();
-
-        if let Ok(entries) = std::fs::read_dir(&self.watch_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-                    if let Ok(metadata) = std::fs::metadata(&path) {
-                        if let Ok(modified) = metadata.modified() {
-                            self.file_times.insert(path, modified);
-                        }
-                    }
+        for_each_json_in_dir(&self.watch_dir, |path| {
+            if let Ok(metadata) = std::fs::metadata(path) {
+                if let Ok(modified) = metadata.modified() {
+                    self.file_times.insert(path.to_path_buf(), modified);
                 }
             }
-        }
-
+        });
         Ok(())
     }
 
@@ -178,34 +170,15 @@ impl LanguageWatcher {
 /// i18n manager and starts watching. Returns `Ok(true)` if the watcher was started,
 /// `Ok(false)` if the i18n manager is not yet initialized, or an error.
 pub fn start_watcher(languages_dir: &Path, check_interval: Duration) -> Result<bool> {
-    let i18n_arc = crate::i18n::runtime::I18N.clone();
     let dir = languages_dir.to_path_buf();
-    let has_manager = {
-        let guard = i18n_arc
-            .read()
-            .map_err(|e| anyhow::anyhow!("failed to read i18n global lock: {}", e))?;
-        guard.is_some()
-    };
-    if !has_manager {
-        warn!("i18n manager not initialized; cannot start watcher");
-        return Ok(false);
-    }
-    // Clone the global manager into an Arc to share with the watcher thread.
-    // Since I18N stores Option<I18nManager>, we extract and wrap it.
-    let manager_arc = {
-        let guard = i18n_arc
-            .read()
-            .map_err(|e| anyhow::anyhow!("failed to read i18n global lock: {}", e))?;
-        match guard.as_ref() {
-            Some(mgr) => {
-                // Clone the existing global manager so the watcher shares the same data.
-                // Deref first so we clone the I18nManager itself, not the &I18nManager reference.
-                Arc::new(mgr.clone())
-            }
-            None => return Ok(false),
+    let manager = match crate::i18n::runtime::I18N.get() {
+        Some(mgr) => Arc::new(mgr.clone()),
+        None => {
+            warn!("i18n manager not initialized; cannot start watcher");
+            return Ok(false);
         }
     };
-    let mut watcher = LanguageWatcher::new(manager_arc, &dir)?;
+    let mut watcher = LanguageWatcher::new(manager, &dir)?;
     watcher.start_watching(check_interval)?;
     info!("Language watcher started for directory: {:?}", dir);
     Ok(true)

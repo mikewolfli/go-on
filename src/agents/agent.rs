@@ -80,6 +80,42 @@ pub fn token_request_failed_msg(provider: &str, status: &str, body: &str) -> Str
     }
 }
 
+/// Retry a `chat_once` call up to `max_attempts` times with exponential backoff.
+///
+/// Returns early on success or on non-retryable 4xx errors.
+/// Shared by all agent providers to eliminate ~30 duplicate retry loops.
+pub async fn retry_chat_once<F, Fut, T>(
+    mut chat_once: F,
+    max_attempts: usize,
+) -> crate::core::error::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = crate::core::error::Result<T>>,
+{
+    use crate::core::error::AppError;
+    let mut last_error: Option<AppError> = None;
+    for attempt in 0..max_attempts {
+        match chat_once().await {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                let err_msg = err.to_string();
+                if is_non_retryable_4xx(&err_msg) {
+                    return Err(err);
+                }
+                last_error = Some(err);
+                if attempt + 1 < max_attempts {
+                    sleep(Duration::from_secs(1_u64 << attempt)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AppError::Proxy(crate::core::error::ProxyError::Internal(format!(
+            "chat_once failed after {max_attempts} attempts"
+        )))
+    }))
+}
+
 /// Check if an error message indicates a non-retryable HTTP 4xx status
 /// (excluding 429 rate limit). This prevents wasting time retrying requests
 /// that will never succeed (e.g. 400, 401, 403).

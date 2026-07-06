@@ -5,11 +5,10 @@
 
 // activated, formerly F-GAP-51: all items below are active WebSocket code
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicI64, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -100,24 +99,6 @@ impl Default for ConnectionMetadata {
 // WsSender
 // ---------------------------------------------------------------------------
 
-/// Per-connection rate-limit state (interior mutability via `Mutex`).
-#[derive(Debug)]
-struct RateLimitState {
-    /// Number of messages sent in the current time window.
-    msg_count: u64,
-    /// Start of the current rate-limit window.
-    window_start: Instant,
-}
-
-impl RateLimitState {
-    fn new() -> Self {
-        Self {
-            msg_count: 0,
-            window_start: Instant::now(),
-        }
-    }
-}
-
 /// Channel wrapper for sending messages to a single WebSocket connection.
 // activated, formerly F-GAP-51
 #[derive(Debug)]
@@ -130,10 +111,12 @@ pub struct WsSender {
     pub principal: Principal,
     /// Number of reconnection attempts (0 = first connection).
     pub reconnect_count: u64,
-    /// Timestamp of the last heartbeat-related activity (ping send or pong receive).
-    last_heartbeat: Mutex<Instant>,
-    /// Per-connection rate limiting state.
-    rate_limit: Mutex<RateLimitState>,
+    /// Timestamp (epoch ms) of the last heartbeat-related activity.
+    last_heartbeat_ms: AtomicI64,
+    /// Per-connection message count in the current rate-limit window.
+    rate_limit_count: AtomicU64,
+    /// Start (epoch ms) of the current rate-limit window.
+    rate_limit_window_ms: AtomicI64,
     /// The sequence number of the last heartbeat ping sent to this connection.
     heartbeat_seq: AtomicU64,
     /// Consecutive heartbeat cycles without a matching pong response.
@@ -148,16 +131,26 @@ impl WsSender {
         metadata: ConnectionMetadata,
         principal: Principal,
     ) -> Self {
+        let now_ms = Self::epoch_ms();
         Self {
             sender,
             metadata,
             principal,
             reconnect_count: 0,
-            last_heartbeat: Mutex::new(Instant::now()),
-            rate_limit: Mutex::new(RateLimitState::new()),
+            last_heartbeat_ms: AtomicI64::new(now_ms),
+            rate_limit_count: AtomicU64::new(0),
+            rate_limit_window_ms: AtomicI64::new(now_ms),
             heartbeat_seq: AtomicU64::new(0),
             missed_pongs: AtomicU16::new(0),
         }
+    }
+
+    /// Helper: current timestamp as epoch milliseconds.
+    fn epoch_ms() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
     }
 
     /// Send a message to this connection. Returns `true` if the message was
@@ -177,21 +170,42 @@ impl WsSender {
     /// Check whether this connection is within its per-second message rate limit
     /// (enforced by `max_messages_per_sec`). Returns `true` if the message may
     /// be forwarded, `false` if the limit has been exceeded.
+    ///
+    /// Lock-free: uses `AtomicU64` / `AtomicI64` with CAS instead of a `Mutex`.
     pub fn check_rate_limit(&self, max_per_sec: u64) -> bool {
-        let mut state = self.rate_limit.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("rate_limit lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let now = Instant::now();
-        if now.duration_since(state.window_start).as_secs() >= 1 {
-            state.msg_count = 0;
-            state.window_start = now;
+        if max_per_sec == 0 {
+            return true;
         }
-        if state.msg_count >= max_per_sec {
-            return false;
+        let now_ms = Self::epoch_ms();
+        let window_start_ms = self.rate_limit_window_ms.load(Ordering::Relaxed);
+
+        // Window expired — attempt to reset atomically.
+        if now_ms - window_start_ms >= 1000
+            && self
+                .rate_limit_window_ms
+                .compare_exchange(window_start_ms, now_ms, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            // We won the reset race; counter starts at 1 for this message.
+            self.rate_limit_count.store(1, Ordering::Release);
+            return true;
         }
-        state.msg_count += 1;
-        true
+        // Window expired but another thread won the reset race — fall through to CAS increment.
+
+        // CAS loop to increment the counter.
+        loop {
+            let current = self.rate_limit_count.load(Ordering::Relaxed);
+            if current >= max_per_sec {
+                return false;
+            }
+            if self
+                .rate_limit_count
+                .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
     }
 
     /// Increment the reconnect counter.
@@ -205,17 +219,9 @@ impl WsSender {
         // If the connection has been stable for longer than the threshold,
         // treat this as a fresh reconnection rather than a continuation of
         // an old backoff series.
-        if self
-            .last_heartbeat
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("last_heartbeat lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .elapsed()
-            .as_secs()
-            >= DECAY_THRESHOLD_SECS
-        {
+        let now_ms = Self::epoch_ms();
+        let last_hb_ms = self.last_heartbeat_ms.load(Ordering::Relaxed);
+        if now_ms - last_hb_ms >= (DECAY_THRESHOLD_SECS as i64 * 1000) {
             self.reconnect_count = 0;
         }
         self.reconnect_count = self.reconnect_count.saturating_add(1);
@@ -237,17 +243,13 @@ impl WsSender {
     pub fn record_pong(&self, seq: u64) -> bool {
         let current_seq = self.heartbeat_seq.load(Ordering::Relaxed);
         if seq == current_seq {
-            let mut hb = self.last_heartbeat.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("last_heartbeat lock poisoned, recovering");
-                poisoned.into_inner()
-            });
             self.missed_pongs.store(0, Ordering::Release);
-            let elapsed = hb.elapsed();
-            *hb = Instant::now();
-            drop(hb);
+            let now_ms = Self::epoch_ms();
+            let prev_hb_ms = self.last_heartbeat_ms.swap(now_ms, Ordering::AcqRel);
+            let rtt_ms = (now_ms - prev_hb_ms).max(0) as u128;
             debug!(
                 heartbeat_seq = seq,
-                rtt_ms = elapsed.as_millis(),
+                rtt_ms = rtt_ms,
                 "pong received, RTT computed"
             );
             true
@@ -364,8 +366,8 @@ pub struct WebSocketHub {
 struct WebSocketHubInner {
     /// All active connections keyed by their ConnectionId.
     connections: RwLock<HashMap<ConnectionId, WsSender>>,
-    /// Topic → list of subscribed ConnectionIds.
-    topic_subscriptions: RwLock<HashMap<String, Vec<ConnectionId>>>,
+    /// Topic → set of subscribed ConnectionIds (HashSet for O(1) lookups).
+    topic_subscriptions: RwLock<HashMap<String, HashSet<ConnectionId>>>,
     /// Hub configuration.
     config: WebSocketConfig,
     /// Handle for the background heartbeat task.
@@ -469,7 +471,8 @@ impl WebSocketHub {
                 let mut conns = inner.connections.write().await;
 
                 // Separate connections with 3+ consecutive missed pongs.
-                let stale_ids: Vec<ConnectionId> = conns
+                // Use a HashSet for O(1) lookups during stale cleanup.
+                let stale_ids: HashSet<ConnectionId> = conns
                     .iter()
                     .filter(|(_, sender)| sender.missed_pongs.load(Ordering::Acquire) >= 3)
                     .map(|(id, _)| id.clone())
@@ -497,10 +500,11 @@ impl WebSocketHub {
                 for (conn_id, sender) in conns.iter_mut() {
                     // Stamp the seq so record_pong can verify it later.
                     sender.heartbeat_seq.store(current_seq, Ordering::Release);
-                    *sender.last_heartbeat.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("last_heartbeat lock poisoned, recovering");
-                        poisoned.into_inner()
-                    }) = Instant::now();
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+                    sender.last_heartbeat_ms.store(now_ms, Ordering::Release);
 
                     if !sender.send(ping.clone()) {
                         debug!(connection_id = %conn_id, "connection channel closed, removing");
@@ -635,7 +639,7 @@ impl WebSocketHub {
         // Remove from all topic subscriptions.
         let mut subs = self.inner.topic_subscriptions.write().await;
         for (_topic, members) in subs.iter_mut() {
-            members.retain(|id| id != connection_id);
+            members.remove(connection_id);
         }
         // Clean up empty topic entries.
         subs.retain(|_topic, members| !members.is_empty());
@@ -653,9 +657,7 @@ impl WebSocketHub {
     pub async fn subscribe(&self, connection_id: &str, topic: &str) {
         let mut subs = self.inner.topic_subscriptions.write().await;
         let members = subs.entry(topic.to_string()).or_default();
-        if !members.contains(&connection_id.to_string()) {
-            members.push(connection_id.to_string());
-        }
+        members.insert(connection_id.to_string());
         debug!(
             connection_id = %connection_id,
             topic = %topic,
@@ -667,7 +669,7 @@ impl WebSocketHub {
     pub async fn unsubscribe(&self, connection_id: &str, topic: &str) {
         let mut subs = self.inner.topic_subscriptions.write().await;
         if let Some(members) = subs.get_mut(topic) {
-            members.retain(|id| id != connection_id);
+            members.remove(connection_id);
             if members.is_empty() {
                 subs.remove(topic);
             }
@@ -689,7 +691,8 @@ impl WebSocketHub {
 
         // Collect all connection ids that match the topic (exact or wildcard).
         // Only exact matches and wildcard-path matches are supported.
-        let mut targets: Vec<ConnectionId> = Vec::new();
+        // Use a HashSet for O(1) deduplication (instead of O(n) `.contains()`).
+        let mut targets: HashSet<ConnectionId> = HashSet::new();
 
         // 1. Exact match.
         if let Some(members) = subs.get(topic) {
@@ -702,21 +705,13 @@ impl WebSocketHub {
         if topic_parts.len() >= 2 {
             let wildcard = format!("{}.*", topic_parts[0]);
             if let Some(members) = subs.get(&wildcard) {
-                for id in members {
-                    if !targets.contains(id) {
-                        targets.push(id.clone());
-                    }
-                }
+                targets.extend(members.iter().cloned());
             }
         }
         if topic_parts.len() >= 3 {
             let wildcard = format!("{}.{}.*", topic_parts[0], topic_parts[1]);
             if let Some(members) = subs.get(&wildcard) {
-                for id in members {
-                    if !targets.contains(id) {
-                        targets.push(id.clone());
-                    }
-                }
+                targets.extend(members.iter().cloned());
             }
         }
 

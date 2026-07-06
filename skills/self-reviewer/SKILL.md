@@ -9,9 +9,46 @@ min_go_on_version: 1.0.0
 
 # Self Reviewer
 
-Agent reviews its own work before finalizing.
+Performs a structured self-review of the agent's own work before submission. Checks for completeness, correctness, safety, and adherence to project principles.
 
-## When to use
+## Tags
+
+review, code-quality, self-improvement
+
+## Description
+
+A meta-skill that guides an agent through a structured self-review of its own output before presenting it to the user. Applies a comprehensive checklist across code changes, documentation, performance, and safety dimensions. Catches errors, style violations, omissions, and regressions before the user sees the result.
+
+Use this skill before presenting any work product — especially code changes, documentation updates, configuration changes, or generated artifacts. It is the final quality gate in the agent's workflow.
+
+## Usage
+
+Invoke after completing work but before presenting results to the user.
+
+- `/self-review` — Run full self-review on all pending changes
+- `/self-review code` — Review only code changes (compile, lint, test, style)
+- `/self-review docs` — Review only documentation changes
+- `/self-review safety` — Review for security and safety concerns only
+
+## Input Schema
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scope` | string | Review scope: `full`, `code`, `docs`, `safety` (default: `full`) |
+| `changes` | string | Optional: description or diff of the changes to review |
+| `strictness` | string | Optional: `normal`, `strict` (default: `normal`). Strict mode flags warnings as errors |
+
+## Output
+
+Returns a structured review report containing:
+
+1. **Summary** — Overall verdict: Pass, Pass with Warnings, or Needs Fixes
+2. **Per-category Checklists** — Checked items with pass/fail status for each review category
+3. **Issues Found** — Specific, actionable issues with file paths, line references, and suggested fixes
+4. **Fix Recommendations** — For each issue, a concrete proposed change or remediation step
+5. **Resubmission Checklist** — Re-check items that must pass before final delivery
+
+## When to Use
 
 - Before presenting final results to the user
 - After completing a code change

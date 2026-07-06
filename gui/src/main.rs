@@ -19,8 +19,6 @@ mod tests;
 mod theme;
 mod view_registry;
 mod views;
-mod widgets;
-
 use app::GoOnApp;
 
 fn font_cache_path() -> Option<std::path::PathBuf> {

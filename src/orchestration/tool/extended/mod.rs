@@ -156,10 +156,10 @@ pub use sqlite::SqliteQueryTool;
 #[cfg(feature = "cad-step")]
 pub use step::StepReadTool;
 #[cfg(all(feature = "cad-stl", feature = "model-3d"))]
-pub use stl::StlGenerateTool;
+pub use stl::{StlGenerateTool, StlReadTool};
 #[cfg(all(feature = "cad-stl", not(feature = "model-3d")))]
 pub use stl::{StlGenerateTool, StlReadTool};
-#[cfg(feature = "model-3d")]
+#[cfg(all(feature = "model-3d", not(feature = "cad-stl")))]
 pub use stl_tool::StlReadTool;
 #[cfg(feature = "drawing-svg")]
 pub use svg::{SvgExportTool, SvgGenerateTool, SvgReadTool};

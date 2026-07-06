@@ -65,11 +65,11 @@ pub struct FailoverMetrics {
 pub struct HotFailover {
     config: HotFailoverConfig,
     /// Maps model ID to the Instant when its cooldown expires.
-    failed_models: Mutex<HashMap<String, Instant>>,
+    failed_models: HashMap<String, Instant>,
     /// Maximum number of entries in the failed_models map before evicting oldest.
     max_failed_models: usize,
     /// Cumulative failover metrics.
-    metrics: Mutex<FailoverMetrics>,
+    metrics: FailoverMetrics,
 }
 
 impl HotFailover {
@@ -77,33 +77,35 @@ impl HotFailover {
     pub fn new(config: HotFailoverConfig) -> Self {
         Self {
             config,
-            failed_models: Mutex::new(HashMap::new()),
+            failed_models: HashMap::new(),
             max_failed_models: DEFAULT_MAX_FAILED_MODELS,
-            metrics: Mutex::new(FailoverMetrics::default()),
+            metrics: FailoverMetrics::default(),
         }
     }
 
     /// Whether the given model is currently blacklisted (in cooldown).
+    ///
+    /// Note: expired entries are not eagerly cleaned here — they are removed
+    /// the next time `record_failure` or `execute_with_failover` is called.
     pub fn is_blacklisted(&self, model_id: &str) -> bool {
-        self.evict_expired_entries();
-        let guard = crate::intelligence::lock_guard(&self.failed_models);
-        match guard.get(model_id) {
+        match self.failed_models.get(model_id) {
             Some(expiry) => Instant::now() < *expiry,
             None => false,
         }
     }
 
     /// Mark a model as failed, placing it into cooldown.
-    pub fn record_failure(&self, model_id: &str) {
+    pub fn record_failure(&mut self, model_id: &str) {
         self.evict_expired_entries();
         let cooldown = Duration::from_millis(self.config.cooldown_ms);
         let expiry = Instant::now() + cooldown;
-        let mut guard = crate::intelligence::lock_guard(&self.failed_models);
 
         // Evict the oldest entry if at capacity to prevent unbounded growth.
-        if guard.len() >= self.max_failed_models && !guard.contains_key(model_id) {
-            if let Some(oldest_key) = guard.keys().next().cloned() {
-                guard.remove(&oldest_key);
+        if self.failed_models.len() >= self.max_failed_models
+            && !self.failed_models.contains_key(model_id)
+        {
+            if let Some(oldest_key) = self.failed_models.keys().next().cloned() {
+                self.failed_models.remove(&oldest_key);
                 tracing::warn!(
                     "failed_models cap reached ({}): evicted oldest entry",
                     self.max_failed_models,
@@ -111,7 +113,7 @@ impl HotFailover {
             }
         }
 
-        guard.insert(model_id.to_string(), expiry);
+        self.failed_models.insert(model_id.to_string(), expiry);
         warn!(
             model = %model_id,
             cooldown_ms = self.config.cooldown_ms,
@@ -120,10 +122,9 @@ impl HotFailover {
     }
 
     /// Remove entries whose cooldown has already expired.
-    fn evict_expired_entries(&self) {
-        let mut guard = crate::intelligence::lock_guard(&self.failed_models);
+    fn evict_expired_entries(&mut self) {
         let now = Instant::now();
-        guard.retain(|_, expiry| now < *expiry);
+        self.failed_models.retain(|_, expiry| now < *expiry);
     }
 
     /// Execute a task with failover across a sequence of model functions.
@@ -134,7 +135,7 @@ impl HotFailover {
     ///
     /// Returns the first successful result, or an error if all models fail.
     pub async fn execute_with_failover<F, Fut, T, E>(
-        &self,
+        &mut self,
         prompt: &str,
         attempts: &[(String, F)],
     ) -> Result<T, E>
@@ -166,8 +167,7 @@ impl HotFailover {
         for (i, (model_id, f)) in attempts.iter().enumerate().take(max_attempts) {
             // Skip blacklisted models.
             if self.is_blacklisted(model_id) {
-                let mut m = crate::intelligence::lock_guard(&self.metrics);
-                m.cooldown_skips += 1;
+                self.metrics.cooldown_skips += 1;
                 info!(
                     model = %model_id,
                     %prompt,
@@ -183,10 +183,9 @@ impl HotFailover {
                 Ok(Ok(result)) => {
                     // Success — no failover latency recorded for primary.
                     if i > 0 {
-                        let mut m = crate::intelligence::lock_guard(&self.metrics);
-                        m.failover_count += 1;
+                        self.metrics.failover_count += 1;
                         let latency = attempt_start.duration_since(failover_start);
-                        m.total_failover_latency_ms += latency.as_millis() as u64;
+                        self.metrics.total_failover_latency_ms += latency.as_millis() as u64;
                     }
                     return Ok(result);
                 }
@@ -216,10 +215,9 @@ impl HotFailover {
             }
         }
 
-        let mut m = crate::intelligence::lock_guard(&self.metrics);
-        m.failover_count += 1;
+        self.metrics.failover_count += 1;
         let latency = Instant::now().duration_since(failover_start);
-        m.total_failover_latency_ms += latency.as_millis() as u64;
+        self.metrics.total_failover_latency_ms += latency.as_millis() as u64;
 
         // GAP-B58-B16: Log all models that failed before returning the error.
         if !failed_models.is_empty() {
@@ -240,13 +238,12 @@ impl HotFailover {
 
     /// Return a snapshot of current failover metrics.
     pub fn metrics(&self) -> FailoverMetrics {
-        crate::intelligence::lock_guard(&self.metrics).clone()
+        self.metrics.clone()
     }
 
     /// Clear the cooldown blacklist (useful after a configuration change).
-    pub fn clear_blacklist(&self) {
-        let mut guard = crate::intelligence::lock_guard(&self.failed_models);
-        guard.clear();
+    pub fn clear_blacklist(&mut self) {
+        self.failed_models.clear();
     }
 }
 
@@ -271,7 +268,7 @@ mod tests {
     #[tokio::test]
     async fn primary_succeeds_no_failover() {
         let config = HotFailoverConfig::default();
-        let hf = HotFailover::new(config);
+        let mut hf = HotFailover::new(config);
 
         let attempts = vec![("primary".to_string(), |id: String| async move {
             assert_eq!(id, "primary");
@@ -291,7 +288,7 @@ mod tests {
             max_failover_attempts: 2,
             ..HotFailoverConfig::default()
         };
-        let hf = HotFailover::new(config);
+        let mut hf = HotFailover::new(config);
 
         let call_count = std::sync::Arc::new(AtomicU32::new(0));
 
@@ -344,7 +341,7 @@ mod tests {
             max_failover_attempts: 3,
             ..HotFailoverConfig::default()
         };
-        let hf = HotFailover::new(config);
+        let mut hf = HotFailover::new(config);
 
         // Pre-blacklist the "bad" model.
         hf.record_failure("bad");
@@ -375,7 +372,7 @@ mod tests {
             max_failover_attempts: 3,
             ..HotFailoverConfig::default()
         };
-        let hf = HotFailover::new(config);
+        let mut hf = HotFailover::new(config);
 
         let attempt = |id: String| -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<&str, String>> + Send>,
@@ -404,7 +401,7 @@ mod tests {
             enabled: false,
             ..HotFailoverConfig::default()
         };
-        let hf = HotFailover::new(config);
+        let mut hf = HotFailover::new(config);
 
         let attempts = vec![("only".to_string(), |_id: String| async move {
             Ok::<_, String>("only".to_string())
@@ -419,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn clear_blacklist_removes_all_entries() {
         let config = HotFailoverConfig::default();
-        let hf = HotFailover::new(config);
+        let mut hf = HotFailover::new(config);
 
         hf.record_failure("model-a");
         hf.record_failure("model-b");

@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use tracing::Instrument;
 
 use super::config_handlers::build_trace_payload;
@@ -9,7 +9,6 @@ use crate::acp::helpers::tool_governance::{
     record_tool_rbac_denied,
 };
 use crate::governance::hardening::{task_budget_for_target, BudgetTracker, GovernanceAction};
-use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::skill_discovery::SkillDiscovery;
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
 
@@ -36,13 +35,6 @@ pub(crate) fn global_tool_registry() -> &'static ToolRegistry {
 /// Get or create the global `SkillDiscovery` instance.
 pub(crate) fn skill_discovery() -> &'static Mutex<SkillDiscovery> {
     SKILL_DISCOVERY.get_or_init(|| Mutex::new(SkillDiscovery::new()))
-}
-
-/// Initialize the global SkillDiscovery with a registry reference.
-/// Called during server startup to wire the live skill registry into the discovery engine.
-pub(crate) fn init_skill_discovery(registry: Arc<RwLock<SkillRegistry>>) {
-    let mut discovery = skill_discovery().lock().unwrap_or_else(|e| e.into_inner());
-    discovery.set_registry(registry);
 }
 
 pub(super) fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {

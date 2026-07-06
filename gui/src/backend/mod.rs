@@ -572,11 +572,6 @@ impl BackendClient {
             }
         }
 
-        // Reset abort controller in case it's being reused across requests
-        if let Some(ref ctrl) = abort_ctrl {
-            ctrl.reset();
-        }
-
         // Race the response body against abort signal so the user can cancel
         // an in-flight HTTP request during the response-read phase.
         // Create the futures outside select! to avoid ownership conflicts:

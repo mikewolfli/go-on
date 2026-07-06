@@ -157,15 +157,6 @@ pub fn render_markdown(text: &str) -> String {
             ));
             continue;
         }
-        if let Some(content) = trimmed.strip_prefix('-').or_else(|| {
-            trimmed
-                .strip_prefix('*')
-                .or_else(|| trimmed.strip_prefix('+'))
-        }) {
-            if trimmed.len() > 2 && content.trim().len() < trimmed.len() - 1 {
-                // Was a list item already handled above
-            }
-        }
         // Ordered list
         if let Some((num_str, content)) = trimmed.split_once(". ") {
             if num_str.chars().all(|c| c.is_ascii_digit()) {

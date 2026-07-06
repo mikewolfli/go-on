@@ -101,7 +101,7 @@ impl SessionContextManager {
     }
 
     /// Record a new message and extract its concepts.
-    pub fn record_message(&mut self, content: &str, _role: &str) {
+    pub fn record_message(&mut self, content: &str) {
         let idx = self.message_count;
         self.message_count += 1;
 
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn test_record_message_extracts_files() {
         let mut mgr = SessionContextManager::default();
-        mgr.record_message("Fix src/main.rs and tests/e2e.rs", "user");
+        mgr.record_message("Fix src/main.rs and tests/e2e.rs");
         assert!(mgr.file_paths.contains("src/main.rs"));
         assert!(mgr.file_paths.contains("tests/e2e.rs"));
     }
@@ -341,14 +341,14 @@ mod tests {
     #[test]
     fn test_record_message_detects_error() {
         let mut mgr = SessionContextManager::default();
-        mgr.record_message("Got an error: timeout expired", "user");
+        mgr.record_message("Got an error: timeout expired");
         assert_eq!(mgr.error_messages.len(), 1);
     }
 
     #[test]
     fn test_record_message_detects_decision() {
         let mut mgr = SessionContextManager::default();
-        mgr.record_message("I have decided to use the retry strategy", "assistant");
+        mgr.record_message("I have decided to use the retry strategy");
         assert_eq!(mgr.decision_count(), 1);
     }
 
@@ -368,8 +368,8 @@ mod tests {
     #[test]
     fn test_continuity_marker_generation() {
         let mut mgr = SessionContextManager::default();
-        mgr.record_message("Fix src/lib.rs: error in main loop", "user");
-        mgr.record_message("Decided: use async approach", "assistant");
+        mgr.record_message("Fix src/lib.rs: error in main loop");
+        mgr.record_message("Decided: use async approach");
         let marker = mgr.generate_continuity_marker(&[0]);
         assert_eq!(marker.messages_trimmed, 1);
         assert!(!marker.files_referenced.is_empty());
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn test_message_scoring_different_content() {
         let mut mgr = SessionContextManager::default();
-        mgr.record_message("Fix src/main.rs", "user");
+        mgr.record_message("Fix src/main.rs");
         let score_with_file = mgr.score_message(0, "Fix src/main.rs");
         let score_plain = mgr.score_message(0, "hello");
         assert!(

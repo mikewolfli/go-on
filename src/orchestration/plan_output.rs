@@ -73,7 +73,7 @@ pub struct PlanStep {
 /// - Risk indicators (keywords like "security", "critical", "backup")
 ///
 /// Returns a default (no steps) plan if the response cannot be parsed.
-pub fn extract_plan_from_response(response: &str, _mode: &str) -> PlanOutput {
+pub fn extract_plan_from_response(response: &str) -> PlanOutput {
     let mut steps: Vec<PlanStep> = Vec::new();
     let mut affected_files: Vec<String> = Vec::new();
     let mut risk_score: f64 = 0.0;
@@ -111,7 +111,7 @@ pub fn extract_plan_from_response(response: &str, _mode: &str) -> PlanOutput {
         {
             let desc = rest.trim().to_string();
             let file = extract_file_ref(rest);
-            let action = classify_step_action(&desc, rest);
+            let action = classify_step_action(&desc);
             if let Some(f) = &file {
                 if !affected_files.contains(f) {
                     affected_files.push(f.clone());
@@ -135,7 +135,7 @@ pub fn extract_plan_from_response(response: &str, _mode: &str) -> PlanOutput {
             if !rest.starts_with('`') && !rest.starts_with('[') {
                 let desc = rest.trim().to_string();
                 let file = extract_file_ref(rest);
-                let action = classify_step_action(rest, rest);
+                let action = classify_step_action(rest);
                 if let Some(f) = &file {
                     if !affected_files.contains(f) {
                         affected_files.push(f.clone());
@@ -263,7 +263,7 @@ fn extract_file_ref(text: &str) -> Option<String> {
 }
 
 /// Classify the action type of a plan step.
-fn classify_step_action(description: &str, _full_line: &str) -> String {
+fn classify_step_action(description: &str) -> String {
     let lower = description.to_lowercase();
     if lower.contains("read")
         || lower.contains("review")
@@ -293,12 +293,6 @@ fn classify_step_action(description: &str, _full_line: &str) -> String {
         || lower.contains("fix")
     {
         "edit".to_string()
-    } else if lower.contains("test")
-        || lower.contains("verify")
-        || lower.contains("validate")
-        || lower.contains("check")
-    {
-        "test".to_string()
     } else if lower.contains("delete") || lower.contains("remove") || lower.contains("drop") {
         "delete".to_string()
     } else if lower.contains("search") || lower.contains("find") || lower.contains("grep") {
@@ -314,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_extract_empty_response() {
-        let plan = extract_plan_from_response("", "plan");
+        let plan = extract_plan_from_response("");
         assert!(plan.steps.is_empty());
         assert_eq!(plan.recommended_mode, "edit");
         assert!(!plan.requires_approval);
@@ -329,7 +323,7 @@ Plan for implementing login feature:
 - [ ] Add login form component `src/ui/login.rs`
 - [ ] Update routing `src/router.rs`
 - [ ] Test the implementation";
-        let plan = extract_plan_from_response(response, "plan");
+        let plan = extract_plan_from_response(response);
         assert_eq!(plan.steps.len(), 4);
         assert_eq!(plan.steps[0].action.as_deref(), Some("read"));
         assert_eq!(plan.steps[1].action.as_deref(), Some("create"));
@@ -348,7 +342,7 @@ Plan for rotating API credentials:
 - [ ] Generate new API key
 - [ ] Update credential store `config/credentials.toml`
 - [ ] Deploy to production";
-        let plan = extract_plan_from_response(response, "plan");
+        let plan = extract_plan_from_response(response);
         assert_eq!(plan.recommended_mode, "safeguard");
         assert!(plan.requires_approval);
         assert!(plan.risk_score >= 0.5);
@@ -360,7 +354,7 @@ Plan for rotating API credentials:
         for i in 1..=8 {
             response.push_str(&format!("- [ ] Step {} refactoring module {}\n", i, i));
         }
-        let plan = extract_plan_from_response(&response, "plan");
+        let plan = extract_plan_from_response(&response);
         assert!(plan.complexity >= 6 || plan.recommended_mode == "full_auto");
     }
 
@@ -395,18 +389,18 @@ Plan for rotating API credentials:
 Here's my analysis:
 - [ ] Check the database schema
 - [ ] Update the migration script";
-        let plan = extract_plan_from_response(response, "edit");
+        let plan = extract_plan_from_response(response);
         assert_eq!(plan.steps.len(), 2);
     }
 
     #[test]
     fn test_action_classification() {
-        assert_eq!(classify_step_action("Read the config file", ""), "read");
-        assert_eq!(classify_step_action("Create new module", ""), "create");
-        assert_eq!(classify_step_action("Fix the bug", ""), "edit");
-        assert_eq!(classify_step_action("Test the feature", ""), "test");
-        assert_eq!(classify_step_action("Delete old code", ""), "delete");
-        assert_eq!(classify_step_action("Search for patterns", ""), "search");
-        assert_eq!(classify_step_action("Do something generic", ""), "execute");
+        assert_eq!(classify_step_action("Read the config file"), "read");
+        assert_eq!(classify_step_action("Create new module"), "create");
+        assert_eq!(classify_step_action("Fix the bug"), "edit");
+        assert_eq!(classify_step_action("Test the feature"), "test");
+        assert_eq!(classify_step_action("Delete old code"), "delete");
+        assert_eq!(classify_step_action("Search for patterns"), "search");
+        assert_eq!(classify_step_action("Do something generic"), "execute");
     }
 }

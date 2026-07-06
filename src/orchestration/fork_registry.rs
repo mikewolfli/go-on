@@ -373,7 +373,11 @@ impl ForkRegistry {
 
     /// Returns `true` if no forks are tracked.
     pub fn is_empty(&self) -> Result<bool> {
-        self.len().map(|l| l == 0)
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
+        Ok(inner.forks.is_empty())
     }
 
     /// Number of forks that have not yet been marked completed.

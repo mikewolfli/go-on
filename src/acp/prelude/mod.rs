@@ -125,14 +125,10 @@ mod tests {
         .join();
         assert!(join.is_err(), "poisoning thread should panic");
 
-        let tracked_before = with_acp_lock(
-            "test_lock",
-            shared.as_ref(),
-            |guard: &mut PhaseRateLimiter| {
-                let _ = guard.allow("entry:test", 60, Some(5));
-                guard.tracked_phases()
-            },
-        );
+        let tracked_before = with_acp_lock(shared.as_ref(), |guard: &mut PhaseRateLimiter| {
+            let _ = guard.allow("entry:test", 60, Some(5));
+            guard.tracked_phases()
+        });
         assert_eq!(tracked_before, 1);
     }
 }

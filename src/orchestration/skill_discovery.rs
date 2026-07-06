@@ -19,7 +19,6 @@
 // F-GAP-51: dead_code allowed on items below in non-test builds (consumed via OnceLock)
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -273,15 +272,6 @@ impl SkillDiscovery {
             cache_ttl: CACHE_TTL,
             max_cache_entries: MAX_CACHE_ENTRIES,
         }
-    }
-
-    /// Set the skill registry reference used for index rebuilds.
-    ///
-    /// Currently a no-op — `discover()` takes registry directly.
-    /// Kept for API compatibility with existing callers.
-    #[allow(unused_variables)]
-    pub fn set_registry(&mut self, _registry: Arc<RwLock<SkillRegistry>>) {
-        // registry_ref was removed as dead weight in v1.3.0 optimization.
     }
 
     /// Discover skills matching the query, using the registry for runtime data.

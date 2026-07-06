@@ -11,12 +11,11 @@ mod render;
 
 use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
+use crate::connection::{build_copilot_http_client, COPILOT_HTTP_CLIENT};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
-use crate::widgets::cache::CachedView;
 use serde_json::Value;
 use std::sync::mpsc;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub struct ProvidersView {
@@ -77,7 +76,6 @@ pub struct ProvidersView {
     /// Whether we've already scheduled a repaint for the current polling cycle.
     /// Avoids calling request_repaint_after every frame while polling.
     copilot_poll_repaint_requested: bool,
-    pub cached_view: CachedView,
 }
 
 /// Provider names for the dropdown (36 total, matching built_in_provider_specs())
@@ -331,99 +329,6 @@ pub(crate) fn provider_requires_secret(provider: &str) -> bool {
     matches!(provider.to_lowercase().as_str(), "wenxin" | "qianfan")
 }
 
-fn build_copilot_http_client() -> reqwest::Client {
-    // Strategy 1: user-configured env var proxy (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY)
-    // Check this FIRST so users can explicitly route copilot auth through a proxy.
-    let env_vars = [
-        "HTTPS_PROXY",
-        "https_proxy",
-        "HTTP_PROXY",
-        "http_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-    ];
-    for var in &env_vars {
-        if let Ok(url) = std::env::var(var) {
-            let url = url.trim().to_string();
-            if url.is_empty() {
-                continue;
-            }
-            for make_proxy in [
-                reqwest::Proxy::all,
-                reqwest::Proxy::https,
-                reqwest::Proxy::http,
-            ] {
-                if let Ok(proxy) = make_proxy(&url) {
-                    if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
-                        eprintln!("INFO: copilot auth using proxy from {}: {}", var, url);
-                        return client;
-                    }
-                }
-            }
-        }
-    }
-
-    // Strategy 2: common local proxy ports (same list as backend's build_github_client)
-    // Try HTTP probes first, then SOCKS5 probes for the same ports.
-    let http_proxies: [&str; 6] = [
-        "http://127.0.0.1:15732",
-        "http://127.0.0.1:7890",
-        "http://127.0.0.1:10809",
-        "http://127.0.0.1:10808",
-        "http://127.0.0.1:1080",
-        "http://127.0.0.1:33210",
-    ];
-    for url in http_proxies {
-        for make_proxy in [
-            reqwest::Proxy::all,
-            reqwest::Proxy::https,
-            reqwest::Proxy::http,
-        ] {
-            if let Ok(proxy) = make_proxy(url) {
-                if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
-                    eprintln!("INFO: copilot auth using proxy {}", url);
-                    return client;
-                }
-            }
-        }
-    }
-
-    // SOCKS5 probes for common proxy ports
-    let socks_proxies: [&str; 2] = ["socks5://127.0.0.1:7890", "socks5://127.0.0.1:10809"];
-    for url in socks_proxies {
-        if let Ok(proxy) = reqwest::Proxy::all(url) {
-            if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
-                eprintln!("INFO: copilot auth using proxy {}", url);
-                return client;
-            }
-        }
-    }
-
-    // Strategy 3: direct connection (no proxy) — fallback for users without a proxy
-    if let Ok(client) = reqwest::Client::builder().no_proxy().build() {
-        eprintln!("INFO: copilot auth using direct connection (no proxy)");
-        return client;
-    }
-
-    // Strategy 4: no proxy + accept invalid certs (for broken corporate cert stores)
-    if let Ok(client) = reqwest::Client::builder()
-        .no_proxy()
-        .danger_accept_invalid_certs(true)
-        .build()
-    {
-        eprintln!(
-            "WARNING: copilot auth falling back to dangerous SSL (no certificate verification)"
-        );
-        return client;
-    }
-
-    // Final fallback: default system proxy detection
-    eprintln!("INFO: copilot auth using default system proxy detection");
-    reqwest::Client::new()
-}
-
-static COPILOT_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
 impl ProvidersView {
     pub fn new() -> Self {
         let (pending_tx, pending_rx) = mpsc::sync_channel(256);
@@ -465,7 +370,6 @@ impl ProvidersView {
             copilot_token_stored: false,
             copilot_status: String::new(),
             copilot_poll_repaint_requested: false,
-            cached_view: CachedView::new(),
         }
     }
 

@@ -234,8 +234,8 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
 }
 
 /// Get artifact ledger.
-pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLedger {
-    _server
+pub fn artifact_ledger(server: &AcpServer) -> crate::reinforcement::ArtifactLedger {
+    server
         .persistence
         .artifact_ledger
         .lock()

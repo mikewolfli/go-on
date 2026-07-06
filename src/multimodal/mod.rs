@@ -388,7 +388,7 @@ impl MultimodalProcessor {
         match input {
             MultimodalInput::Text(text) => self.process_text(text).await,
             MultimodalInput::Image(data) => self.process_image(data).await,
-            MultimodalInput::Audio(data) => self.process_audio(data),
+            MultimodalInput::Audio(data) => self.process_audio(data).await,
             MultimodalInput::Video(data) => self.process_video(data).await,
             MultimodalInput::Document(data, ext) => self.process_document(data, ext).await,
         }
@@ -460,23 +460,34 @@ impl MultimodalProcessor {
 
     /// Process an audio input — delegates to the `AudioProcessor` when
     /// configured, otherwise returns an empty result.
-    fn process_audio(&self, data: &[u8]) -> ProcessedContent {
+    async fn process_audio(&self, data: &[u8]) -> ProcessedContent {
         if let Some(ref processor) = self.audio_processor {
-            // AudioProcessor::transcribe is synchronous — no .await.
-            // Detect audio format from magic bytes for broader compatibility.
             let format = detect_audio_format(data);
-            match processor.transcribe(data, format) {
-                Ok(transcription) => {
+            // AudioProcessor::transcribe is blocking I/O — offload via spawn_blocking.
+            let data_owned = data.to_vec();
+            let processor_clone = processor.clone();
+            match tokio::task::spawn_blocking(move || {
+                processor_clone.transcribe(&data_owned, format)
+            })
+            .await
+            {
+                Ok(Ok(transcription)) => {
                     return ProcessedContent {
                         text: transcription.text.clone(),
                         images: Vec::new(),
                         audio_transcriptions: vec![transcription.text],
                     };
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(
                         error = %e,
                         "MultimodalProcessor: AudioProcessor failed to transcribe"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MultimodalProcessor: spawn_blocking for audio transcription failed"
                     );
                 }
             }

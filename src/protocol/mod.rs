@@ -1,7 +1,7 @@
 pub mod access_mode;
 pub mod acp_methods;
 pub mod mcp_server;
-pub mod negotiator;
+
 pub mod session_sync;
 pub mod state_sync;
 // Legacy JSON-RPC types + trace helpers — used across ACP / MCP / governance.

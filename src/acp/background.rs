@@ -3,7 +3,7 @@
 //! This module contains background task implementations for the ACP server,
 //! including maintenance cycles, health checks, and periodic operations.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -36,7 +36,7 @@ pub struct MaintenanceCycleResult {
 /// into a single struct, eliminating the previous 12-parameter function signature.
 #[derive(Debug)]
 pub struct BackgroundContext {
-    pub memory_cache: Arc<tokio::sync::Mutex<MemoryResponseCache>>,
+    pub memory_cache: Arc<StdMutex<MemoryResponseCache>>,
     pub memory_store: Arc<tokio::sync::Mutex<MemoryStore>>,
     pub maintenance: Arc<tokio::sync::Mutex<MaintenanceTracker>>,
     pub shutdown_notify: Arc<Notify>,
@@ -77,23 +77,18 @@ pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
 
 /// Perform maintenance cycle
 pub async fn perform_maintenance_cycle(
-    memory_cache: Arc<TokioMutex<MemoryResponseCache>>,
+    memory_cache: Arc<StdMutex<MemoryResponseCache>>,
     memory_store: Arc<TokioMutex<MemoryStore>>,
     maintenance: Arc<TokioMutex<MaintenanceTracker>>,
     source: &str,
 ) -> Result<MaintenanceCycleResult> {
-    let _ = with_acp_lock_async("maintenance", maintenance.as_ref(), |guard| {
-        guard.note_started()
-    })
-    .await;
+    let _ = with_acp_lock_async(maintenance.as_ref(), |guard| guard.note_started()).await;
 
     let mut result = MaintenanceCycleResult {
-        memory_expired_removed: with_acp_lock_async(
-            "memory_cache",
-            memory_cache.as_ref(),
-            |guard| guard.purge_expired(),
-        )
-        .await,
+        memory_expired_removed: {
+            let guard = memory_cache.lock().unwrap_or_else(|e| e.into_inner());
+            guard.purge_expired()
+        },
         ..MaintenanceCycleResult::default()
     };
 
@@ -102,7 +97,7 @@ pub async fn perform_maintenance_cycle(
         source, result.memory_expired_removed
     );
 
-    if with_acp_lock_async("memory_store", memory_store.as_ref(), |guard| {
+    if with_acp_lock_async(memory_store.as_ref(), |guard| {
         guard.gc();
         true
     })
@@ -111,7 +106,7 @@ pub async fn perform_maintenance_cycle(
         result.memory_store_gc_ran = true;
     }
 
-    with_acp_lock_async("maintenance", maintenance.as_ref(), |guard| {
+    with_acp_lock_async(maintenance.as_ref(), |guard| {
         guard.note_completed(result.memory_expired_removed);
     })
     .await;
@@ -147,22 +142,9 @@ pub async fn start_background_tasks(
     server: &super::server::AcpServer,
     shutdown_notify: Arc<Notify>,
 ) -> Result<()> {
-    let memory_cache = {
-        // Acquire and release the memory_response_cache lock to ensure
-        // exclusive access during startup. The guard is dropped immediately.
-        drop(
-            server
-                .cache_deps
-                .cache
-                .memory_response_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()),
-        );
-        // MemoryResponseCache doesn't impl Clone, but we can use Default
-        // since the background loop only needs a fresh monitoring instance.
-        let fresh = MemoryResponseCache::default();
-        Arc::new(tokio::sync::Mutex::new(fresh))
-    };
+    // Share the live memory_response_cache so background GC actually
+    // purges expired entries from the cache serving live requests.
+    let memory_cache = server.cache_deps.cache.memory_response_cache.clone();
     let memory_store = Arc::new(tokio::sync::Mutex::new(
         MemoryStore::new(Default::default()),
     ));
@@ -262,9 +244,10 @@ pub async fn start_background_tasks(
     // ── mTLS certificate monitor (GAP-B52) ──────────────────────────────
     // Certificate monitor task removed — MtlsConfig, start_cert_monitor, and
     // spawn_cert_monitor_if_configured were dead code (F-GAP-49 reserved mTLS).
-    if server.runtime_config.mtls_enabled {
-        tracing::info!("mTLS enabled in runtime config — cert monitoring not wired");
-    }
+    // TODO: Wire mTLS certificate monitoring (planned feature). The mtls_enabled
+    // config flag exists but the cert-monitoring background task has not yet been
+    // implemented. When implementing, consider polling the cert file's mtime and
+    // triggering a graceful TLS acceptor reload on change.
 
     // ── Security scanning background tasks (GAP-B52-24, GAP-B52-30) ─────
 
@@ -692,7 +675,7 @@ pub async fn run_maintenance_cycle(
     }
 
     // Fallback: create fresh state (before start_background_tasks is called).
-    let memory_cache = Arc::new(tokio::sync::Mutex::new(MemoryResponseCache::default()));
+    let memory_cache = Arc::new(StdMutex::new(MemoryResponseCache::default()));
     let memory_store = Arc::new(tokio::sync::Mutex::new(
         MemoryStore::new(Default::default()),
     ));

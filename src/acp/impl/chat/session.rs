@@ -75,7 +75,7 @@ pub async fn handle_chat(
                         warn!("handle_chat: lifecycle_state poisoned, recovering");
                         poisoned.into_inner()
                     });
-            if lifecycle_guard.is_shutting_down() {
+            if lifecycle_guard.shutdown_requested() {
                 Some(serde_json::to_value(lifecycle_guard.snapshot())?)
             } else {
                 None
@@ -154,7 +154,7 @@ pub async fn handle_chat(
         );
         // Record each message for context extraction.
         for msg in &chat_params.messages {
-            session_mgr.record_message(&msg.content, &msg.role);
+            session_mgr.record_message(&msg.content);
         }
         let concept_count = session_mgr.concept_count();
         let decision_count = session_mgr.decision_count();

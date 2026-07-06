@@ -1065,7 +1065,6 @@ The backend may be misconfigured or overloaded."
                     self.output_token_estimate = output_tokens;
                     self.last_token_estimate = total_tokens;
                     // Sync stream progress with telemetry data
-                    self.stream_progress.input_tokens = input_tokens;
                     self.stream_progress.output_tokens = output_tokens;
                     self.stream_progress.total_tokens = total_tokens;
                 }

@@ -105,7 +105,6 @@ fn detect_system_language() -> Lang {
 impl eframe::App for GoOnApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        ctx.request_repaint(); // Ensure continuous repainting
         let _frame_start = std::time::Instant::now();
 
         self.config_store.sync_shared_if_needed();
@@ -142,7 +141,9 @@ impl eframe::App for GoOnApp {
             theme.apply(&ctx, self.config_store.read().font_scale);
         }
 
-        if !self.connection.pending_refresh && !self.views.chat_view.sending {
+        if self.views.chat_view.sending || self.connection.pending_refresh {
+            ctx.request_repaint();
+        } else {
             ctx.request_repaint_after(std::time::Duration::from_secs(10));
         }
 

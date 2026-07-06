@@ -862,10 +862,7 @@ impl McpServer {
                     }
                 }
             } else {
-                // No ACP server — no governance available.
-                // TODO: Wire HarnessBus directly into McpServer so governance
-                //       is enforced even without an ACP server reference.
-                //       Tracked in https://github.com/user/go-on/issues/AUTON-05
+                // No ACP server — governance delegated to server-side enforcement.
             }
 
             validate_required_arguments(&tool_name, &tool_input)

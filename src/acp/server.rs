@@ -579,7 +579,6 @@ impl AcpServer {
             active_requests: self.observability.metrics.active_requests(),
             cache_hit_rate: 0.0,
             circuit_breaker_open_count: with_acp_lock(
-                "circuit_breakers",
                 self.resilience.circuit_breakers.as_ref(),
                 |guard| guard.open_count(),
             ),
@@ -616,7 +615,6 @@ impl AcpServer {
             });
 
         let circuit_breakers = with_acp_lock(
-            "circuit_breakers",
             self.resilience.circuit_breakers.as_ref(),
             |guard| guard.snapshots(),
         );
@@ -1134,8 +1132,7 @@ impl ServerBuilder {
             }
         }
 
-        // Wire the skill registry into the global discovery and tool layers
-        crate::acp::r#impl::request::tools_pack::init_skill_discovery(skill_registry.clone());
+        // Wire the skill registry into the global tool layer
         crate::orchestration::tool::set_skill_registry(skill_registry.clone());
 
         // Spawn background task to periodically rescan ~/.agents/skills/ for new skills.

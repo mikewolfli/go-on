@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::time::Instant;
@@ -7,11 +6,6 @@ use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use crate::state_sync::SkillRecord;
 use crate::views::security_prefs;
-use crate::widgets::cache::CachedView;
-
-thread_local! {
-    static SKILLS_CACHE: RefCell<CachedView> = RefCell::new(CachedView::new());
-}
 
 /// Send a SkillsUpdate over a SyncSender with a single try_send attempt.
 /// If the channel is full the update is silently dropped — the cache will be
@@ -318,14 +312,9 @@ impl SkillsView {
         ctx: &egui::Context,
         lifecycle_enabled: bool,
     ) {
-        // Process pending events FIRST, before cache check
         self.process_pending(i18n);
 
-        let hash = 0_u64;
-
-        let _ = SKILLS_CACHE.with(|c| c.borrow().check_size("skills_list", hash));
-
-        let resp = egui::Frame::NONE.show(ui, |ui| {
+        let _resp = egui::Frame::NONE.show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         if !self.initialized {
             self.initialized = true;
@@ -1300,10 +1289,6 @@ impl SkillsView {
             });
         }
         });
-        });
-        SKILLS_CACHE.with(|c| {
-            c.borrow_mut()
-                .store_size("skills_list", hash, resp.response.rect.size())
         });
     }
 }

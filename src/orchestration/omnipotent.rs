@@ -196,35 +196,35 @@ impl OmnipotentMode {
             }
         };
 
-        if let Some(token) = tokens.get_mut(token_id) {
+        let token_found = tokens.contains_key(token_id);
+        let freshly_revoked = if let Some(token) = tokens.get_mut(token_id) {
             if !token.is_revoked {
                 token.is_revoked = true;
-                let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("lock poisoned, recovering");
-                    poisoned.into_inner()
-                });
-                profile.revoked_tokens += 1;
+                true
+            } else {
+                false
             }
         } else {
-            // Token does not exist — still count it as a revocation attempt
-            // for observability.
-            let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            profile.revoked_tokens += 1;
-        }
+            false
+        };
 
         // Disable omnipotent mode if there are no valid tokens remaining.
         if count_valid_tokens(&tokens, now_epoch_ms()) == 0 {
             self.enabled.store(false, Ordering::Release);
         }
+        drop(tokens);
 
-        // Sync profile enabled state.
+        // Single profile lock acquisition for both revocation tracking and enabled sync.
+        // revoked_tokens is incremented for both freshly revoked tokens AND unknown
+        // token revocation attempts (for observability). Already-revoked tokens
+        // do not re-increment.
         let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
+        if freshly_revoked || !token_found {
+            profile.revoked_tokens += 1;
+        }
         profile.enabled = self.enabled.load(Ordering::Acquire);
     }
 

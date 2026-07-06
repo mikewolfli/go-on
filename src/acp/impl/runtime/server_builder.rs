@@ -594,11 +594,6 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
         }
     }
 
-    // Wire the skill registry into the global discovery engine
-    crate::acp::r#impl::request::tools_pack::init_skill_discovery(
-        server.orchestration_deps.skill_registry.clone(),
-    );
-
     // Wire the new modules' state from CapabilityBus into the server's
     // standalone fields so process_chat_request can access them directly.
     server.registries.schema_registry = Arc::clone(

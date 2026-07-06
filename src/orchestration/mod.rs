@@ -5,7 +5,6 @@ pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibilit
 pub mod bulkhead;
 pub mod plan_output; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
 
-pub mod capability_signals; // BLUE41: Structured capability decision data
 pub mod complexity_estimator;
 pub mod context;
 pub mod core_dag; // DAG-UNIFY: Unified generic DAG

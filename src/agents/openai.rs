@@ -3,15 +3,15 @@
 //! This module provides an implementation for the OpenAI API.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::{chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg};
+use crate::agents::agent::{
+    chat_request_failed_msg, retry_chat_once,
+};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct OpenAiAgent {
@@ -179,8 +179,6 @@ impl Agent for OpenAiAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
-        let mut last_error: Option<anyhow::Error> = None;
-
         // Check if SSE compression is requested via options
         let use_compression = options
             .as_ref()
@@ -198,38 +196,26 @@ impl Agent for OpenAiAgent {
         };
 
         let chat_messages = messages;
-        for attempt in 0..=2 {
-            let result = if let Some(ref cfg) = compress_cfg {
-                self.chat_once_compressed(
-                    &chat_messages,
-                    &principles,
-                    &options,
-                    sender.clone(),
-                    cfg,
-                )
-                .await
-            } else {
-                self.chat_once(&chat_messages, &principles, &options, sender.clone())
+        retry_chat_once(
+            || async {
+                let result = if let Some(ref cfg) = compress_cfg {
+                    self.chat_once_compressed(
+                        &chat_messages,
+                        &principles,
+                        &options,
+                        sender.clone(),
+                        cfg,
+                    )
                     .await
-            };
-            match result {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    let err_msg = err.to_string();
-                    if is_non_retryable_4xx(&err_msg) {
-                        return Err(err.into());
-                    }
-                    last_error = Some(err);
-                    if attempt < 2 {
-                        sleep(Duration::from_secs(1_u64 << attempt)).await;
-                    }
-                }
-            }
-        }
-
-        Err(last_error
-            .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("openai")))
-            .into())
+                } else {
+                    self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                        .await
+                };
+                result.map_err(Into::into)
+            },
+            3,
+        )
+        .await
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {

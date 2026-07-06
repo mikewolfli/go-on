@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing::{debug, error, info, warn};
 
 fn read_guard<'a, T>(lock: &'a RwLock<T>, label: &str) -> RwLockReadGuard<'a, T> {
@@ -31,6 +31,9 @@ fn write_guard<'a, T>(lock: &'a RwLock<T>, label: &str) -> RwLockWriteGuard<'a, 
         }
     }
 }
+
+/// Sentinel used during brace-escaping in formatted messages.
+const ESCAPED_SENTINEL: &str = "\x00ESCAPED_BRACE\x00";
 
 /// Language enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -312,7 +315,6 @@ impl I18nManager {
 
     /// Get translated message with format arguments
     pub fn get_formatted(&self, key: &str, format_args: &[(&str, &str)]) -> String {
-        const ESCAPED_SENTINEL: &str = "\x00ESCAPED_BRACE\x00";
         let mut message = self.get(key);
 
         // Escape {{ → sentinel so literal {name} is not substituted
@@ -359,11 +361,8 @@ impl I18nManager {
     }
 }
 
-use std::sync::LazyLock;
-
 /// Global i18n manager instance
-pub static I18N: LazyLock<Arc<RwLock<Option<I18nManager>>>> =
-    LazyLock::new(|| Arc::new(RwLock::new(None)));
+pub static I18N: OnceLock<I18nManager> = OnceLock::new();
 
 /// Initialize global i18n system
 ///
@@ -374,8 +373,8 @@ pub static I18N: LazyLock<Arc<RwLock<Option<I18nManager>>>> =
 /// Result indicating success
 pub fn init_i18n<P: AsRef<Path>>(languages_dir: P) -> Result<()> {
     let manager = I18nManager::new(languages_dir)?;
-    let mut i18n = write_guard(&I18N, "i18n.global");
-    *i18n = Some(manager);
+    I18N.set(manager)
+        .map_err(|_| anyhow::anyhow!("i18n already initialized"))?;
     Ok(())
 }
 
@@ -384,8 +383,7 @@ pub fn init_i18n<P: AsRef<Path>>(languages_dir: P) -> Result<()> {
 /// Acquires the I18N read lock once, then performs the full lookup (current
 /// language + English fallback) under a single `manager.state` read lock.
 pub fn t(key: &str) -> String {
-    let i18n = read_guard(&I18N, "i18n.global");
-    match i18n.as_ref() {
+    match I18N.get() {
         Some(manager) => {
             let state = read_guard(&manager.inner.state, "i18n.state");
             I18nManager::lookup(&state, key, state.current_language)
@@ -398,7 +396,6 @@ pub fn t(key: &str) -> String {
 pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
     let template = t(key);
 
-    const ESCAPED_SENTINEL: &str = "\x00ESCAPED_BRACE\x00";
     let mut message = template;
     // Escape {{ → sentinel so literal {name} is not substituted
     message = message.replace("{{", ESCAPED_SENTINEL);
@@ -412,20 +409,16 @@ pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
 
 /// Set global language
 pub fn set_language(language: Language) {
-    let i18n = read_guard(&I18N, "i18n.global");
-    if let Some(manager) = i18n.as_ref() {
+    if let Some(manager) = I18N.get() {
         manager.set_language(language);
     }
 }
 
 /// Get current global language
 pub fn current_language() -> Language {
-    let i18n = read_guard(&I18N, "i18n.global");
-    if let Some(manager) = i18n.as_ref() {
-        manager.current_language()
-    } else {
-        Language::EnUS
-    }
+    I18N.get()
+        .map(|manager| manager.current_language())
+        .unwrap_or(Language::EnUS)
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::server::AcpServer;
 use crate::agents::sse_optimizer::SseBufferPool;
+use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 
 // Stream event type constants to avoid repeated allocations
 const STREAM_EVENT_CHUNK: &str = "chunk";
@@ -65,11 +66,12 @@ pub(crate) async fn emit_stream_chunk(
     };
 
     // Check if this is a reasoning token (prefixed with __thinking__)
-    let (display_token, reasoning_token) = if let Some(rest) = token.strip_prefix("__thinking__") {
-        ("", rest)
-    } else {
-        (token, "")
-    };
+    let (display_token, reasoning_token) =
+        if let Some(rest) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
+            ("", rest)
+        } else {
+            (token, "")
+        };
 
     // Use as_ref() to avoid cloning response_id
     if let Some(response_id) = observer.jsonrpc_response_id.as_ref() {

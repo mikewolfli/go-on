@@ -28,12 +28,7 @@ impl ProvidersView {
                 let redact_keys = self.cached_security.redact_api_keys_in_ui;
                 let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
 
-                // Keep cache API shape for compatibility, but avoid expensive per-frame
-                // hash construction in immediate-mode rendering.
-                let hash = 0_u64;
-
-                let _ = self.cached_view.check_size("providers", hash);
-                let resp = egui::Frame::NONE.show(ui, |ui| {
+                let _resp = egui::Frame::NONE.show(ui, |ui| {
                         ui.heading(i18n.t("providers.title"));
                         ui.separator();
                         ui.add_space(8.0);
@@ -1131,7 +1126,6 @@ impl ProvidersView {
                     ui.label(&self.status);
                 }
                     });
-                self.cached_view.store_size("providers", hash, resp.response.rect.size());
 
                 // ── Copilot Device Code auto-poll (uses system proxy) ──
                 if self.copilot_device_state.as_deref() == Some("polling") {

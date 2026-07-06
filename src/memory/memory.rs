@@ -316,7 +316,40 @@ impl MemoryStore {
             let from_name = format!("{:?}", from_class);
             let to_name = format!("{:?}", to_class);
             if let Some(entry) = self.entries.get_mut(&id) {
-                entry.class = to_class;
+                entry.class = to_class.clone();
+
+                // Update entries_by_class index: remove from old class tree
+                if let Some(tree) = self.entries_by_class.get_mut(&from_class) {
+                    let old_seq = tree.iter().find(|(_, v)| *v == &id).map(|(k, _)| *k);
+                    if let Some(k) = old_seq {
+                        tree.remove(&k);
+                    }
+                    if tree.is_empty() {
+                        self.entries_by_class.remove(&from_class);
+                    }
+                }
+
+                // Update entries_by_class index: add to new class tree
+                let seq = self.store_sequence;
+                self.store_sequence += 1;
+                self.entries_by_class
+                    .entry(to_class.clone())
+                    .or_default()
+                    .insert(seq, id.clone());
+
+                // Update class_counts: decrement old class
+                if let Some(count) = self.class_counts.get_mut(&from_class) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        self.class_counts.remove(&from_class);
+                    }
+                }
+
+                // Update class_counts: increment new class
+                self.class_counts
+                    .entry(to_class)
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
             }
             promotion_map.push((id, from_name, to_name));
         }

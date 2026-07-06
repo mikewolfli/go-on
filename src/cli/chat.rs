@@ -48,6 +48,14 @@ const SESSION_FILE: &str = ".goon/chat-session.json";
 /// Threshold at which we prompt the user to compact the conversation.
 const COMPACT_PROMPT_THRESHOLD: usize = 30;
 
+/// Default pricing fallback: GPT-4o input cost per token ($0.15 per 1M tokens).
+/// Used when provider cost info is unavailable.
+const GPT4O_INPUT_COST_PER_TOKEN: f64 = 0.15 / 1_000_000.0;
+
+/// Default pricing fallback: GPT-4o output cost per token ($0.60 per 1M tokens).
+/// Used when provider cost info is unavailable.
+const GPT4O_OUTPUT_COST_PER_TOKEN: f64 = 0.60 / 1_000_000.0;
+
 /// Notify mechanism for session auto-save completion — prevents concurrent disk writes.
 /// Used instead of spin-wait + AtomicBool to avoid busy-waiting on exit.
 /// Initialized on first access via OnceLock.
@@ -165,9 +173,9 @@ impl TokenTracker {
     fn record_usage(&mut self, prompt_tokens: u64, completion_tokens: u64) {
         self.total_prompt_tokens += prompt_tokens;
         self.total_completion_tokens += completion_tokens;
-        // Rough estimate: $0.15/M input tokens, $0.60/M output tokens (GPT-4o pricing)
-        self.total_cost_usd += (prompt_tokens as f64 * 0.15 / 1_000_000.0)
-            + (completion_tokens as f64 * 0.60 / 1_000_000.0);
+        // Use default pricing fallback when provider cost info is unavailable.
+        self.total_cost_usd += (prompt_tokens as f64 * GPT4O_INPUT_COST_PER_TOKEN)
+            + (completion_tokens as f64 * GPT4O_OUTPUT_COST_PER_TOKEN);
     }
 
     fn display(&self) -> String {
