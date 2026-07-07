@@ -25,13 +25,12 @@ fn lang_color(lang: &str) -> &'static str {
 /// Returns a `String` with embedded ANSI escape codes suitable for
 /// writing to a terminal that supports basic ANSI (all modern terminals).
 ///
-/// Production code now uses `StreamMarkdownRenderer` for incremental
-/// rendering. This function is kept as a convenience for tests.
+/// Render markdown text to ANSI-colored output (test-only convenience).
 ///
-/// Note: This is annotated for test-only usage because it is not called
-/// from production code paths, but is kept as a testing helper.
-#[allow(dead_code)]
-pub fn render_markdown(text: &str) -> String {
+/// Production code uses `StreamMarkdownRenderer` for incremental rendering.
+/// This function is kept under `#[cfg(test)]` as a testing helper.
+#[cfg(test)]
+pub(crate) fn render_markdown(text: &str) -> String {
     // Pre-allocate ~10% more than input for ANSI escape overhead
     let mut out = String::with_capacity(text.len() + text.len() / 10 + 16);
     let mut in_code_block = false;

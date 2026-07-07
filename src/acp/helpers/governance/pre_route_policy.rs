@@ -160,8 +160,7 @@ fn validate_mode_capability(mode: &ModeKind, messages: &[Message]) -> Result<()>
     // up requests as requiring higher privilege modes.
     let task_description: String = messages
         .iter()
-        .filter(|m| m.role == "user")
-        .last()
+        .rfind(|m| m.role == "user")
         .map(|m| m.content.as_str())
         .unwrap_or("")
         .to_string();

@@ -156,18 +156,13 @@ impl WorkGrade {
 }
 
 /// Work grade decision with reasoning.
-/// `requested` and `decision_action` are part of the public API but
-/// only consumed in test assertions currently. They are kept as
-/// the complete decision struct is a well-defined value type.
 #[derive(Debug, Clone)]
 pub struct WorkGradeDecision {
     /// Requested work grade
-    #[allow(dead_code)]
     pub requested: WorkGrade,
     /// Decided work grade
     pub decided: WorkGrade,
     /// Decision action (upgraded/downgraded/unchanged)
-    #[allow(dead_code)]
     pub decision_action: String,
     /// Reasons for decision
     pub reasons: Vec<String>,

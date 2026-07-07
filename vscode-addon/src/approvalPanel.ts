@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import { RuntimeManagerLike } from "./managerTypes";
+import { Logger } from "./logger";
 import { getNonce } from "./utils";
+
+const log = Logger.forModule("approvalPanel");
 
 interface ApprovalRequest {
   id: string;
@@ -64,8 +67,7 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
           }
         } catch (error: unknown) {
           const msg = error instanceof Error ? error.message : String(error);
-          // eslint-disable-next-line no-console
-          console.warn("[approvalPanel] message error:", msg);
+          log.warn("message error:", msg);
           this._view?.webview.postMessage({
             type: "error",
             message: msg,
@@ -128,8 +130,7 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
         count: requests.length,
       });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[approvalPanel] _fetchPendingRequests failed:", err);
+      log.warn("_fetchPendingRequests failed:", err);
     }
   }
 

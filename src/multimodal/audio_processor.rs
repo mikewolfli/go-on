@@ -658,16 +658,6 @@ impl AudioProcessor {
 // Standalone helper: convenience transcription without a full AudioProcessor
 // ---------------------------------------------------------------------------
 
-// One-shot convenience: transcribe audio bytes with the given backend and
-// format. Uses default configuration for the chosen backend.
-//
-// ```ignore
-// let audio = std::fs::read("speech.wav").unwrap();
-// let result = go_on::multimodal::audio_processor::transcribe(
-//     &audio,
-//     go_on::multimodal::audio_processor::AudioFormat::Wav,
-//     go_on::multimodal::audio_processor::SttBackend::OpenAIWhisper,
-// );
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

@@ -16,8 +16,10 @@ import { registerRpcCommands } from "./rpcCommandRegistry";
 import { registerCoreCommands } from "./coreCommandRegistry";
 import { registerWorkspaceContextCommands } from "./commands/workspaceContext";
 import { GoOnManager, GoOnStatusProvider } from "./runtimeManager";
-import { disposeLogger } from "./logger";
+import { Logger, disposeLogger } from "./logger";
 import { startStateSyncListener } from "./stateSync";
+
+const log = Logger.forModule("extension");
 import { protocolContract } from "./protocolContract";
 import {
   ensureGoOnBinary,
@@ -836,8 +838,7 @@ async function initializeGoOn(
           }
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn("go-on: backend readiness check failed:", err);
+        log.warn("backend readiness check failed:", err);
       }
     }, 3000);
     context.subscriptions.push(
@@ -858,8 +859,7 @@ async function initializeGoOn(
           await vscode.commands.executeCommand("go-on.openChat");
           await context.globalState.update("go-on.hasOpenedChatOnce", true);
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("[extension] autoOpenChat failed:", err);
+          log.warn("autoOpenChat failed:", err);
         }
       }, 300);
       context.subscriptions.push(
@@ -922,11 +922,7 @@ export function activate(context: vscode.ExtensionContext) {
       platform: process.platform,
       timestamp: new Date().toISOString(),
     };
-    // eslint-disable-next-line no-console
-    console.error(
-      "Activation failed:",
-      JSON.stringify(diagnosticData, null, 2),
-    );
+    log.error("Activation failed:", JSON.stringify(diagnosticData, null, 2));
 
     // Retry activation once after a short delay
     const retryDelayMs = 2000;

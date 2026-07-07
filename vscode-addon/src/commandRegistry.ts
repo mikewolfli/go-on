@@ -1,5 +1,8 @@
 import * as vscode from "vscode";
+import { Logger } from "./logger";
 import { i18n, MessageKeys } from "./i18n";
+
+const log = Logger.forModule("commandRegistry");
 
 export interface ViewCommandRegistryDeps {
   revealGoOnView: (
@@ -205,9 +208,8 @@ export function registerViewCommands(
           }
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          "go-on: failed to fetch session list from backend, using default:",
+        log.warn(
+          "failed to fetch session list from backend, using default:",
           err,
         );
       }

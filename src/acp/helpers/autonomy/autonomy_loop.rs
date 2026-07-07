@@ -151,7 +151,6 @@ pub async fn run_autonomy_loop(
 
     let mut response = String::new();
     let mut reasoning = String::new();
-    let mut selected_model: Option<String> = None;
     let mut rounds: Vec<AutonomyRound> = Vec::new();
     let max_iterations = config.max_iterations.max(1);
 
@@ -200,9 +199,8 @@ pub async fn run_autonomy_loop(
                 token = receiver.recv() => {
                     match token {
                         Some(t) => {
-                            // Model used detection
-                            if let Some(model) = t.strip_prefix(TOKEN_MODEL_USED_PREFIX) {
-                                selected_model = Some(model.trim().to_string());
+                            // Model used detection (detected but not currently consumed)
+                            if t.strip_prefix(TOKEN_MODEL_USED_PREFIX).is_some() {
                                 continue;
                             }
                             // Tool call detection
@@ -245,12 +243,10 @@ pub async fn run_autonomy_loop(
             planner_guided: false,
             duration_ms: round_duration_ms,
             error: None,
-            round_start_offset_ms: (|| {
-                round_start
-                    .checked_duration_since(start)
-                    .unwrap_or(std::time::Duration::from_secs(0))
-                    .as_millis() as u64
-            })(),
+            round_start_offset_ms: round_start
+                .checked_duration_since(start)
+                .unwrap_or(std::time::Duration::from_secs(0))
+                .as_millis() as u64,
             retry_count: 0,
             round_stop_reason: "completed".to_string(),
             agent_switched: false,

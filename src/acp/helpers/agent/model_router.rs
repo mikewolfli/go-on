@@ -28,15 +28,7 @@ pub(crate) struct FilterResult {
 /// High-risk vote configuration computed from agent options and risk assessment.
 #[derive(Debug)]
 pub(crate) struct HighRiskVoteConfig {
-    /// Whether high-risk voting is enabled (policy enabled + high risk + specific model).
-    /// Used internally as a local variable to derive multi-agent vote config;
-    /// stored on the struct for completeness/debugging.
-    #[allow(
-        dead_code,
-        reason = "stored for config completeness; used locally in build fn"
-    )]
-    pub(crate) enable_high_risk_vote: bool,
-    /// Whether multi-agent voting is enabled.
+    /// Whether multi-agent voting is enabled (derived from policy + risk + model specificity).
     pub(crate) enable_high_risk_multi_agent_vote: bool,
     /// Minimum number of vote agents (clamped 1..=6).
     pub(crate) min_vote_agents: usize,
@@ -174,9 +166,6 @@ pub(crate) fn build_high_risk_vote_config(
     let enable_high_risk_vote =
         risk_policy.enabled && risk_assessment.is_high_risk && !model_is_specific;
 
-    let enable_high_risk_multi_agent_vote =
-        enable_high_risk_vote && option_bool(options, "high_risk_multi_agent_vote_enabled", true);
-
     let min_vote_agents = option_usize(options, "high_risk_vote_min_agents", 2).clamp(1, 6);
 
     let max_vote_agents = option_usize(options, "high_risk_vote_max_agents", 3)
@@ -193,8 +182,8 @@ pub(crate) fn build_high_risk_vote_config(
             .clamp(1, max_vote_agents);
 
     HighRiskVoteConfig {
-        enable_high_risk_vote,
-        enable_high_risk_multi_agent_vote,
+        enable_high_risk_multi_agent_vote: enable_high_risk_vote
+            && option_bool(options, "high_risk_multi_agent_vote_enabled", true),
         min_vote_agents,
         max_vote_agents,
         escalation_enabled,

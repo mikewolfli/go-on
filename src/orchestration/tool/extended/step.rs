@@ -35,9 +35,6 @@ struct StepHeader {
 /// A simple representation of a STEP entity.
 #[cfg(feature = "cad-step")]
 struct StepEntity {
-    /// Entity ID (used in test assertions)
-    #[allow(dead_code)]
-    id: i64,
     type_name: String,
 }
 
@@ -268,6 +265,7 @@ fn split_step_arguments(s: &str) -> Vec<String> {
 }
 
 /// Parse a STEP entity line like `#123 = CARTESIAN_POINT('name',(1.0,2.0,3.0));`
+/// Only the type name is extracted; the entity ID is parsed only for validation.
 #[cfg(feature = "cad-step")]
 fn parse_entity_line(line: &str) -> Option<StepEntity> {
     let line = line.trim();
@@ -278,14 +276,13 @@ fn parse_entity_line(line: &str) -> Option<StepEntity> {
     // Strip trailing semicolon
     let content = line.strip_suffix(';').unwrap_or(line);
 
-    // Find the entity ID (e.g., #123)
+    // Find the entity ID (e.g., #123) — parse for validation only
     if !content.starts_with('#') {
         return None;
     }
 
     let eq_pos = content.find('=')?;
-    let id_str = content[1..eq_pos].trim();
-    let id: i64 = id_str.parse().ok()?;
+    let _id: i64 = content[1..eq_pos].trim().parse().ok()?;
 
     let rest = content[eq_pos + 1..].trim();
 
@@ -293,7 +290,7 @@ fn parse_entity_line(line: &str) -> Option<StepEntity> {
     let paren_pos = rest.find('(')?;
     let type_name = rest[..paren_pos].trim().to_string();
 
-    Some(StepEntity { id, type_name })
+    Some(StepEntity { type_name })
 }
 
 /// Parse the full STEP file content.
@@ -461,8 +458,9 @@ mod tests {
     fn parse_step_entity_line() {
         let line = "#10 = CARTESIAN_POINT('Origin',(0.0,0.0,0.0));";
         let entity = parse_entity_line(line).expect("should parse entity");
-        assert_eq!(entity.id, 10);
         assert_eq!(entity.type_name, "CARTESIAN_POINT");
+        // Entity ID parse validation is verified by the function returning Some
+        assert!(parse_entity_line(line).is_some());
     }
 
     #[test]

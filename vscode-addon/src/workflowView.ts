@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
+import { Logger } from "./logger";
 import { RuntimeManagerLike } from "./managerTypes";
 import { t, MessageKeys } from "./i18n";
 import { getErrorMessage, getNonce } from "./utils";
+
+const log = Logger.forModule("workflowView");
 
 interface WorkflowStep {
   type: "chat" | "code" | "delay";
@@ -64,8 +67,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
               try {
                 await this._deleteWorkflow(message.workflowId);
               } catch (err) {
-                // eslint-disable-next-line no-console
-                console.warn(`[workflow] delete error: ${err}`);
+                log.warn("delete error:", err);
               }
               break;
             case "showConfirm":
@@ -83,8 +85,7 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
                   workflowId: message.workflowId,
                 });
               } catch (err) {
-                // eslint-disable-next-line no-console
-                console.warn(`[workflow] showConfirm error: ${err}`);
+                log.warn("showConfirm error:", err);
               }
               break;
             case "showInputBox":

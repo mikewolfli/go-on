@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
+import { Logger } from "./logger";
 import { i18n, MessageKeys } from "./i18n";
+
+const log = Logger.forModule("coreCommandRegistry");
 import { RuntimeResolution } from "./runtimeBinaryService";
 import { asRecord, getErrorMessage } from "./utils";
 
@@ -280,8 +283,7 @@ export function registerCoreCommands(
         try {
           params = JSON.parse(paramsInput);
         } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("[coreCommandRegistry] Invalid JSON params:", err);
+          log.warn("Invalid JSON params:", err);
           vscode.window.showErrorMessage(
             "Invalid JSON params. Please provide valid JSON or leave empty.",
           );

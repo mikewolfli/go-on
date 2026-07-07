@@ -677,69 +677,86 @@ impl HarnessBus {
     ) -> serde_json::Value {
         use crate::acp::helpers::policy::{decide_work_grade, work_grade_action, WorkGrade};
 
-        let requested = WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent);
-
-        let (decided, reasons, risk_score) = if let Some(chars) = task_characteristics {
-            // Real task context is available — build the plan from actual data
-            let plan = crate::reinforcement::TaskPlanArtifact {
-                generated_at: 0,
-                task: String::new(),
-                characteristics: chars,
-                routing: crate::orchestration::task_router::RoutingDecision {
-                    roles: vec![],
-                    requirements: vec![],
-                    predicted_success_rate: 0.95,
-                    estimated_duration_seconds: 0,
-                    can_parallelize: vec![],
-                    risk_factors: vec![],
-                    recommended_safeguards: vec![],
-                    pua_enforcement: crate::governance::pua::PuaEnforcementPlan::default(),
-                },
-                decomposition: None,
-                planned_subtasks: vec![],
-                sub_agent_recommended: false,
-                activation_reasons: vec![],
-                action_checks_required: vec![],
-            };
-            let d = decide_work_grade(Some(requested_grade), &plan, true, false, false);
-            (d.decided, d.reasons, d.risk_score)
-        } else {
-            // No real task context — compute a meaningful default grade
-            // based on the requested grade and complexity alone, without
-            // fabricating a synthetic TaskPlanArtifact.
-            let complexity = task_complexity.clamp(1.0, 5.0) as u8;
-            let risk_score = (complexity as f64 / 5.0) * 0.4;
-
-            let mut decided = requested;
-            let mut reasons = Vec::new();
-
-            if risk_score >= 0.75 {
-                decided = WorkGrade::Safeguard;
-                reasons
-                    .push("insufficient context, complexity alone warrants safeguard".to_string());
-            } else if complexity >= 3 {
-                decided = WorkGrade::Agent;
-                reasons.push(
-                    "multi-step complexity (no task context), promote to agent execution"
-                        .to_string(),
-                );
-            } else if complexity <= 1 {
-                decided = WorkGrade::Edit;
-                reasons
-                    .push("low complexity (no task context), use edit for efficiency".to_string());
+        let (decided, reasons, risk_score, decision_action, decided_requested) =
+            if let Some(chars) = task_characteristics {
+                // Real task context is available — build the plan from actual data
+                let plan = crate::reinforcement::TaskPlanArtifact {
+                    generated_at: 0,
+                    task: String::new(),
+                    characteristics: chars,
+                    routing: crate::orchestration::task_router::RoutingDecision {
+                        roles: vec![],
+                        requirements: vec![],
+                        predicted_success_rate: 0.95,
+                        estimated_duration_seconds: 0,
+                        can_parallelize: vec![],
+                        risk_factors: vec![],
+                        recommended_safeguards: vec![],
+                        pua_enforcement: crate::governance::pua::PuaEnforcementPlan::default(),
+                    },
+                    decomposition: None,
+                    planned_subtasks: vec![],
+                    sub_agent_recommended: false,
+                    activation_reasons: vec![],
+                    action_checks_required: vec![],
+                };
+                let d = decide_work_grade(Some(requested_grade), &plan, true, false, false);
+                (
+                    d.decided,
+                    d.reasons,
+                    d.risk_score,
+                    d.decision_action.clone(),
+                    d.requested,
+                )
             } else {
-                reasons.push(
-                    "moderate complexity (no task context), retaining requested grade".to_string(),
+                // No real task context — compute a meaningful default grade
+                // based on the requested grade and complexity alone, without
+                // fabricating a synthetic TaskPlanArtifact.
+                let complexity = task_complexity.clamp(1.0, 5.0) as u8;
+                let risk_score = (complexity as f64 / 5.0) * 0.4;
+
+                let mut decided =
+                    WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent);
+                let mut reasons = Vec::new();
+
+                if risk_score >= 0.75 {
+                    decided = WorkGrade::Safeguard;
+                    reasons.push(
+                        "insufficient context, complexity alone warrants safeguard".to_string(),
+                    );
+                } else if complexity >= 3 {
+                    decided = WorkGrade::Agent;
+                    reasons.push(
+                        "multi-step complexity (no task context), promote to agent execution"
+                            .to_string(),
+                    );
+                } else if complexity <= 1 {
+                    decided = WorkGrade::Edit;
+                    reasons.push(
+                        "low complexity (no task context), use edit for efficiency".to_string(),
+                    );
+                } else {
+                    reasons.push(
+                        "moderate complexity (no task context), retaining requested grade"
+                            .to_string(),
+                    );
+                }
+
+                let action = work_grade_action(
+                    WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent),
+                    decided,
                 );
-            }
-
-            (decided, reasons, risk_score)
-        };
-
-        let decision_action = work_grade_action(requested, decided);
+                (
+                    decided,
+                    reasons,
+                    risk_score,
+                    action,
+                    WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent),
+                )
+            };
 
         serde_json::json!({
-            "requested": requested.as_str(),
+            "requested": decided_requested.as_str(),
             "decided": decided.as_str(),
             "decision_action": decision_action,
             "reasons": reasons,
