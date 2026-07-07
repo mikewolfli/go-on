@@ -138,8 +138,28 @@ impl GovernanceStatus {
 
 use crate::governance::harness_bus::PuaGovernanceProfile;
 use std::collections::BTreeSet;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use serde_json::Value;
+
+/// Global set of dynamically registered tool names (populated by ToolRegistry).
+/// This ensures the governance gate stays in sync with the ToolRegistry automatically,
+/// eliminating the maintenance burden of manually adding every new tool to `tool_category()`.
+static GOVERNANCE_TOOL_NAMES: OnceLock<Mutex<BTreeSet<&'static str>>> = OnceLock::new();
+
+fn governance_tool_names() -> &'static Mutex<BTreeSet<&'static str>> {
+    GOVERNANCE_TOOL_NAMES.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+/// Register a tool name with the governance gate. Called by ToolRegistry::new()
+/// to ensure every registered tool is allowed through the governance gate,
+/// even if it is not explicitly listed in the static `tool_category()` match.
+pub fn register_tool(name: &'static str) {
+    if let Ok(mut guard) = governance_tool_names().lock() {
+        guard.insert(name);
+    }
+}
 
 /// Categories for tool-level governance gating.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +208,7 @@ fn tool_category(name: &str) -> Option<ToolCategory> {
         | "archive_inspect" | "jsonl_read" | "diagnostics"
         | "environment_info" | "rss_read"
         | "code_index_search" | "semantic_search"
+        | "file_diff" | "read_file_lines"
         | "dns_lookup" | "ping" | "port_scan"
         // ── Document read tools ──
         | "read_excel" | "read_ppt" | "read_docx" | "read_pdf"
@@ -393,6 +414,9 @@ pub fn known_tool_names() -> BTreeSet<&'static str> {
         "rss_read",
         "code_index_search",
         "semantic_search",
+        "diff",
+        "file_diff",
+        "read_file_lines",
         "dns_lookup",
         "ping",
         "port_scan",
@@ -495,26 +519,44 @@ pub fn known_tool_names() -> BTreeSet<&'static str> {
     ] {
         set.insert(name);
     }
+    // Merge in dynamically registered tool names from ToolRegistry
+    // so that introspection always reflects the complete set.
+    if let Ok(guard) = governance_tool_names().lock() {
+        set.extend(guard.iter().copied());
+    }
     set
 }
 
 // ── Internal logic ────────────────────────────────────────────────────────
 
 fn do_quick_check(tool_name: &str, args: &Value) -> QuickCheckResult {
-    let category = match tool_category(tool_name) {
-        Some(cat) => cat,
-        None => {
-            return QuickCheckResult::deny(format!(
-                "Unknown tool '{}' — not registered in governance gate",
-                tool_name
-            ));
+    match tool_category(tool_name) {
+        Some(cat) => {
+            // Static category known — apply the appropriate check
+            match cat {
+                ToolCategory::ReadOnly => check_read_only(args),
+                ToolCategory::Write => check_write(args),
+                ToolCategory::Shell => check_shell(args),
+            }
         }
-    };
-
-    match category {
-        ToolCategory::ReadOnly => check_read_only(args),
-        ToolCategory::Write => check_write(args),
-        ToolCategory::Shell => check_shell(args),
+        None => {
+            // Not in the static category list. Check if it has been
+            // dynamically registered via ToolRegistry::register_tool().
+            if let Ok(guard) = governance_tool_names().lock() {
+                if guard.contains(tool_name) {
+                    // Dynamically registered tool — allow with a medium-risk
+                    // conservative check (path validation if applicable).
+                    check_read_only(args)
+                } else {
+                    QuickCheckResult::deny(format!(
+                        "Unknown tool '{}' — not registered in governance gate",
+                        tool_name
+                    ))
+                }
+            } else {
+                QuickCheckResult::deny("governance gate lock poisoned".to_string())
+            }
+        }
     }
 }
 

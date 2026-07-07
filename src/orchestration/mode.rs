@@ -12,6 +12,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -126,7 +127,11 @@ async fn execute_agent_chat_async(
         .map_err(|e| anyhow::anyhow!("agent chat failed: {}", e))?;
 
     let mut full_output = String::new();
-    while let Some(token) = rx.recv().await {
+    // Add timeout to prevent infinite hang on dropped sender
+    while let Some(token) = tokio::time::timeout(Duration::from_secs(300), rx.recv())
+        .await
+        .unwrap_or(None)
+    {
         full_output.push_str(&token);
     }
     Ok(full_output)
@@ -135,10 +140,12 @@ async fn execute_agent_chat_async(
 /// Async helper to execute an agent run_task without blocking.
 /// Safe to call from within any tokio runtime context.
 async fn execute_agent_run_task_async(
-    agent: &dyn Agent,
+    agent: Arc<dyn Agent>,
     envelope: AgentTaskEnvelope,
 ) -> Result<AgentTaskResult> {
-    let result = agent.run_task(envelope);
+    let result = tokio::task::spawn_blocking(move || agent.run_task(envelope))
+        .await
+        .map_err(|e| anyhow::anyhow!("agent run_task join failed: {}", e))?;
     result.map_err(|e| anyhow::anyhow!("agent run_task failed: {}", e))
 }
 
@@ -301,7 +308,7 @@ impl BaseModeRuntime {
                             }
                         }
                     } else {
-                        let result = execute_agent_run_task_async(agent.as_ref(), task).await;
+                        let result = execute_agent_run_task_async(agent.clone(), task).await;
                         match result {
                             Ok(result) => {
                                 return Ok(AgentTaskResult {

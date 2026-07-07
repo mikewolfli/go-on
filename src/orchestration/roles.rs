@@ -139,35 +139,6 @@ pub struct RoleSpecification {
     pub timeout_seconds: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HandoffContract {
-    pub from_role: AgentRole,
-    pub to_role: AgentRole,
-    pub objective: String,
-    pub constraints: Vec<String>,
-    pub evidence_pointers: Vec<String>,
-    pub failure_modes: Vec<String>,
-    pub expected_outputs: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HandoffContext {
-    pub contract: HandoffContract,
-    pub project_state: serde_json::Value,
-    pub episodic_memory: serde_json::Value,
-    pub prior_results: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RoleOutput {
-    pub role: AgentRole,
-    pub success: bool,
-    pub deliverables: serde_json::Value,
-    pub confidence: f32,
-    pub failure_signals: Option<Vec<String>>,
-    pub artifacts: Vec<String>,
-}
-
 /// Built-in role specifications, annotated for integration with the dynamic
 /// [`RoleRegistry`].
 ///

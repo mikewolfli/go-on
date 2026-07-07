@@ -83,6 +83,9 @@ impl std::error::Error for PuaViolation {}
 pub struct PuaRuleEngine {
     plan: Arc<StdMutex<PuaEnforcementPlan>>,
     rbac_enforcer: Option<Arc<RwLock<RbacEnforcer>>>,
+    /// Stores the reason for the most recent escalation or de-escalation
+    /// so it is preserved in audit logs rather than lost after logging.
+    last_escalation_reason: Arc<StdMutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -334,7 +337,16 @@ impl PuaRuleEngine {
         Self {
             plan,
             rbac_enforcer: None,
+            last_escalation_reason: Arc::new(StdMutex::new(None)),
         }
+    }
+
+    /// Return the reason recorded by the most recent `escalate` or `de_escalate` call.
+    pub fn last_escalation_reason(&self) -> Option<String> {
+        self.last_escalation_reason
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     /// Set the RBAC enforcer for this engine.
@@ -513,7 +525,7 @@ impl PuaRuleEngine {
         }
     }
 
-    pub fn escalate(&self, _reason: &str) -> u8 {
+    pub fn escalate(&self, reason: &str) -> u8 {
         if !self.check_escalation_permission() {
             tracing::warn!("Escalation denied: caller lacks Execute permission");
             let plan = self.plan.lock().unwrap_or_else(|poisoned| {
@@ -522,7 +534,13 @@ impl PuaRuleEngine {
             });
             return parse_escalation_level(&plan.escalation_level);
         }
-        tracing::debug!("Escalation triggered: {}", _reason);
+        tracing::debug!("Escalation triggered: {}", reason);
+
+        // Record the reason for audit trail
+        if let Ok(mut guard) = self.last_escalation_reason.lock() {
+            *guard = Some(format!("escalate: {}", reason));
+        }
+
         let mut plan = self.plan.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("PUA plan lock poisoned: recovering");
             poisoned.into_inner()
@@ -539,7 +557,7 @@ impl PuaRuleEngine {
     /// Decreases the escalation level when threat conditions are resolved
     /// (e.g., after successful recovery from a security incident).
     /// The level is floored at L0 (no escalation).
-    pub fn de_escalate(&self, _reason: &str) -> u8 {
+    pub fn de_escalate(&self, reason: &str) -> u8 {
         if !self.check_escalation_permission() {
             tracing::warn!("De-escalation denied: caller lacks Execute permission");
             let plan = self.plan.lock().unwrap_or_else(|poisoned| {
@@ -548,7 +566,13 @@ impl PuaRuleEngine {
             });
             return parse_escalation_level(&plan.escalation_level);
         }
-        tracing::debug!("De-escalation triggered: {}", _reason);
+        tracing::debug!("De-escalation triggered: {}", reason);
+
+        // Record the reason for audit trail
+        if let Ok(mut guard) = self.last_escalation_reason.lock() {
+            *guard = Some(format!("de-escalate: {}", reason));
+        }
+
         let mut plan = self.plan.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("PUA plan lock poisoned: recovering");
             poisoned.into_inner()

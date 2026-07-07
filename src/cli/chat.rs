@@ -18,18 +18,20 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 
-use futures_util::future::join_all;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
 use serde_json::{json, Value};
 use tokio::signal;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 use crate::acp::helpers::autonomy::terminal_chat_contract_snapshot;
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
+use crate::cli::markdown_renderer::StreamMarkdownRenderer;
 use crate::config::AppConfig;
 
 use crate::governance::status::quick_check_tool as governance_gate;
@@ -42,11 +44,18 @@ use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry};
 
 /// Maximum number of characters from a tool result sent to the LLM.
 const MAX_TOOL_RESULT_CHARS: usize = 100_000;
+
+/// Maximum number of concurrent tool executions.
+/// Prevents resource exhaustion when the agent emits many parallel tool calls.
+const MAX_CONCURRENT_TOOLS: usize = 10;
 /// Session file name for conversation persistence (inside .goon/ directory).
 const SESSION_FILE: &str = ".goon/chat-session.json";
 
 /// Threshold at which we prompt the user to compact the conversation.
 const COMPACT_PROMPT_THRESHOLD: usize = 30;
+
+/// Threshold at which we automatically compact (requires user consent).
+const AUTO_COMPACT_THRESHOLD: usize = 60;
 
 /// Default pricing fallback: GPT-4o input cost per token ($0.15 per 1M tokens).
 /// Used when provider cost info is unavailable.
@@ -105,14 +114,26 @@ Commands:
   /commit      Git commit with staged changes
   /review      Review current git diff before committing
   /plan        Show structured execution plan
+  /find_path   Search for files by name glob
 
 The AI agent has access to tools:
-  - Read/write files
-  - Search files and directories
-  - Execute shell commands
-  - Create and invoke skills
-  - Git operations (diff, status, log, commit)
+  - Read/write files (read_file, write_file, read_file_lines)
+  - Search files and directories (search_files, grep, find_path, list_directory)
+  - Apply patches (apply_patch)
+  - Execute shell commands (shell_exec)
+  - Git operations (diff, status, log, commit, review)
+  - Cargo commands (cargo_check, cargo_test)
+  - Diagnostics (diagnostics)
+  - Network tools (http_request, dns_lookup, ping, port_scan)
+  - Archive tools (archive_inspect, archive_extract)
+  - Compression (compress, decompress)
+  - Data tools (jsonl_read, jsonl_write)
+  - Environment info (date_time, environment_info)
+  - Code search (code_index_search)
+  - File comparison (diff)
+  - Skills (skill_list, skill_execute, skill_create, skill_reload)
   - Multi-turn conversation with context
+  - File operations (copy_path, move_path, delete_path, create_directory)
 ";
 
 /// Helper to produce ANSI escape codes; expands to empty string on Windows.
@@ -142,12 +163,12 @@ struct ChatSession {
 /// - Numbers/symbols count as ~0.5 tokens each
 ///
 /// This is significantly more accurate than the naive `chars/4` approach.
-pub fn estimate_tokens(text: &str) -> u64 {
+pub fn estimate_tokens(text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
-    let mut cjk_chars = 0u64;
-    let mut ascii_chars = 0u64;
+    let mut cjk_chars = 0usize;
+    let mut ascii_chars = 0usize;
     for ch in text.chars() {
         match ch {
             '\u{4E00}'..='\u{9FFF}'
@@ -164,13 +185,13 @@ pub fn estimate_tokens(text: &str) -> u64 {
 /// Track cumulative token usage and cost across the session.
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct TokenTracker {
-    total_prompt_tokens: u64,
-    total_completion_tokens: u64,
+    total_prompt_tokens: usize,
+    total_completion_tokens: usize,
     total_cost_usd: f64,
 }
 
 impl TokenTracker {
-    fn record_usage(&mut self, prompt_tokens: u64, completion_tokens: u64) {
+    fn record_usage(&mut self, prompt_tokens: usize, completion_tokens: usize) {
         self.total_prompt_tokens += prompt_tokens;
         self.total_completion_tokens += completion_tokens;
         // Use default pricing fallback when provider cost info is unavailable.
@@ -239,33 +260,31 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     eprintln!("╠════════════════════════════════════════════════════════════════╣");
     eprintln!("║  Agent: {:<60} ║", current_agent_name);
     eprintln!("║  Commands: /help /quit /clear /save /load /cost /compact    ║");
-    eprintln!("║            /diff /commit /plan /model /context /tools /skills /stats  ║");
+    eprintln!("║   /diff /commit /plan /model /context /tools /skills /stats /find_path  ║");
     eprintln!("╚════════════════════════════════════════════════════════════════╝");
     eprintln!();
 
     let mut messages: Vec<Message> = Vec::new();
-    // ── Inject initial system message ──
-    // The agent needs a clear description of its capabilities and the tool call protocol
-    // before processing any user messages. This is injected as a system message so that
-    // agent implementations that support system roles (e.g. OpenAI, Anthropic) treat it
-    // with appropriate priority.
+    // ── Inject initial system message (built once per session) ──
     let all_tool_names = tool_registry().all_names();
+    let tool_list_str = all_tool_names.join(", ");
+    let agent_list_str = agent_names.join(", ");
     messages.push(Message {
         role: "system".to_string(),
         content: format!(
             "You are go-on, an AI coding assistant running inside a terminal.\n\
              You have access to the following tool categories:\n\
-             - **File tools**: read_file, write_file, search_files, list_directory, find_files,\n               create_directory, copy_path, move_path, delete_path\n\
-             - **Patch**: apply_patch\n\
-             - **Shell**: shell_exec (bash commands)\n\
-             - **Git**: inspect_git_diff, git operations (status, log, commit, diff)\n\
-             - **Build/Test**: cargo_check, cargo_test, run_tests, diagnostics\n\
-             - **Skills**: skill_list, skill_execute, skill_create, skill_reload\n\
-             - **Network**: http_request, dns_lookup, ping, port_scan\n\
-             - **Archive**: archive_inspect, archive_extract\n\
-             - **Data**: jsonl_read, jsonl_write, compress, decompress\n\
-             - **Date/Time**: date_time, environment_info\n\
-             - **Search**: grep, find_files, code_index_search\n\
+             - **File tools**: read_file, write_file, read_file_lines, search_files, list_directory, find_path, create_directory, copy_path, move_path, delete_path\
+             - **Patch**: apply_patch\
+             - **Shell**: shell_exec (bash commands)\
+             - **Git**: inspect_git_diff, git operations (status, log, commit, diff)\
+             - **Build/Test**: cargo_check, cargo_test, run_tests, diagnostics\
+             - **Skills**: skill_list, skill_execute, skill_create, skill_reload\
+             - **Network**: http_request, dns_lookup, ping, port_scan\
+             - **Archive**: archive_inspect, archive_extract\
+             - **Data**: jsonl_read, jsonl_write, compress, decompress\
+             - **Date/Time**: date_time, environment_info\
+             - **Search**: grep, find_files, find_path, code_index_search\
              - **Diff**: diff (file comparison)\n\n\
              All registered tools ({} total): {}\n\n\
              To invoke a tool, use the __tool_call__ protocol:\n\
@@ -273,8 +292,8 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
              Current configured agents: {}\n\
              Use /model <name> to switch agents.",
             all_tool_names.len(),
-            all_tool_names.join(", "),
-            agent_names.join(", ")
+            tool_list_str,
+            agent_list_str
         ),
     });
 
@@ -346,26 +365,63 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         messages: messages.clone(),
                         agent_name: current_agent_name.clone(),
                     };
-                    let json = serde_json::to_string_pretty(&session)?;
-                    tokio::fs::write(&session_path, &json).await?;
-                    eprintln!(
-                        "{}Session saved to {}{}",
-                        ansi!("32"),
-                        session_path.display(),
-                        ansi!("0")
-                    );
+                    let json = serde_json::to_string_pretty(&session);
+                    match json {
+                        Ok(json) => {
+                            if let Err(e) = tokio::fs::write(&session_path, &json).await {
+                                eprintln!(
+                                    "{}Failed to write session: {}{}",
+                                    ansi!("31"),
+                                    e,
+                                    ansi!("0")
+                                );
+                            } else {
+                                eprintln!(
+                                    "{}Session saved to {}{}",
+                                    ansi!("32"),
+                                    session_path.display(),
+                                    ansi!("0")
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "{}Failed to serialize session: {}{}",
+                                ansi!("31"),
+                                e,
+                                ansi!("0")
+                            );
+                        }
+                    }
                     continue;
                 }
                 "load" => {
                     match tokio::fs::read_to_string(&session_path).await {
                         Ok(json) => match serde_json::from_str::<ChatSession>(&json) {
                             Ok(session) => {
+                                // Validate the saved agent name is still in the registry
+                                let agent_valid = registry.get(&session.agent_name).is_some();
+                                if !agent_valid {
+                                    eprintln!(
+                                        "{}Warning: agent '{}' from session no longer available. Using current agent '{}'.{}",
+                                        ansi!("33"),
+                                        session.agent_name,
+                                        current_agent_name,
+                                        ansi!("0")
+                                    );
+                                }
                                 messages = session.messages;
+                                if agent_valid && session.agent_name != current_agent_name {
+                                    if let Some(new_agent) = registry.get(&session.agent_name) {
+                                        current_agent = new_agent;
+                                        current_agent_name = session.agent_name.clone();
+                                    }
+                                }
                                 eprintln!(
                                     "{}Session loaded: {} messages from '{}'{}",
                                     ansi!("32"),
                                     messages.len(),
-                                    session.agent_name,
+                                    current_agent_name,
                                     ansi!("0")
                                 );
                             }
@@ -457,7 +513,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                 }
                 "context" => {
                     let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-                    let est_tokens: u64 =
+                    let est_tokens: usize =
                         messages.iter().map(|m| estimate_tokens(&m.content)).sum();
                     let system_msgs = messages.iter().filter(|m| m.role == "system").count();
                     eprintln!("Context window:");
@@ -506,16 +562,66 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         eprintln!("{}No messages to compact.{}", ansi!("33"), ansi!("0"));
                         continue;
                     }
-                    let summary = format!(
-                        "[Conversation compacted: {} earlier messages summarized. Continuing conversation.]",
-                        compact_count
+
+                    eprintln!(
+                        "{}Summarizing {} messages with LLM...{}",
+                        ansi!("33"),
+                        compact_count,
+                        ansi!("0")
                     );
+
+                    // Collect the messages to summarize
+                    let to_compact: Vec<Message> = messages[compact_range.clone()].to_vec();
+
+                    // Build a summarization prompt
+                    let summarize_prompt = Message {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Please provide a concise summary of the above conversation. \
+                             Focus on: what has been accomplished, what decisions were made, \
+                             what the current state of the project/task is, and what remains to be done. \
+                             This summary replaces {} conversation turns, so include enough detail \
+                             (file paths, important findings, key decisions) that the conversation \
+                             can continue seamlessly without losing context.",
+                            compact_count
+                        ),
+                    };
+
+                    // Build messages for the summarization call
+                    let mut summarize_msgs = to_compact;
+                    summarize_msgs.push(summarize_prompt);
+
+                    // Call agent to generate summary via streaming
+                    let (summary_tx, mut summary_rx) = tokio::sync::mpsc::channel::<String>(2048);
+                    let summary_sender = crate::agents::agent::StreamingSender::from(summary_tx);
+                    let agent_for_summary = Arc::clone(&current_agent);
+                    let summarize_task = tokio::spawn(async move {
+                        agent_for_summary
+                            .chat(summarize_msgs, None, None, summary_sender)
+                            .await
+                    });
+
+                    let mut summary_text = String::new();
+                    while let Some(token) = summary_rx.recv().await {
+                        summary_text.push_str(&token);
+                    }
+
+                    if let Err(e) = summarize_task.await {
+                        eprintln!("{}Summarization failed: {}{}", ansi!("31"), e, ansi!("0"));
+                        continue;
+                    }
+
+                    // Drain the compacted range and insert the summary
                     messages.drain(compact_range);
                     messages.insert(
                         1,
                         Message {
                             role: "user".to_string(),
-                            content: summary,
+                            content: format!(
+                                "[Conversation compacted: summary of previous {} messages]\n{}",
+                                compact_count,
+                                summary_text.trim()
+                            ),
                         },
                     );
                     eprintln!(
@@ -558,35 +664,24 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     continue;
                 }
                 "commit" => {
-                    eprintln!("Generating commit message from diff...");
-                    // Check git status
-                    let status_output = match tokio::process::Command::new("git")
-                        .args(["status", "--short"])
-                        .output()
-                        .await
-                    {
-                        Ok(out) => out,
-                        Err(e) => {
-                            eprintln!("{}Git status failed: {}{}", ansi!("31"), e, ansi!("0"));
-                            continue;
-                        }
-                    };
-                    let status_str = String::from_utf8_lossy(&status_output.stdout);
-                    if status_str.trim().is_empty() {
-                        eprintln!("{}Nothing to commit.{}", ansi!("33"), ansi!("0"));
-                        continue;
-                    }
-                    eprintln!("Changes:\n{}", status_str);
-
-                    // Get the diff to use as commit message context
+                    eprintln!("Preparing commit...");
+                    // Single git diff call for both status and stat context
                     let diff_output = match tokio::process::Command::new("git")
                         .args(["diff", "--stat"])
                         .output()
                         .await
                     {
                         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
-                        Err(_) => String::new(),
+                        Err(e) => {
+                            eprintln!("{}Git diff failed: {}{}", ansi!("31"), e, ansi!("0"));
+                            continue;
+                        }
                     };
+                    if diff_output.trim().is_empty() {
+                        eprintln!("{}Nothing to commit.{}", ansi!("33"), ansi!("0"));
+                        continue;
+                    }
+                    eprintln!("Changes:\n{}", diff_output);
 
                     // Stage all changes
                     let add_output = tokio::process::Command::new("git")
@@ -622,16 +717,11 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     } else {
                         format!("{} files", files_changed.len())
                     };
-                    let desc = if summary.is_empty() {
-                        "Update".to_string()
-                    } else {
-                        summary
-                    };
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let msg = format!("feat: {} ({})", desc, now);
+                    if summary.is_empty() {
+                        eprintln!("{}Nothing to commit.{}", ansi!("33"), ansi!("0"));
+                        continue;
+                    }
+                    let msg = format!("feat: {}", summary);
 
                     match tokio::process::Command::new("git")
                         .args(["commit", "-m", &msg])
@@ -685,21 +775,29 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     }
                     continue;
                 }
-                "review" => {
-                    let diff = match tokio::process::Command::new("git")
-                        .args(["diff", "--stat"])
-                        .output()
-                        .await
-                    {
-                        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
-                        Err(_) => String::new(),
-                    };
-                    if diff.trim().is_empty() {
-                        eprintln!("{}No changes to review.{}", ansi!("33"), ansi!("0"));
-                        continue;
+                find_cmd if find_cmd.starts_with("find_path") || find_cmd.starts_with("find ") => {
+                    let pattern = find_cmd
+                        .strip_prefix("find_path ")
+                        .or_else(|| find_cmd.strip_prefix("find "))
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty());
+                    match pattern {
+                        Some(pattern) => {
+                            let args = serde_json::json!({"pattern": pattern});
+                            match execute_simple_tool("search_files", &args).await {
+                                Ok(result) => eprintln!("{}", result),
+                                Err(e) => eprintln!("{}Error: {}{}", ansi!("31"), e, ansi!("0")),
+                            }
+                        }
+                        None => {
+                            eprintln!("Usage: /find_path <glob>  (e.g. /find **/*.rs)");
+                        }
                     }
-                    eprintln!("{}── Changes to review ──{}", ansi!("1"), ansi!("0"));
-                    eprintln!("{}", diff);
+                    continue;
+                }
+                "review" => {
+                    // Single git diff call — extract stat from the same output
+                    // instead of running two separate processes.
                     let detailed = match tokio::process::Command::new("git")
                         .args(["diff"])
                         .output()
@@ -708,8 +806,29 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
                         Err(_) => String::new(),
                     };
-                    // Pre-compute total line count once to avoid triple iteration.
-                    // display_diff with Some(60) processes only 60 lines.
+                    if detailed.trim().is_empty() {
+                        eprintln!("{}No changes to review.{}", ansi!("33"), ansi!("0"));
+                        continue;
+                    }
+                    // Extract stat from the full diff: lines matching "file | N ++"
+                    let stat_lines: Vec<&str> = detailed
+                        .lines()
+                        .filter(|l| {
+                            l.contains('|')
+                                && !l.starts_with("diff ")
+                                && !l.starts_with("index ")
+                                && !l.starts_with("---")
+                                && !l.starts_with("+++")
+                                && !l.starts_with("@@")
+                        })
+                        .collect();
+                    if !stat_lines.is_empty() {
+                        eprintln!("{}── Changes to review ──{}", ansi!("1"), ansi!("0"));
+                        for line in &stat_lines {
+                            eprintln!("  {}", line);
+                        }
+                        eprintln!();
+                    }
                     let total_lines = detailed.lines().count();
                     display_diff(&detailed, Some(60));
                     if total_lines > 60 {
@@ -810,12 +929,20 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         }
 
         // ── Prompt to compact if conversation is long ──
-        if messages.len() >= COMPACT_PROMPT_THRESHOLD {
+        let msg_count = messages.len();
+        if msg_count >= AUTO_COMPACT_THRESHOLD {
+            eprintln!(
+                "{}⚠️  Conversation is very long ({} msgs). Type /compact to summarize.{}  (Tip: /compact reduces context usage)",
+                ansi!("31"),
+                msg_count,
+                ansi!("0")
+            );
+        } else if msg_count >= COMPACT_PROMPT_THRESHOLD {
             eprintln!(
                 "{}💡 Tip: Use /compact to summarize old messages and free context.{}  ({}/{} msgs)",
                 ansi!("33"),
                 ansi!("0"),
-                messages.len(),
+                msg_count,
                 COMPACT_PROMPT_THRESHOLD
             );
         }
@@ -832,11 +959,11 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => { /* timeout */ }
             }
         }
-        let json = serde_json::to_string(&ChatSession {
+        let session = ChatSession {
             messages: messages.clone(),
             agent_name: current_agent_name.clone(),
-        })
-        .unwrap_or_default();
+        };
+        let json = serde_json::to_string(&session).unwrap_or_default();
         if let Err(e) = tokio::fs::write(&session_path, &json).await {
             tracing::warn!("Failed to save session on exit: {e}");
         } else {
@@ -858,16 +985,18 @@ async fn run_agent_with_tools(
     agent: &Arc<dyn Agent>,
     messages: &mut Vec<Message>,
     principles: Option<Vec<String>>,
-) -> Result<(String, u64, u64)> {
+) -> Result<(String, usize, usize)> {
+    let principles = principles.unwrap_or_default();
     // ── Estimate prompt tokens from existing messages using CJK-aware estimator ──
-    let estimated_prompt_tokens = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
+    let estimated_prompt_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
     let (tx, mut rx) = mpsc::channel::<String>(2048);
     let sender = StreamingSender::from(tx);
-    // Clone the messages for the spawned agent task. The agent runs concurrently
-    // with streaming output, so the clone is required to avoid a borrow conflict.
     let msgs = messages.clone();
-    // Clone principles up front since it's used in both initial chat and follow-up.
-    let initial_principles = principles.clone();
+    let initial_principles = if principles.is_empty() {
+        None
+    } else {
+        Some(principles.clone())
+    };
 
     // ── Cancellation support for Ctrl+C ──
     // The JoinHandle::abort() cancels the spawned task when the user presses Ctrl+C.
@@ -876,12 +1005,11 @@ async fn run_agent_with_tools(
     let chat_task =
         tokio::spawn(async move { agent_ref.chat(msgs, initial_principles, None, sender).await });
 
-    let mut response = String::new();
+    let mut renderer = StreamMarkdownRenderer::new();
     let mut tool_calls: Vec<(String, String)> = Vec::new();
     let mut in_reasoning = false;
 
     // ── Streaming output with interrupt support ──
-    let mut output_line = String::new();
     loop {
         tokio::select! {
             token = rx.recv() => {
@@ -890,10 +1018,6 @@ async fn run_agent_with_tools(
                         // Tool call detection (agents emit __tool_call__:tool_name:args)
                         if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
                             tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-                            if !output_line.is_empty() {
-                                eprintln!("{}", output_line);
-                                output_line.clear();
-                            }
                             eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
                             continue;
                         }
@@ -901,10 +1025,6 @@ async fn run_agent_with_tools(
                         // Reasoning content markers
                         if token == REASONING_START {
                             in_reasoning = true;
-                            if !output_line.is_empty() {
-                                eprintln!("{}", output_line);
-                                output_line.clear();
-                            }
                             eprint!("{}", ansi!("90"));
                             continue;
                         }
@@ -918,9 +1038,18 @@ async fn run_agent_with_tools(
                         if in_reasoning {
                             eprint!("{}", token);
                         } else {
-                            response.push_str(&token);
-                            output_line.push_str(&token);
-                            print!("{}", token);
+                            // Feed to streaming renderer for ANSI formatting first,
+                            // then display only the formatted output — avoids the raw-text
+                            // flash followed by ANSI-replace flicker that occurs when
+                            // printing raw first then cursor-up+erase.
+                            renderer.feed(&token);
+                            let (formatted, _) = renderer.flush();
+                            if !formatted.is_empty() {
+                                eprint!("{}", formatted);
+                            } else {
+                                // No complete lines yet — buffer via renderer, do NOT
+                                // print raw to avoid flicker.
+                            }
                         }
                         std::io::Write::flush(&mut std::io::stdout()).ok();
                     }
@@ -939,10 +1068,6 @@ async fn run_agent_with_tools(
         }
     }
 
-    if !output_line.is_empty() {
-        eprintln!();
-    }
-
     // Await the task — if it was aborted, JoinError is expected
     match chat_task.await {
         Ok(Ok(())) => {} // completed normally
@@ -956,57 +1081,58 @@ async fn run_agent_with_tools(
         }
     }
 
-    // ── Markdown re-render of full response ──
-    if !response.is_empty() {
-        let rendered = crate::cli::markdown_renderer::render_markdown(&response);
-        if rendered.contains("\u{001B}") {
-            eprint!("\r");
-            // Use rendered line count instead of raw response line count.
-            // The rendered output may have more or fewer lines than the raw
-            // streaming output, so using the wrong count causes visual artifacts
-            // (lines not cleared or too many lines cleared).
-            let line_count = rendered.lines().count().max(1);
-            for _ in 0..line_count {
-                // ANSI cursor up + clear line
+    // ── Flush remaining renderer output ──
+    let mut response: String = {
+        let (remaining, _) = renderer.flush();
+        if !remaining.is_empty() {
+            let n = remaining.lines().count();
+            for _ in 0..n {
                 eprint!("\x1B[F\x1B[K");
             }
-            eprintln!("{}", rendered);
-            response = rendered;
+            eprintln!("{}", remaining);
+            remaining
+        } else {
+            renderer.take_raw_response()
         }
-    }
+    };
 
-    // ── Phase 2: Execute any tool calls in parallel ──
+    // ── Phase 2: Execute tools with progressive streaming ──
     let mut followup_round_executed = false;
     if !tool_calls.is_empty() {
         eprintln!("{}── Tool execution ──{}", ansi!("33"), ansi!("0"));
 
-        // Execute all tools concurrently using join_all for maximum throughput.
-        // I/O-bound tools (read_file, search_files, http_request) run in parallel.
-        // Write operations are serialized by ToolLockManager internally.
-        let tool_futures: Vec<_> = tool_calls
-            .iter()
-            .map(|(tool_name, tool_args_str)| {
-                let tool_name = tool_name.clone();
-                let tool_args_str = tool_args_str.clone();
-                async move {
-                    eprintln!("  {}⚡ {}{}...", ansi!("36"), tool_name, ansi!("0"));
-                    let parsed_args: Value =
-                        serde_json::from_str(&tool_args_str).unwrap_or(json!({}));
-                    let start = std::time::Instant::now();
-                    let result = execute_simple_tool(&tool_name, &parsed_args).await;
-                    let elapsed = start.elapsed();
-                    (tool_name, tool_args_str, result, elapsed)
-                }
-            })
-            .collect();
-
-        let results: Vec<(String, String, anyhow::Result<String>, std::time::Duration)> =
-            join_all(tool_futures).await;
+        // Use FuturesUnordered for progressive tool result display — results
+        // appear as each tool completes rather than waiting for ALL tools to
+        // finish. This matches ZED chat's progressive result streaming pattern
+        // and provides immediate feedback for fast tools.
+        //
+        // A Semaphore limits concurrent tool executions to prevent resource
+        // exhaustion when the agent emits many parallel tool calls (e.g., 50+).
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TOOLS));
+        let mut tool_futures = FuturesUnordered::new();
+        for (tool_name, tool_args_str) in &tool_calls {
+            let tool_name = tool_name.clone();
+            let tool_args_str = tool_args_str.clone();
+            let sem_clone = Arc::clone(&semaphore);
+            tool_futures.push(async move {
+                // Acquire a permit — this limits concurrent exec to MAX_CONCURRENT_TOOLS.
+                // I/O-bound tools (read_file, search_files, http_request) benefit from
+                // parallelism while CPU-bound or resource-heavy tools are throttled.
+                let _permit = sem_clone.acquire().await.ok();
+                let parsed_args: Value = serde_json::from_str(&tool_args_str).unwrap_or(json!({}));
+                let start = std::time::Instant::now();
+                eprintln!("  {}⚡ {}{}...", ansi!("36"), tool_name, ansi!("0"));
+                let result = execute_simple_tool(&tool_name, &parsed_args).await;
+                let elapsed = start.elapsed();
+                (tool_name, tool_args_str, result, elapsed)
+            });
+        }
 
         let mut tool_results: Vec<String> = Vec::new();
         let mut has_failure = false;
 
-        for (tool_name, _, result, elapsed) in results {
+        // Process results as they arrive (progressive streaming)
+        while let Some((tool_name, _, result, elapsed)) = tool_futures.next().await {
             match result {
                 Ok(result_text) => {
                     let display = if result_text.len() > 500 {
@@ -1072,14 +1198,18 @@ async fn run_agent_with_tools(
             let msgs2 = messages.clone();
 
             let agent_ref2 = Arc::clone(agent);
-            let followup_principles = principles.clone();
+            let followup_principles = if principles.is_empty() {
+                None
+            } else {
+                Some(principles.clone())
+            };
             let followup_task = tokio::spawn(async move {
                 agent_ref2
                     .chat(msgs2, followup_principles, None, sender2)
                     .await
             });
 
-            let mut followup_response = String::new();
+            let mut followup_renderer = StreamMarkdownRenderer::new();
             let mut in_reasoning2 = false;
             loop {
                 tokio::select! {
@@ -1100,8 +1230,12 @@ async fn run_agent_with_tools(
                                 if in_reasoning2 {
                                     eprint!("{}", token);
                                 } else {
-                                    followup_response.push_str(&token);
-                                    print!("{}", token);
+                                    // Feed to renderer first, display only formatted output
+                                    followup_renderer.feed(&token);
+                                    let (formatted, _) = followup_renderer.flush();
+                                    if !formatted.is_empty() {
+                                        eprint!("{}", formatted);
+                                    }
                                 }
                                 std::io::Write::flush(&mut std::io::stdout()).ok();
                             }
@@ -1118,31 +1252,27 @@ async fn run_agent_with_tools(
                     }
                 }
             }
-            eprintln!();
 
             if let Err(e) = followup_task.await {
                 warn!("Agent followup task failed: {e}");
             }
 
-            if !followup_response.trim().is_empty() {
-                // ── Markdown re-render of follow-up response ──
-                // Apply ANSI formatting to the follow-up response before storing it,
-                // matching the primary response behavior (Fix 1).
-                let rendered_final = {
-                    let rendered =
-                        crate::cli::markdown_renderer::render_markdown(&followup_response);
-                    if rendered.contains("\u{001B}") {
-                        eprint!("\r");
-                        let line_count = rendered.lines().count().max(1);
-                        for _ in 0..line_count {
-                            eprint!("\x1B[F\x1B[K");
-                        }
-                        eprintln!("{}", rendered);
-                        rendered
-                    } else {
-                        followup_response.clone()
+            // ── Flush remaining follow-up renderer output ──
+            let rendered_final = {
+                let (remaining, _) = followup_renderer.flush();
+                if !remaining.is_empty() {
+                    let n = remaining.lines().count();
+                    for _ in 0..n {
+                        eprint!("\x1B[F\x1B[K");
                     }
-                };
+                    eprintln!("{}", remaining);
+                    remaining
+                } else {
+                    followup_renderer.take_raw_response()
+                }
+            };
+
+            if !rendered_final.trim().is_empty() {
                 crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
                 response = rendered_final;
             } else {
@@ -1287,7 +1417,11 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
 fn format_tool_output(tool_name: &str, output: &ToolOutput) -> Result<String> {
     let r = match output.result.as_ref() {
         Some(val) => val,
-        None => return Ok("Ok".to_string()),
+        None => {
+            // Tool returned success but no result — return the error message if any,
+            // otherwise a simple success acknowledgement.
+            return Ok(output.error.as_deref().unwrap_or("success").to_string());
+        }
     };
 
     match tool_name {
@@ -1422,40 +1556,63 @@ fn format_tool_output(tool_name: &str, output: &ToolOutput) -> Result<String> {
     }
 }
 
-/// Build principles (system prompt instructions) for CLI chat mode.
-/// Includes the list of registered skills so the LLM knows about available custom skills.
+/// Cached build of CLI principles — rebuilt only when skills change.
+/// Uses a generation counter so that principles are re-built only when
+/// the skill registry content changes (detected via total skill count).
 fn build_cli_principles() -> Option<Vec<String>> {
-    let mut principles = vec![
-        "You are a helpful AI coding assistant with access to tools.".to_string(),
-        "You can use the following tools via __tool_call__:tool_name:json_args protocol:"
-            .to_string(),
-    ];
+    static CACHED: std::sync::OnceLock<std::sync::Mutex<(Vec<String>, usize)>> =
+        std::sync::OnceLock::new();
+    let cache = CACHED.get_or_init(|| std::sync::Mutex::new((Vec::new(), usize::MAX)));
 
-    // Add tool names from the registry
-    let tool_names = tool_registry().all_names();
-    if !tool_names.is_empty() {
-        principles.push(format!("  Built-in tools: {}", tool_names.join(", ")));
-    }
+    // Detect skill registry change by current skill count
+    let current_skill_count = crate::orchestration::tool::skill_registry()
+        .and_then(|r| r.read().ok())
+        .map(|g| g.list().len())
+        .unwrap_or(0);
 
-    // Add available skills from the skill registry
-    if let Some(registry) = crate::orchestration::tool::skill_registry() {
-        if let Ok(guard) = registry.read() {
-            let skill_list = guard.list();
-            if !skill_list.is_empty() {
-                let skill_names: Vec<String> = skill_list
-                    .iter()
-                    .map(|d| format!("{}: {}", d.name, d.description))
-                    .collect();
-                principles.push(format!("  Registered skills: {}", skill_names.join("; ")));
-                principles.push(
-                    "Use skill_execute tool with skill_name and input to invoke a skill."
-                        .to_string(),
-                );
+    if let Ok(mut guard) = cache.lock() {
+        if guard.1 == current_skill_count && !guard.0.is_empty() {
+            return Some(guard.0.clone());
+        }
+
+        let mut principles = vec![
+            "You are a helpful AI coding assistant with access to tools.".to_string(),
+            "You can use the following tools via __tool_call__:tool_name:json_args protocol:"
+                .to_string(),
+        ];
+
+        let tool_names = tool_registry().all_names();
+        if !tool_names.is_empty() {
+            principles.push(format!("  Built-in tools: {}", tool_names.join(", ")));
+        }
+
+        if let Some(registry) = crate::orchestration::tool::skill_registry() {
+            if let Ok(guard2) = registry.read() {
+                let skill_list = guard2.list();
+                if !skill_list.is_empty() {
+                    let skill_names: Vec<String> = skill_list
+                        .iter()
+                        .map(|d| format!("{}: {}", d.name, d.description))
+                        .collect();
+                    principles.push(format!("  Registered skills: {}", skill_names.join("; ")));
+                    principles.push(
+                        "Use skill_execute tool with skill_name and input to invoke a skill."
+                            .to_string(),
+                    );
+                }
             }
         }
-    }
 
-    Some(principles)
+        guard.0 = principles.clone();
+        guard.1 = current_skill_count;
+        Some(principles)
+    } else {
+        // Fallback: rebuild uncached
+        Some(vec![
+            "You are a helpful AI coding assistant with access to tools.".to_string(),
+            "You can use __tool_call__:tool_name:json_args to invoke tools.".to_string(),
+        ])
+    }
 }
 
 /// Display a git diff with ANSI color highlighting, optionally limited to `max_lines`.

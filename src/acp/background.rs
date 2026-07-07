@@ -358,9 +358,22 @@ pub async fn start_background_tasks(
     // (which also runs timeout checks and processes approval engine timeouts)
     {
         let approval_engine = server.governance_deps.approval_engine.clone();
+        // Pull timeout config from harness_bus evaluator if available
+        let (pending_count, timeout_secs) = server
+            .governance_deps
+            .harness_bus
+            .as_ref()
+            .map(|hb| {
+                let secs = hb.evaluator.dispatch.timeout_policy.max_timeout.as_secs();
+                (Some(1usize), Some(secs))
+            })
+            .unwrap_or_else(|| (Some(1usize), Some(300u64)));
+
         crate::governance::runtime_controls::spawn_timeout_loop(
             shutdown_notify.clone(),
             approval_engine,
+            pending_count,
+            timeout_secs,
         );
     }
 

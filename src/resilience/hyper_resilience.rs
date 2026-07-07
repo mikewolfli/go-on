@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::{Mutex, RwLock};
+use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -642,10 +643,57 @@ impl HyperResilienceEngine {
         }
     }
 
+    /// Attempt a real TCP health check against the target (parsed as `host:port`).
+    /// Returns `true` if the connection succeeds within the timeout.
+    /// This provides actual observability into whether the service is reachable
+    /// rather than relying on purely in-memory simulation.
+    async fn try_health_check(&self, target: &str, timeout_ms: u64) -> (bool, String) {
+        // Try to parse target as host:port
+        if let Some((host, port_str)) = target.split_once(':') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                let addr = format!("{}:{}", host, port);
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(timeout_ms),
+                    TcpStream::connect(&addr),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {
+                        return (true, format!("TCP health check PASSED for {}", addr));
+                    }
+                    Ok(Err(e)) => {
+                        return (
+                            false,
+                            format!("TCP health check FAILED for {}: {}", addr, e),
+                        );
+                    }
+                    Err(_) => {
+                        return (
+                            false,
+                            format!(
+                                "TCP health check TIMEOUT for {} after {}ms",
+                                addr, timeout_ms
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        // Target is not a host:port — log a hint but treat as non-fatal
+        (
+            false,
+            format!(
+                "target '{}' is not a host:port address — no TCP health check possible",
+                target
+            ),
+        )
+    }
+
     /// Execute a self-healing action and return a report.
     ///
-    /// This is a test/benchmark operation — no actual node restarts or resource
-    /// scaling are performed.
+    /// Performs a real health check where possible, logs clear actionable
+    /// indicators of what infrastructure changes would be needed, and applies
+    /// in-memory state updates for simulation purposes.
     pub async fn execute_healing(
         &self,
         action: SelfHealingAction,
@@ -653,6 +701,16 @@ impl HyperResilienceEngine {
     ) -> Result<HealingReport> {
         let started_ms = now_millis();
         self.healing_actions_taken.fetch_add(1, Ordering::Release);
+
+        // Perform a real TCP health check to determine if the target is reachable.
+        let (healthy, health_check_result) = self.try_health_check(target, 3_000).await;
+        tracing::info!(
+            target: "resilience",
+            target = %target,
+            healthy = %healthy,
+            "[HEALTH_CHECK] {}",
+            health_check_result
+        );
 
         // Simulate execution duration.
         let test_duration_ms: u64 = match &action {
@@ -665,6 +723,19 @@ impl HyperResilienceEngine {
 
         let (success, result) = match &action {
             SelfHealingAction::ClearCircuitBreaker => {
+                tracing::info!(
+                    target: "resilience",
+                    action = "ClearCircuitBreaker",
+                    target = %target,
+                    healthy = %healthy,
+                    "[HEALING] WOULD: reset circuit breaker for '{}' — in production this would reset the failure count to 0 and transition the breaker to Closed state",
+                    target
+                );
+                tracing::info!(
+                    target: "resilience",
+                    "[SUGGESTION] Actionable: verify the downstream service at '{}' is healthy before clearing the breaker. Consider adding a health check endpoint.",
+                    target
+                );
                 // Clear the circuit breaker if it exists.
                 let mut cbs = lock_mutex(&self.circuit_breakers);
                 if let Some(cb) = cbs.get_mut(target) {
@@ -684,6 +755,18 @@ impl HyperResilienceEngine {
                 }
             }
             SelfHealingAction::PromoteReplica => {
+                tracing::info!(
+                    target: "resilience",
+                    action = "PromoteReplica",
+                    target = %target,
+                    healthy = %healthy,
+                    "[HEALING] WOULD: promote a replica for failover group '{}' — in production this would reconfigure the load balancer and update DNS/endpoint routing",
+                    target
+                );
+                tracing::info!(
+                    target: "resilience",
+                    "[SUGGESTION] Actionable: ensure replica nodes are pre-warmed and ready to accept traffic. Verify health of the promoted replica before rerouting.",
+                );
                 // Simulate promoting a replica by triggering a failover.
                 let mut fgs = lock_mutex(&self.failover_groups);
                 if let Some(group) = fgs.get_mut(target) {
@@ -713,7 +796,15 @@ impl HyperResilienceEngine {
             SelfHealingAction::RestartNode => {
                 tracing::info!(
                     target: "resilience",
-                    "[HEALING] Restarting node '{}' — resetting circuit breaker and health score",
+                    action = "RestartNode",
+                    target = %target,
+                    healthy = %healthy,
+                    "[HEALING] WOULD: restart node '{}' — in production this would send a SIGTERM, wait for graceful shutdown, then restart the process via the process manager (systemd/k8s)",
+                    target
+                );
+                tracing::info!(
+                    target: "resilience",
+                    "[SUGGESTION] Actionable: implement a /healthz endpoint on '{}' and use a process supervisor that auto-restarts on failure. Configure crash loop backoff.",
                     target
                 );
                 // Reset circuit breaker state for the node's service
@@ -744,7 +835,15 @@ impl HyperResilienceEngine {
             SelfHealingAction::ScaleResources => {
                 tracing::info!(
                     target: "resilience",
-                    "[HEALING] Scaling resources for '{}' — increasing capacity by 20%",
+                    action = "ScaleResources",
+                    target = %target,
+                    healthy = %healthy,
+                    "[HEALING] WOULD: scale resources for '{}' — in production this would increase CPU/memory limits, scale up replica count, or adjust autoscaling thresholds",
+                    target
+                );
+                tracing::info!(
+                    target: "resilience",
+                    "[SUGGESTION] Actionable: configure horizontal pod autoscaling on '{}' with target CPU utilization at 70% and memory at 80%. Set min/max replicas.",
                     target
                 );
                 {
@@ -764,7 +863,15 @@ impl HyperResilienceEngine {
             SelfHealingAction::ReinitializeComponent => {
                 tracing::info!(
                     target: "resilience",
-                    "[HEALING] Reinitializing component '{}' — resetting circuit breaker to known-good state",
+                    action = "ReinitializeComponent",
+                    target = %target,
+                    healthy = %healthy,
+                    "[HEALING] WOULD: reinitialize component '{}' — in production this would reload configuration, clear internal caches, and re-establish connections to dependencies",
+                    target
+                );
+                tracing::info!(
+                    target: "resilience",
+                    "[SUGGESTION] Actionable: implement a /reload endpoint on '{}' that refreshes config without full restart. Use graceful connection draining during reinit.",
                     target
                 );
                 {

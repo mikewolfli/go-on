@@ -184,6 +184,15 @@ impl HarnessBus {
             });
             p.total_evaluations = p.total_evaluations.saturating_add(1);
             p.last_evaluation_ms = elapsed;
+            // Record rationalization blocks by draining the flag set in the evaluator.
+            if self.evaluator.drain_rationalization_blocked() {
+                p.record_rationalization_block();
+            }
+            // Record review overrides when the review gate resolves to Approve
+            // despite requiring manual review.
+            if self.evaluator.drain_review_override() {
+                p.record_review_override();
+            }
             match &verdict {
                 PolicyVerdict::Allow => p.allow_count = p.allow_count.saturating_add(1),
                 PolicyVerdict::Deny(v) => {
@@ -191,6 +200,7 @@ impl HarnessBus {
                     match v.kind.as_str() {
                         "red_line" => {
                             p.red_line_blocks = p.red_line_blocks.saturating_add(1);
+                            p.record_hardening_event();
                             let engine =
                                 self.evaluator
                                     .rule_engine
@@ -209,16 +219,24 @@ impl HarnessBus {
                         }
                         "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
                         "rbac" | "permission" => {
-                            p.rbac_denials = p.rbac_denials.saturating_add(1);
+                            p.record_rbac_denial();
                         }
                         "security_policy" => {
-                            p.security_blocks = p.security_blocks.saturating_add(1);
+                            p.record_security_block();
                         }
                         _ => p.other_denials = p.other_denials.saturating_add(1),
                     }
                 }
-                PolicyVerdict::Escalate(_) => p.escalate_count = p.escalate_count.saturating_add(1),
-                PolicyVerdict::Review(_) => p.review_count = p.review_count.saturating_add(1),
+                PolicyVerdict::Escalate(_) => {
+                    p.escalate_count = p.escalate_count.saturating_add(1);
+                    p.record_hardening_event();
+                }
+                PolicyVerdict::Review(_) => {
+                    p.review_count = p.review_count.saturating_add(1);
+                    // The review gate is the primary approval workflow in the
+                    // current pipeline — record as an approval request.
+                    p.record_approval_request();
+                }
                 PolicyVerdict::AllowWithConstraints(_) => {
                     p.allow_count = p.allow_count.saturating_add(1)
                 }
@@ -272,6 +290,11 @@ impl HarnessBus {
                         new_level = level,
                         "PUA de-escalated after 3 consecutive clean evaluations"
                     );
+                    // The PUA rule engine learning from evaluation patterns
+                    // constitutes a learning update.
+                    if let Ok(mut p) = self.profile.lock() {
+                        p.record_learning_update();
+                    }
                 }
             }
             _ => {
@@ -425,20 +448,67 @@ impl HarnessBus {
         p.audit_entries_total = p.audit_entries_total.saturating_add(1);
     }
 
-    /// Build a per-agent execution policy from the three base policies.
-    pub fn get_agent_policy(&self, _agent: &str, _task_type: &str) -> AgentExecutionPolicy {
+    /// Build a per-agent execution policy from the three base policies,
+    /// adjusted by agent role hints and task type.
+    pub fn get_agent_policy(&self, agent: &str, task_type: &str) -> AgentExecutionPolicy {
+        let agent_lower = agent.to_ascii_lowercase();
+        let task_lower = task_type.to_ascii_lowercase();
+
+        // Derive agent role tier from naming conventions
+        let is_admin = agent_lower.contains("admin") || agent_lower.contains("planner");
+        let is_reviewer = agent_lower.contains("review") || agent_lower.contains("audit");
+        let is_tester = agent_lower.contains("test");
+
+        // Derive task criticality from task type
+        let is_security = task_lower.contains("security") || task_lower.contains("patch");
+        let is_feature = task_lower.contains("feature") || task_lower.contains("implementation");
+
+        let sandbox_idx = self.evaluator.governance.sandbox_level.level_index() as usize;
+
+        // Admin/planner agents get slightly longer timeouts
+        let timeout = if is_admin {
+            self.evaluator.dispatch.timeout_policy.max_timeout
+        } else if is_security {
+            // Security tasks get the default timeout
+            self.evaluator.dispatch.timeout_policy.default_timeout
+        } else {
+            self.evaluator.dispatch.timeout_policy.default_timeout
+        };
+
+        // Security tasks, high sandbox idx, and reviewer agents all
+        // need higher review level — merge conditions to avoid
+        // clippy::if_same_then_else (both branches produce Manual).
+        let review_level = if is_security || sandbox_idx >= 2 || is_reviewer {
+            ReviewLevel::Manual
+        } else {
+            ReviewLevel::Auto
+        };
+
+        // Reviewers and testers can write files; shell access only for admin-level agents
+        let allow_file_write = sandbox_idx <= 1 || is_reviewer || is_tester;
+        let allow_shell = sandbox_idx == 0 || is_admin;
+
+        // Feature work may need more tool calls; security tasks use fewer
+        let max_tool_calls = if is_feature {
+            (self.evaluator.execution.budget.max_tool_calls as u32)
+                .saturating_mul(2)
+                .min(512)
+        } else if is_security {
+            (self.evaluator.execution.budget.max_tool_calls as u32)
+                .saturating_div(2)
+                .max(8)
+        } else {
+            self.evaluator.execution.budget.max_tool_calls as u32
+        };
+
         AgentExecutionPolicy {
-            timeout: self.evaluator.dispatch.timeout_policy.default_timeout,
-            max_tool_calls: self.evaluator.execution.budget.max_tool_calls as u32,
-            allow_file_write: self.evaluator.governance.sandbox_level.level_index() as usize <= 1,
-            allow_shell: self.evaluator.governance.sandbox_level.level_index() as usize == 0,
+            timeout,
+            max_tool_calls,
+            allow_file_write,
+            allow_shell,
             allow_network: true,
-            review_level: if self.evaluator.governance.sandbox_level.level_index() as usize >= 2 {
-                ReviewLevel::Manual
-            } else {
-                ReviewLevel::Auto
-            },
-            audit_level: if self.evaluator.governance.sandbox_level.level_index() as usize >= 2 {
+            review_level,
+            audit_level: if is_security || sandbox_idx >= 2 {
                 AuditLevel::Verbose
             } else {
                 AuditLevel::Standard
@@ -594,51 +664,86 @@ impl HarnessBus {
     }
 
     /// Evaluate and decide the work grade for a task context.
+    ///
+    /// When real `TaskCharacteristics` are available, pass them via
+    /// `task_characteristics` to get an accurate risk assessment. When `None`
+    /// (no real task context), a meaningful default grade is returned based
+    /// on the requested grade alone — without fabricating synthetic data.
     pub fn decide_work_grade_for_task(
         &self,
         requested_grade: &str,
         task_complexity: f64,
+        task_characteristics: Option<crate::orchestration::task_router::TaskCharacteristics>,
     ) -> serde_json::Value {
-        use crate::acp::helpers::policy::decide_work_grade;
+        use crate::acp::helpers::policy::{decide_work_grade, work_grade_action, WorkGrade};
 
-        let plan = crate::reinforcement::TaskPlanArtifact {
-            generated_at: 0,
-            task: String::new(),
-            characteristics: crate::orchestration::task_router::TaskCharacteristics {
-                description: String::new(),
-                task_type: crate::orchestration::task_router::TaskType::Unknown,
-                complexity: task_complexity.min(5.0) as u8,
-                required_capabilities: vec![],
-                involves_multiple_modules: false,
-                is_time_critical: false,
-                needs_verification: false,
-                has_safety_concerns: false,
-            },
-            routing: crate::orchestration::task_router::RoutingDecision {
-                roles: vec![],
-                requirements: vec![],
-                predicted_success_rate: 0.95,
-                estimated_duration_seconds: 0,
-                can_parallelize: vec![],
-                risk_factors: vec![],
-                recommended_safeguards: vec![],
-                pua_enforcement: crate::governance::pua::PuaEnforcementPlan::default(),
-            },
-            decomposition: None,
-            planned_subtasks: vec![],
-            sub_agent_recommended: false,
-            activation_reasons: vec![],
-            action_checks_required: vec![],
+        let requested = WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent);
+
+        let (decided, reasons, risk_score) = if let Some(chars) = task_characteristics {
+            // Real task context is available — build the plan from actual data
+            let plan = crate::reinforcement::TaskPlanArtifact {
+                generated_at: 0,
+                task: String::new(),
+                characteristics: chars,
+                routing: crate::orchestration::task_router::RoutingDecision {
+                    roles: vec![],
+                    requirements: vec![],
+                    predicted_success_rate: 0.95,
+                    estimated_duration_seconds: 0,
+                    can_parallelize: vec![],
+                    risk_factors: vec![],
+                    recommended_safeguards: vec![],
+                    pua_enforcement: crate::governance::pua::PuaEnforcementPlan::default(),
+                },
+                decomposition: None,
+                planned_subtasks: vec![],
+                sub_agent_recommended: false,
+                activation_reasons: vec![],
+                action_checks_required: vec![],
+            };
+            let d = decide_work_grade(Some(requested_grade), &plan, true, false, false);
+            (d.decided, d.reasons, d.risk_score)
+        } else {
+            // No real task context — compute a meaningful default grade
+            // based on the requested grade and complexity alone, without
+            // fabricating a synthetic TaskPlanArtifact.
+            let complexity = task_complexity.clamp(1.0, 5.0) as u8;
+            let risk_score = (complexity as f64 / 5.0) * 0.4;
+
+            let mut decided = requested;
+            let mut reasons = Vec::new();
+
+            if risk_score >= 0.75 {
+                decided = WorkGrade::Safeguard;
+                reasons
+                    .push("insufficient context, complexity alone warrants safeguard".to_string());
+            } else if complexity >= 3 {
+                decided = WorkGrade::Agent;
+                reasons.push(
+                    "multi-step complexity (no task context), promote to agent execution"
+                        .to_string(),
+                );
+            } else if complexity <= 1 {
+                decided = WorkGrade::Edit;
+                reasons
+                    .push("low complexity (no task context), use edit for efficiency".to_string());
+            } else {
+                reasons.push(
+                    "moderate complexity (no task context), retaining requested grade".to_string(),
+                );
+            }
+
+            (decided, reasons, risk_score)
         };
 
-        let decision = decide_work_grade(Some(requested_grade), &plan, true, false, false);
+        let decision_action = work_grade_action(requested, decided);
 
         serde_json::json!({
-            "requested": decision.requested.as_str(),
-            "decided": decision.decided.as_str(),
-            "decision_action": decision.decision_action,
-            "reasons": decision.reasons,
-            "risk_score": decision.risk_score,
+            "requested": requested.as_str(),
+            "decided": decided.as_str(),
+            "decision_action": decision_action,
+            "reasons": reasons,
+            "risk_score": risk_score,
         })
     }
 
@@ -663,6 +768,7 @@ impl HarnessBus {
     pub fn start_drift_monitor(&self, interval_secs: u64) {
         let interval = std::time::Duration::from_secs(interval_secs);
         let engine = self.drift_engine.clone();
+        let profile = self.profile.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -684,6 +790,9 @@ impl HarnessBus {
                             alert.message,
                             severity,
                         );
+                        if let Ok(mut p) = profile.lock() {
+                            p.record_drift_detection();
+                        }
                     }
                 }
             }

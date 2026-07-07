@@ -28,7 +28,9 @@ fn config_file_exists() {
 fn config_parses_successfully() {
     let cfg = go_on::config::AppConfig::load(test_config_path())
         .expect("default config/config.toml must parse without errors");
-    assert_eq!(cfg.schema_version, "1.0.0");
+    let current = go_on::config::schema_version::SchemaVersion::CURRENT;
+    let expected = format!("{}.{}.{}", current.major, current.minor, current.patch);
+    assert_eq!(cfg.schema_version, expected);
 }
 
 #[test]

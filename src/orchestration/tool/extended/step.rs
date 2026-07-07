@@ -35,19 +35,16 @@ struct StepHeader {
 /// A simple representation of a STEP entity.
 #[cfg(feature = "cad-step")]
 struct StepEntity {
-    #[allow(dead_code, reason = "F-GAP reserved for future STEP parsing")]
+    /// Entity ID (used in test assertions)
+    #[allow(dead_code)]
     id: i64,
     type_name: String,
-    #[allow(dead_code, reason = "F-GAP reserved for future STEP parsing")]
-    raw: String,
 }
 
 /// Parsed STEP file summary.
 #[cfg(feature = "cad-step")]
 struct StepSummary {
     header: StepHeader,
-    #[allow(dead_code, reason = "F-GAP reserved: entity detail expansion")]
-    entities: Vec<StepEntity>,
     entity_type_counts: BTreeMap<String, usize>,
     entity_count: usize,
     byte_size: usize,
@@ -296,11 +293,7 @@ fn parse_entity_line(line: &str) -> Option<StepEntity> {
     let paren_pos = rest.find('(')?;
     let type_name = rest[..paren_pos].trim().to_string();
 
-    Some(StepEntity {
-        id,
-        type_name,
-        raw: line.to_string(),
-    })
+    Some(StepEntity { id, type_name })
 }
 
 /// Parse the full STEP file content.
@@ -312,7 +305,7 @@ fn parse_step(content: &str) -> StepSummary {
     let mut in_header = false;
     let mut in_data = false;
     let mut header_lines: Vec<&str> = Vec::new();
-    let mut entities: Vec<StepEntity> = Vec::new();
+    let mut entity_count = 0usize;
     let mut entity_type_counts: BTreeMap<String, usize> = BTreeMap::new();
 
     for line in &lines {
@@ -340,11 +333,8 @@ fn parse_step(content: &str) -> StepSummary {
             header_lines.push(line);
         } else if in_data {
             if let Some(entity) = parse_entity_line(line) {
-                let count = entity_type_counts
-                    .entry(entity.type_name.clone())
-                    .or_insert(0);
-                *count += 1;
-                entities.push(entity);
+                *entity_type_counts.entry(entity.type_name).or_insert(0) += 1;
+                entity_count += 1;
             }
         }
     }
@@ -368,8 +358,7 @@ fn parse_step(content: &str) -> StepSummary {
 
     StepSummary {
         header,
-        entity_count: entities.len(),
-        entities,
+        entity_count,
         entity_type_counts,
         byte_size,
     }

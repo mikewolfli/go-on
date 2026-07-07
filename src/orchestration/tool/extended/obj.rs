@@ -29,35 +29,6 @@ fn parse_triple(tokens: &[&str], start: usize) -> Option<(f64, f64, f64)> {
     Some((x, y, z))
 }
 
-/// Parse a single OBJ texture coordinate pair from tokens.
-#[cfg(feature = "cad-obj")]
-#[allow(dead_code, reason = "F-GAP reserved for future OBJ parsing")]
-fn parse_pair(tokens: &[&str], start: usize) -> Option<(f64, f64)> {
-    let u = tokens.get(start)?.parse::<f64>().ok()?;
-    let v = tokens.get(start + 1)?.parse::<f64>().ok()?;
-    Some((u, v))
-}
-
-/// Parse a face element string like "1", "1/2", "1/2/3", or "1//3"
-/// into vertex/texture/normal indices (1-based). Returns `None` on parse failure.
-#[cfg(feature = "cad-obj")]
-#[allow(dead_code, reason = "F-GAP reserved for future OBJ parsing")]
-fn parse_face_element(s: &str) -> Option<(i64, Option<i64>, Option<i64>)> {
-    let parts: Vec<&str> = s.split('/').collect();
-    let v = parts[0].parse::<i64>().ok()?;
-    let vt = if parts.len() > 1 && !parts[1].is_empty() {
-        Some(parts[1].parse::<i64>().ok()?)
-    } else {
-        None
-    };
-    let vn = if parts.len() > 2 && !parts[2].is_empty() {
-        Some(parts[2].parse::<i64>().ok()?)
-    } else {
-        None
-    };
-    Some((v, vt, vn))
-}
-
 /// Axis-aligned bounding box: (min, max) as ((x, y, z), (x, y, z)).
 #[cfg(feature = "cad-obj")]
 type BoundingBox = ((f64, f64, f64), (f64, f64, f64));

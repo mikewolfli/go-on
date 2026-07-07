@@ -17,31 +17,6 @@ pub enum ProtocolModeError {
 }
 
 impl ProtocolMode {
-    /// Priority order for negotiation (higher = more preferred).
-    /// Not yet wired into production path.
-    #[allow(dead_code)]
-    pub fn priority(self) -> u32 {
-        match self {
-            ProtocolMode::Adaptive => 5,
-            ProtocolMode::AcpHttp => 4,
-            ProtocolMode::AcpStdio => 3,
-            ProtocolMode::McpHttp => 2,
-            ProtocolMode::McpStdio => 1,
-        }
-    }
-
-    /// Fallback chain: if current protocol fails, what to try next.
-    /// Not yet wired into production path.
-    #[allow(dead_code)]
-    pub fn fallback(self) -> Option<ProtocolMode> {
-        match self {
-            ProtocolMode::AcpHttp => Some(ProtocolMode::AcpStdio),
-            ProtocolMode::AcpStdio => Some(ProtocolMode::McpHttp),
-            ProtocolMode::McpHttp => Some(ProtocolMode::McpStdio),
-            ProtocolMode::McpStdio | ProtocolMode::Adaptive => None,
-        }
-    }
-
     pub const CANONICAL_MODES: [&'static str; 5] =
         ["adaptive", "acp_stdio", "acp_http", "mcp_stdio", "mcp_http"];
 

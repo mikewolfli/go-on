@@ -106,8 +106,8 @@ Return ONLY valid JSON, no markdown formatting.
                 }),
             };
 
-            match agent.run_task(envelope) {
-                Ok(result) => {
+            match tokio::task::spawn_blocking(move || agent.run_task(envelope)).await {
+                Ok(Ok(result)) => {
                     if let Some(ref output) = result.output {
                         // Try to parse the LLM output as a TaskDecomposition
                         if let Ok(decomp) =
@@ -162,10 +162,16 @@ Return ONLY valid JSON, no markdown formatting.
                         "LLM decomposition failed to produce valid output, falling back to rule-based"
                     );
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(
                         "LLM agent returned error: {}, falling back to rule-based decomposition",
                         e
+                    );
+                }
+                Err(join_err) => {
+                    tracing::warn!(
+                        "LLM agent task panicked or was cancelled: {}, falling back to rule-based decomposition",
+                        join_err
                     );
                 }
             }

@@ -602,6 +602,17 @@ impl AcpServer {
         metrics.review_gate_invalid_response_total =
             runtime_snapshot.review_gate_invalid_response_total;
 
+        // Compute cache hit rate from actual vector and summary cache stats
+        let total_cache_searches =
+            runtime_snapshot.vector_search_total + runtime_snapshot.summary_read_total;
+        let total_cache_hits =
+            runtime_snapshot.vector_hit_total + runtime_snapshot.summary_hit_total;
+        metrics.cache_hit_rate = if total_cache_searches > 0 {
+            total_cache_hits as f64 / total_cache_searches as f64
+        } else {
+            0.0
+        };
+
         let lifecycle = self
             .resilience
             .lifecycle_state
@@ -614,10 +625,9 @@ impl AcpServer {
                 poisoned.into_inner().snapshot()
             });
 
-        let circuit_breakers = with_acp_lock(
-            self.resilience.circuit_breakers.as_ref(),
-            |guard| guard.snapshots(),
-        );
+        let circuit_breakers = with_acp_lock(self.resilience.circuit_breakers.as_ref(), |guard| {
+            guard.snapshots()
+        });
 
         let maintenance = self
             .resilience

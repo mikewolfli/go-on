@@ -32,6 +32,7 @@ use crate::i18n::runtime::tf;
 
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -64,6 +65,15 @@ pub struct PolicyEvaluator {
     /// Thread-safe, runtime-registerable policies keyed by name.
     /// Evaluated after the built-in checks; the first matching policy short-circuits.
     pub policies: Arc<RwLock<HashMap<String, PolicyFn>>>,
+
+    /// Set to true when the most recent `evaluate()` call was blocked by
+    /// the self-rationalization guard. Consumed by `HarnessBus::evaluate()`
+    /// to record a rationalization block counter on the governance profile.
+    pub(crate) rationalization_block_occurred: AtomicBool,
+    /// Set to true when the most recent `evaluate()` call resolved a review
+    /// gate outcome that bypasses manual review (i.e., the response indicates
+    /// override of the default review requirement).
+    pub(crate) review_override_occurred: AtomicBool,
 }
 
 impl PolicyEvaluator {
@@ -105,6 +115,8 @@ impl PolicyEvaluator {
                 default_policies,
                 ..Default::default()
             })),
+            rationalization_block_occurred: AtomicBool::new(false),
+            review_override_occurred: AtomicBool::new(false),
         }
     }
 
@@ -308,6 +320,11 @@ impl PolicyEvaluator {
             tf("status.harness_bus.review_approved", &[])
         };
         let verdict = Self::resolve_review_policy(&review_response, 8);
+        // Detect review override: manual review was required but the gate
+        // resolved to Approve (e.g., via a customized review_verdict impl).
+        if requires_review && verdict.is_approved() {
+            self.review_override_occurred.store(true, Ordering::Release);
+        }
         let outcome = match verdict {
             ReviewVerdict::Approve => ReviewGateOutcome::Approved(vec![
                 crate::governance::review_controls::ReviewDecision {
@@ -359,6 +376,8 @@ impl PolicyEvaluator {
         });
         let mut annotation = RationalizationAnnotation::default();
         if guard.evaluate(&mut annotation, ctx.risk_score as f32, false) {
+            self.rationalization_block_occurred
+                .store(true, Ordering::Release);
             return PolicyVerdict::Review(ReviewReason {
                 reason: tf("error.harness_bus.low_confidence", &[]),
             });
@@ -642,20 +661,63 @@ impl PolicyEvaluator {
     }
 
     /// Post-execution output verification.
-    pub fn verify_output(&self, _output: &Value) -> OutputVerdict {
+    /// Validates that `output` is a well-formed JSON value, checks for expected
+    /// structural fields, and logs the verification outcome.
+    pub fn verify_output(&self, output: &Value) -> OutputVerdict {
         let stage = "default";
         let completed: Vec<String> = Vec::new();
+
+        // --- Validate the output value itself ---
+        let output_shape = match output {
+            Value::Null => {
+                tracing::warn!("[harness_bus] verify_output: output is null");
+                "null"
+            }
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(s) => {
+                if s.is_empty() {
+                    tracing::warn!("[harness_bus] verify_output: output is an empty string");
+                    "string_empty"
+                } else {
+                    "string"
+                }
+            }
+            Value::Array(arr) => {
+                if arr.is_empty() {
+                    tracing::warn!("[harness_bus] verify_output: output is an empty array");
+                    "array_empty"
+                } else {
+                    "array"
+                }
+            }
+            Value::Object(obj) => {
+                let keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+                tracing::debug!(
+                    "[harness_bus] verify_output: output object with keys: {:?}",
+                    keys
+                );
+                "object"
+            }
+        };
+
+        tracing::debug!("[harness_bus] verify_output: output shape={}", output_shape);
 
         let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
             poisoned.into_inner()
         });
         let mut evidence = engine.collect_evidence(stage);
+        // Record output validation in evidence
+        evidence.push(format!("output_shape:{}", output_shape));
         let missing = engine.collect_missing(stage, &completed);
         drop(engine);
 
-        let quality = missing.is_empty();
-        let risk_score = if missing.is_empty() { 0.0 } else { 0.5 };
+        let quality = missing.is_empty()
+            && output_shape != "null"
+            && output_shape != "string_empty"
+            && output_shape != "array_empty";
+        let risk_score = if quality { 0.0 } else { 0.5 };
 
         // P1-11: Call SelfRationalizationGuard to evaluate confidence
         let mut risk_score = risk_score; // make mutable for possible adjustment
@@ -694,14 +756,14 @@ impl PolicyEvaluator {
                     reasons: vec![if quality {
                         "output verification passed".to_string()
                     } else {
-                        "output verification found missing evidence".to_string()
+                        format!("output verification failed: output_shape={}", output_shape)
                     }],
                 },
                 "verify_output".to_string(),
                 "harness".to_string(),
                 format!(
-                    "quality={}, risk_score={}, evidence_count={}",
-                    quality, risk_score, evidence_count
+                    "quality={}, risk_score={}, evidence_count={}, output_shape={}",
+                    quality, risk_score, evidence_count, output_shape
                 ),
             );
             self.security_governor.record_audit(audit_entry);
@@ -863,6 +925,21 @@ impl PolicyEvaluator {
                 *guard = Some(enforcer);
             }
         }
+    }
+
+    /// Returns `true` if the most recent `evaluate()` call was blocked by
+    /// the self-rationalization guard, and resets the flag for the next call.
+    /// Used by `HarnessBus::evaluate()` to record `record_rationalization_block()`.
+    pub fn drain_rationalization_blocked(&self) -> bool {
+        self.rationalization_block_occurred
+            .swap(false, Ordering::AcqRel)
+    }
+
+    /// Returns `true` if the most recent `evaluate()` call detected a review
+    /// gate override (manual review was required but the gate resolved to
+    /// Approve), and resets the flag.
+    pub fn drain_review_override(&self) -> bool {
+        self.review_override_occurred.swap(false, Ordering::AcqRel)
     }
 
     /// Resolve a raw response string into a governance-level review verdict.

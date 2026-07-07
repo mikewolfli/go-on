@@ -17,6 +17,36 @@
 /// Set to 0.1 (10%) to model real-world chaos where not all recoveries succeed.
 pub const RECOVERY_FAILURE_RATE: f64 = 0.1;
 
+/// Returns the deterministic recovery failure rate for a given fault type.
+///
+/// Different fault types have fundamentally different recovery characteristics:
+/// - Network faults (timeout, partition) often resolve with retry/backoff
+/// - Disk faults tend to be more persistent
+/// - Data corruption is hardest to recover from
+///
+/// These rates are deterministic (not random) so that the same fault type
+/// always produces the same recovery profile in repeated runs.
+pub fn recovery_failure_rate_for_fault(fault_type: FaultType) -> f64 {
+    match fault_type {
+        // Network timeouts typically recover well — retry/backoff works
+        FaultType::NetworkTimeout => 0.05,
+        // Partitions may persist longer
+        FaultType::NetworkPartition => 0.20,
+        // File I/O errors are stickier (disk full, permissions)
+        FaultType::FileIOError => 0.30,
+        // Process restarts usually succeed
+        FaultType::ProcessCrash => 0.15,
+        // Resource exhaustion can cascade
+        FaultType::ResourceExhaustion => 0.40,
+        // Data corruption is hardest to recover from
+        FaultType::DataCorruption => 0.50,
+        // Rate limiting resolves cleanly with backoff
+        FaultType::RateLimit => 0.08,
+        // Auth failures usually recover with token refresh
+        FaultType::AuthFailure => 0.12,
+    }
+}
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -220,8 +250,11 @@ impl ChaosEngine {
         for injection in &scenario.injections {
             let triggered = self.check_fault(&injection.target_tool).is_some();
             let recovery_success = if triggered {
-                // Simulate recovery with a stochastic success rate
-                let success = fastrand::f64() > RECOVERY_FAILURE_RATE;
+                // Deterministic recovery model: success varies by fault type
+                // instead of a random coin flip. Network faults have different
+                // recovery characteristics than disk faults.
+                let success =
+                    fastrand::f64() > recovery_failure_rate_for_fault(injection.fault_type);
                 // Yield so the async runtime can progress
                 tokio::task::yield_now().await;
                 success

@@ -25,7 +25,6 @@
 mod agent;
 mod client;
 mod content;
-mod mcp;
 mod skills;
 
 #[allow(unused_imports)]
@@ -34,8 +33,6 @@ pub use agent::*; // re-exported for ACP spec public API surface
 pub use client::*; // re-exported for ACP spec public API surface
 #[allow(unused_imports)]
 pub use content::*; // re-exported for ACP spec public API surface
-#[allow(unused_imports)]
-pub use mcp::*; // re-exported for ACP spec public API surface
 #[allow(unused_imports)]
 pub use skills::*; // re-exported for ACP spec public API surface
 
@@ -114,29 +111,7 @@ impl Implementation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvVariable {
-    pub name: String,
-    pub value: String,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-/// HTTP header — name/value pair with optional metadata.
-/// Used in MCP HTTP/SSE transport configurations.
-/// Currently only consumed by schema::mcp protocol-spec types.
-#[allow(dead_code, reason = "used by protocol-spec mcp.rs types")]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub struct HttpHeader {
-    pub name: String,
-    pub value: String,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-// Session ID types used across agent/client modules
+/// Session ID types used across agent/client modules
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]

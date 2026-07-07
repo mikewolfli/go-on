@@ -1082,18 +1082,22 @@ pub struct WarmStore {
 
 #[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
 impl WarmStore {
-    fn new(_path: &Path, max_entries: usize) -> Result<Self> {
-        Ok(Self { max_entries })
+    fn new(_path: &Path, _max_entries: usize) -> Result<Self> {
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 
     fn upsert(&self, _entry: &MemoryEntry) -> Result<()> {
-        tracing::warn!("WarmStore: operation not available - no storage backend configured");
-        Ok(())
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 
     fn get(&self, _id: &str) -> Result<Option<MemoryEntry>> {
-        tracing::warn!("WarmStore: operation not available - no storage backend configured");
-        Ok(None)
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 
     pub fn search_by_usefulness(
@@ -1101,28 +1105,33 @@ impl WarmStore {
         _min_usefulness: f32,
         _limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
-        tracing::warn!("WarmStore: operation not available - no storage backend configured");
-        Ok(Vec::new())
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 
     fn remove(&self, _id: &str) -> Result<bool> {
-        tracing::warn!("WarmStore: operation not available - no storage backend configured");
-        Ok(false)
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 
     fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
-        tracing::warn!("WarmStore: operation not available - no storage backend configured");
-        Ok(Vec::new())
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 
     fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
-        tracing::warn!("WarmStore: operation not available - no storage backend configured");
-        Ok(Vec::new())
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 
     fn count(&self) -> Result<usize> {
-        tracing::warn!("WarmStore: operation not available - no storage backend configured");
-        Ok(0)
+        Err(anyhow::anyhow!(
+            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
+        ))
     }
 }
 

@@ -542,6 +542,8 @@ pub fn spawn_timeout_loop(
     approval_engine: Option<
         std::sync::Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
     >,
+    pending_count: Option<usize>,
+    timeout_secs: Option<u64>,
 ) {
     tokio::spawn(async move {
         let mut cycle: u64 = 0;
@@ -558,7 +560,10 @@ pub fn spawn_timeout_loop(
                     cycle = cycle.wrapping_add(1);
 
                     // 1. Run the runtime_controls timeout check
-                    run_timeout_check(cycle, None, None);
+                    //    Use provided values, or default to tracking 1 pending op with a 300s timeout
+                    let pc = pending_count.or(Some(1));
+                    let ts = timeout_secs.or(Some(300));
+                    run_timeout_check(cycle, pc, ts);
 
                     // 2. Process approval engine timeouts if available
                     if let Some(ref engine) = approval_engine {

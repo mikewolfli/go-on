@@ -6,6 +6,7 @@ use crate::i18n::runtime::tf;
 use crate::setup::{parse_setup_level, parse_setup_profile, SetupOptions};
 use anyhow::{Context, Result};
 use std::path::Path;
+use tokio::io::AsyncBufReadExt;
 use tracing::info;
 
 /// Configuration for the onboarding flow.
@@ -152,7 +153,9 @@ pub async fn run_onboarding(config: &OnboardingConfig, config_path: &Path) -> Re
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
     let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
+    tokio::io::BufReader::new(tokio::io::stdin())
+        .read_line(&mut input)
+        .await?;
     let selection = input.trim();
     let selection = if selection.is_empty() { "1" } else { selection };
 

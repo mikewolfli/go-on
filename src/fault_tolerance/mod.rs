@@ -282,6 +282,176 @@ fn persist_json(path: &std::path::Path, snapshot: &FaultToleranceSnapshot) {
     }
 }
 
+/// Parse an enum variant from its Debug string representation (e.g. "Crash" -> FaultType::Crash).
+/// The persist functions store enums via `format!("{:?}", value)` which produces unquoted variant names.
+#[cfg(feature = "backend-sqlite")]
+fn parse_enum_from_debug<T>(s: &str) -> Result<T, serde_json::Error>
+where
+    T: serde::de::DeserializeOwned,
+{
+    // Wrap in JSON quotes so serde can parse it as a JSON string
+    serde_json::from_str(&format!("\"{}\"", s))
+}
+
+/// Load snapshot from SQLite. Runs inside `spawn_blocking` — never call from
+/// async context directly.
+#[cfg(feature = "backend-sqlite")]
+fn load_sqlite(path: &std::path::Path) -> Option<FaultToleranceSnapshot> {
+    let conn = rusqlite::Connection::open(path).ok()?;
+
+    // Load faults
+    let mut faults = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered FROM faults"
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let node_id: String = row.get(1)?;
+            let fault_type_str: String = row.get(2)?;
+            let severity: i64 = row.get(3)?;
+            let description: String = row.get(4)?;
+            let detected_ms: i64 = row.get(5)?;
+            let resolved_ms: Option<i64> = row.get(6)?;
+            let recovered: i64 = row.get(7)?;
+            Ok((id, node_id, fault_type_str, severity, description, detected_ms, resolved_ms, recovered))
+        }) {
+            for row in rows.flatten() {
+                let fault_type: FaultType = parse_enum_from_debug(&row.2).unwrap_or(FaultType::Crash);
+                let fault = FaultEvent {
+                    id: row.0,
+                    node_id: row.1,
+                    fault_type,
+                    severity: row.3 as u8,
+                    description: row.4,
+                    detected_ms: row.5 as u64,
+                    resolved_ms: row.6.map(|v| v as u64),
+                    recovered: row.7 != 0,
+                };
+                faults.insert(fault.id.clone(), fault);
+            }
+        }
+    }
+
+    // Load recovery plans
+    let mut recovery_plans = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT plan_id, node_id, actions, state, created_ms, completed_ms, result FROM recovery_plans"
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let plan_id: String = row.get(0)?;
+            let node_id: String = row.get(1)?;
+            let actions_json: String = row.get(2)?;
+            let state_str: String = row.get(3)?;
+            let created_ms: i64 = row.get(4)?;
+            let completed_ms: Option<i64> = row.get(5)?;
+            let result: Option<String> = row.get(6)?;
+            Ok((plan_id, node_id, actions_json, state_str, created_ms, completed_ms, result))
+        }) {
+            for row in rows.flatten() {
+                let actions: Vec<RecoveryAction> =
+                    serde_json::from_str(&row.2).unwrap_or_default();
+                let state: RecoveryState =
+                    parse_enum_from_debug(&row.3).unwrap_or(RecoveryState::Pending);
+                let plan = RecoveryPlan {
+                    plan_id: row.0,
+                    node_id: row.1,
+                    actions,
+                    state,
+                    created_ms: row.4 as u64,
+                    completed_ms: row.5.map(|v| v as u64),
+                    result: row.6,
+                };
+                recovery_plans.insert(plan.plan_id.clone(), plan);
+            }
+        }
+    }
+
+    // Load isolation groups
+    let mut isolation_groups = HashMap::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT group_id, nodes, isolation_level, created_ms FROM isolation_groups")
+    {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let group_id: String = row.get(0)?;
+            let nodes_json: String = row.get(1)?;
+            let isolation_level_str: String = row.get(2)?;
+            let created_ms: i64 = row.get(3)?;
+            Ok((group_id, nodes_json, isolation_level_str, created_ms))
+        }) {
+            for row in rows.flatten() {
+                let nodes: Vec<String> = serde_json::from_str(&row.1).unwrap_or_default();
+                let isolation_level: IsolationLevel =
+                    parse_enum_from_debug(&row.2).unwrap_or(IsolationLevel::Monitor);
+                let group = IsolationGroup {
+                    group_id: row.0,
+                    nodes,
+                    isolation_level,
+                    created_ms: row.3 as u64,
+                };
+                isolation_groups.insert(group.group_id.clone(), group);
+            }
+        }
+    }
+
+    // Load heartbeat records
+    let mut heartbeats = HashMap::new();
+    if let Ok(mut stmt) = conn
+        .prepare("SELECT node_id, last_heartbeat_ms, missed_beats, status FROM heartbeat_records")
+    {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let node_id: String = row.get(0)?;
+            let last_heartbeat_ms: i64 = row.get(1)?;
+            let missed_beats: i64 = row.get(2)?;
+            let status_str: String = row.get(3)?;
+            Ok((node_id, last_heartbeat_ms, missed_beats, status_str))
+        }) {
+            for row in rows.flatten() {
+                let status: NodeStatus =
+                    parse_enum_from_debug(&row.3).unwrap_or(NodeStatus::Online);
+                let hb = HeartbeatRecord {
+                    node_id: row.0,
+                    last_heartbeat_ms: row.1 as u64,
+                    missed_beats: row.2 as u32,
+                    status,
+                };
+                heartbeats.insert(hb.node_id.clone(), hb);
+            }
+        }
+    }
+
+    if faults.is_empty()
+        && recovery_plans.is_empty()
+        && isolation_groups.is_empty()
+        && heartbeats.is_empty()
+    {
+        return None;
+    }
+
+    Some(FaultToleranceSnapshot {
+        faults,
+        recovery_plans,
+        isolation_groups,
+        heartbeats,
+    })
+}
+
+/// Load snapshot from JSON file. Runs inside `spawn_blocking` — never call from
+/// async context directly.
+#[cfg(not(feature = "backend-sqlite"))]
+fn load_json(path: &std::path::Path) -> Option<FaultToleranceSnapshot> {
+    let data = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<FaultToleranceSnapshot>(&data) {
+        Ok(snapshot) => Some(snapshot),
+        Err(e) => {
+            tracing::warn!(
+                "FaultToleranceEngine: failed to deserialize state from JSON: {}",
+                e
+            );
+            None
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -357,6 +527,112 @@ impl FaultToleranceEngine {
         };
         Self {
             inner: Arc::new(RwLock::new(inner)),
+        }
+    }
+
+    /// Create a new engine and immediately restore persisted state from disk/DB.
+    /// Falls back to an empty engine if no persisted state exists.
+    pub async fn new_with_restore(config: FaultToleranceConfig) -> Self {
+        let engine = Self::new(config);
+        engine.restore_state().await;
+        engine
+    }
+
+    /// Load persisted state into the engine's in-memory maps.
+    ///
+    /// Uses the same storage path as `try_persist_state` so that state
+    /// survives process restarts. Counter fields (fault_counter,
+    /// group_counter, plan_counter) are derived from the loaded data.
+    pub async fn restore_state(&self) {
+        #[cfg(feature = "backend-sqlite")]
+        {
+            let cache_path = std::path::PathBuf::from("target")
+                .join("go-on")
+                .join("fault_tolerance.db");
+
+            if !cache_path.exists() {
+                tracing::info!(
+                    "FaultToleranceEngine: no existing state DB at {} — starting fresh",
+                    cache_path.display()
+                );
+                return;
+            }
+
+            let path = cache_path.clone();
+            match tokio::task::spawn_blocking(move || load_sqlite(&path)).await {
+                Ok(Some(snapshot)) => {
+                    let mut inner = self.inner.write().await;
+                    inner.faults = snapshot.faults;
+                    inner.recovery_plans = snapshot.recovery_plans;
+                    inner.isolation_groups = snapshot.isolation_groups;
+                    inner.heartbeats = snapshot.heartbeats;
+                    // Derive counters from loaded data
+                    inner.fault_counter = inner.faults.len() as u64;
+                    inner.group_counter = inner.isolation_groups.len() as u64;
+                    inner.plan_counter = inner.recovery_plans.len() as u64;
+                    tracing::info!(
+                        faults = inner.faults.len(),
+                        plans = inner.recovery_plans.len(),
+                        groups = inner.isolation_groups.len(),
+                        heartbeats = inner.heartbeats.len(),
+                        "FaultToleranceEngine: restored state from SQLite"
+                    );
+                }
+                Ok(None) => {
+                    tracing::info!("FaultToleranceEngine: no data in SQLite DB — starting fresh");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "FaultToleranceEngine: failed to load state from SQLite: {}",
+                        e
+                    );
+                }
+            }
+        }
+        #[cfg(not(feature = "backend-sqlite"))]
+        {
+            let cache_path = std::path::PathBuf::from("target")
+                .join("go-on")
+                .join("fault_tolerance.json");
+
+            if !cache_path.exists() {
+                tracing::info!(
+                    "FaultToleranceEngine: no existing state file at {} — starting fresh",
+                    cache_path.display()
+                );
+                return;
+            }
+
+            let path = cache_path.clone();
+            match tokio::task::spawn_blocking(move || load_json(&path)).await {
+                Ok(Some(snapshot)) => {
+                    let mut inner = self.inner.write().await;
+                    inner.faults = snapshot.faults;
+                    inner.recovery_plans = snapshot.recovery_plans;
+                    inner.isolation_groups = snapshot.isolation_groups;
+                    inner.heartbeats = snapshot.heartbeats;
+                    // Derive counters from loaded data
+                    inner.fault_counter = inner.faults.len() as u64;
+                    inner.group_counter = inner.isolation_groups.len() as u64;
+                    inner.plan_counter = inner.recovery_plans.len() as u64;
+                    tracing::info!(
+                        faults = inner.faults.len(),
+                        plans = inner.recovery_plans.len(),
+                        groups = inner.isolation_groups.len(),
+                        heartbeats = inner.heartbeats.len(),
+                        "FaultToleranceEngine: restored state from JSON"
+                    );
+                }
+                Ok(None) => {
+                    tracing::info!("FaultToleranceEngine: no data in JSON file — starting fresh");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "FaultToleranceEngine: failed to load state from JSON: {}",
+                        e
+                    );
+                }
+            }
         }
     }
 

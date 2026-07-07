@@ -388,21 +388,21 @@ fn run_benchmarks() -> BTreeMap<String, Vec<StreamBenchResult>> {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// This benchmark requires a live LLM server at `127.0.0.1:8090`.
+/// Run with `cargo test streaming_e2e_benchmark -- --ignored` after starting the server.
 #[test]
+#[ignore]
 fn streaming_e2e_benchmark() {
-    // Quick health check: try to reach the local server
+    // Quick health check: fail fast if the server is not reachable
     let server_available = TcpStream::connect_timeout(
         &"127.0.0.1:8090".parse().expect("valid socket addr"),
         std::time::Duration::from_secs(2),
     )
     .is_ok();
     if !server_available {
-        eprintln!("╔═══════════════════════════════════════════════════════════╗");
-        eprintln!("║   Streaming E2E Benchmark: SKIPPED                       ║");
-        eprintln!("║   No LLM server detected at 127.0.0.1:8090               ║");
-        eprintln!("║   Start the server and re-run to run the benchmark.      ║");
-        eprintln!("╚═══════════════════════════════════════════════════════════╝");
-        return;
+        panic!(
+            "LLM server not detected at 127.0.0.1:8090. Start the server and re-run with --ignored."
+        );
     }
     eprintln!("╔═══════════════════════════════════════════════════════════╗");
     eprintln!("║   GAP-B50-20: Streaming E2E Performance Benchmark       ║");

@@ -24,6 +24,13 @@ fn lang_color(lang: &str) -> &'static str {
 ///
 /// Returns a `String` with embedded ANSI escape codes suitable for
 /// writing to a terminal that supports basic ANSI (all modern terminals).
+///
+/// Production code now uses `StreamMarkdownRenderer` for incremental
+/// rendering. This function is kept as a convenience for tests.
+///
+/// Note: This is annotated for test-only usage because it is not called
+/// from production code paths, but is kept as a testing helper.
+#[allow(dead_code)]
 pub fn render_markdown(text: &str) -> String {
     // Pre-allocate ~10% more than input for ANSI escape overhead
     let mut out = String::with_capacity(text.len() + text.len() / 10 + 16);
@@ -440,6 +447,272 @@ fn terminal_width() -> usize {
 /// ANSI helper (same as the macro in chat.rs but as a function for use in this module).
 fn ansi(code: &str) -> String {
     format!("\u{001B}[{}m", code)
+}
+
+// ── Streaming Renderer ────────────────────────────────────────────────────
+
+/// Streaming markdown renderer that processes tokens incrementally.
+///
+/// Instead of rendering a complete string at once (like `render_markdown`),
+/// this state machine accepts tokens one at a time and outputs ANSI-formatted
+/// fragments as soon as complete lines are available.
+///
+/// # How it works
+///
+/// 1. Tokens are buffered until a `\n` boundary is reached
+/// 2. Complete lines are processed through the same line-based parser as `render_markdown`
+/// 3. Code blocks and tables are fully buffered before rendering (they need complete data)
+/// 4. Regular lines are rendered and flushed immediately
+/// 5. A raw copy of the response is maintained for tool call detection
+pub struct StreamMarkdownRenderer {
+    /// Buffer for accumulating partial lines between newlines
+    line_buf: String,
+    /// Raw response text (for tool call detection and follow-up)
+    raw_response: String,
+    /// State: in code block
+    in_code_block: bool,
+    /// Code block language
+    code_lang: String,
+    /// Code block content buffer
+    code_content: String,
+    /// State: in table
+    in_table: bool,
+    /// Table column widths
+    table_col_widths: Vec<usize>,
+    /// Table rows buffer
+    table_rows: Vec<Vec<String>>,
+    /// Output buffer for completed ANSI fragments
+    out_buf: String,
+}
+
+impl Default for StreamMarkdownRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StreamMarkdownRenderer {
+    pub fn new() -> Self {
+        Self {
+            line_buf: String::new(),
+            raw_response: String::new(),
+            in_code_block: false,
+            code_lang: String::new(),
+            code_content: String::new(),
+            in_table: false,
+            table_col_widths: Vec::new(),
+            table_rows: Vec::new(),
+            out_buf: String::new(),
+        }
+    }
+
+    /// Feed a token into the renderer. Returns the raw text for tool/reasoning detection.
+    pub fn feed(&mut self, token: &str) -> &str {
+        self.raw_response.push_str(token);
+        self.line_buf.push_str(token);
+
+        // Process all complete lines in the buffer
+        while let Some(newline_pos) = self.line_buf.find('\n') {
+            let line = self.line_buf[..newline_pos].to_string();
+            // Keep the remainder (after \n) in the buffer
+            self.line_buf = self.line_buf[newline_pos + 1..].to_string();
+            self.process_line(&line);
+        }
+        self.raw_response.as_str()
+    }
+
+    /// Flush any pending output (partial line, code block, table).
+    /// Returns (formatted_output, is_complete) where is_complete indicates
+    /// whether the renderer has fully flushed (no pending state).
+    pub fn flush(&mut self) -> (String, bool) {
+        let mut flushed = String::new();
+        std::mem::swap(&mut flushed, &mut self.out_buf);
+
+        // Flush pending code block
+        if self.in_code_block {
+            flushed.push_str(&render_code_block(&self.code_content, &self.code_lang));
+            self.code_content.clear();
+            self.code_lang.clear();
+            self.in_code_block = false;
+        }
+
+        // Flush pending table
+        if self.in_table {
+            flushed.push_str(&render_table(&self.table_rows, &self.table_col_widths));
+            self.in_table = false;
+            self.table_rows.clear();
+            self.table_col_widths.clear();
+        }
+
+        // Flush partial line
+        if !self.line_buf.is_empty() {
+            let line = std::mem::take(&mut self.line_buf);
+            Self::render_regular_line(&line, &mut flushed);
+            flushed.push('\n');
+        }
+
+        (
+            flushed,
+            self.line_buf.is_empty() && !self.in_code_block && !self.in_table,
+        )
+    }
+
+    /// Consume the raw response and reset it.
+    pub fn take_raw_response(&mut self) -> String {
+        std::mem::take(&mut self.raw_response)
+    }
+
+    fn process_line(&mut self, line: &str) {
+        // ── Code block fences ──
+        if line.trim_start().starts_with("```") {
+            if self.in_code_block {
+                // End code block — render accumulated content
+                let rendered = render_code_block(&self.code_content, &self.code_lang);
+                self.out_buf.push_str(&rendered);
+                self.code_content.clear();
+                self.code_lang.clear();
+                self.in_code_block = false;
+            } else {
+                // Start code block
+                self.in_code_block = true;
+                self.code_lang = line
+                    .trim_start()
+                    .trim_start_matches("```")
+                    .trim()
+                    .to_string();
+            }
+            return;
+        }
+
+        if self.in_code_block {
+            self.code_content.push_str(line);
+            self.code_content.push('\n');
+            return;
+        }
+
+        // ── Tables ──
+        if line.trim_start().starts_with('|') {
+            let cells: Vec<&str> = line
+                .split('|')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            // Detect separator row (e.g. |---|---|)
+            if cells
+                .iter()
+                .all(|c| c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' '))
+            {
+                return; // skip separator row
+            }
+
+            if !self.in_table {
+                self.in_table = true;
+                self.table_rows.clear();
+                self.table_col_widths = cells.iter().map(|c| c.chars().count()).collect();
+            } else {
+                for (i, cell) in cells.iter().enumerate() {
+                    if i < self.table_col_widths.len() {
+                        self.table_col_widths[i] =
+                            self.table_col_widths[i].max(cell.chars().count());
+                    }
+                }
+            }
+            self.table_rows
+                .push(cells.iter().map(|s| s.to_string()).collect());
+            return;
+        } else if self.in_table {
+            // End of table — render it
+            let rendered = render_table(&self.table_rows, &self.table_col_widths);
+            self.out_buf.push_str(&rendered);
+            self.in_table = false;
+            self.table_rows.clear();
+            self.table_col_widths.clear();
+        }
+
+        Self::render_regular_line(line, &mut self.out_buf);
+    }
+
+    fn render_regular_line(trimmed: &str, out: &mut String) {
+        // ── Horizontal rules ──
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            out.push_str(&format!(
+                "{}{}{}\n",
+                ansi("90"),
+                "─".repeat(terminal_width().min(60)),
+                ansi("0")
+            ));
+            return;
+        }
+
+        // ── Headings ──
+        if let Some(level) = heading_level(trimmed) {
+            let content = trimmed.trim_start_matches('#').trim();
+            let color = match level {
+                1 => "1;36",
+                2 => "1;34",
+                3 => "1;33",
+                _ => "1;90",
+            };
+            let prefix = "#".repeat(level);
+            out.push_str(&format!(
+                "\n{}{}{}{} {}\n",
+                ansi(color),
+                prefix,
+                ansi("0"),
+                ansi("1"),
+                render_inline(content)
+            ));
+            return;
+        }
+
+        // ── Blockquotes ──
+        if let Some(content) = trimmed.strip_prefix('>') {
+            out.push_str(&format!(
+                " {}│ {}\n",
+                ansi("90"),
+                render_inline(content.trim())
+            ));
+            return;
+        }
+
+        // ── Lists ──
+        if let Some(content) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+        {
+            out.push_str(&format!(
+                "  {}{} {}{}\n",
+                ansi("33"),
+                "•",
+                ansi("0"),
+                render_inline(content)
+            ));
+            return;
+        }
+        // Ordered list
+        if let Some((num_str, content)) = trimmed.split_once(". ") {
+            if num_str.chars().all(|c| c.is_ascii_digit()) {
+                out.push_str(&format!(
+                    "  {}.{} {}\n",
+                    ansi("36"),
+                    ansi("0"),
+                    render_inline(content)
+                ));
+                return;
+            }
+        }
+
+        // ── Regular paragraph with inline formatting ──
+        let rendered = render_inline(trimmed);
+        if !rendered.is_empty() {
+            out.push_str(&rendered);
+            out.push('\n');
+        } else if trimmed.is_empty() {
+            out.push('\n');
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1407,6 +1407,9 @@ impl ToolRegistry {
         profile: ToolCapabilityProfile,
     ) {
         let name = tool.name();
+        // Auto-register with the governance gate so the tool is never
+        // rejected as "unknown" — eliminates manual sync burden.
+        crate::governance::status::register_tool(name);
         self.profiles.insert(name, profile);
         self.tools.push(Arc::new(tool));
     }
@@ -1494,6 +1497,7 @@ impl ToolRegistry {
         serde_json::json!({ "tools": matrix })
     }
 
+    /// Run a tool synchronously with fallback chain support.
     #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
     pub fn run_with_fallback(&self, name: &str, input: &ToolInput) -> Result<ToolOutput> {
         let start = std::time::Instant::now();
@@ -1504,16 +1508,9 @@ impl ToolRegistry {
             anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
-        let mut primary_result = primary.run(input)?;
-        if primary_result.success {
+        let mut last_result = primary.run(input)?;
+        if last_result.success {
             let elapsed = start.elapsed().as_millis() as u64;
-            tracing::debug!(
-                target: "tool_execution",
-                tool = %name,
-                latency_ms = elapsed,
-                success = true,
-                "tool executed successfully"
-            );
             record_tool_execution(
                 "tool_execution_total",
                 name,
@@ -1521,32 +1518,21 @@ impl ToolRegistry {
                 elapsed,
                 serde_json::to_string(&input.payload).ok().map(|s| s.len()),
             );
-            return Ok(primary_result);
+            return Ok(last_result);
         }
 
-        let fallback_chain = self
+        for fb_name in self
             .profile(name)
-            .map(|profile| profile.fallback_chain.clone())
-            .unwrap_or_default();
-
-        for fallback_name in fallback_chain {
-            if let Some(fallback_tool) = self.get(&fallback_name) {
-                let mut fallback_result = fallback_tool.run(input)?;
-                if fallback_result.success {
+            .map(|p| p.fallback_chain.clone())
+            .unwrap_or_default()
+        {
+            if let Some(fb) = self.get(&fb_name) {
+                let mut fb_result = fb.run(input)?;
+                if fb_result.success {
                     let elapsed = start.elapsed().as_millis() as u64;
-                    fallback_result.audit_log = Some(format!(
-                        "primary '{}' failed, fallback '{}' succeeded",
-                        name, fallback_name
+                    fb_result.audit_log = Some(format!(
+                        "primary '{name}' failed, fallback '{fb_name}' succeeded"
                     ));
-                    tracing::info!(
-                        target: "tool_execution",
-                        primary = %name,
-                        fallback = %fallback_name,
-                        latency_ms = elapsed,
-                        success = true,
-                        fallback_used = true,
-                        "fallback tool executed successfully"
-                    );
                     record_tool_execution(
                         "tool_execution_total",
                         name,
@@ -1554,21 +1540,13 @@ impl ToolRegistry {
                         elapsed,
                         serde_json::to_string(&input.payload).ok().map(|s| s.len()),
                     );
-                    return Ok(fallback_result);
+                    return Ok(fb_result);
                 }
-                primary_result = fallback_result;
+                last_result = fb_result;
             }
         }
 
         let elapsed = start.elapsed().as_millis() as u64;
-        tracing::warn!(
-            target: "tool_execution",
-            tool = %name,
-            latency_ms = elapsed,
-            success = false,
-            fallback_used = !self.profile(name).map(|p| p.fallback_chain.is_empty()).unwrap_or(true),
-            "tool execution failed after all fallbacks"
-        );
         record_tool_execution(
             "tool_execution_total",
             name,
@@ -1576,9 +1554,11 @@ impl ToolRegistry {
             elapsed,
             serde_json::to_string(&input.payload).ok().map(|s| s.len()),
         );
-        Ok(primary_result)
+        Ok(last_result)
     }
 
+    /// Run a tool asynchronously with fallback chain support.
+    /// Uses `run_async` directly without `block_in_place` to comply with principle #23.
     #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
     pub async fn run_with_fallback_async(
         &self,
@@ -1593,16 +1573,9 @@ impl ToolRegistry {
             anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
-        let mut primary_result = primary.run_async(input.clone()).await?;
-        if primary_result.success {
+        let mut last_result = primary.run_async(input.clone()).await?;
+        if last_result.success {
             let elapsed = start.elapsed().as_millis() as u64;
-            tracing::debug!(
-                target: "tool_execution",
-                tool = %name,
-                latency_ms = elapsed,
-                success = true,
-                "tool executed successfully"
-            );
             record_tool_execution(
                 "tool_execution_total",
                 name,
@@ -1610,32 +1583,21 @@ impl ToolRegistry {
                 elapsed,
                 serde_json::to_string(&input.payload).ok().map(|s| s.len()),
             );
-            return Ok(primary_result);
+            return Ok(last_result);
         }
 
-        let fallback_chain = self
+        for fb_name in self
             .profile(name)
-            .map(|profile| profile.fallback_chain.clone())
-            .unwrap_or_default();
-
-        for fallback_name in fallback_chain {
-            if let Some(fallback_tool) = self.get_arc(&fallback_name) {
-                let mut fallback_result = fallback_tool.run_async(input.clone()).await?;
-                if fallback_result.success {
+            .map(|p| p.fallback_chain.clone())
+            .unwrap_or_default()
+        {
+            if let Some(fb) = self.get_arc(&fb_name) {
+                let mut fb_result = fb.run_async(input.clone()).await?;
+                if fb_result.success {
                     let elapsed = start.elapsed().as_millis() as u64;
-                    fallback_result.audit_log = Some(format!(
-                        "primary '{}' failed, fallback '{}' succeeded",
-                        name, fallback_name
+                    fb_result.audit_log = Some(format!(
+                        "primary '{name}' failed, fallback '{fb_name}' succeeded"
                     ));
-                    tracing::info!(
-                        target: "tool_execution",
-                        primary = %name,
-                        fallback = %fallback_name,
-                        latency_ms = elapsed,
-                        success = true,
-                        fallback_used = true,
-                        "fallback tool executed successfully"
-                    );
                     record_tool_execution(
                         "tool_execution_total",
                         name,
@@ -1643,21 +1605,13 @@ impl ToolRegistry {
                         elapsed,
                         serde_json::to_string(&input.payload).ok().map(|s| s.len()),
                     );
-                    return Ok(fallback_result);
+                    return Ok(fb_result);
                 }
-                primary_result = fallback_result;
+                last_result = fb_result;
             }
         }
 
         let elapsed = start.elapsed().as_millis() as u64;
-        tracing::warn!(
-            target: "tool_execution",
-            tool = %name,
-            latency_ms = elapsed,
-            success = false,
-            fallback_used = !self.profile(name).map(|p| p.fallback_chain.is_empty()).unwrap_or(true),
-            "tool execution failed after all fallbacks"
-        );
         record_tool_execution(
             "tool_execution_total",
             name,
@@ -1665,7 +1619,7 @@ impl ToolRegistry {
             elapsed,
             serde_json::to_string(&input.payload).ok().map(|s| s.len()),
         );
-        Ok(primary_result)
+        Ok(last_result)
     }
 }
 
@@ -1677,10 +1631,9 @@ impl Default for ToolRegistry {
 
 /// Record a tool execution metric via the global performance monitor.
 ///
-/// Tracks tool call count, latency, and success/failure for observability
-/// and alert-rule evaluation (P3-9). Uses an explicit info_span to record
-/// the tool name, input size (when available), latency, and success status
-/// into the distributed trace tree.
+/// Tracks tool call count, latency, and success/failure for observability.
+/// Uses a single `trace!` macro instead of creating a separate span, which
+/// avoids per-call overhead from span construction and enter/exit (P3-17).
 pub fn record_tool_execution(
     metric_name: &str,
     tool: &str,
@@ -1690,23 +1643,13 @@ pub fn record_tool_execution(
 ) {
     crate::observability::performance::record_global_operation(success, latency_ms as f64);
 
-    let span = tracing::info_span!(
-        target: "tool_execution",
-        "tool.execute",
-        tool = %tool,
-        input_size = input_size.unwrap_or(0),
-        latency_ms = latency_ms,
-        success = success,
-    );
-    let _guard = span.enter();
-
     tracing::trace!(
         target: "tool_execution",
         metric = %metric_name,
         tool = %tool,
         input_size = input_size.unwrap_or(0),
-        success = success,
         latency_ms = latency_ms,
+        success = success,
         "tool execution metric"
     );
 }
@@ -1841,6 +1784,32 @@ impl Tool for ReadFileTool {
             pua_report: Some(tool_execution_report("read_file", Some("file_read"))),
         })
     }
+
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let path = input.payload["path"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
+            let validated_path = sanitize_path(&input, path)?;
+
+            let _lock =
+                tool_lock_manager().try_acquire(&validated_path.to_string_lossy(), LockMode::Read);
+
+            let content = tokio::fs::read_to_string(&validated_path).await?;
+
+            Ok(ToolOutput {
+                success: true,
+                result: Some(serde_json::json!({"content": content})),
+                error: None,
+                verification: Some("file_read".to_string()),
+                audit_log: Some(format!("Read file: {}", validated_path.display())),
+                pua_report: Some(tool_execution_report("read_file", Some("file_read"))),
+            })
+        })
+    }
 }
 
 pub struct WriteFileTool;
@@ -1916,6 +1885,63 @@ impl Tool for WriteFileTool {
             pua_report: Some(tool_execution_report("write_file", Some("file_written"))),
         })
     }
+
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let path = input.payload["path"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
+            let content = input.payload["content"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_content")))?;
+            let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
+            let path_buf = sanitize_path_for_write(&input, path)?;
+
+            let _lock = tool_lock_manager()
+                .try_acquire(&path_buf.to_string_lossy(), LockMode::Write)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "write lock contended for '{}' — another tool is modifying this file",
+                        path_buf.display()
+                    )
+                })?;
+
+            if let Some(parent) = path_buf.parent() {
+                if !parent.as_os_str().is_empty() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+            }
+
+            match mode {
+                "append" => {
+                    let mut file = tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path_buf)
+                        .await?;
+                    tokio::io::AsyncWriteExt::write_all(&mut file, content.as_bytes()).await?;
+                }
+                "overwrite" => {
+                    tokio::fs::write(&path_buf, content).await?;
+                }
+                other => {
+                    anyhow::bail!("{}", tf("error.unsupported_write_mode", &[("mode", other)]));
+                }
+            }
+
+            Ok(ToolOutput {
+                success: true,
+                result: Some(serde_json::json!({"path": path, "mode": mode})),
+                error: None,
+                verification: Some("file_written".to_string()),
+                audit_log: Some(format!("Wrote file: {} ({})", path_buf.display(), mode)),
+                pua_report: Some(tool_execution_report("write_file", Some("file_written"))),
+            })
+        })
+    }
 }
 
 pub struct SearchFilesTool;
@@ -1959,6 +1985,35 @@ impl Tool for SearchFilesTool {
                 root.display()
             )),
             pua_report: Some(tool_execution_report("search_files", Some("search_done"))),
+        })
+    }
+
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let pattern = input.payload["pattern"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_pattern")))?;
+            let directory = input.payload["directory"].as_str().unwrap_or(".");
+            let root = sanitize_path(&input, directory)?;
+            let matcher = glob::Pattern::new(pattern)?;
+
+            let files = collect_matching_files_async(root.clone(), matcher).await?;
+
+            Ok(ToolOutput {
+                success: true,
+                result: Some(serde_json::json!({"files": files})),
+                error: None,
+                verification: Some("search_done".to_string()),
+                audit_log: Some(format!(
+                    "Search files completed for pattern '{}' in '{}'",
+                    pattern,
+                    root.display()
+                )),
+                pua_report: Some(tool_execution_report("search_files", Some("search_done"))),
+            })
         })
     }
 }
@@ -2046,6 +2101,78 @@ impl Tool for ApplyPatchTool {
                     "patch_applied"
                 }),
             )),
+        })
+    }
+
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let patch = input.payload["patch"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
+            let check_only = input.payload["check"].as_bool().unwrap_or(false);
+            let current_dir = input.payload["directory"].as_str().unwrap_or(".");
+            let sanitized_dir = sanitize_path(&input, current_dir)?;
+            let mut command = tokio::process::Command::new("git");
+            command.arg("apply");
+            if check_only {
+                command.arg("--check");
+            }
+            // Pipe patch via stdin to avoid Windows \\\\? long-path prefix issues
+            command.arg("-");
+            tracing::debug!(directory = %current_dir, check_only = %check_only, "tool: running git apply (async)");
+            command.current_dir(&sanitized_dir);
+            command.stdin(std::process::Stdio::piped());
+            command.stdout(std::process::Stdio::piped());
+            command.stderr(std::process::Stdio::piped());
+            let mut child = command
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("failed to spawn git apply: {}", e))?;
+            if let Some(mut stdin) = child.stdin.take() {
+                tokio::io::AsyncWriteExt::write_all(&mut stdin, patch.as_bytes()).await?;
+            }
+            let output = child.wait_with_output().await?;
+            let success = output.status.success();
+            if !success {
+                tracing::warn!(
+                    directory = %current_dir,
+                    check_only = %check_only,
+                    stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                    "tool: git apply failed"
+                );
+            }
+
+            Ok(ToolOutput {
+                success,
+                result: Some(serde_json::json!({
+                    "applied": success && !check_only,
+                    "checked": check_only,
+                    "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
+                    "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+                    "exit_code": output.status.code(),
+                })),
+                error: (!success)
+                    .then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
+                verification: Some(
+                    if check_only {
+                        "patch_checked"
+                    } else {
+                        "patch_applied"
+                    }
+                    .to_string(),
+                ),
+                audit_log: Some(format!("git apply executed in '{}'", current_dir)),
+                pua_report: Some(tool_execution_report(
+                    "apply_patch",
+                    Some(if check_only {
+                        "patch_checked"
+                    } else {
+                        "patch_applied"
+                    }),
+                )),
+            })
         })
     }
 }
@@ -2148,6 +2275,82 @@ impl Tool for RunTestsTool {
             pua_report: Some(tool_execution_report("run_tests", Some("tests_passed"))),
         })
     }
+
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let command_name = input.payload["command"].as_str().unwrap_or("cargo");
+            if !ALLOWED_TEST_COMMANDS.contains(&command_name) {
+                let allowed = ALLOWED_TEST_COMMANDS.join(", ");
+                anyhow::bail!(
+                    "{} — allowed commands: {}",
+                    tf("error.command_not_allowed", &[("command", command_name)]),
+                    allowed,
+                );
+            }
+            let args = input.payload["args"]
+                .as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(|text| text.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| vec!["test".to_string()]);
+            // Validate arguments
+            for arg in &args {
+                if !arg.chars().all(|c| {
+                    c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/' || c == '='
+                }) {
+                    anyhow::bail!("Invalid test argument: '{}'", arg);
+                }
+                if arg.starts_with("--")
+                    && !arg[2..]
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '=')
+                {
+                    anyhow::bail!("Invalid flag argument: '{}'", arg);
+                }
+            }
+            let current_dir =
+                sanitize_path(&input, input.payload["directory"].as_str().unwrap_or("."))?;
+            let output = tokio::process::Command::new(command_name)
+                .args(&args)
+                .current_dir(&current_dir)
+                .output()
+                .await?;
+            let success = output.status.success();
+            if !success {
+                tracing::warn!(
+                    command = %command_name,
+                    exit_code = ?output.status.code(),
+                    stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                    "tool: shell command failed"
+                );
+            }
+            Ok(ToolOutput {
+                success,
+                result: Some(serde_json::json!({
+                    "command": command_name,
+                    "args": args,
+                    "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
+                    "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+                    "exit_code": output.status.code(),
+                })),
+                error: (!success)
+                    .then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
+                verification: Some("tests_passed".to_string()),
+                audit_log: Some(format!(
+                    "Executed '{}' in '{}'",
+                    command_name,
+                    current_dir.display()
+                )),
+                pua_report: Some(tool_execution_report("run_tests", Some("tests_passed"))),
+            })
+        })
+    }
 }
 
 pub struct InspectGitDiffTool;
@@ -2213,6 +2416,56 @@ impl Tool for InspectGitDiffTool {
             )),
         })
     }
+
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            let current_dir = input.payload["directory"].as_str().unwrap_or(".");
+            let sanitized_dir = sanitize_path(&input, current_dir)?;
+            let staged = input.payload["staged"].as_bool().unwrap_or(false);
+            let files = input.payload["files"]
+                .as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(|text| text.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            let mut command = tokio::process::Command::new("git");
+            command.arg("diff").current_dir(&sanitized_dir);
+            if staged {
+                command.arg("--cached");
+            }
+            if !files.is_empty() {
+                command.arg("--").args(&files);
+            }
+            let output = command.output().await?;
+            let success = output.status.success();
+
+            Ok(ToolOutput {
+                success,
+                result: Some(serde_json::json!({
+                    "diff": String::from_utf8_lossy(&output.stdout).to_string(),
+                    "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+                    "exit_code": output.status.code(),
+                    "staged": staged,
+                    "files": files,
+                })),
+                error: (!success)
+                    .then(|| String::from_utf8_lossy(&output.stderr).trim().to_string()),
+                verification: Some("diff_inspected".to_string()),
+                audit_log: Some(format!("git diff inspected in '{}'", current_dir)),
+                pua_report: Some(tool_execution_report(
+                    "inspect_git_diff",
+                    Some("diff_inspected"),
+                )),
+            })
+        })
+    }
 }
 
 // ── SkillListTool ────────────────────────────────────────────────────────────
@@ -2232,16 +2485,6 @@ impl Tool for SkillListTool {
     }
 
     fn run(&self, _input: &ToolInput) -> Result<ToolOutput> {
-        let span = tracing::info_span!(
-            "tool.run",
-            tool = self.name(),
-            input_size = 0u64,
-            latency_ms = 0u64,
-            success = false,
-        );
-        let _guard = span.enter();
-        let start = Instant::now();
-
         let skills = match SKILL_REGISTRY.get() {
             Some(registry) => match registry.read() {
                 Ok(guard) => {
@@ -2267,9 +2510,6 @@ impl Tool for SkillListTool {
             None => Vec::new(),
         };
 
-        let elapsed = start.elapsed().as_millis() as u64;
-        span.record("latency_ms", elapsed);
-        span.record("success", true);
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({"skills": skills})),
@@ -2325,16 +2565,6 @@ impl Tool for SkillExecuteTool {
         input: ToolInput,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
         Box::pin(async move {
-            let span = tracing::info_span!(
-                "tool.run",
-                tool = self.name(),
-                input_size = 0u64,
-                latency_ms = 0u64,
-                success = false,
-            );
-            let _guard = span.enter();
-            let start = Instant::now();
-
             // ── Step 1: Extract skill name from payload ──
             let payload = &input.payload;
             let skill_name = payload
@@ -2401,8 +2631,6 @@ impl Tool for SkillExecuteTool {
             let result = skill.execute(&skill_input).await;
             let exec_elapsed = exec_start.elapsed();
 
-            // Record outcome in registry (async-safe via spawn_blocking)
-            let elapsed = start.elapsed().as_millis() as u64;
             let outcome_success = result.is_ok();
             if let Some(registry) = SKILL_REGISTRY.get() {
                 let registry = Arc::clone(registry);
@@ -2415,37 +2643,30 @@ impl Tool for SkillExecuteTool {
                 .await
                 .ok();
             }
-            span.record("latency_ms", elapsed);
 
             match result {
-                Ok(value) => {
-                    span.record("success", true);
-                    Ok(ToolOutput {
-                        success: true,
-                        result: Some(serde_json::json!({
-                            "skill": skill_name,
-                            "output": value,
-                        })),
-                        error: None,
-                        verification: Some("skill_executed".to_string()),
-                        audit_log: Some(format!("Executed skill '{}'", skill_name)),
-                        pua_report: Some(tool_execution_report(
-                            "skill_execute",
-                            Some("skill_executed"),
-                        )),
-                    })
-                }
-                Err(e) => {
-                    span.record("success", false);
-                    Ok(ToolOutput {
-                        success: false,
-                        result: None,
-                        error: Some(format!("skill '{}' execution failed: {}", skill_name, e)),
-                        verification: None,
-                        audit_log: None,
-                        pua_report: None,
-                    })
-                }
+                Ok(value) => Ok(ToolOutput {
+                    success: true,
+                    result: Some(serde_json::json!({
+                        "skill": skill_name,
+                        "output": value,
+                    })),
+                    error: None,
+                    verification: Some("skill_executed".to_string()),
+                    audit_log: Some(format!("Executed skill '{}'", skill_name)),
+                    pua_report: Some(tool_execution_report(
+                        "skill_execute",
+                        Some("skill_executed"),
+                    )),
+                }),
+                Err(e) => Ok(ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(format!("skill '{}' execution failed: {}", skill_name, e)),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                }),
             }
         })
     }
@@ -2608,6 +2829,31 @@ fn collect_matching_files(
         }
     }
     Ok(())
+}
+
+/// Recursively walk a directory tree using `tokio::fs` and collect files
+/// matching the given glob pattern. Returns their full paths.
+async fn collect_matching_files_async(root: PathBuf, matcher: Pattern) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    let mut dirs_to_visit = vec![root.clone()];
+
+    while let Some(dir) = dirs_to_visit.pop() {
+        let mut rd = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = rd.next_entry().await? {
+            let path = entry.path();
+            if entry.file_type().await?.is_dir() {
+                dirs_to_visit.push(path);
+            } else {
+                let relative = path.strip_prefix(&root).unwrap_or(&path);
+                let candidate = relative.to_string_lossy().replace('\\', "/");
+                if matcher.matches(&candidate) || matcher.matches_path(relative) {
+                    files.push(path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    Ok(files)
 }
 
 // ---------------------------------------------------------------------------

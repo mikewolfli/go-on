@@ -21,7 +21,7 @@ use crate::config::AgentConfig;
 use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::intelligence::capability_bus::core::CapabilityBus;
-use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, ConsensusVote, NodeRole};
+use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, NodeRole};
 use crate::intelligence::voter_impls::{
     CapabilityBusVoter, DeepSeekVoter, LocalAgentVoter, LocalVoter, RationalizationGuardVoter,
 };
@@ -237,120 +237,10 @@ impl Default for VoteConfig {
 /// - "rationalization-guard": weight=1, votes reject if confidence < 0.4
 ///
 /// Returns the REAL consensus verdict (approve/reject) and confidence.
-/// Non-blocking — returns (approve, 0.3) as degraded fallback on any failure.
-// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary.
-// F-GAP-49: reserved for when consensus_vote_with_reputation (weighted/DelphiDebate)
-// needs a lightweight synchronous fallback, or when CapabilityBus integration adds
-// external voter nodes that require a simpler sync API. Currently unused because
-// the async consensus_vote_with_reputation (below) is the primary path.
-pub fn consensus_vote_on(
-    proposal_id: &str,
-    proposal: serde_json::Value,
-    approve: bool,
-) -> (bool, f64) {
-    let consensus = GLOBAL_CONSENSUS.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("intel_hub: consensus mutex poisoned, recovering");
-        poisoned.into_inner()
-    });
-
-    let now = crate::intelligence::now_ms();
-    // Extract a confidence score from the proposal to drive real voting
-    let proposal_confidence = proposal
-        .get("confidence")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.5);
-    let is_risky = proposal
-        .get("risk_level")
-        .and_then(|v| v.as_str())
-        .map(|s| matches!(s, "high" | "critical"))
-        .unwrap_or(false);
-
-    let proposals = vec![proposal];
-    match consensus.start_round("capability-bus", proposals) {
-        Ok(round_id) => {
-            CONSENSUS_ROUNDS.fetch_add(1, Ordering::Relaxed);
-
-            // Node 1: capability-bus votes based on proposal confidence
-            // Higher confidence → more likely to approve
-            let cb_approve = if is_risky {
-                approve && proposal_confidence > 0.6
-            } else {
-                approve || proposal_confidence > 0.7
-            };
-            let _ = consensus.cast_vote(ConsensusVote {
-                node_id: "capability-bus".to_string(),
-                round_id: round_id.clone(),
-                proposal_id: proposal_id.to_string(),
-                approve: cb_approve,
-                weight: 2,
-                vote_ms: now,
-            });
-
-            // Node 2: local-agent votes the caller's intent but has lower weight
-            let _ = consensus.cast_vote(ConsensusVote {
-                node_id: "local-agent".to_string(),
-                round_id: round_id.clone(),
-                proposal_id: proposal_id.to_string(),
-                approve,
-                weight: 1,
-                vote_ms: now,
-            });
-
-            // Node 3: rationalization-guard independently votes based on confidence threshold
-            let rg_approve = if is_risky {
-                proposal_confidence > 0.5
-            } else {
-                proposal_confidence > 0.3
-            };
-            let _ = consensus.cast_vote(ConsensusVote {
-                node_id: "rationalization-guard".to_string(),
-                round_id,
-                proposal_id: proposal_id.to_string(),
-                approve: rg_approve,
-                weight: 1,
-                vote_ms: now,
-            });
-
-            // Finalize round — compute REAL consensus result
-            if consensus.finalize_round().is_ok() {
-                // Consensus achieved: compute weighted verdict
-                let weighted_approve =
-                    (cb_approve as u64 * 2 + approve as u64 + rg_approve as u64) as f64;
-                let total_weight = 4.0;
-                let approval_ratio = weighted_approve / total_weight;
-                let final_approve = approval_ratio >= 0.5;
-                let confidence = if final_approve {
-                    0.5 + approval_ratio * 0.4
-                } else {
-                    0.5 - (0.5 - approval_ratio) * 0.4
-                };
-                (final_approve, confidence.clamp(0.1, 0.95))
-            } else {
-                // No consensus — fall back to conservative decision
-                tracing::warn!(
-                    "intel_hub: no consensus on proposal={}, approve={}, confidence={}",
-                    proposal_id,
-                    approve,
-                    proposal_confidence
-                );
-                (approve, 0.4)
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                "intel_hub: consensus.start_round failed for {}: {e}",
-                proposal_id
-            );
-            (approve, 0.3)
-        }
-    }
-}
-
 /// Run multi-agent consensus voting with **weighted reputation** and optional
 /// **Delphi-method debate rounds**.
 ///
-/// This is the upgraded version of [`consensus_vote_on`]. Instead of simple
-/// majority via hardcoded weights, it:
+/// Instead of simple majority via hardcoded weights, it:
 ///
 /// 1. Collects votes from the 3 internal nodes (capability-bus, local-agent,
 ///    rationalization-guard).
@@ -368,7 +258,7 @@ pub fn consensus_vote_on(
 ///   Pass an empty map to use default weights.
 /// * `config` – [`VoteConfig`] controlling mode, threshold, debate rounds.
 ///
-/// Returns `(approved, confidence)` — same signature as [`consensus_vote_on`].
+/// Returns `(approved, confidence)`.
 pub async fn consensus_vote_with_reputation(
     proposal_id: &str,
     proposal: serde_json::Value,
@@ -377,11 +267,7 @@ pub async fn consensus_vote_with_reputation(
     config: &VoteConfig,
 ) -> (bool, f64) {
     match config.mode {
-        VoteMode::Legacy => {
-            // Delegate to the original implementation
-            return consensus_vote_on(proposal_id, proposal, approve);
-        }
-        VoteMode::Weighted | VoteMode::DelphiDebate => {
+        VoteMode::Legacy | VoteMode::Weighted | VoteMode::DelphiDebate => {
             // Continue with weighted / Delphi logic
         }
     }
@@ -839,16 +725,6 @@ impl AuditEntryBuilder {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_consensus_vote_basic() {
-        init_intel_hub(false);
-        let (approved, conf) =
-            consensus_vote_on("test-proposal", serde_json::json!({"action": "test"}), true);
-        assert!(approved);
-        assert!(conf > 0.0);
-        assert!(CONSENSUS_ROUNDS.load(Ordering::Relaxed) > 0);
-    }
-
     #[tokio::test]
     async fn test_rationalize_high_confidence() {
         let (justified, _reason) = rationalize_decision("agent-x", "simple-task", 0.95).await;
@@ -889,13 +765,5 @@ mod tests {
             .build();
         record_audit_entry(entry);
         assert!(AUDIT_ENTRY_COUNT.load(Ordering::Relaxed) > 0);
-    }
-
-    #[test]
-    fn test_consensus_tracks_activations() {
-        let before = INTEL_HUB_ACTIVATIONS.load(Ordering::Relaxed);
-        init_intel_hub(false);
-        consensus_vote_on("prop-activation", serde_json::json!({"x": 1}), true);
-        assert!(INTEL_HUB_ACTIVATIONS.load(Ordering::Relaxed) >= before);
     }
 }
