@@ -602,8 +602,7 @@ impl FederatedServer {
                     let uptime = elapsed_ms();
                     let body = format!(
                         r#"{{"status":"ok","uptime_ms":{},"submissions":{}}}"#,
-                        uptime,
-                        0u64,
+                        uptime, 0u64,
                     );
                     format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

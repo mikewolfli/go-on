@@ -208,9 +208,8 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         })
         .collect::<Vec<_>>();
 
-    let rate_limiter_buckets = with_acp_lock(
-        server.resilience.phase_rate_limiter.as_ref(),
-        |guard| {
+    let rate_limiter_buckets =
+        with_acp_lock(server.resilience.phase_rate_limiter.as_ref(), |guard| {
             guard
                 .snapshot()
                 .into_iter()
@@ -227,8 +226,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
                     })
                 })
                 .collect::<Vec<_>>()
-        },
-    );
+        });
 
     let lock_components: Vec<LockHealthSummary> = Vec::new();
     let lock_summary = summarize_lock_health(&lock_components);

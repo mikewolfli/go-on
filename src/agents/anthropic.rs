@@ -11,9 +11,7 @@ use tracing::warn;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::{
-    chat_request_failed_msg, retry_chat_once,
-};
+use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_events, SseEventAction,
 };

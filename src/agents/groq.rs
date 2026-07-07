@@ -9,9 +9,7 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{
-    chat_request_failed_msg, retry_chat_once,
-};
+use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct GroqAgent {
