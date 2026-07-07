@@ -14,8 +14,53 @@ pub const REDACTED_API_KEY: &str = "********";
 /// The GUI also keeps `api_key` in `config.providers` as a fallback so that if the
 /// system keyring is unavailable the key can still be injected into the backend
 /// process environment at startup.
+///
+/// # macOS keychain prompt elimination
+///
+/// macOS keychain access prompts are **per-item**: accessing 36 provider entries
+/// (each with api_key + secret_key) would trigger **72 individual dialogs**.
+/// To avoid this, `KEYRING_CACHE` stores all read results in memory so each
+/// keychain item is accessed exactly **once** per process lifetime.
 use anyhow::Result;
 use std::collections::BTreeMap;
+use std::sync::{LazyLock, Mutex};
+
+/// In-memory cache of keychain read results.
+/// Key: `"go-on/{account}"`, Value: `Some(key)` if found, `None` if not in keychain.
+///
+/// ## Why this cache exists (DO NOT REMOVE)
+///
+/// macOS keychain access prompts are **per-item per-process**. The project has
+/// 36+ canonical provider names. Without this cache, every call to
+/// `get_api_key()` or `get_secret_key()` for each provider triggers a separate
+/// macOS keychain dialog — that's **72+ popups** asking the user to allow
+/// keychain access. With the cache, each keychain item is accessed exactly
+/// **once** per process lifetime.
+///
+/// ## Usage rules
+///
+/// 1. **ALWAYS** call `get_api_key()` / `get_secret_key()` — never call
+///    `platform::get_api_key()` directly, which bypasses the cache.
+/// 2. After `store_*` or `delete_*`, `invalidate_cache()` is called
+///    automatically so the next read fetches fresh data.
+/// 3. If a new public read function is added, it MUST go through this cache.
+static KEYRING_CACHE: LazyLock<Mutex<BTreeMap<String, Option<String>>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+/// Clear the in-memory keyring cache. Call this after storing/deleting a key
+/// so subsequent reads reflect the new state.
+///
+/// Currently reserved for future/emergency use — `invalidate_cache()` handles
+/// per-provider invalidation automatically during normal store/delete operations.
+#[expect(
+    dead_code,
+    reason = "exposed as public API for future/emergency use; normal store/delete uses invalidate_cache()"
+)]
+pub fn clear_keyring_cache() {
+    if let Ok(mut cache) = KEYRING_CACHE.lock() {
+        cache.clear();
+    }
+}
 
 // ╔══════════════════════════════════════════════════════════════════════════╗
 // ║  macOS: keyring crate + security CLI for ACL                             ║
@@ -135,10 +180,6 @@ mod platform {
         entry.get_password().ok()
     }
 
-    pub fn has_api_key(provider: &str) -> bool {
-        get_api_key(provider).is_some()
-    }
-
     pub fn delete_api_key(provider: &str) -> Result<()> {
         let account = format!("{}_api_key", provider);
         let entry = keyring::Entry::new("go-on", &account)?;
@@ -191,10 +232,6 @@ mod platform {
         entry.get_password().ok()
     }
 
-    pub fn has_api_key(provider: &str) -> bool {
-        get_api_key(provider).is_some()
-    }
-
     pub fn delete_api_key(provider: &str) -> Result<()> {
         let account = format!("{}_api_key", provider);
         let entry = keyring::Entry::new("go-on", &account)?;
@@ -212,11 +249,33 @@ mod platform {
 
 // ── Public API — delegates to the active platform module ──────────────────
 
+/// Invalidate cached entries for a provider (both api_key and secret_key).
+///
+/// Called automatically by `store_*` and `delete_*` functions. If you add a
+/// new function that modifies keychain state, call this to keep the cache
+/// consistent.
+///
+/// ## Why not just clear the entire cache?
+///
+/// 1. Targeted invalidation preserves all OTHER providers' cached values,
+///    avoiding redundant keychain prompts for them on the next read.
+/// 2. Clearing the whole cache would re-prompt for every provider on the
+///    next iteration — reverting the 72-dialog problem.
+fn invalidate_cache(provider: &str) {
+    if let Ok(mut cache) = KEYRING_CACHE.lock() {
+        let api_key = format!("go-on/{}_api_key", provider);
+        let secret_key = format!("go-on/{}_secret_key", provider);
+        cache.remove(&api_key);
+        cache.remove(&secret_key);
+    }
+}
+
 /// Store an API key in the system keyring AND sync to `.env` file.
 /// Hybrid storage ensures the backend can read keys even in headless mode
 /// (macOS Security.framework blocks background keychain access).
 pub fn store_api_key(provider: &str, api_key: &str) -> Result<()> {
     platform::store_api_key(provider, api_key)?;
+    invalidate_cache(provider);
     // Also sync to .env file for headless backend / Zed standalone
     let env_name = provider_to_env_name(provider, "api_key");
     if let Err(e) = sync_dotenv_key(&env_name, api_key) {
@@ -231,6 +290,7 @@ pub fn store_api_key(provider: &str, api_key: &str) -> Result<()> {
 /// Store a provider secret key in the system keyring AND sync to `.env` file.
 pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
     platform::store_secret_key(provider, secret_key)?;
+    invalidate_cache(provider);
     let env_name = provider_to_env_name(provider, "secret_key");
     if let Err(e) = sync_dotenv_key(&env_name, secret_key) {
         eprintln!(
@@ -241,49 +301,76 @@ pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Retrieve an API key from the system keyring, falling back to `.env` file on Linux.
+/// Retrieve an API key from the system keyring with in-memory caching.
+/// The cache ensures each macOS keychain item is accessed at most **once**
+/// per process lifetime, avoiding 36+ redundant keychain dialogs.
 pub fn get_api_key(provider: &str) -> Option<String> {
-    // Primary: try system keyring
-    if let Some(key) = platform::get_api_key(provider) {
-        return Some(key);
+    let cache_key = format!("go-on/{}_api_key", provider);
+
+    // Check in-memory cache first (avoids redundant keychain prompts)
+    if let Ok(cache) = KEYRING_CACHE.lock() {
+        if let Some(cached) = cache.get(&cache_key) {
+            return cached.clone();
+        }
     }
-    // Fallback: read from `.env` file (especially important on Linux where
-    // the Secret Service keyring daemon may not be available).
-    let env_name = provider_to_env_name(provider, "api_key");
-    let dotenv = read_dotenv();
-    dotenv
-        .get(&env_name)
-        .map(|v| v.trim_matches('"').to_string())
+
+    // Cache miss — query the system keyring
+    let result = platform::get_api_key(provider).or_else(|| {
+        // Fallback: read from `.env` file
+        let env_name = provider_to_env_name(provider, "api_key");
+        let dotenv = read_dotenv();
+        dotenv
+            .get(&env_name)
+            .map(|v| v.trim_matches('"').to_string())
+    });
+
+    // Cache the result (both Some and None) to avoid redundant prompts
+    if let Ok(mut cache) = KEYRING_CACHE.lock() {
+        cache.insert(cache_key, result.clone());
+    }
+
+    result
 }
 
-/// Retrieve a provider secret key from the system keyring, falling back to `.env` file.
+/// Retrieve a provider secret key from the system keyring with in-memory caching.
+/// Same cache strategy as `get_api_key`.
 pub fn get_secret_key(provider: &str) -> Option<String> {
-    // Primary: try system keyring
-    if let Some(key) = platform::get_secret_key(provider) {
-        return Some(key);
+    let cache_key = format!("go-on/{}_secret_key", provider);
+
+    // Check in-memory cache first
+    if let Ok(cache) = KEYRING_CACHE.lock() {
+        if let Some(cached) = cache.get(&cache_key) {
+            return cached.clone();
+        }
     }
-    // Fallback: read from `.env` file
-    let env_name = provider_to_env_name(provider, "secret_key");
-    let dotenv = read_dotenv();
-    dotenv
-        .get(&env_name)
-        .map(|v| v.trim_matches('"').to_string())
+
+    // Cache miss — query the system keyring
+    let result = platform::get_secret_key(provider).or_else(|| {
+        let env_name = provider_to_env_name(provider, "secret_key");
+        let dotenv = read_dotenv();
+        dotenv
+            .get(&env_name)
+            .map(|v| v.trim_matches('"').to_string())
+    });
+
+    // Cache the result
+    if let Ok(mut cache) = KEYRING_CACHE.lock() {
+        cache.insert(cache_key, result.clone());
+    }
+
+    result
 }
 
 /// Check whether a key exists in the system keyring or `.env` file for the given provider.
+/// Uses cached `get_api_key` internally, so no redundant keychain access.
 pub fn has_api_key(provider: &str) -> bool {
-    if platform::has_api_key(provider) {
-        return true;
-    }
-    // Fallback: check `.env` file
-    let env_name = provider_to_env_name(provider, "api_key");
-    let dotenv = read_dotenv();
-    dotenv.contains_key(&env_name)
+    get_api_key(provider).is_some()
 }
 
 /// Delete an API key from the system keyring AND `.env` file (silent if missing).
 pub fn delete_api_key(provider: &str) -> Result<()> {
     platform::delete_api_key(provider)?;
+    invalidate_cache(provider);
     let env_name = provider_to_env_name(provider, "api_key");
     let _ = remove_dotenv_key(&env_name);
     Ok(())
@@ -293,6 +380,7 @@ pub fn delete_api_key(provider: &str) -> Result<()> {
 /// F-GAP-48: Wired — called from providers/mod.rs when removing dual-auth providers.
 pub fn delete_secret_key(provider: &str) -> Result<()> {
     platform::delete_secret_key(provider)?;
+    invalidate_cache(provider);
     let env_name = provider_to_env_name(provider, "secret_key");
     let _ = remove_dotenv_key(&env_name);
     Ok(())

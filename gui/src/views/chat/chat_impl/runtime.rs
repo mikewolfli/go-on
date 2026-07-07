@@ -794,14 +794,14 @@ impl ChatView {
                                                     .map(String::from);
                                                 // Capture plan_output from Plan mode responses
                                                 if let Some(plan_output) = val.get("plan_output") {
-                                                    if let Some(obj) = plan_output.as_object() {
+                                                    if let Some(_obj) = plan_output.as_object() {
                                                         // Plan output is available for the UI to display
                                                         // the structured plan steps and recommended mode
                                                         #[cfg(debug_assertions)]
                                                         {
                                                             eprintln!("[Plan] Captured plan output: {} mode, {} step(s)",
-                                                                obj.get("recommended_mode").and_then(|v| v.as_str()).unwrap_or("?"),
-                                                                obj.get("steps").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0)
+                                                                _obj.get("recommended_mode").and_then(|v| v.as_str()).unwrap_or("?"),
+                                                                _obj.get("steps").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0)
                                                             );
                                                         }
                                                     }
