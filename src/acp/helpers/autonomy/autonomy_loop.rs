@@ -14,8 +14,12 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, StreamingSender};
+use crate::orchestration::autonomy_runtime::{
+    parse_tool_call_token, TOKEN_MODEL_USED_PREFIX, TOKEN_THINKING_PREFIX,
+};
 use crate::orchestration::tool::ToolRegistry;
 
 // ---------------------------------------------------------------------------
@@ -132,11 +136,10 @@ pub async fn run_autonomy_loop(
     objective: &str,
     messages: Vec<Message>,
     config: AutonomyLoopConfig,
-    _timeout_duration: Option<std::time::Duration>,
+    timeout_duration: Option<std::time::Duration>,
 ) -> Result<AutonomyLoopResult, anyhow::Error> {
     let start = Instant::now();
-    let _agent = agent;
-    let _tool_registry = tool_registry.unwrap_or_else(|| Arc::new(ToolRegistry::new()));
+    let tool_registry = tool_registry.unwrap_or_else(|| Arc::new(ToolRegistry::new()));
 
     tracing::debug!(
         target: "autonomy_loop",
@@ -146,23 +149,182 @@ pub async fn run_autonomy_loop(
         "autonomy loop starting"
     );
 
-    let final_response = String::new();
-    let rounds: Vec<AutonomyRound> = Vec::new();
+    let mut response = String::new();
+    let mut reasoning = String::new();
+    let mut selected_model: Option<String> = None;
+    let mut rounds: Vec<AutonomyRound> = Vec::new();
+    let max_iterations = config.max_iterations.max(1);
+
+    for iteration in 0..max_iterations {
+        let round_start = Instant::now();
+        let mut tool_calls: Vec<(String, String)> = Vec::new();
+
+        // ── Call agent with streaming ────────────────────────────────
+        let (sender, mut receiver) = mpsc::channel::<String>(1024);
+        let sender = StreamingSender::from(sender);
+
+        let agent_messages = if iteration == 0 {
+            messages.clone()
+        } else {
+            // For follow-up rounds, the response text serves as context
+            vec![Message {
+                role: "user".to_string(),
+                content: format!(
+                    "Continue with the task. Context so far: {}\n\nOriginal objective: {}",
+                    response, objective
+                ),
+            }]
+        };
+
+        let agent_clone = Arc::clone(&agent);
+        let chat_task = tokio::spawn(async move {
+            agent_clone
+                .chat(agent_messages, None, None, sender)
+                .await
+                .map_err(|e| anyhow::anyhow!("agent chat failed: {}", e))
+        });
+
+        // ── Stream tokens ────────────────────────────────────────────
+        let mut round_response = String::new();
+        let timeout_fut = async move {
+            if let Some(dur) = timeout_duration {
+                tokio::time::sleep(dur).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(timeout_fut);
+        loop {
+            tokio::select! {
+                biased;
+                token = receiver.recv() => {
+                    match token {
+                        Some(t) => {
+                            // Model used detection
+                            if let Some(model) = t.strip_prefix(TOKEN_MODEL_USED_PREFIX) {
+                                selected_model = Some(model.trim().to_string());
+                                continue;
+                            }
+                            // Tool call detection
+                            if let Some((tool_name, tool_args)) = parse_tool_call_token(&t) {
+                                tool_calls.push((tool_name.to_string(), tool_args.to_string()));
+                                continue;
+                            }
+                            // Reasoning content
+                            if let Some(rt) = t.strip_prefix(TOKEN_THINKING_PREFIX) {
+                                reasoning.push_str(rt);
+                                continue;
+                            }
+                            // Regular token
+                            round_response.push_str(&t);
+                            response.push_str(&t);
+                        }
+                        None => break,
+                    }
+                }
+                _ = &mut timeout_fut => {
+                    tracing::warn!("autonomy_loop: round {iteration} timed out");
+                    break;
+                }
+            }
+        }
+
+        let _ = chat_task.await;
+        let round_duration_ms = round_start.elapsed().as_millis() as u64;
+
+        // Track this round
+        let tool_names: Vec<String> = tool_calls.iter().map(|(n, _)| n.clone()).collect();
+        rounds.push(AutonomyRound {
+            round_index: iteration,
+            phase: if tool_calls.is_empty() {
+                AutonomyPhase::Completed
+            } else {
+                AutonomyPhase::Executing
+            },
+            tools_executed: tool_names.clone(),
+            planner_guided: false,
+            duration_ms: round_duration_ms,
+            error: None,
+            round_start_offset_ms: (|| {
+                round_start
+                    .checked_duration_since(start)
+                    .unwrap_or(std::time::Duration::from_secs(0))
+                    .as_millis() as u64
+            })(),
+            retry_count: 0,
+            round_stop_reason: "completed".to_string(),
+            agent_switched: false,
+            agent_switch_reason: None,
+            trace: Vec::new(),
+        });
+
+        // ── Execute tool calls ───────────────────────────────────────
+        if tool_calls.is_empty() {
+            break; // No tools to execute — final response ready
+        }
+
+        if iteration + 1 >= max_iterations {
+            break; // Max iterations reached
+        }
+
+        for (tool_name, tool_args) in &tool_calls {
+            if let Some(tool) = tool_registry.get_arc(tool_name) {
+                tracing::info!("autonomy_loop: executing tool {}", tool_name);
+                let input = crate::orchestration::tool::ToolInput {
+                    task_id: format!("autonomy-{}-{}", iteration, tool_name),
+                    phase: "execute".to_string(),
+                    agent_role: "assistant".to_string(),
+                    objective: objective.to_string(),
+                    constraints: None,
+                    evidence: None,
+                    payload: serde_json::from_str(tool_args).unwrap_or_default(),
+                    allowed_base_dir: None,
+                };
+                let tool_output = tool.run_async(input).await;
+                let result_str = format!("{:?}", tool_output);
+                round_response
+                    .push_str(&format!("\n[Tool {} result:]\n{}\n", tool_name, result_str));
+                response.push_str(&format!("\n[Tool {} result:]\n{}\n", tool_name, result_str));
+            } else {
+                tracing::warn!("autonomy_loop: tool '{}' not found in registry", tool_name);
+                round_response.push_str(&format!("\n[Tool {} not available]\n", tool_name));
+            }
+        }
+
+        // If we have a non-empty response (even from a tool), we're done.
+        if !round_response.trim().is_empty() && !tool_calls.is_empty() {
+            // Tools were executed; a follow-up round will continue with the context
+        }
+    }
+
+    let total_duration_ms = start.elapsed().as_millis() as u64;
+    let total_tools: usize = rounds.iter().map(|r| r.tools_executed.len()).sum();
+
+    // If the final response is empty but we have reasoning, use reasoning as response
+    let final_response = if response.trim().is_empty() && !reasoning.trim().is_empty() {
+        reasoning.clone()
+    } else {
+        response
+    };
 
     Ok(AutonomyLoopResult {
         response: final_response,
         report: AutonomyLoopReport {
             total_rounds: rounds.len(),
-            total_tools: 0,
+            total_tools,
             final_phase: AutonomyPhase::Completed,
             rounds,
             planner_guidance_used: false,
             trace_alignment_coverage: 0.0,
-            total_duration_ms: start.elapsed().as_millis() as u64,
+            total_duration_ms,
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
             audit_trail: None,
-            stop_reason: "completed".to_string(),
+            stop_reason: if total_tools > 0 {
+                "tools_executed".to_string()
+            } else {
+                "completed".to_string()
+            },
         },
     })
 }
