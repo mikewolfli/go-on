@@ -165,6 +165,40 @@ pub fn option_u64(options: &Option<HashMap<String, Value>>, key: &str) -> Option
         .and_then(|v| v.as_u64())
 }
 
+/// Resolve the effective model name, substituting "auto" or empty with
+/// the provider's first available (default) model. This prevents passing
+/// "auto" as a literal model name to APIs that only accept real model IDs.
+///
+/// Resolution order:
+/// 1. `options["model"]` — explicit user/request override
+/// 2. `configured_model` — the agent's configured model (from config.toml)
+/// 3. First model from `available_models()` — last-resort default
+pub fn resolve_effective_model(
+    configured_model: &str,
+    options: &Option<HashMap<String, Value>>,
+    available_models: &[crate::agent::ModelInfo],
+) -> String {
+    // 1. Check for explicit model override in request options
+    if let Some(model) = option_string(options, "model") {
+        if model != "auto" && !model.is_empty() {
+            return model;
+        }
+    }
+
+    // 2. Use configured model if it's a real model name (not "auto" / empty)
+    if configured_model != "auto" && !configured_model.is_empty() {
+        return configured_model.to_string();
+    }
+
+    // 3. Fallback: first available model (the provider's canonical default)
+    if let Some(first) = available_models.first() {
+        return first.id.clone();
+    }
+
+    // Ultimate fallback — should never reach here for any real provider
+    "unknown".to_string()
+}
+
 /// Apply common OpenAI chat completion options into payload.
 ///
 /// This keeps compatibility with OpenAI-compatible fields while allowing

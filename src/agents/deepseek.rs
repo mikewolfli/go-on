@@ -10,7 +10,7 @@ use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
 use crate::agents::{
-    apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
+    apply_openai_common_options, principles_to_text, resolve_effective_model, stream_sse_to_sender,
 };
 
 pub struct DeepSeekAgent {
@@ -75,7 +75,7 @@ impl DeepSeekAgent {
         }
         final_messages.extend(messages.iter().cloned());
 
-        let model = option_string(options, "model").unwrap_or_else(|| self.model.clone());
+        let model = resolve_effective_model(&self.model, options, &self.available_models());
 
         let mut payload = json!({
             "model": model,

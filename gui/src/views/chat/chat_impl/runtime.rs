@@ -3,6 +3,44 @@ use crate::views::chat::types::{CommandRecord, SubAgentRecord};
 use std::sync::mpsc::TrySendError;
 use std::time::Duration;
 
+/// The `__thinking__` token prefix emitted by the agent runtime to mark
+/// reasoning/thinking content in streaming output.  The GUI strips these
+/// markers from the display text and moves the reasoning into a dedicated
+/// thinking panel (collapsible), matching Zed's chat UX.
+const THINKING_MARKER: &str = "__thinking__";
+
+/// Split content on `__thinking__` markers, returning (cleaned_content, thinking_text).
+/// When markers are nested or repeated, thinking segments are concatenated.
+fn split_thinking_from_content(raw: &str) -> (String, String) {
+    if !raw.contains(THINKING_MARKER) {
+        return (raw.to_string(), String::new());
+    }
+    let mut content = String::with_capacity(raw.len());
+    let mut thinking = String::new();
+    let mut in_thinking = false;
+    let mut cursor = 0;
+    for (end, marker) in raw.match_indices(THINKING_MARKER) {
+        // Text before the marker
+        let segment = &raw[cursor..end];
+        if in_thinking {
+            // Everything since last marker is thinking content
+            thinking.push_str(segment);
+        } else {
+            content.push_str(segment);
+        }
+        in_thinking = !in_thinking;
+        cursor = end + marker.len();
+    }
+    // Remaining text after last marker
+    let remaining = &raw[cursor..];
+    if in_thinking {
+        thinking.push_str(remaining);
+    } else {
+        content.push_str(remaining);
+    }
+    (content, thinking)
+}
+
 /// Retry `tx.try_send(msg)` with exponential backoff when the channel is full.
 /// Gives up immediately if the channel has been closed.
 async fn try_send_with_retry<T>(tx: &mpsc::SyncSender<T>, mut msg: T) {
@@ -889,11 +927,13 @@ impl ChatView {
                             send_pending(&tx, PendingResponse::UiMessage(warn_msg)).await;
                         }
 
-                        let is_empty = final_content.as_ref().is_none_or(|c| c.is_empty());
-                        if is_empty && !final_agent.as_ref().is_some_and(|a| a.is_empty()) {
-                            // Response was empty even after successful streaming.
+                        let content_empty = final_content.as_ref().is_none_or(|c| c.is_empty());
+                        let agent_empty = final_agent.as_ref().map_or(true, |a| a.is_empty());
+                        if content_empty && agent_empty {
+                            // Response was empty AND no agent was selected.
                             // This happens when the backend sends a "done" event without
-                            // a "response" field. Send an error so the user sees feedback.
+                            // a "response" field and no agent name. Send an error so the
+                            // user sees feedback.
                             send_pending(
                                 &tx,
                                 PendingResponse::Error {
@@ -1033,7 +1073,18 @@ The backend may be misconfigured or overloaded."
                         if let Some(session) = self.sessions.get_mut(self.active_session) {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 if !token.is_empty() {
-                                    m.content.push_str(&token);
+                                    // Strip __thinking__ markers from stream tokens
+                                    let (clean_token, extra_thinking) =
+                                        split_thinking_from_content(&token);
+                                    if !clean_token.is_empty() {
+                                        m.content.push_str(&clean_token);
+                                    }
+                                    if !extra_thinking.is_empty() {
+                                        if m.thinking.is_empty() {
+                                            self.show_thinking_idx = Some(idx);
+                                        }
+                                        m.thinking.push_str(&extra_thinking);
+                                    }
                                 }
                                 if !reasoning.is_empty() {
                                     // First reasoning token -> auto-expand thinking panel
@@ -1100,10 +1151,23 @@ The backend may be misconfigured or overloaded."
                         if let Some(session) = self.sessions.get_mut(self.active_session) {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 if !content.is_empty() {
-                                    m.content = content;
+                                    // Strip any remaining __thinking__ markers from the final content
+                                    let (clean_content, extra_thinking) =
+                                        split_thinking_from_content(&content);
+                                    m.content = clean_content;
+                                    if !extra_thinking.is_empty() {
+                                        if m.thinking.is_empty() {
+                                            self.show_thinking_idx = Some(idx);
+                                        }
+                                        m.thinking.push_str(&extra_thinking);
+                                    }
                                 }
                                 if !thinking.is_empty() {
-                                    m.thinking = thinking;
+                                    if m.thinking.is_empty() {
+                                        m.thinking.clone_from(&thinking);
+                                    } else {
+                                        m.thinking.push_str(&thinking);
+                                    }
                                 }
                                 // Update the model used.
                                 //   - Copilot auto → actual model name (e.g. "gemini-2.5-pro")

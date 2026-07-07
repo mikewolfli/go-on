@@ -67,7 +67,8 @@ fn simple_request_hash(request: &str, max_len: usize) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let truncated = if request.len() > max_len {
-        &request[..max_len]
+        // Use floor_char_boundary to avoid cutting in the middle of a UTF-8 char
+        &request[..request.floor_char_boundary(max_len)]
     } else {
         request
     };

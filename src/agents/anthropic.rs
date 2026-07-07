@@ -13,7 +13,8 @@ use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
 use crate::agents::{
-    option_f64, option_string, option_u64, principles_to_text, stream_sse_events, SseEventAction,
+    option_f64, option_u64, principles_to_text, resolve_effective_model, stream_sse_events,
+    SseEventAction,
 };
 
 /// Anthropic Claude agent
@@ -177,7 +178,7 @@ impl AnthropicAgent {
             }));
         }
 
-        let model = option_string(options, "model").unwrap_or_else(|| self.model.clone());
+        let model = resolve_effective_model(&self.model, options, &self.available_models());
         let max_tokens = option_u64(options, "max_tokens")
             .map(|v| v as u32)
             .unwrap_or(self.max_tokens);

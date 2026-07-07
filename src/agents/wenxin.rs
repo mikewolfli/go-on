@@ -95,7 +95,12 @@ impl WenxinAgent {
     }
 
     fn resolve_target_model(options: &Option<HashMap<String, Value>>) -> String {
-        option_string(options, "model").unwrap_or_else(|| "ERNIE-4.5-8K".to_string())
+        let model = option_string(options, "model").unwrap_or_default();
+        if model == "auto" || model.is_empty() {
+            "ERNIE-4.5-8K".to_string()
+        } else {
+            model
+        }
     }
 
     fn endpoint_for_model(model: &str) -> &'static str {

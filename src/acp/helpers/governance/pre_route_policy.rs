@@ -154,13 +154,17 @@ pub(crate) async fn evaluate_pre_route_policies(
 /// [`ModeKind`], and returns an error with a user-friendly recommendation
 /// if the current mode is insufficient.
 fn validate_mode_capability(mode: &ModeKind, messages: &[Message]) -> Result<()> {
-    // Build task description by concatenating all user messages.
+    // Only check the LAST user message to avoid cross-message contamination.
+    // Previous assistant responses may contain security-sensitive content
+    // (API keys, tokens, secrets) that would incorrectly flag benign follow-
+    // up requests as requiring higher privilege modes.
     let task_description: String = messages
         .iter()
         .filter(|m| m.role == "user")
+        .last()
         .map(|m| m.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+        .unwrap_or("")
+        .to_string();
 
     if task_description.is_empty() {
         return Ok(());

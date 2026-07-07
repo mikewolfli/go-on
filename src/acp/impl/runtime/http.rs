@@ -478,14 +478,16 @@ async fn route_http_post(
                         err: anyhow::Error,
                     ) {
                         let err_str = err.to_string();
+                        // Send an "error" event (not "done") so the GUI correctly
+                        // treats this as a failure instead of overwriting the
+                        // previous "done" event from agent streaming with
+                        // an empty response + "system" agent.
+                        // The TLS handler already does this correctly.
                         let _ = sse_tx
                             .send(crate::acp::r#impl::chat::streaming::StreamFrame {
-                                event: "done",
+                                event: "error",
                                 payload: serde_json::json!({
-                                    "done": true,
                                     "error": err_str,
-                                    "response": "",
-                                    "agent": "system",
                                 }),
                             })
                             .await;
