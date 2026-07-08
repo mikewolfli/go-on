@@ -38,8 +38,12 @@ pub(crate) async fn start_server(
     cl_agent_handle: Option<AgentInjector>,
 ) -> Result<()> {
     // Create HTTP client with timeout
+    // Use HTTP/1.1 only to avoid HTTP/2 'unknown stream error' issues with
+    // some AI provider APIs (e.g., DeepSeek). HTTP/2 multiplexing can cause
+    // intermittent stream resets on long-lived SSE connections.
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
+        .http1_only()
         .build()?;
 
     // Initialize capability graph for agent capability-based routing

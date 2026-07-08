@@ -701,9 +701,13 @@ pub(crate) fn extract_token(value: &Value) -> Option<String> {
     // __thinking__ so the chat handler can separate them from the main
     // response and stream them as "reasoning" SSE events.
     //
-    // If BOTH reasoning_content AND content are present in the same delta,
-    // both are returned: first the thinking prefix with reasoning, then the
-    // content (concatenated so neither is lost).
+    // IMPORTANT: When BOTH reasoning_content AND content are present in
+    // the same delta, we return ONLY the thinking token (without content).
+    // The content will be picked up by the standard content extraction
+    // below, ensuring run_agent_collecting correctly separates reasoning
+    // into reasoning_buffer and content into response. DO NOT combine
+    // them with build_thinking_token(thinking, Some(text)) — that would
+    // push the content into reasoning_buffer and lose it from the response.
     if let Some(thinking) = value
         .get("choices")
         .and_then(|v| v.get(0))
@@ -712,18 +716,6 @@ pub(crate) fn extract_token(value: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
     {
         if !thinking.is_empty() {
-            // Check if content also exists in the same delta
-            let content = value
-                .get("choices")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("delta"))
-                .and_then(|v| v.get("content"))
-                .and_then(|v| v.as_str());
-            if let Some(text) = content {
-                if !text.is_empty() {
-                    return Some(build_thinking_token(thinking, Some(text)));
-                }
-            }
             return Some(build_thinking_token(thinking, None));
         }
     }
@@ -735,18 +727,6 @@ pub(crate) fn extract_token(value: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
     {
         if !thinking.is_empty() {
-            // Check if content also exists in the same message
-            let content = value
-                .get("choices")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("message"))
-                .and_then(|v| v.get("content"))
-                .and_then(|v| v.as_str());
-            if let Some(text) = content {
-                if !text.is_empty() {
-                    return Some(build_thinking_token(thinking, Some(text)));
-                }
-            }
             return Some(build_thinking_token(thinking, None));
         }
     }

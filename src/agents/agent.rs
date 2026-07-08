@@ -200,6 +200,17 @@ pub struct AgentAuditLog {
 /// Keyring prefix for secret references
 ///
 /// Duplicated from acp::helpers::planning::context — consider using a shared constant.
+///
+/// # SECURITY POLICY
+///
+/// ALL API keys MUST be stored in the system keyring exclusively.
+///   - GUI stores via keyring crate (libsecret/Keychain/Credential Manager)
+///   - Backend reads via keyring:// URIs in config.toml
+///   - NO .env files, NO plaintext storage, NO process env leakage
+///
+/// The env var fallback in load_secret_value() exists ONLY for advanced
+/// users who deliberately export env vars (e.g., CI/CD pipelines).
+/// Do NOT add .env file loading here.
 const KEYRING_PREFIX: &str = "keyring://";
 static SECRET_POOL_STATE: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 

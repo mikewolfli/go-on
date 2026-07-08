@@ -94,6 +94,43 @@ pub struct SecurityConfig {
     /// Empty means any valid client cert is accepted.
     #[serde(default)]
     pub mtls_allowed_cns: String,
+    /// HTTP request URL policy for runtime sandboxing.
+    /// Controls which URLs the http_request tool is allowed to access.
+    /// Security is enforced at runtime (Layer 3), not via LLM pre-policy.
+    #[serde(default)]
+    pub url_policy: UrlPolicyConfig,
+}
+
+/// URL access policy for the http_request tool.
+///
+/// LAYER 3: Config-level URL allow/block lists.
+/// Security is enforced at runtime by the tool execution sandbox,
+/// not by LLM pre-policy review.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct UrlPolicyConfig {
+    /// If true, only URLs matching allowed_patterns are permitted.
+    /// If false (default), all http/https URLs are permitted unless blocked.
+    #[serde(default)]
+    pub restrict_to_allowed: bool,
+    /// Glob-style URL patterns that are always allowed (e.g. "https://api.deepseek.com/*").
+    #[serde(default)]
+    pub allowed_patterns: Vec<String>,
+    /// Glob-style URL patterns that are always blocked (e.g. "*.malicious.com/*").
+    #[serde(default)]
+    pub blocked_patterns: Vec<String>,
+    /// Maximum response body size in bytes (default: 10MB).
+    #[serde(default = "default_max_response_bytes")]
+    pub max_response_bytes: usize,
+    /// Block requests to private/internal IP ranges (10.x, 192.168.x, 127.x, etc.).
+    #[serde(default = "default_true")]
+    pub block_private_ips: bool,
+}
+
+fn default_max_response_bytes() -> usize {
+    10 * 1024 * 1024
+}
+fn default_true() -> bool {
+    true
 }
 
 /// Feature-flag configuration fields.

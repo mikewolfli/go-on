@@ -27,6 +27,7 @@ summary_max_chars = 1200
 
 [runtime]
 protocol_mode = "acp"
+deployment_target = "local-dev"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
@@ -42,6 +43,11 @@ production_strict = false
 governance_enabled = true
 governance_policy_mode = "advisory"
 acp_http_bind_addr = "127.0.0.1:8090"
+
+[startup_context]
+enabled = true
+readme_max_chars = 2000
+recent_commits = 5
 
 # ── Observability / OpenTelemetry ────────────────────────────────────
 otel_enabled = true

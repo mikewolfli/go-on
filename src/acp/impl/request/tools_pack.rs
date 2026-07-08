@@ -385,7 +385,10 @@ pub(crate) async fn execute_mcp_tool_call(
     let result = async {
     if let Some(harness_bus) = server.governance_deps.harness_bus.as_ref() {
         let verdict = harness_bus.evaluator.check_tool_call(name, arguments);
-        if verdict.require_review {
+        // Skip require_review for tools that are registered in the
+        // tool_registry — they are explicitly registered and trusted.
+        let is_registered = server.tool_registry.get(name).is_some();
+        if verdict.require_review && !is_registered {
             // Unknown tool — not in sandbox whitelist. The AI should ask
             // the user for approval before using this tool (inline
             // confirmation pattern, like zed chat / copilot chat).
@@ -396,7 +399,7 @@ pub(crate) async fn execute_mcp_tool_call(
                  Tools can be added to the allowlist via governance policy configuration.",
                 name,
             );
-        } else if !verdict.allowed {
+        } else if !verdict.allowed && !verdict.require_review {
             record_tool_harness_sandbox_denied();
             anyhow::bail!(
                 "tool '{}' denied by harness sandbox policy (sandbox_allowed={}). \

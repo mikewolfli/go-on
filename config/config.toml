@@ -35,6 +35,7 @@ summary_max_chars = 800
 [runtime]
 protocol_mode = "acp"
 platform_mode = "universal"
+deployment_target = "local-dev"
 acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
@@ -44,7 +45,7 @@ entry_auth_enabled = false
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 240
 entry_rate_limit_burst = 60
-production_strict = false
+	production_strict = false
 i18n_default_language = "en-US"
 skills_enabled = true
 skills_import_enabled = false
@@ -52,6 +53,12 @@ skills_allowed_sources = ["local:*"]
 skills_require_sha256 = true
 skills_allow_floating_ref = false
 skills_cache_dir = "skills_cache"
+
+[startup_context]
+enabled = true
+readme_max_chars = 2000
+recent_commits = 5
+
 governance_enabled = true
 governance_policy_mode = "advisory"
 

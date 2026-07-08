@@ -534,10 +534,9 @@ async fn route_http_post(
 
                     // Add a 30-second overall timeout for the chat stream.
                     // If no events arrive (e.g., pipeline hang), abort and return error.
-                    // SSE flush interval: flush every 16 events to batch syscalls.
-                    // This avoids one `flush()` syscall per event, which is the #1
-                    // performance bottleneck in high-frequency token streaming.
-                    const SSE_FLUSH_INTERVAL: usize = 16;
+                    // SSE flush interval: flush every 4 events to keep UI responsive
+                    // for thinking/reasoning token display while still batching syscalls.
+                    const SSE_FLUSH_INTERVAL: usize = 4;
                     let mut sse_event_count: usize = 0;
 
                     let stream_timeout = tokio::time::sleep(std::time::Duration::from_secs(30));

@@ -222,6 +222,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     // ── Initialize runtime components ──
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
+        .http1_only()
         .build()?;
 
     let capability_graph = Arc::new(Mutex::new(CapabilityGraph::new()));

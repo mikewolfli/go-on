@@ -10,6 +10,9 @@ use anyhow::Result;
 use tokio::net::{lookup_host, TcpStream};
 
 /// Prefix for keyring secret references
+///
+/// SECURITY: ALL secrets MUST come from keyring only.
+/// Do NOT add .env or env var fallbacks here.
 const KEYRING_PREFIX: &str = "keyring://";
 
 use crate::config::{AppConfig, PhaseOptions};

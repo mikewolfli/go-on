@@ -838,6 +838,14 @@ impl ChatView {
                                                                 .unwrap_or_default()
                                                         )
                                                     });
+
+                                                // Log the error details for diagnostics.
+                                                tracing::warn!(
+                                                    "[Gen] SSE error event for generation {}: {}",
+                                                    generation_id,
+                                                    message
+                                                );
+
                                                 send_pending(
                                                     &tx,
                                                     PendingResponse::Error {
@@ -928,7 +936,7 @@ impl ChatView {
                         }
 
                         let content_empty = final_content.as_ref().is_none_or(|c| c.is_empty());
-                        let agent_empty = final_agent.as_ref().map_or(true, |a| a.is_empty());
+                        let agent_empty = final_agent.as_ref().is_none_or(|a| a.is_empty());
                         if content_empty && agent_empty {
                             // Response was empty AND no agent was selected.
                             // This happens when the backend sends a "done" event without
@@ -961,8 +969,10 @@ The backend may be misconfigured or overloaded."
                         }
                     }
                     Err(err) => {
+                        // Log full error details for diagnosing reqwest/hyper transport errors
+                        // (e.g. HTTP/2 stream errors, connection resets, TLS handshake failures).
                         tracing::warn!(
-                            "[Gen] Generation {} stream request failed (attempting fallback): {}",
+                            "[Gen] Generation {} stream request failed (attempting fallback): {:?}",
                             generation_id,
                             err
                         );
@@ -1232,7 +1242,49 @@ The backend may be misconfigured or overloaded."
                     generation_id,
                     message,
                 } => {
-                    self.error = i18n.t("chat.chatError").replace("{message}", &message);
+                    // Provide user-friendly hints for common/generic errors
+                    // that lack actionable details (e.g., HTTP/2 "stream error"
+                    // from reqwest/hyper when the provider API call fails).
+                    let enhanced_message = {
+                        let lower = message.to_lowercase();
+                        if lower.contains("unknown stream error")
+                            || (lower.contains("stream error") && lower.contains("unknown"))
+                        {
+                            format!(
+                                "{} \n\n💡 The AI provider returned a generic stream error. \
+                                 This often means the API key is missing, expired, or the provider \
+                                 endpoint is unreachable. Check your provider configuration in \
+                                 the Providers tab and verify that DEEPSEEK_API_KEY (or the \
+                                 appropriate env var) is set correctly.",
+                                message
+                            )
+                        } else if lower.contains("401")
+                            || lower.contains("unauthorized")
+                            || lower.contains("authentication")
+                            || lower.contains("invalid api key")
+                            || lower.contains("invalid_api_key")
+                        {
+                            format!(
+                                "{} \n\n💡 Authentication failed. Check that your API key is \
+                                 correct and has not expired. Update it in the Providers tab.",
+                                message
+                            )
+                        } else if lower.contains("402")
+                            || lower.contains("insufficient_quota")
+                            || lower.contains("rate limit")
+                        {
+                            format!(
+                                "{} \n\n💡 You may have exceeded your API usage quota or rate \
+                                 limit. Check your provider account billing and usage.",
+                                message
+                            )
+                        } else {
+                            message
+                        }
+                    };
+                    self.error = i18n
+                        .t("chat.chatError")
+                        .replace("{message}", &enhanced_message);
                     if let Some(id) = generation_id {
                         if let Some((_, model, _)) = self.generation_meta(id) {
                             let stats = self.model_stats.entry(model).or_default();

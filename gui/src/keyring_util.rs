@@ -2,7 +2,7 @@
 /// Shared across config loading, editor redaction, and UI preview logic.
 pub const REDACTED_API_KEY: &str = "********";
 
-/// Utility for storing and retrieving API keys via the system keyring.
+/// Utility for storing and retrieving API keys via the system keyring ONLY.
 ///
 /// Keyring entries use the format `go-on/{provider}_api_key`.
 ///
@@ -11,9 +11,18 @@ pub const REDACTED_API_KEY: &str = "********";
 ///   - **Linux**: libsecret (Secret Service)
 ///   - **Windows**: Credential Manager
 ///
-/// The GUI also keeps `api_key` in `config.providers` as a fallback so that if the
-/// system keyring is unavailable the key can still be injected into the backend
-/// process environment at startup.
+/// # SECURITY POLICY (DO NOT VIOLATE)
+///
+/// ALL API keys and tokens MUST be stored and retrieved exclusively via the
+/// system keyring. NO .env files, NO environment variable fallbacks, NO
+/// plaintext storage of any kind. This applies to ALL providers and the
+/// Copilot token.
+///
+/// Rationale:
+///   - .env files are world-readable on Unix (0755 parent dir)
+///   - Process environment is visible via /proc/PID/environ to any user
+///   - Keyring provides OS-level encryption at rest (Keychain, libsecret,
+///     Credential Manager)
 ///
 /// # macOS keychain prompt elimination
 ///
@@ -270,34 +279,17 @@ fn invalidate_cache(provider: &str) {
     }
 }
 
-/// Store an API key in the system keyring AND sync to `.env` file.
-/// Hybrid storage ensures the backend can read keys even in headless mode
-/// (macOS Security.framework blocks background keychain access).
+/// Store an API key in the system keyring.
 pub fn store_api_key(provider: &str, api_key: &str) -> Result<()> {
     platform::store_api_key(provider, api_key)?;
     invalidate_cache(provider);
-    // Also sync to .env file for headless backend / Zed standalone
-    let env_name = provider_to_env_name(provider, "api_key");
-    if let Err(e) = sync_dotenv_key(&env_name, api_key) {
-        eprintln!(
-            "Warning: failed to sync API key to .env ({}): {}",
-            env_name, e
-        );
-    }
     Ok(())
 }
 
-/// Store a provider secret key in the system keyring AND sync to `.env` file.
+/// Store a provider secret key in the system keyring.
 pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
     platform::store_secret_key(provider, secret_key)?;
     invalidate_cache(provider);
-    let env_name = provider_to_env_name(provider, "secret_key");
-    if let Err(e) = sync_dotenv_key(&env_name, secret_key) {
-        eprintln!(
-            "Warning: failed to sync secret key to .env ({}): {}",
-            env_name, e
-        );
-    }
     Ok(())
 }
 
@@ -315,14 +307,7 @@ pub fn get_api_key(provider: &str) -> Option<String> {
     }
 
     // Cache miss — query the system keyring
-    let result = platform::get_api_key(provider).or_else(|| {
-        // Fallback: read from `.env` file
-        let env_name = provider_to_env_name(provider, "api_key");
-        let dotenv = read_dotenv();
-        dotenv
-            .get(&env_name)
-            .map(|v| v.trim_matches('"').to_string())
-    });
+    let result = platform::get_api_key(provider);
 
     // Cache the result (both Some and None) to avoid redundant prompts
     if let Ok(mut cache) = KEYRING_CACHE.lock() {
@@ -345,13 +330,7 @@ pub fn get_secret_key(provider: &str) -> Option<String> {
     }
 
     // Cache miss — query the system keyring
-    let result = platform::get_secret_key(provider).or_else(|| {
-        let env_name = provider_to_env_name(provider, "secret_key");
-        let dotenv = read_dotenv();
-        dotenv
-            .get(&env_name)
-            .map(|v| v.trim_matches('"').to_string())
-    });
+    let result = platform::get_secret_key(provider);
 
     // Cache the result
     if let Ok(mut cache) = KEYRING_CACHE.lock() {
@@ -361,28 +340,24 @@ pub fn get_secret_key(provider: &str) -> Option<String> {
     result
 }
 
-/// Check whether a key exists in the system keyring or `.env` file for the given provider.
+/// Check whether a key exists in the system keyring for the given provider.
 /// Uses cached `get_api_key` internally, so no redundant keychain access.
 pub fn has_api_key(provider: &str) -> bool {
     get_api_key(provider).is_some()
 }
 
-/// Delete an API key from the system keyring AND `.env` file (silent if missing).
+/// Delete an API key from the system keyring (silent if missing).
 pub fn delete_api_key(provider: &str) -> Result<()> {
     platform::delete_api_key(provider)?;
     invalidate_cache(provider);
-    let env_name = provider_to_env_name(provider, "api_key");
-    let _ = remove_dotenv_key(&env_name);
     Ok(())
 }
 
-/// Delete a provider secret key from the system keyring AND `.env` file (silent if missing).
+/// Delete a provider secret key from the system keyring (silent if missing).
 /// F-GAP-48: Wired — called from providers/mod.rs when removing dual-auth providers.
 pub fn delete_secret_key(provider: &str) -> Result<()> {
     platform::delete_secret_key(provider)?;
     invalidate_cache(provider);
-    let env_name = provider_to_env_name(provider, "secret_key");
-    let _ = remove_dotenv_key(&env_name);
     Ok(())
 }
 
@@ -398,7 +373,7 @@ pub fn flush_pending_acl_updates() {
     platform::flush_pending_acl_updates();
 }
 
-/// Delete the github_copilot_token alias from the system keyring AND `.env` file.
+/// Delete the github_copilot_token alias from the system keyring.
 /// Used when removing a Copilot provider to clean up the alternative keyring entry
 /// that was created alongside copilot_api_key for backward compatibility.
 pub fn delete_copilot_token() -> Result<()> {
@@ -406,22 +381,16 @@ pub fn delete_copilot_token() -> Result<()> {
     if let Ok(entry) = keyring::Entry::new("go-on", account) {
         let _ = entry.delete_credential();
     }
-    let _ = remove_dotenv_key("GITHUB_COPILOT_TOKEN");
     Ok(())
 }
 
-/// Store the Copilot token to the github_copilot_token keyring entry AND `.env`.
-/// Hybrid storage ensures the backend / Zed can read it without keychain.
+/// Store the Copilot token to the github_copilot_token keyring entry.
 pub fn store_copilot_token(token: &str) -> Result<()> {
     let account = "github_copilot_token";
     let entry = keyring::Entry::new("go-on", account)?;
     entry.set_password(token)?;
     #[cfg(target_os = "macos")]
     platform::defer_ensure_item_accessible(account);
-    // Also sync to .env
-    if let Err(e) = sync_dotenv_key("GITHUB_COPILOT_TOKEN", token) {
-        eprintln!("Warning: failed to sync Copilot token to .env: {}", e);
-    }
     Ok(())
 }
 
@@ -430,7 +399,7 @@ pub fn store_copilot_token(token: &str) -> Result<()> {
 /// from being stored in plaintext config files.
 /// Returns `None` if the key is not found in the keyring.
 pub fn get_api_key_with_fallback(provider: &str, config_key: Option<&str>) -> Option<String> {
-    // First try: keyring lookup (with .env fallback already built into get_api_key)
+    // First try: keyring lookup
     if let Some(key) = get_api_key(provider) {
         return Some(key);
     }
@@ -438,101 +407,4 @@ pub fn get_api_key_with_fallback(provider: &str, config_key: Option<&str>) -> Op
     config_key
         .filter(|k| !k.is_empty() && *k != REDACTED_API_KEY)
         .map(|k| k.to_string())
-}
-
-// ── .env file sync (Hybrid storage: keyring + dotenv) ────────────────────
-//
-// The backend (especially when run standalone by Zed) cannot reliably read
-// the system keyring on macOS (blocking Security.framework dialog).
-// As a fallback, we sync all API keys to a `.env` file next to the backend
-// binary. The backend reads this file when keychain access times out.
-//
-// .env format:
-//   DEEPSEEK_API_KEY=sk-xxx
-//   OPENAI_API_KEY=sk-xxx
-//   WENXIN_API_KEY=xxx
-//   WENXIN_SECRET_KEY=xxx
-//   GITHUB_COPILOT_TOKEN=ghu_xxx
-
-/// Map a provider name and key type to the corresponding environment variable name.
-fn provider_to_env_name(provider: &str, key_type: &str) -> String {
-    let prefix = match provider {
-        "copilot" => "GITHUB_COPILOT".to_string(),
-        "github" => "GITHUB_COPILOT".to_string(),
-        p => p.to_uppercase(),
-    };
-    match key_type {
-        "api_key" | "token" => {
-            if provider == "copilot" || provider == "github" {
-                "GITHUB_COPILOT_TOKEN".to_string()
-            } else {
-                format!("{}_API_KEY", prefix)
-            }
-        }
-        "secret_key" => format!("{}_SECRET_KEY", prefix),
-        other => format!("{}_{}", prefix, other.to_uppercase()),
-    }
-}
-
-/// Find the `.env` file path relative to the backend binary.
-/// Falls back to `./.env` in current directory.
-fn dotenv_path() -> std::path::PathBuf {
-    // Try next to backend binary first
-    if let Some(bin_path) = crate::app::actions::find_backend_binary() {
-        if let Some(parent) = bin_path.parent() {
-            return parent.join(".env");
-        }
-    }
-    // Fallback: current directory
-    std::path::PathBuf::from(".env")
-}
-
-/// Read the current `.env` file into a map of key-value pairs.
-fn read_dotenv() -> BTreeMap<String, String> {
-    let path = dotenv_path();
-    let mut map = BTreeMap::new();
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some((key, value)) = line.split_once('=') {
-                map.insert(key.trim().to_string(), value.trim().to_string());
-            }
-        }
-    }
-    map
-}
-
-/// Write a map of key-value pairs to the `.env` file.
-fn write_dotenv(map: &BTreeMap<String, String>) -> Result<()> {
-    let path = dotenv_path();
-    let mut content = String::from("# Auto-generated by go-on-gui — do not edit manually.\n");
-    content.push_str("# Add new keys via the GUI Providers page.\n");
-    for (key, value) in map {
-        content.push_str(&format!("{}=\"{}\"\n", key, value));
-    }
-    std::fs::write(&path, content.as_bytes())?;
-    // Set 600 permission (user read/write only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
-}
-
-/// Sync a single key-value pair to the `.env` file, preserving existing entries.
-pub fn sync_dotenv_key(env_name: &str, value: &str) -> Result<()> {
-    let mut map = read_dotenv();
-    map.insert(env_name.to_string(), value.to_string());
-    write_dotenv(&map)
-}
-
-/// Remove a key from the `.env` file, preserving other entries.
-pub fn remove_dotenv_key(env_name: &str) -> Result<()> {
-    let mut map = read_dotenv();
-    map.remove(env_name);
-    write_dotenv(&map)
 }

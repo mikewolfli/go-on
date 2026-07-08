@@ -52,43 +52,40 @@ impl ChatView {
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-                match tokio::time::timeout(
+                if let Ok(Ok(baseline)) = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
                     backend_clone.config_baseline(),
                 )
                 .await
                 {
-                    Ok(Ok(baseline)) => {
-                        // Try to load phases from backend config baseline response.
-                        // The backend may not include "flow.phases", so fall back to
-                        // the hardcoded default phases that the GUI always generates.
-                        let phases: Vec<String> = baseline
-                            .get("config")
-                            .and_then(|c| c.get("flow"))
-                            .and_then(|f| f.get("phases"))
-                            .and_then(|p| p.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(String::from))
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_else(|| {
-                                vec![
-                                    "planning".to_string(),
-                                    "coding".to_string(),
-                                    "review".to_string(),
-                                    "delivery".to_string(),
-                                ]
-                            });
-                        if let Err(e) = tx.try_send(PendingResponse::Phases(phases)) {
-                            eprintln!("WARN: chat ui try_send failed: {:?}", e);
-                        }
-                        ctx_clone.request_repaint();
+                    // Try to load phases from backend config baseline response.
+                    // The backend may not include "flow.phases", so fall back to
+                    // the hardcoded default phases that the GUI always generates.
+                    let phases: Vec<String> = baseline
+                        .get("config")
+                        .and_then(|c| c.get("flow"))
+                        .and_then(|f| f.get("phases"))
+                        .and_then(|p| p.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_else(|| {
+                            vec![
+                                "planning".to_string(),
+                                "coding".to_string(),
+                                "review".to_string(),
+                                "delivery".to_string(),
+                            ]
+                        });
+                    if let Err(e) = tx.try_send(PendingResponse::Phases(phases)) {
+                        eprintln!("WARN: chat ui try_send failed: {:?}", e);
                     }
-                    _ => {
-                        #[cfg(debug_assertions)]
-                        eprintln!("Warning: Failed to load phases from backend (timeout or error)");
-                    }
+                    ctx_clone.request_repaint();
+                } else {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Warning: Failed to load phases from backend (timeout or error)");
                 }
             });
         }
