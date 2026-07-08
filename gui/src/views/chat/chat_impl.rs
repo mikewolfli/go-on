@@ -146,6 +146,11 @@ pub struct ChatView {
     pub stream_progress: TokenProgress,
     /// SSE processor for the current streaming generation.
     stream_processor: Option<StreamProcessor>,
+
+    /// Pending tool approval request from a sandbox denial.
+    /// When set, the UI shows Approve/Deny buttons instead of a plain error.
+    /// Tuple: (tool_name, last_user_message_index)
+    pending_tool_approval: Option<(String, usize)>,
 }
 
 impl ChatView {
@@ -530,6 +535,7 @@ impl ChatView {
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,
+            pending_tool_approval: None,
         }
     }
 
@@ -1092,6 +1098,7 @@ mod tests {
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,
+            pending_tool_approval: None,
         }
     }
 

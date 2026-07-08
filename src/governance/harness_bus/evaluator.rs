@@ -66,6 +66,9 @@ pub struct PolicyEvaluator {
     /// Evaluated after the built-in checks; the first matching policy short-circuits.
     pub policies: Arc<RwLock<HashMap<String, PolicyFn>>>,
 
+    /// Tools that the user has explicitly approved (bypasses require_review).
+    pub user_approved_tools: Mutex<std::collections::HashSet<String>>,
+
     /// Set to true when the most recent `evaluate()` call was blocked by
     /// the self-rationalization guard. Consumed by `HarnessBus::evaluate()`
     /// to record a rationalization block counter on the governance profile.
@@ -115,6 +118,7 @@ impl PolicyEvaluator {
                 default_policies,
                 ..Default::default()
             })),
+            user_approved_tools: Mutex::new(std::collections::HashSet::new()),
             rationalization_block_occurred: AtomicBool::new(false),
             review_override_occurred: AtomicBool::new(false),
         }
@@ -477,6 +481,20 @@ impl PolicyEvaluator {
     }
 
     /// Pre-tool-call validation.
+    /// Approve a tool for the current session — bypasses sandbox require_review.
+    pub fn approve_tool(&self, tool: &str) {
+        if let Ok(mut approved) = self.user_approved_tools.lock() {
+            approved.insert(tool.to_string());
+        }
+    }
+
+    /// Revoke approval for a tool.
+    pub fn revoke_tool_approval(&self, tool: &str) {
+        if let Ok(mut approved) = self.user_approved_tools.lock() {
+            approved.remove(tool);
+        }
+    }
+
     pub fn check_tool_call(&self, tool: &str, _args: &Value) -> ToolVerdict {
         let level = *self.sandbox_level.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
@@ -628,8 +646,17 @@ impl PolicyEvaluator {
             }
             // ── Unknown tools — require user review (not auto-allowed) ─
             _ => {
-                recognized = false;
-                false
+                // Check user-approved tools first (bypasses require_review)
+                let is_approved = self.user_approved_tools.lock()
+                    .map(|approved| approved.contains(tool))
+                    .unwrap_or(false);
+                if is_approved {
+                    recognized = true;
+                    true  // User explicitly approved, bypass sandbox
+                } else {
+                    recognized = false;
+                    false
+                }
             }
         };
         let idempotent = self

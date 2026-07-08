@@ -1157,6 +1157,7 @@ The backend may be misconfigured or overloaded."
                     let generation_meta = self.generation_meta(generation_id);
                     let mut model_name = None;
                     let mut output_tokens_to_record = self.output_token_estimate;
+                    let mut is_sandbox_denial = false;
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
                         if let Some(session) = self.sessions.get_mut(self.active_session) {
                             if let Some(m) = session.messages.get_mut(idx) {
@@ -1172,6 +1173,13 @@ The backend may be misconfigured or overloaded."
                                         m.thinking.push_str(&extra_thinking);
                                     }
                                 }
+
+                                // Check for sandbox denial in message content
+                                is_sandbox_denial = !m.content.is_empty() && {
+                                    let lower = m.content.to_lowercase();
+                                    lower.contains("not in sandbox whitelist")
+                                        && lower.contains("requires user confirmation")
+                                };
                                 if !thinking.is_empty() {
                                     if m.thinking.is_empty() {
                                         m.thinking.clone_from(&thinking);
@@ -1201,6 +1209,35 @@ The backend may be misconfigured or overloaded."
                                 m.total_tokens = self.last_token_estimate.max(m.total_tokens);
                                 output_tokens_to_record = m.output_tokens;
                                 model_name = Some(m.model.clone());
+                            }
+                        }
+                    }
+
+                    // Detect sandbox denial in completed message content
+                    if is_sandbox_denial {
+                        if let Some(idx) = self.generation_msg_idx(generation_id) {
+                            let msg_content = self
+                                .sessions
+                                .get(self.active_session)
+                                .and_then(|s| s.messages.get(idx))
+                                .map(|m| m.content.clone())
+                                .unwrap_or_default();
+                            let tool_name =
+                                msg_content.split('\'').nth(1).unwrap_or("").to_string();
+                            if !tool_name.is_empty() {
+                                let last_user_idx = self
+                                    .sessions
+                                    .get(self.active_session)
+                                    .map(|s| s.messages.iter().rposition(|m| m.role == "user"))
+                                    .flatten()
+                                    .unwrap_or(0);
+                                self.pending_tool_approval =
+                                    Some((tool_name.clone(), last_user_idx));
+                                self.error = format!(
+                                    "💡 Tool '{}' requires your approval. Click Approve above or Deny to block it.",
+                                    tool_name
+                                );
+                                self.ai_status = AiStatus::Error;
                             }
                         }
                     }
@@ -1277,6 +1314,30 @@ The backend may be misconfigured or overloaded."
                                 "{} \n\n💡 You may have exceeded your API usage quota or rate \
                                  limit. Check your provider account billing and usage.",
                                 message
+                            )
+                        } else if lower.contains("not in sandbox whitelist")
+                            && lower.contains("requires user confirmation")
+                        {
+                            // Sandbox denial — extract tool name for approval buttons
+                            // Format: "tool 'agent-world-connector' is not in sandbox whitelist..."
+                            let tool_name = message.split('\'').nth(1).unwrap_or("").to_string();
+                            if !tool_name.is_empty() {
+                                // Find the last user message index
+                                let last_user_idx = self
+                                    .sessions
+                                    .get(self.active_session)
+                                    .map(|session| {
+                                        session.messages.iter().rposition(|m| m.role == "user")
+                                    })
+                                    .flatten()
+                                    .unwrap_or(0);
+                                self.pending_tool_approval =
+                                    Some((tool_name.clone(), last_user_idx));
+                            }
+                            format!(
+                                "{} \n\n💡 The tool '{}' requires your approval to proceed. \
+                                         Click 'Approve' to allow it, or 'Deny' to block it.",
+                                message, tool_name
                             )
                         } else {
                             message

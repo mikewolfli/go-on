@@ -778,6 +778,16 @@ impl BackendClient {
         self.rpc_call("runtime.restart", None).await
     }
 
+    /// Approve a tool that was blocked by the sandbox whitelist.
+    /// Called when the user clicks "Approve" in the chat UI.
+    pub async fn approve_tool(&self, tool_name: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "tool.approve",
+            Some(serde_json::json!({"tool_name": tool_name})),
+        )
+        .await
+    }
+
     pub async fn provider_test_connection(&self, provider: &str) -> Result<Value, String> {
         self.rpc_call(
             "provider.test_connection",

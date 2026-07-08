@@ -516,6 +516,55 @@ impl ChatView {
             if !self.error.is_empty() {
                 ui.colored_label(egui::Color32::RED, &self.error);
             }
+
+            // ── Tool approval buttons (shown when sandbox denies an unknown tool) ─
+            if let Some((ref tool_name, ref last_msg_idx)) = self.pending_tool_approval.clone() {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("🧰 Tool '{}' requires approval:", tool_name))
+                            .size(12.0)
+                            .strong(),
+                    );
+
+                    let approve_btn =
+                        egui::Button::new(egui::RichText::new("✅ Approve").size(13.0))
+                            .fill(egui::Color32::from_rgb(40, 160, 40));
+
+                    let deny_btn = egui::Button::new(egui::RichText::new("❌ Deny").size(13.0))
+                        .fill(egui::Color32::from_rgb(180, 40, 40));
+
+                    if ui.add(approve_btn).clicked() {
+                        let tool = tool_name.clone();
+                        let b = backend.clone();
+                        let msg_idx = *last_msg_idx;
+                        let input_text = self
+                            .sessions
+                            .get(self.active_session)
+                            .and_then(|s| s.messages.get(msg_idx))
+                            .map(|m| m.content.clone())
+                            .unwrap_or_default();
+
+                        self.pending_tool_approval = None;
+                        self.error.clear();
+
+                        // Spawn async task to approve tool on the backend
+                        tokio::spawn(async move {
+                            let _ = b.approve_tool(&tool).await;
+                        });
+
+                        // Re-send the user's last message with the approved tool
+                        if !input_text.is_empty() {
+                            self.input = input_text;
+                            self.send_message(backend, ctx, autotune_chain_enabled);
+                        }
+                    }
+
+                    if ui.add(deny_btn).clicked() {
+                        self.pending_tool_approval = None;
+                        self.error = format!("Tool '{}' was denied by the user.", tool_name);
+                    }
+                });
+            }
             if let Some(msg) = self.success_message.take() {
                 let success_color = if ui.visuals().dark_mode {
                     egui::Color32::from_rgb(100, 220, 100)

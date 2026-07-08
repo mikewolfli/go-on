@@ -191,6 +191,7 @@ pub(super) fn is_acp_request(method: &str) -> bool {
         "summary/primary_secondary",
         "task.execute",
         "task.plan",
+        "tool.approve",
         "terminal/create",
         "terminal/kill",
         "terminal/output",
@@ -230,6 +231,8 @@ pub(super) fn method_to_permission(method: &str) -> crate::governance::rbac::Per
         || method == "session/prompt"
     {
         Permission::Execute
+    } else if method.starts_with("tool.") {
+        Permission::ManageConfig
     } else if method.starts_with("metrics.")
         || method.starts_with("trace.")
         || method == "runtime.health"

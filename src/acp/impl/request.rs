@@ -1574,6 +1574,30 @@ pub async fn handle_request(
                     )
                     .await
                 }
+                "tool.approve" => {
+                    let params = request.params.clone().unwrap_or_default();
+                    let tool_name = params
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("tool.approve: missing 'tool_name' parameter")
+                        })?;
+
+                    if let Some(ref harness_bus) = server.governance_deps.harness_bus {
+                        harness_bus.evaluator.approve_tool(tool_name);
+                        tracing::info!("tool.approve: user approved tool '{}'", tool_name);
+                    }
+
+                    send_result(
+                        server,
+                        request_id,
+                        serde_json::json!({
+                            "approved": true,
+                            "tool_name": tool_name,
+                        }),
+                    )
+                    .await
+                }
                 "runtime.restart" => {
                     lifecycle_handlers::handle_runtime_restart(server, request_id).await
                 }

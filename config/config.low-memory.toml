@@ -73,13 +73,19 @@ api_key_env = "keyring://go-on/deepseek_api_key"
 model = "deepseek-v4-flash"
 supports_system = true
 
+[agents.copilot]
+type = "copilot"
+api_key_env = "keyring://go-on/copilot_api_key"
+model = "gpt-4o"
+supports_system = true
+
 [flow]
 name = "Low Memory Adaptive"
 phases = ["think", "act", "check", "done"]
 
 [phases.think]
 description = "Think — analyze, plan, gather context"
-agents = ["deepseek"]
+agents = ["deepseek", "copilot"]
 fallback = true
 
 [phases.think.options]
@@ -93,7 +99,7 @@ global_max_inflight = 8            # Absolute minimum global cap
 
 [phases.act]
 description = "Act — execute, generate, implement"
-agents = ["deepseek"]
+agents = ["deepseek", "copilot"]
 fallback = true
 
 [phases.act.options]
@@ -107,7 +113,7 @@ global_max_inflight = 8
 
 [phases.check]
 description = "Check — verify, validate, review results"
-agents = ["deepseek"]
+agents = ["deepseek", "copilot"]
 fallback = true
 
 [phases.check.options]
@@ -122,7 +128,7 @@ global_max_inflight = 8
 
 [phases.done]
 description = "Done — finalize, deliver, complete"
-agents = []
+agents = ["deepseek", "copilot"]
 fallback = false
 
 [phases.done.options]
