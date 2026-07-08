@@ -25,6 +25,56 @@ impl Tool for ShellExecTool {
         let timeout_ms = input.payload["timeout_ms"].as_u64().unwrap_or(30_000);
         let directory = input.payload["directory"].as_str().unwrap_or(".");
 
+        // ── LAYER 2: Runtime sandbox ────────────────────────────────────
+        // Block dangerous commands that could harm the system.
+        let command_lower = command.to_lowercase();
+        let blocked_patterns = [
+            "rm -rf /",
+            "rm -rf /*",
+            "mkfs.",
+            "dd if=",
+            "format ",
+            ":(){",
+            "fork bomb",
+            "chmod -R 000",
+            "> /dev/sda",
+            "> /dev/hda",
+            "| shutdown",
+            "| reboot",
+            "wget http://",
+            "curl http://",
+            "nmap ",
+            "hydra ",
+        ];
+        for pattern in &blocked_patterns {
+            if command_lower.contains(pattern) {
+                warn!(
+                    "shell_exec BLOCKED: command matches blocked pattern '{}' — cmd={}",
+                    pattern, command
+                );
+                return Ok(ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(format!(
+                        "Command blocked by security policy: contains '{}'",
+                        pattern
+                    )),
+                    verification: Some("shell_sandbox_blocked".to_string()),
+                    audit_log: Some(format!(
+                        "BLOCKED shell exec (pattern '{}'): {}",
+                        pattern, command
+                    )),
+                    pua_report: Some(tool_execution_report(
+                        "shell_exec",
+                        Some("shell_sandbox_blocked"),
+                    )),
+                });
+            }
+        }
+
+        // Limit output size to prevent memory exhaustion (default 10MB)
+        const MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
+
         debug!(command = %command, timeout_ms = %timeout_ms, directory = %directory, "tool: executing shell command");
 
         let current_dir = sanitize_path(input, directory)?;
@@ -203,9 +253,31 @@ impl Tool for ShellExecTool {
         match output {
             Ok(output) => {
                 let success = output.status.success();
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let exit_code = output.status.code();
+
+                // ── LAYER 2: Output size limit ──────────────────────────────────
+                if stdout.len() > MAX_OUTPUT_BYTES {
+                    warn!(
+                        "shell_exec TRUNCATED: stdout {} bytes > {} max",
+                        stdout.len(),
+                        MAX_OUTPUT_BYTES
+                    );
+                    // Truncate rather than fail - partial output is better than none
+                    let mut truncated = String::with_capacity(MAX_OUTPUT_BYTES);
+                    for ch in stdout.chars().take(MAX_OUTPUT_BYTES) {
+                        truncated.push(ch);
+                    }
+                    stdout = truncated;
+                }
+                if stderr.len() > MAX_OUTPUT_BYTES {
+                    let mut truncated = String::with_capacity(MAX_OUTPUT_BYTES);
+                    for ch in stderr.chars().take(MAX_OUTPUT_BYTES) {
+                        truncated.push(ch);
+                    }
+                    stderr = truncated;
+                }
 
                 if !success {
                     warn!(

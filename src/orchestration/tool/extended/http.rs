@@ -1,9 +1,9 @@
-//! HTTP request tool with runtime sandboxing (LAYER 2) — fully async.
+//! HTTP request tool with runtime sandboxing (LAYER 2 + LAYER 3) — fully async.
 //!
 //! Security architecture:
 //!   LAYER 1 (Principles): Review gate only confirms user intent, not safety.
 //!   LAYER 2 (Runtime):   This file — tool-level sandboxing, enforced at runtime.
-//!   LAYER 3 (Config):     URL allow/block policies from AppConfig.
+//!   LAYER 3 (Config):     URL allow/block policies from `UrlPolicyConfig`.
 //!
 //! Runtime sandbox rules (all enforced at execution time, not by LLM):
 //!   1. Only http:// and https:// schemes allowed.
@@ -11,13 +11,14 @@
 //!   3. Response body size limited (default 10MB, configurable via UrlPolicyConfig).
 //!   4. Request timeout (default 15s, configurable).
 //!   5. Full audit logging of every request (URL, method, status, size).
+//!   6. URL allow/block patterns from config (`allowed_patterns` / `blocked_patterns`).
 //!
-//! Uses async reqwest client directly (not blocking) for optimal performance
-//! in multi-user scenarios. The `run` method delegates to `run_async` via
-//! tokio's spawn_blocking.
+//! The `UrlPolicyConfig` is loaded at server startup and stored in a global OnceLock.
+//! Call `init_url_policy(config)` once during server initialization.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, OnceLock};
 
+use crate::config::UrlPolicyConfig;
 use crate::governance::pua::tool_execution_report;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
@@ -26,6 +27,41 @@ use serde_json::Value;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use tracing::{debug, warn};
+
+// ── Global URL policy config (LAYER 3) ───────────────────────────────
+// Initialized once at server startup from AppConfig::SecurityConfig::url_policy.
+// Falls back to defaults if not initialized.
+static URL_POLICY_OVERRIDE: OnceLock<UrlPolicyConfig> = OnceLock::new();
+static URL_POLICY_DEFAULT: LazyLock<UrlPolicyConfig> = LazyLock::new(|| UrlPolicyConfig {
+    max_response_bytes: 10 * 1024 * 1024,
+    block_private_ips: true,
+    restrict_to_allowed: false,
+    allowed_patterns: Vec::new(),
+    blocked_patterns: Vec::new(),
+});
+
+/// Initialize the global URL policy config from AppConfig.
+/// Must be called once during server startup.
+pub fn init_url_policy(config: UrlPolicyConfig) {
+    let _ = URL_POLICY_OVERRIDE.set(config);
+    if let Some(p) = URL_POLICY_OVERRIDE.get() {
+        tracing::info!(
+            "http_request: URL policy initialized (max_response_bytes={}, block_private_ips={}, restrict_to_allowed={}, allowed_patterns={}, blocked_patterns={})",
+            p.max_response_bytes,
+            p.block_private_ips,
+            p.restrict_to_allowed,
+            p.allowed_patterns.len(),
+            p.blocked_patterns.len(),
+        );
+    }
+}
+
+/// Get the effective URL policy.
+fn url_policy() -> &'static UrlPolicyConfig {
+    URL_POLICY_OVERRIDE
+        .get()
+        .unwrap_or_else(|| &URL_POLICY_DEFAULT)
+}
 
 /// Extract the first HTTP/HTTPS URL from a text string.
 fn extract_url(text: &str) -> Option<String> {
@@ -106,16 +142,26 @@ fn validate_url(url: &str) -> Result<()> {
         anyhow::bail!("{}", t("error.url_missing_host"));
     }
 
-    let block_private = std::env::var("GO_ON_PRIVATE_IP_BLOCK")
-        .ok()
-        .and_then(|v| v.parse::<bool>().ok())
-        .unwrap_or(true);
-
-    if block_private && is_private_host(host) {
+    if url_policy().block_private_ips && is_private_host(host) {
         anyhow::bail!(
             "{}",
             tf("error.url_blocked_private_host", &[("host", host)])
         );
+    }
+
+    // ── URL allow/block patterns (LAYER 3) ───────────────────────────
+    let policy = url_policy();
+    if policy.restrict_to_allowed && !policy.allowed_patterns.is_empty() {
+        let allowed = policy.allowed_patterns.iter().any(|p| url.contains(p));
+        if !allowed {
+            anyhow::bail!("{}", tf("error.url_not_allowed", &[("url", url)]));
+        }
+    }
+    if !policy.blocked_patterns.is_empty() {
+        let blocked = policy.blocked_patterns.iter().any(|p| url.contains(p));
+        if blocked {
+            anyhow::bail!("{}", tf("error.url_blocked", &[("url", url)]));
+        }
     }
 
     Ok(())
@@ -141,27 +187,56 @@ impl Tool for HttpRequestTool {
         "Make HTTP requests (GET/POST/PUT/DELETE) to external APIs. Only http:// and https:// URLs are allowed. Private/internal IPs are blocked for security."
     }
 
-    /// Sync path: delegates to the async implementation via spawn_blocking.
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full HTTP/HTTPS URL to request (required)"
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+                    "description": "HTTP method (default: GET)"
+                },
+                "headers": {
+                    "type": "object",
+                    "description": "Optional HTTP headers as key-value pairs",
+                    "additionalProperties": {"type": "string"}
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Request body for POST/PUT/PATCH"
+                },
+                "auth": {
+                    "type": "object",
+                    "properties": {
+                        "bearer": {
+                            "type": "string",
+                            "description": "Bearer token for Authorization header"
+                        }
+                    }
+                },
+                "query": {
+                    "type": "object",
+                    "description": "Query parameters as key-value pairs",
+                    "additionalProperties": {"type": "string"}
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Request timeout in milliseconds (default: 15000)"
+                }
+            },
+            "required": ["url"]
+        })
+    }
+
+    /// Sync path: uses blocking reqwest client directly.
+    /// Independent from run_async — no cross-delegation to avoid
+    /// issues with spawn_blocking + block_in_place nesting.
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let rt = tokio::runtime::Handle::try_current()
-            .ok()
-            .and_then(|handle| {
-                // If we're already on a tokio runtime, block on the async impl
-                // inside spawn_blocking to avoid blocking the worker thread.
-                Some(
-                    tokio::task::block_in_place(|| {
-                        handle.block_on(async {
-                            let this = Arc::new(HttpRequestTool);
-                            this.run_async(input.clone()).await
-                        })
-                    }),
-                )
-            })
-            .unwrap_or_else(|| {
-                // No tokio runtime available — use sync reqwest as fallback
-                Self::run_sync(input)
-            })?;
-        Ok(rt)
+        Self::run_sync(input)
     }
 
     /// Async path: fully async reqwest client for non-blocking execution.
@@ -185,7 +260,10 @@ impl Tool for HttpRequestTool {
                 e
             })?;
 
-            let method = input.payload["method"].as_str().unwrap_or("GET").to_string();
+            let method = input.payload["method"]
+                .as_str()
+                .unwrap_or("GET")
+                .to_string();
             let body = input.payload["body"].as_str().map(|s| s.to_string());
 
             // ── 3. Timeout ────────────────────────────────────────────
@@ -200,15 +278,13 @@ impl Tool for HttpRequestTool {
 
             debug!(method = %method, url = %url, timeout_ms = %timeout_ms, "http_request: executing");
 
-            // ── 4. Max response size ──────────────────────────────────
-            let max_response_bytes: usize = std::env::var("GO_ON_HTTP_MAX_RESPONSE_BYTES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10 * 1024 * 1024);
+            // ── 4. Max response size (from UrlPolicyConfig, LAYER 3) ──
+            let max_response_bytes: usize = url_policy().max_response_bytes;
 
             let client = http_client(timeout_ms)?;
 
-            let mut request_builder: reqwest::RequestBuilder = match method.to_uppercase().as_str() {
+            let mut request_builder: reqwest::RequestBuilder = match method.to_uppercase().as_str()
+            {
                 "GET" => client.get(&url),
                 "POST" => {
                     let mut builder = client.post(&url);
@@ -291,7 +367,10 @@ impl Tool for HttpRequestTool {
             }
 
             // ── 8. Execute request (async) ────────────────────────────
-            let response = request_builder.send().await.context("HTTP request failed")?;
+            let response = request_builder
+                .send()
+                .await
+                .context("HTTP request failed")?;
             let status = response.status().as_u16();
 
             // ── 9. Runtime sandbox: response body size limit ──────────
@@ -385,10 +464,7 @@ impl HttpRequestTool {
             })
             .unwrap_or(15_000);
 
-        let max_response_bytes: usize = std::env::var("GO_ON_HTTP_MAX_RESPONSE_BYTES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(10 * 1024 * 1024);
+        let max_response_bytes: usize = url_policy().max_response_bytes;
 
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_millis(timeout_ms))

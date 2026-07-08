@@ -119,12 +119,23 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Returns the JSON Schema for this tool's input parameters.
     /// Used when building OpenAI/Anthropic-compatible function-calling schemas.
+    ///
+    /// Default implementation delegates to `tool_descriptor()` in
+    /// `shared::tool_descriptors`, which has schemas for all built-in tools.
+    /// Individual tools CAN override this for custom schemas, but most
+    /// should rely on the shared tool_descriptor definitions.
     fn input_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
+        let desc = crate::shared::tool_descriptors::tool_descriptor_value(self.name());
+        desc.get("input_schema")
+            .or_else(|| desc.get("inputSchema"))
+            .cloned()
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                })
+            })
     }
 
     /// Executes the tool with the given input. Should emit tracing spans for performance analysis (implementations only).
@@ -1838,6 +1849,41 @@ impl Tool for WriteFileTool {
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_content")))?;
         let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
         let path_buf = sanitize_path_for_write(input, path)?;
+
+        // ── LAYER 2: Runtime sandbox ────────────────────────────────────
+        // Limit file size to prevent disk exhaustion (default 50MB).
+        const MAX_WRITE_BYTES: usize = 50 * 1024 * 1024;
+        if content.len() > MAX_WRITE_BYTES {
+            anyhow::bail!(
+                "write_file BLOCKED: content {} bytes exceeds maximum {} bytes",
+                content.len(),
+                MAX_WRITE_BYTES
+            );
+        }
+
+        // Block writing to sensitive system paths.
+        let path_str = path_buf.to_string_lossy().to_lowercase();
+        let blocked_paths = [
+            "/etc/",
+            "/sys/",
+            "/proc/",
+            "/dev/",
+            "/boot/",
+            "/var/log/",
+            "/var/db/",
+            "/usr/lib/",
+            "/usr/bin/",
+            "C:\\windows\\",
+            "C:\\Program Files\\",
+        ];
+        for blocked in &blocked_paths {
+            if path_str.contains(blocked) {
+                anyhow::bail!(
+                    "write_file BLOCKED: writing to system path '{}' is not allowed",
+                    blocked
+                );
+            }
+        }
 
         // Non-blocking try_acquire write lock.
         // If lock is already held by another operation, return a transient

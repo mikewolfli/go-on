@@ -458,6 +458,121 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["source", "destination"]
             })),
         },
+        "read_file_lines" => McpTool {
+            name: name.to_string(),
+            description: Some("Read specific lines from a file by line number range. Returns the requested lines with their line numbers.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read from"},
+                    "start_line": {"type": "integer", "description": "Starting line number (1-based)"},
+                    "end_line": {"type": "integer", "description": "Ending line number (inclusive)"}
+                },
+                "required": ["path", "start_line", "end_line"]
+            })),
+        },
+        "file_diff" => McpTool {
+            name: name.to_string(),
+            description: Some("Compare two files and show the differences between them.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "file1": {"type": "string", "description": "First file path"},
+                    "file2": {"type": "string", "description": "Second file path"}
+                },
+                "required": ["file1", "file2"]
+            })),
+        },
+        "code_index_search" => McpTool {
+            name: name.to_string(),
+            description: Some("Search across indexed codebases for symbols, definitions, or references.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (symbol name, function name, etc.)"}
+                },
+                "required": ["query"]
+            })),
+        },
+        "archive_inspect" => McpTool {
+            name: name.to_string(),
+            description: Some("List the contents of an archive file (zip, tar, tar.gz) without extracting it.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the archive file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "archive_extract" => McpTool {
+            name: name.to_string(),
+            description: Some("Extract an archive file (zip, tar, tar.gz) to a destination directory.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the archive file"},
+                    "destination": {"type": "string", "description": "Destination directory (default: current directory)"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "diagnostics" => McpTool {
+            name: name.to_string(),
+            description: Some("Get project compilation errors and warnings. Optionally specify a file path to scope results.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional file path to scope diagnostics (default: entire project)"}
+                },
+                "required": []
+            })),
+        },
+        "environment_info" => McpTool {
+            name: name.to_string(),
+            description: Some("Get information about the current environment: OS, CPU, memory, disk, and language runtime details.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            })),
+        },
+        "rss_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Fetch and parse an RSS/Atom feed from a URL. Returns feed entries with titles, links, and descriptions.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "RSS/Atom feed URL"},
+                    "max_items": {"type": "integer", "description": "Maximum number of items to return (default: 20)"}
+                },
+                "required": ["url"]
+            })),
+        },
+        "jsonl_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a JSONL (JSON Lines) file and return parsed JSON objects.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the JSONL file"},
+                    "limit": {"type": "integer", "description": "Maximum number of lines to read (default: all)"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "jsonl_write" => McpTool {
+            name: name.to_string(),
+            description: Some("Write data as JSONL (JSON Lines) to a file. Each object is written as a separate line.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output file path"},
+                    "data": {"type": "array", "description": "Array of JSON objects to write as lines"}
+                },
+                "required": ["path", "data"]
+            })),
+        },
         other => McpTool {
             name: other.to_string(),
             description: Some("Registered MCP tool".to_string()),
@@ -527,12 +642,6 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .get("command")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("shell_exec requires arguments.command"))?;
-        }
-        "http_request" => {
-            tool_input
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("http_request requires arguments.url"))?;
         }
         "grep" => {
             tool_input

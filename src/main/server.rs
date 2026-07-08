@@ -46,6 +46,11 @@ pub(crate) async fn start_server(
         .http1_only()
         .build()?;
 
+    // ── Initialize Layer 3 URL policy config ───────────────────────────
+    // Load the UrlPolicyConfig from SecurityConfig and inject it into the
+    // http_request tool's global state for runtime sandboxing.
+    crate::orchestration::tool_extended::http::init_url_policy(config.security.url_policy.clone());
+
     // Initialize capability graph for agent capability-based routing
     let capability_graph = Arc::new(Mutex::new(CapabilityGraph::new()));
 

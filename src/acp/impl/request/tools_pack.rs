@@ -199,6 +199,47 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
             }
         }),
         json!({
+            "name": "http_request",
+            "description": "Make HTTP requests (GET/POST/PUT/DELETE) to external APIs. Only http:// and https:// URLs are allowed. Private/internal IPs are blocked for security.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The full HTTP/HTTPS URL to request"
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+                        "description": "HTTP method (default: GET)"
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "Optional HTTP headers as key-value pairs",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Request body for POST/PUT/PATCH"
+                    },
+                    "auth": {
+                        "type": "object",
+                        "properties": {
+                            "bearer": {
+                                "type": "string",
+                                "description": "Bearer token for Authorization header"
+                            }
+                        }
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Request timeout in milliseconds (default: 15000)"
+                    }
+                },
+                "required": ["url"]
+            }
+        }),
+        json!({
             "name": "workflow_execute",
             "description": "Execute a workflow task with optional phase. The AI creates and runs an autonomous multi-step plan using available skills to accomplish the given task.",
             "input_schema": {

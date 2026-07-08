@@ -28,5 +28,5 @@ pub use types::{
     AdaptiveConfig, AgentConfig, AppConfig, CacheConfig, ComplianceConfig, ConversationContext,
     FeatureConfig, FlowConfig, LearningPreferences, MinimalConfig, PhaseConfig, PhaseOptions,
     ProviderConfig, ReputationConfig, RuntimeConfig, SchedulerConfig, SecurityConfig,
-    StartupContextConfig, VectorConfig, WorkflowType,
+    StartupContextConfig, UrlPolicyConfig, VectorConfig, WorkflowType,
 };
