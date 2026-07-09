@@ -17,7 +17,7 @@ thiserror = "2"
 futures = "0.3"
 futures-util = "0.3"
 base64 = "0.22"
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "3", features = ["apple-native", "sync-secret-service"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tokio-stream = "0.1"
@@ -279,7 +279,7 @@ subtle = "2"
 notify = "8"
 
 # ── Security / Signing / mTLS (GAP-B52) ────────────────────────────────────
-ed25519-dalek = { version = "2", default-features = false, features = ["signature"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["signature", "rand_core"] }
 hmac = "0.13"
 rand = "0.10"
 hex = "0.4"

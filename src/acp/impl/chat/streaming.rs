@@ -297,4 +297,10 @@ impl StreamObserver {
             sse_sender: Some(sender),
         }
     }
+
+    /// Clone the SSE sender, if present, so callers can send progress
+    /// frames through the same channel without owning the observer.
+    pub(crate) fn sse_sender(&self) -> Option<mpsc::Sender<StreamFrame>> {
+        self.sse_sender.clone()
+    }
 }

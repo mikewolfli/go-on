@@ -147,7 +147,7 @@ static CHAT_THRESHOLD_LEARNER: OnceLock<
 /// prompt injection check, context gathering, memory recall, capability sensing.
 pub(crate) async fn observe_phase(
     server: &AcpServer,
-    params: &ChatParams,
+    params: &mut ChatParams,
     ctx: ChatRequestContext,
 ) -> Result<ObserveOutput> {
     clear_task_description_cache();
@@ -180,6 +180,238 @@ pub(crate) async fn observe_phase(
 
     // ── Multimodal input detection & processing ────────────────────
     let multimodal_context = detect_and_process_multimodal(server, params).await;
+    // ── URL auto-detection & pre-fetching ─────────────────────────
+    // When user messages contain HTTP/HTTPS URLs, pre-fetch their content
+    // automatically and try API endpoint probes for SPA pages.
+    // This ensures invitation links are always processed even if the LLM
+    // responds with text instead of calling http_request.
+    {
+        let url_entries: Vec<(usize, String)> = params
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, msg)| msg.role == "user")
+            .filter_map(|(i, msg)| {
+                crate::orchestration::tool_extended::http::extract_url(&msg.content)
+                    .map(|u| (i, u.to_string()))
+            })
+            .collect();
+
+        for (msg_idx, url) in url_entries {
+            let url_lower = url.to_lowercase();
+            if url_lower.starts_with("http://localhost")
+                || url_lower.starts_with("http://127.0.0.1")
+                || url_lower.starts_with("https://localhost")
+                || url_lower.starts_with("https://127.0.0.1")
+                || url_lower.starts_with("http://10.")
+                || url_lower.starts_with("http://192.168.")
+                || url_lower.starts_with("https://10.")
+                || url_lower.starts_with("https://192.168.")
+            {
+                tracing::info!(
+                    "observe_phase: skipping pre-fetch for local/private URL: {}",
+                    url
+                );
+                continue;
+            }
+
+            tracing::info!("observe_phase: auto-detected URL, pre-fetching: {}", url);
+            let fetch_url = url.split('#').next().unwrap_or(&url).to_string();
+
+            // Phase 1: Fetch the page HTML
+            let fetch_result: Option<(String, String)> = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                reqwest::get(&fetch_url),
+            )
+            .await
+            {
+                Ok(Ok(resp)) => {
+                    let status = resp.status().to_string();
+                    match tokio::time::timeout(std::time::Duration::from_secs(5), resp.text()).await
+                    {
+                        Ok(Ok(body)) => Some((status, body)),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some((status, body)) = fetch_result {
+                let truncated = if body.len() > 8192 {
+                    format!("{}...\n[Response truncated at 8192 bytes]", &body[..8192])
+                } else {
+                    body.clone()
+                };
+                let mut context_msg = format!(
+                    "[Auto-fetched content from {}]\nHTTP Status: {}\n\n{}",
+                    url, status, truncated
+                );
+
+                // Phase 2: Detect SPA and probe API endpoints
+                let is_spa = body.contains("<div id=\"root\"")
+                    || body.contains("<div id=\"app\"")
+                    || (body.contains("<script")
+                        && body.chars().filter(|c| *c == '<').count() > 20
+                        && body.len() > 200
+                        && body.len() < 5000);
+                if is_spa {
+                    tracing::info!("observe_phase: detected SPA page, probing API: {}", url);
+
+                    // Extract fragment params
+                    let fragment_params: Vec<(String, String)> = url
+                        .split('#')
+                        .nth(1)
+                        .map(|f| {
+                            url::form_urlencoded::parse(f.as_bytes())
+                                .map(|(k, v)| (k.to_string(), v.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let path_segments: Vec<&str> = url
+                        .split('#')
+                        .next()
+                        .unwrap_or(&url)
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .collect();
+
+                    let mut spa_info = format!(
+                        "\n\n[SPA Page Analysis]\n\
+                         The URL returned a JavaScript SPA shell.\n\
+                         Path segments: {}\nFragment params: {:?}",
+                        path_segments.join(" / "),
+                        fragment_params,
+                    );
+
+                    // Try common API pattern: POST /api/v1/agent-binding/invitations/{id}/agent-task
+                    if let Some(invitation_id) = path_segments
+                        .last()
+                        .filter(|s| s.starts_with("invite_") || s.starts_with("invitation_"))
+                    {
+                        let token = fragment_params
+                            .iter()
+                            .find(|(k, _)| k == "task_access_token")
+                            .map(|(_, v)| v.clone());
+
+                        if let Some(token_val) = token {
+                            let host = url.split('/').nth(2).unwrap_or("");
+                            let scheme = if fetch_url.starts_with("https") {
+                                "https"
+                            } else {
+                                "http"
+                            };
+                            let api_url = format!(
+                                "{}://{}/api/v1/agent-binding/invitations/{}/agent-task",
+                                scheme, host, invitation_id,
+                            );
+                            let web_origin = format!("{}://{}", scheme, host);
+                            let api_body = serde_json::json!({
+                                "task_access_token": token_val,
+                                "web_origin": web_origin,
+                            });
+
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                reqwest::Client::new()
+                                    .post(&api_url)
+                                    .header("Content-Type", "application/json")
+                                    .json(&api_body)
+                                    .send(),
+                            )
+                            .await
+                            {
+                                Ok(Ok(api_resp)) => {
+                                    let api_status = api_resp.status();
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(5),
+                                        api_resp.text(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(api_body_text)) => {
+                                            let t = if api_body_text.len() > 4096 {
+                                                format!(
+                                                    "{}...\n[truncated]",
+                                                    &api_body_text[..4096]
+                                                )
+                                            } else {
+                                                api_body_text.clone()
+                                            };
+                                            spa_info.push_str(&format!(
+                                                "\n\n[API: POST {}]\nStatus: {}\nRequest: {}\nResponse:\n{}",
+                                                api_url, api_status, api_body, t,
+                                            ));
+
+                                            // ── Phase 3: Present raw task data to AI for planning ──────
+                                            // The AI receives the full task package and plans the workflow
+                                            // itself using general PUA principles (FETCH, ANALYZE, EXTRACT,
+                                            // CHAIN, RES, ERR). No task-specific instructions here.
+                                            match serde_json::from_str::<Value>(&api_body_text) {
+                                                Ok(task_json) => {
+                                                    let ok_val = task_json
+                                                        .get("ok")
+                                                        .and_then(|v| v.as_bool())
+                                                        .unwrap_or(false);
+                                                    if ok_val {
+                                                        if let Some(data) = task_json
+                                                            .get("data")
+                                                            .and_then(|v| v.as_object())
+                                                        {
+                                                            let data_json = serde_json::to_string_pretty(data)
+                                                                .unwrap_or_default();
+                                                            spa_info.push_str(&format!(
+                                                                "\n\n[Agent World Task Package - pre-fetched by system]\n{}",
+                                                                data_json,
+                                                            ));
+                                                        } else {
+                                                            spa_info.push_str(
+                                                                "\n\n[Agent World] No `data` object in task response",
+                                                            );
+                                                        }
+                                                    } else {
+                                                        spa_info.push_str(&format!(
+                                                            "\n\n[Agent World] Task package returned ok=false: {}",
+                                                            task_json,
+                                                        ));
+                                                    }
+                                                }
+                                                Err(e) => spa_info.push_str(&format!(
+                                                    "\n\n[Agent World] Failed to parse task package JSON: {}",
+                                                    e,
+                                                )),
+                                            }
+                                        }
+                                        _ => spa_info.push_str(&format!(
+                                            "\n\n[API: POST {}] - read failed",
+                                            api_url
+                                        )),
+                                    }
+                                }
+                                Ok(Err(e)) => spa_info.push_str(&format!(
+                                    "\n\n[API: POST {}] - failed: {}",
+                                    api_url, e
+                                )),
+                                Err(_) => spa_info
+                                    .push_str(&format!("\n\n[API: POST {}] - timeout", api_url)),
+                            }
+                        }
+                    }
+                    context_msg.push_str(&spa_info);
+                }
+
+                params.messages.insert(
+                    msg_idx,
+                    Message {
+                        role: "system".to_string(),
+                        content: context_msg,
+                    },
+                );
+            } else {
+                tracing::warn!("observe_phase: failed to fetch URL: {}", url);
+            }
+        }
+    }
 
     // ── HarnessBus during-execute checkpoint ───────────────────────
     if let Some(ref harness) = server.governance_deps.harness_bus {
@@ -578,6 +810,7 @@ pub(crate) async fn act_phase(
 
     // Autonomy round
     let mut task_contexts: Vec<TaskContext> = Vec::new();
+    let progress_sse_tx = stream_observer.as_ref().and_then(|o| o.sse_sender());
     let autonomy_outcome = if review_passed {
         execute_autonomy_round(
             server,
@@ -588,6 +821,7 @@ pub(crate) async fn act_phase(
             &routing_out.agent_messages,
             &routing_out.base_agent_options,
             cache_hit,
+            progress_sse_tx,
         )
         .await
     } else {

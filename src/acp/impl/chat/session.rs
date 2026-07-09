@@ -306,7 +306,7 @@ pub async fn handle_chat(
         // Process chat request
         let result = process_chat_request(
             server,
-            &chat_params,
+            &mut chat_params,
             Some(StreamObserver::jsonrpc(id.clone())),
             &pipeline_trace,
             chat_span.as_ref(),

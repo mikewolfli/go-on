@@ -106,7 +106,7 @@ pub struct SecurityConfig {
 /// LAYER 3: Config-level URL allow/block lists.
 /// Security is enforced at runtime by the tool execution sandbox,
 /// not by LLM pre-policy review.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct UrlPolicyConfig {
     /// If true, only URLs matching allowed_patterns are permitted.
     /// If false (default), all http/https URLs are permitted unless blocked.
@@ -124,6 +124,18 @@ pub struct UrlPolicyConfig {
     /// Block requests to private/internal IP ranges (10.x, 192.168.x, 127.x, etc.).
     #[serde(default = "default_true")]
     pub block_private_ips: bool,
+}
+
+impl Default for UrlPolicyConfig {
+    fn default() -> Self {
+        Self {
+            restrict_to_allowed: false,
+            allowed_patterns: Vec::new(),
+            blocked_patterns: Vec::new(),
+            max_response_bytes: 10 * 1024 * 1024,
+            block_private_ips: true,
+        }
+    }
 }
 
 fn default_max_response_bytes() -> usize {

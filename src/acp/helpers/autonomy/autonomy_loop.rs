@@ -9,6 +9,7 @@
 //! - [`AutonomyLoopResult`] — final result
 //! - [`AutonomyLoopReport`] — detailed report with per-round metrics
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+use crate::acp::r#impl::chat::streaming::StreamFrame;
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::autonomy_runtime::{
     parse_tool_call_token, TOKEN_MODEL_USED_PREFIX, TOKEN_THINKING_PREFIX,
@@ -49,6 +51,11 @@ pub struct AutonomyLoopConfig {
     pub use_dag_execution: bool,
     pub enable_agent_reroute: bool,
     pub recovery_orchestrator: Option<String>,
+    /// Sender for SSE progress events during tool execution.
+    /// If set, progress frames are sent before/after each tool call to
+    /// keep the SSE inactivity timeout from firing during long tool runs.
+    #[serde(skip)]
+    pub(crate) progress_tx: Option<mpsc::Sender<StreamFrame>>,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -73,6 +80,7 @@ impl Default for AutonomyLoopConfig {
             use_dag_execution: true,
             enable_agent_reroute: true,
             recovery_orchestrator: None,
+            progress_tx: None,
         }
     }
 }
@@ -135,6 +143,8 @@ pub async fn run_autonomy_loop(
     tool_registry: Option<Arc<ToolRegistry>>,
     objective: &str,
     messages: Vec<Message>,
+    principles: &Option<Vec<String>>,
+    options: &Option<HashMap<String, Value>>,
     config: AutonomyLoopConfig,
     timeout_duration: Option<std::time::Duration>,
 ) -> Result<AutonomyLoopResult, anyhow::Error> {
@@ -159,26 +169,33 @@ pub async fn run_autonomy_loop(
         let mut tool_calls: Vec<(String, String)> = Vec::new();
 
         // ── Call agent with streaming ────────────────────────────────
-        let (sender, mut receiver) = mpsc::channel::<String>(1024);
-        let sender = StreamingSender::from(sender);
+        let (sender_inner, mut receiver) = mpsc::channel::<String>(1024);
+        let progress_tx = sender_inner.clone();
+        let sender = StreamingSender::from(sender_inner);
 
         let agent_messages = if iteration == 0 {
             messages.clone()
         } else {
             // For follow-up rounds, the response text serves as context
+            let principles_context = principles
+                .as_ref()
+                .map(|p| format!("\n\nPUA principles:\n- {}", p.join("\n- ")))
+                .unwrap_or_default();
             vec![Message {
                 role: "user".to_string(),
                 content: format!(
-                    "Continue with the task. Context so far: {}\n\nOriginal objective: {}",
-                    response, objective
+                    "Continue with the task. Context so far: {}{}\n\nOriginal objective: {}",
+                    response, principles_context, objective
                 ),
             }]
         };
 
         let agent_clone = Arc::clone(&agent);
+        let principles_clone = principles.clone();
+        let options_clone = options.clone();
         let chat_task = tokio::spawn(async move {
             agent_clone
-                .chat(agent_messages, None, None, sender)
+                .chat(agent_messages, principles_clone, options_clone, sender)
                 .await
                 .map_err(|e| anyhow::anyhow!("agent chat failed: {}", e))
         });
@@ -208,14 +225,37 @@ pub async fn run_autonomy_loop(
                                 tool_calls.push((tool_name.to_string(), tool_args.to_string()));
                                 continue;
                             }
-                            // Reasoning content
+                            // Reasoning content — forward to SSE as chunk token
+                            // so the GUI shows it inline (same as Zed chat).
                             if let Some(rt) = t.strip_prefix(TOKEN_THINKING_PREFIX) {
                                 reasoning.push_str(rt);
+                                if let Some(ref tx) = config.progress_tx {
+                                    if let Err(e) = tx.try_send(StreamFrame {
+                                        event: "chunk",
+                                        payload: serde_json::json!({
+                                            "token": "",
+                                            "reasoning": rt,
+                                        }),
+                                    }) {
+                                        tracing::warn!(
+                                            "autonomy_loop: progress_tx send failed: {}", e
+                                        );
+                                    }
+                                }
                                 continue;
                             }
-                            // Regular token
+                            // Regular token — forward to SSE as chunk token
+                            // so the GUI displays it inline.
                             round_response.push_str(&t);
                             response.push_str(&t);
+                            if let Some(ref tx) = config.progress_tx {
+                                let _ = tx.try_send(StreamFrame {
+                                    event: "chunk",
+                                    payload: serde_json::json!({
+                                        "token": t,
+                                    }),
+                                });
+                            }
                         }
                         None => break,
                     }
@@ -264,6 +304,19 @@ pub async fn run_autonomy_loop(
         }
 
         for (tool_name, tool_args) in &tool_calls {
+            // ── Stream tool execution progress as visible chat tokens ──
+            // Send SSE progress event before executing tool ────────
+            if let Some(ref tx) = config.progress_tx {
+                let _ = tx
+                    .send(StreamFrame {
+                        event: "progress",
+                        payload: serde_json::json!({
+                            "message": format!("executing tool {}...", tool_name),
+                        }),
+                    })
+                    .await;
+            }
+
             if let Some(tool) = tool_registry.get_arc(tool_name) {
                 tracing::info!("autonomy_loop: executing tool {}", tool_name);
                 let input = crate::orchestration::tool::ToolInput {
@@ -277,6 +330,19 @@ pub async fn run_autonomy_loop(
                     allowed_base_dir: None,
                 };
                 let tool_output = tool.run_async(input).await;
+
+                // ── Send completion notification as visible chunk token ──
+                if let Some(ref tx) = config.progress_tx {
+                    let _ = tx
+                        .send(StreamFrame {
+                            event: "chunk",
+                            payload: serde_json::json!({
+                                "token": format!("✅ **{}** completed
+                            ", tool_name),
+                            }),
+                        })
+                        .await;
+                }
                 let result_str = format!("{:?}", tool_output);
                 round_response
                     .push_str(&format!("\n[Tool {} result:]\n{}\n", tool_name, result_str));

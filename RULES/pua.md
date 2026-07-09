@@ -78,6 +78,91 @@ Escalate when output contains unverified language or surrender patterns:
 - "I think", "maybe", "probably", "should work"
 - "We cannot solve this", "need more context", "beyond scope"
 
+## Universal API & Workflow Automation Rules
+
+These rules ensure the agent autonomously processes URLs, APIs, and multi-step workflows. They apply to ANY protocol (HTTP, WS, file, CLI), ANY auth model (no-auth, API key, OAuth, mTLS, cookie), and ANY response format (JSON, XML, HTML, binary, streaming, SSE). Rules are grouped by functional layer.
+
+### Layer 1: Fetch
+
+#### FETCH-001 [AUTO_FETCH]
+When a user message contains an HTTP/HTTPS URL (invitation links, task URLs, web pages, API endpoints, etc.), you MUST fetch it using http_request. Include URL fragments (#) and query params — even though the fragment is not sent to the HTTP server, you MUST extract it client-side and use it for subsequent API calls. If the content was already pre-fetched by the system (look for `[Auto-fetched content from ...]` in the context), use that data rather than re-fetching — but still analyze it and proceed with follow-up actions. Do NOT ignore the URL, do NOT just acknowledge it verbally, and do NOT ask the user to open it themselves.
+
+### Layer 2: Analyze
+
+#### ANALYZE-001 [RESPONSE_CLASSIFY]
+After fetching any URL, classify the response by content type and derive the next action:
+- `application/json` or structured data: parse all fields, extract tokens/endpoints/workflow steps.
+- `text/html` SPA shell (contains `<div id="root">` or `<script>` tags with minimal body text): extract URL fragment parameters; look for `<script src=...>` and /api/ endpoints in HTML; try common API patterns (`POST /api/v1/*`, `/api/*`) with fragment params as JSON body before fetching large JS bundles.
+- `text/html` static page: extract the meaningful rendered text content.
+- Binary or streaming: report content-type and size; fetch more only if needed for next step.
+
+#### ANALYZE-002 [AUTH_DETECT]
+If the endpoint returns 401/403 or requires authentication, detect the auth method from response headers or body hints:
+- API Key: pass in header (`X-API-Key`, `Authorization: Bearer`) or query param.
+- OAuth / device-code: if the workflow provides tokens or a device-code flow, execute it automatically.
+- Cookie / Session: handle `Set-Cookie` and send `Cookie` on subsequent requests.
+- mTLS / certificate: report that the client environment needs certificate configuration.
+Do NOT give up on 401/403 — try alternative approaches hinted in the response.
+
+### Layer 3: Extract & Chain
+
+#### EXTRACT-001 [DATA_EXTRACTION]
+When an API returns structured data (task package, workflow spec, manifest), extract ALL relevant fields: tokens, IDs, URLs, manifests, required steps, expiry timestamps. Every extracted field is a potential input to the next API call. Do NOT stop after the first successful call — the task is only complete when the workflow reaches its terminal state.
+
+#### EXTRACT-002 [ENDPOINT_DISCOVERY]
+If the response contains endpoint URLs, href links, or API path patterns, collect them in order. Common sources: JSON fields named `endpoint`, `url`, `api`, `href`, `next`, `self`; Link headers (`rel='next'`); HTML `<a href>` or `<form action>`; OpenAPI schemas with `paths` or `servers`. Follow paginated links (next, offset, cursor) automatically until all pages are consumed.
+
+#### EXTRACT-003 [FORMAT_NEGOTIATION]
+Explicitly set the `Accept` header to indicate expected format (`application/json`). If response is not the expected format, try `?format=json` or different `Content-Type`. Be flexible — some APIs wrap data in envelopes like `{ok, data, error, request_id}`.
+
+### Layer 4: Chain Execution
+
+#### CHAIN-001 [SEQ_EXECUTION]
+When a workflow has multiple sequential steps (e.g. fetch task -> download artifact -> generate credentials -> submit request -> complete verification -> wait for confirmation), execute ALL automatable steps in order before asking the user. Each step's output becomes the next step's input. Report progress as you go. Do NOT skip intermediate steps or report partial completion as final.
+
+#### CHAIN-002 [FAN_OUT]
+If a step produces multiple independent items (multiple files to download, multiple endpoints), execute them in parallel batches. Report a summary of batch results.
+
+#### CHAIN-003 [HUMAN_IN_LOOP]
+If a step genuinely requires human action (confirmation button, CAPTCHA, hardware interaction, out-of-band identity):
+1. Complete ALL preceding automatable steps first.
+2. Present the user with a clear brief: what has been done, what the next step is, and the exact URL/instruction for their action.
+3. After the user confirms completion, continue with remaining automatable steps.
+Do NOT claim the workflow is blocked early — advance as far as possible before asking.
+
+#### CHAIN-004 [IDEMPOTENCY]
+Before submitting state-changing requests, check if the API supports idempotency keys (`Idempotency-Key` header, `request_id`). Generate and send them to allow safe retry.
+
+#### CHAIN-005 [RATE_LIMIT]
+If the API returns 429 Too Many Requests or Retry-After headers, wait the specified duration before retrying. Implement exponential backoff (1s, 2s, 4s, 8s capped at 30s) for transient failures.
+
+### Layer 5: Resource Handling
+
+#### RES-001 [DOWNLOAD]
+If the task specifies downloadable artifacts (scripts, configs, schemas, binaries), use http_request to download each file. Verify checksums if provided. Report success/failure per file. Do NOT ask the user to manually download or copy files.
+
+#### RES-002 [KEY_GEN]
+If the workflow requires cryptographic keys (Ed25519, RSA, ECDSA, etc.), generate them using available tools (openssl via shell_exec, built-in crypto, or language-specific libraries). Persist generated keys for reuse across steps. Do NOT ask the user to generate keys manually.
+
+#### RES-003 [SIGNING]
+If the workflow requires signing a challenge or payload, use the generated keys to create the signature following the exact algorithm and format specified (hex, base64, JWS, etc.). Submit the signed payload and verify the response. Do NOT stop at the signing step.
+
+### Layer 6: Streaming & Real-time
+
+#### STREAM-001 [SSE_WS]
+If the response is SSE (`text/event-stream`) or the workflow specifies a WebSocket endpoint, establish the connection and process events. For SSE, read events line by line (`data:`, `event:`, `id:`). For WS, send the required handshake/subscribe message and process incoming frames. Maintain the connection for the workflow's lifetime.
+
+### Layer 7: Error Handling
+
+#### ERR-001 [RETRY]
+On any transient failure (timeout, 5xx, connection reset, DNS failure), retry with exponential backoff (1s, 2s, 4s, 8s capped at 30s) up to 3 times. If still failing, try an alternative approach (different endpoint, different method, different parameters). Only after exhausting ALL alternatives should you report failure.
+
+#### ERR-002 [PARTIAL_FAILURE]
+If a multi-step workflow has partial failure (some steps succeeded, one failed): retain successful results, retry the failed step. If unrecoverable, report what was completed and what remains. Do NOT discard all progress because one step failed.
+
+#### ERR-003 [HONEST_LIMITS]
+If a step is genuinely impossible given available tools (hardware interaction, CAPTCHA, kernel ops, physical installation), clearly state: which step, what tool/permission would be needed, and what the user can do to unblock. Do NOT claim impossibility for steps achievable with http_request, shell_exec, or other available tools — attempt them first.
+
 ## Phase 4 Extension: Profile-Specific Verification
 
 - When Red Line 1 is triggered require cargo check plus cargo clippy D warnings proof

@@ -11,6 +11,7 @@ use anyhow::Result;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use crate::acp::r#impl::chat::StreamFrame;
 use crate::agent::{Agent, Message};
 
 use super::autonomy_loop::{
@@ -32,10 +33,11 @@ pub(crate) async fn run_acp_autonomy_loop(
     agent: Arc<dyn Agent>,
     tool_registry: Option<Arc<ToolRegistry>>,
     messages: Vec<Message>,
-    _principles: Option<Vec<String>>,
+    principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, Value>>,
     timeout_duration: Option<std::time::Duration>,
     stream_tx: Option<mpsc::UnboundedSender<String>>,
+    progress_sse_tx: Option<mpsc::Sender<StreamFrame>>,
 ) -> Result<AutonomyLoopResult> {
     let objective = extract_objective(&messages);
     let option_bool = |key: &str, default: bool| -> bool {
@@ -60,6 +62,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         enable_agent_reroute: option_bool("enable_agent_reroute", true),
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
         recovery_orchestrator: Some("auto".to_string()),
+        progress_tx: progress_sse_tx,
         max_messages: 200,
         use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default.
         tool_timeout_ms: None,
@@ -76,6 +79,8 @@ pub(crate) async fn run_acp_autonomy_loop(
             tool_registry,
             &objective,
             messages,
+            &principles,
+            &options,
             config,
             timeout_duration,
         )

@@ -250,7 +250,7 @@ mod unit_tests {
             *ledger = crate::reinforcement::ArtifactLedger::new(Some(&config_path));
         }
 
-        let params = ChatParams {
+        let mut params = ChatParams {
             mode: "ask".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
@@ -268,7 +268,7 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.test");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
             .await
             .expect("chat request should succeed");
 
@@ -404,7 +404,7 @@ mod unit_tests {
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
 
-        let params = ChatParams {
+        let mut params = ChatParams {
             mode: "ask".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
@@ -422,7 +422,7 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.e2e");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
             .await
             .expect("e2e dual bus chat request should succeed");
 
@@ -504,7 +504,7 @@ mod unit_tests {
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
 
-        let params = ChatParams {
+        let mut params = ChatParams {
             mode: "ask".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
@@ -522,7 +522,7 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.empty_output");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
             .await
             .expect("chat request should succeed by trying next agent");
 
@@ -589,7 +589,7 @@ mod unit_tests {
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
 
-        let params = ChatParams {
+        let mut params = ChatParams {
             mode: "ask".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
@@ -607,7 +607,7 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.all_empty");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
             .await
             .expect("all empty outputs should return a graceful error response");
 
@@ -658,7 +658,7 @@ mod unit_tests {
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
 
-        let params = ChatParams {
+        let mut params = ChatParams {
             mode: "ask".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
@@ -684,7 +684,7 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.model_filter_fallback");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
             .await
             .expect("chat request should succeed by falling back to phase agents");
 
@@ -752,7 +752,7 @@ mod unit_tests {
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
 
-        let params = ChatParams {
+        let mut params = ChatParams {
             mode: "ask".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
@@ -771,7 +771,7 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.council_smoke");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
             .await
             .expect("chat request should succeed");
 
@@ -823,7 +823,7 @@ mod unit_tests {
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
 
-        let params = ChatParams {
+        let mut params = ChatParams {
             mode: "edit".to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
@@ -841,7 +841,7 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.autonomy_contract");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
             .await
             .expect("chat request should succeed");
 

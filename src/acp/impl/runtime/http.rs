@@ -420,7 +420,7 @@ async fn route_http_post(
         crate::observability::performance::utils::measure_time_async(move || async move {
             match path {
                 "/chat" => {
-                    let params: crate::acp::r#impl::chat::ChatParams =
+                    let mut params: crate::acp::r#impl::chat::ChatParams =
                         match serde_json::from_value(body) {
                             Ok(value) => value,
                             Err(err) => {
@@ -441,7 +441,7 @@ async fn route_http_post(
                     ));
                     let result = match crate::acp::r#impl::chat::process_chat_request(
                         server.as_ref(),
-                        &params,
+                        &mut params,
                         None,
                         &trace,
                         None,
@@ -492,7 +492,7 @@ async fn route_http_post(
                             })
                             .await;
                     }
-                    let params: crate::acp::r#impl::chat::ChatParams =
+                    let mut params: crate::acp::r#impl::chat::ChatParams =
                         match serde_json::from_value(body) {
                             Ok(value) => value,
                             Err(err) => {
@@ -520,7 +520,7 @@ async fn route_http_post(
                     let task = tokio::spawn(async move {
                         if let Err(err) = crate::acp::r#impl::chat::process_chat_request(
                             server_ref.as_ref(),
-                            &params,
+                            &mut params,
                             Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
                             &trace,
                             None,
@@ -532,14 +532,17 @@ async fn route_http_post(
                         }
                     });
 
-                    // Add a 30-second overall timeout for the chat stream.
-                    // If no events arrive (e.g., pipeline hang), abort and return error.
-                    // SSE flush interval: flush every 4 events to keep UI responsive
-                    // for thinking/reasoning token display while still batching syscalls.
+                    // Inactivity timeout for the chat stream.
+                    // If no events arrive within the timeout window (e.g. pipeline hang
+                    // during long-running tool execution), abort and return error.
+                    // The timeout resets on each received event, so long-running tool
+                    // chains that produce periodic progress events are fine.
                     const SSE_FLUSH_INTERVAL: usize = 4;
+                    const STREAM_INACTIVITY_TIMEOUT_SECS: u64 = 120;
                     let mut sse_event_count: usize = 0;
 
-                    let stream_timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
+                    let mut stream_timeout =
+                        tokio::time::sleep(std::time::Duration::from_secs(STREAM_INACTIVITY_TIMEOUT_SECS));
                     tokio::pin!(stream_timeout);
                     loop {
                         tokio::select! {
@@ -551,6 +554,11 @@ async fn route_http_post(
                                             return Err(err);
                                         }
                                         sse_event_count += 1;
+                                        // Reset inactivity timer on each received event.
+                                        stream_timeout.as_mut().reset(
+                                            tokio::time::Instant::now() +
+                                            std::time::Duration::from_secs(STREAM_INACTIVITY_TIMEOUT_SECS)
+                                        );
                                         // Periodic flush: every SSE_FLUSH_INTERVAL events.
                                         // This batches syscalls while keeping latency low.
                                         if sse_event_count.is_multiple_of(SSE_FLUSH_INTERVAL) {
@@ -562,7 +570,7 @@ async fn route_http_post(
                             }
                             _ = &mut stream_timeout => {
                                 task.abort();
-                                let payload = serde_json::json!({"error": "chat stream timed out after 30s"});
+                                let payload = serde_json::json!({"error": "chat stream timed out after 120s of inactivity"});
                                 let _ = write_sse_event(socket, "error", &payload).await;
                                 let _ = flush_sse(socket).await;
                                 return Ok(());

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 
 use anyhow::Result;
 use opentelemetry::Context as OtelContext;
@@ -501,7 +502,7 @@ pub(crate) fn controller_recommended_phase(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) async fn process_chat_request(
     server: &AcpServer,
-    params: &ChatParams,
+    params: &mut ChatParams,
     stream_observer: Option<StreamObserver>,
     trace: &RequestTraceContext,
     span: Option<&OtelContext>,
@@ -773,6 +774,7 @@ pub(crate) async fn execute_autonomy_round(
     agent_messages: &[Message],
     base_agent_options: &HashMap<String, Value>,
     cache_hit: bool,
+    progress_sse_tx: Option<mpsc::Sender<StreamFrame>>,
 ) -> AutonomyOutcome {
     if cache_hit {
         return AutonomyOutcome {
@@ -800,17 +802,35 @@ pub(crate) async fn execute_autonomy_round(
         }
 
         let attempt_started = std::time::Instant::now();
-        let autonomy_tool_registry = Some(std::sync::Arc::new(
-            crate::orchestration::tool::ToolRegistry::new(),
-        ));
+
+        // Some agents (notably Copilot/GitHub) don't support custom tools.
+        // For those, strip tools from options so the agent responds naturally
+        // without being confused by unfamiliar function definitions.
+        let agent_opts = if agent_name.to_lowercase().contains("copilot") {
+            let mut opts = base_agent_options.clone();
+            opts.remove("tools");
+            opts.remove("tool_choice");
+            Some(opts)
+        } else {
+            Some(base_agent_options.clone())
+        };
+        let autonomy_tool_registry = if agent_name.to_lowercase().contains("copilot") {
+            None // Copilot has its own native tools, no Go-On tool registry needed
+        } else {
+            Some(std::sync::Arc::new(
+                crate::orchestration::tool::ToolRegistry::new(),
+            ))
+        };
+
         let result = crate::acp::helpers::autonomy_loop_adapter::run_acp_autonomy_loop(
             agent,
             autonomy_tool_registry,
             agent_messages.to_vec(),
             phase.principles.clone(),
-            Some(base_agent_options.clone()),
+            agent_opts,
             request_timeout(phase.options.as_ref()),
             None,
+            progress_sse_tx.clone(),
         )
         .await;
 

@@ -172,20 +172,20 @@ async fn handle_tls_http_stream(
 
         write_sse_headers(tls_stream, &cors_headers).await?;
 
-        let params: crate::acp::r#impl::chat::ChatParams = match serde_json::from_value(body_value)
-        {
-            Ok(p) => p,
-            Err(e) => {
-                write_sse_event(
-                    tls_stream,
-                    "error",
-                    &serde_json::json!({"message": format!("Invalid chat params: {}", e)}),
-                )
-                .await?;
-                let _ = tls_stream.shutdown().await;
-                return Ok(());
-            }
-        };
+        let mut params: crate::acp::r#impl::chat::ChatParams =
+            match serde_json::from_value(body_value) {
+                Ok(p) => p,
+                Err(e) => {
+                    write_sse_event(
+                        tls_stream,
+                        "error",
+                        &serde_json::json!({"message": format!("Invalid chat params: {}", e)}),
+                    )
+                    .await?;
+                    let _ = tls_stream.shutdown().await;
+                    return Ok(());
+                }
+            };
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         let trace = http_trace_context("chat.stream");
@@ -194,7 +194,7 @@ async fn handle_tls_http_stream(
         let task = tokio::spawn(async move {
             if let Err(err) = crate::acp::r#impl::chat::process_chat_request(
                 server_ref.as_ref(),
-                &params,
+                &mut params,
                 Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
                 &trace,
                 None,

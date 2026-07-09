@@ -99,7 +99,7 @@ impl ChatPipeline {
     /// Timing is accumulated and returned in the [`PipelineOutcome`].
     pub(crate) async fn run(
         server: &AcpServer,
-        params: &ChatParams,
+        params: &mut ChatParams,
         stream_observer: Option<StreamObserver>,
         trace: &RequestTraceContext,
         span: Option<&OtelContext>,

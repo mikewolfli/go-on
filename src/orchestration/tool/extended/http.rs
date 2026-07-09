@@ -64,7 +64,7 @@ fn url_policy() -> &'static UrlPolicyConfig {
 }
 
 /// Extract the first HTTP/HTTPS URL from a text string.
-fn extract_url(text: &str) -> Option<String> {
+pub fn extract_url(text: &str) -> Option<String> {
     let https = text.find("https://");
     let http = text.find("http://").filter(|_| https.is_none());
     let start = https.or(http)?;

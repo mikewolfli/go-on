@@ -398,7 +398,7 @@ pub(crate) async fn handle_openai_chat_completions(
         .clone()
         .unwrap_or_else(|| "go-on".to_string());
     let request_id = format!("chatcmpl-{}", crate::acp::prelude::now_ts_ms());
-    let params = openai_to_chat_params(&openai_req);
+    let mut params = openai_to_chat_params(&openai_req);
 
     if !openai_req.stream {
         let trace = http_trace_context("openai.chat.completions");
@@ -409,10 +409,10 @@ pub(crate) async fn handle_openai_chat_completions(
         // harness review gate, empty agent selection), the client gets
         // a clean error instead of hanging indefinitely.
         let result = match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(300),
             crate::acp::r#impl::chat::process_chat_request(
                 server.as_ref(),
-                &params,
+                &mut params,
                 None,
                 &trace,
                 None,
@@ -425,7 +425,7 @@ pub(crate) async fn handle_openai_chat_completions(
             Err(_) => {
                 let payload = serde_json::json!({
                     "error": {
-                        "message": "chat request timed out after 30s",
+                        "message": "chat request timed out after 300s",
                         "type": "go_on_timeout"
                     }
                 });
@@ -494,7 +494,7 @@ pub(crate) async fn handle_openai_chat_completions(
     let task = tokio::spawn(async move {
         crate::acp::r#impl::chat::process_chat_request(
             server_ref.as_ref(),
-            &params,
+            &mut params,
             Some(StreamObserver::sse(tx)),
             &trace,
             None,
@@ -1578,7 +1578,7 @@ async fn handle_response_create(
         extra.insert("reasoning".to_string(), v.clone());
     }
 
-    let params = ChatParams {
+    let mut params = ChatParams {
         mode: "edit".to_string(),
         messages,
         conversation_id: None,
@@ -1618,7 +1618,7 @@ async fn handle_response_create(
     let ctx = Some(ChatRequestContext::new(user_session.clone()));
     let result = crate::acp::r#impl::chat::process_chat_request(
         server.as_ref(),
-        &params,
+        &mut params,
         None,
         &trace,
         None,
@@ -1755,11 +1755,11 @@ async fn handle_response_stream(
     let ctx = Some(ChatRequestContext::new(user_session));
     let server_ref = Arc::clone(&server);
     let trace_for_task = trace.clone();
-    let params_for_task = params.clone();
+    let mut params_for_task = params.clone();
     let task = tokio::spawn(async move {
         crate::acp::r#impl::chat::process_chat_request(
             server_ref.as_ref(),
-            &params_for_task,
+            &mut params_for_task,
             Some(observer),
             &trace_for_task,
             None,

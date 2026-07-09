@@ -482,7 +482,7 @@ pub(super) async fn handle_session_prompt(
 
     // Build Go-On chat params from ACP prompt
     let chat_params_value = build_chat_params_from_acp(params, &session_state);
-    let chat_params: ChatParams = match serde_json::from_value(chat_params_value) {
+    let mut chat_params: ChatParams = match serde_json::from_value(chat_params_value) {
         Ok(p) => p,
         Err(e) => {
             return crate::acp::r#impl::io::send_error(
@@ -520,7 +520,7 @@ pub(super) async fn handle_session_prompt(
         std::time::Duration::from_secs(300),
         process_chat_request(
             server,
-            &chat_params,
+            &mut chat_params,
             None, // no streaming — avoid proprietary notifications on JSON-RPC
             &pipeline_trace,
             None,
