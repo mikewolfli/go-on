@@ -176,11 +176,9 @@ impl Agent for OpenAiCompatibleAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
-        let chat_messages = messages;
-
         retry_chat_once(
             || async {
-                self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                self.chat_once(&messages, &principles, &options, sender.clone())
                     .await
                     .map_err(Into::into)
             },

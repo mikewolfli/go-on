@@ -91,6 +91,32 @@ impl ActiveGenerationGuard {
 }
 
 impl ChatView {
+    /// Zed-style: append a segment to the segments list, merging with the last
+    /// segment of the same type to keep contiguous content together.
+    fn append_segment(
+        segments: &mut Vec<crate::views::chat::types::MessageSegment>,
+        new_seg: crate::views::chat::types::MessageSegment,
+    ) {
+        use crate::views::chat::types::MessageSegment;
+        let new_type = std::mem::discriminant(&new_seg);
+        if let Some(last) = segments.last_mut() {
+            if std::mem::discriminant(last) == new_type {
+                // Same type — merge into last segment
+                match (last, new_seg) {
+                    (MessageSegment::Content(ref mut t), MessageSegment::Content(add)) => {
+                        t.push_str(&add)
+                    }
+                    (MessageSegment::Thinking(ref mut t), MessageSegment::Thinking(add)) => {
+                        t.push_str(&add)
+                    }
+                    _ => {}
+                }
+                return;
+            }
+        }
+        segments.push(new_seg);
+    }
+
     fn build_attachment_summary(attachments: &[Attachment]) -> String {
         if attachments.is_empty() {
             return String::new();
@@ -208,6 +234,7 @@ impl ChatView {
             output_tokens: 0,
             total_tokens: 0,
             thinking: String::new(),
+            segments: Vec::new(),
             sub_agent_records: Vec::new(),
             command_records: Vec::new(),
         });
@@ -270,6 +297,7 @@ impl ChatView {
                 output_tokens: 0,
                 total_tokens: 0,
                 thinking: String::new(),
+                segments: Vec::new(),
                 sub_agent_records: Vec::new(),
                 command_records: Vec::new(),
             });
@@ -325,12 +353,6 @@ impl ChatView {
             let handle = tokio::spawn(async move {
                 // Guard ensures active_generations is decremented when this task exits
                 let _guard = active_gen_guard;
-
-                let _phase_val = if phase_clone.is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    serde_json::Value::String(phase_clone.clone())
-                };
 
                 let use_workflow_rpc = mode_clone == "workflow";
 
@@ -792,19 +814,10 @@ impl ChatView {
                                                     .get("branch_id")
                                                     .and_then(|v| v.as_str())
                                                     .map(String::from);
-                                                // Capture plan_output from Plan mode responses
-                                                if let Some(plan_output) = val.get("plan_output") {
-                                                    if let Some(_obj) = plan_output.as_object() {
-                                                        // Plan output is available for the UI to display
-                                                        // the structured plan steps and recommended mode
-                                                        #[cfg(debug_assertions)]
-                                                        {
-                                                            eprintln!("[Plan] Captured plan output: {} mode, {} step(s)",
-                                                                _obj.get("recommended_mode").and_then(|v| v.as_str()).unwrap_or("?"),
-                                                                _obj.get("steps").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0)
-                                                            );
-                                                        }
-                                                    }
+                                                // Capture plan_output from Plan mode responses (reserved for future UI display)
+                                                if val.get("plan_output").is_some() {
+                                                    #[cfg(debug_assertions)]
+                                                    eprintln!("[Plan] Captured plan_output");
                                                 }
                                             }
                                             "error" => {
@@ -910,20 +923,22 @@ impl ChatView {
                             .await;
                         }
 
-                        let _status_log = format!(
-                            "tokens:{}, thinking:{}, agent:{}",
-                            final_content.as_ref().map(|c| c.len()).unwrap_or(0),
-                            !final_thinking
-                                .as_ref()
-                                .map(|t| t.is_empty())
-                                .unwrap_or(true),
-                            final_agent.as_deref().unwrap_or("unknown")
-                        );
                         #[cfg(debug_assertions)]
-                        eprintln!(
-                            "[Gen] Generation {} completed ({})",
-                            generation_id, _status_log
-                        );
+                        {
+                            let _status_log = format!(
+                                "tokens:{}, thinking:{}, agent:{}",
+                                final_content.as_ref().map(|c| c.len()).unwrap_or(0),
+                                !final_thinking
+                                    .as_ref()
+                                    .map(|t| t.is_empty())
+                                    .unwrap_or(true),
+                                final_agent.as_deref().unwrap_or("unknown")
+                            );
+                            eprintln!(
+                                "[Gen] Generation {} completed ({})",
+                                generation_id, _status_log
+                            );
+                        }
 
                         // Emit SSE parse error summary warning if any errors occurred
                         if sse_parse_error_count > 0 {
@@ -1088,20 +1103,39 @@ The backend may be misconfigured or overloaded."
                                         split_thinking_from_content(&token);
                                     if !clean_token.is_empty() {
                                         m.content.push_str(&clean_token);
+                                        // Zed-style: append to last Content segment or add new
+                                        Self::append_segment(
+                                            &mut m.segments,
+                                            crate::views::chat::types::MessageSegment::Content(
+                                                clean_token,
+                                            ),
+                                        );
                                     }
                                     if !extra_thinking.is_empty() {
                                         if m.thinking.is_empty() {
                                             self.show_thinking_idx = Some(idx);
                                         }
                                         m.thinking.push_str(&extra_thinking);
+                                        Self::append_segment(
+                                            &mut m.segments,
+                                            crate::views::chat::types::MessageSegment::Thinking(
+                                                extra_thinking,
+                                            ),
+                                        );
                                     }
                                 }
                                 if !reasoning.is_empty() {
-                                    // First reasoning token -> auto-expand thinking panel
                                     if m.thinking.is_empty() {
                                         self.show_thinking_idx = Some(idx);
                                     }
                                     m.thinking.push_str(&reasoning);
+                                    // Zed-style: append to last Thinking segment or add new
+                                    Self::append_segment(
+                                        &mut m.segments,
+                                        crate::views::chat::types::MessageSegment::Thinking(
+                                            reasoning,
+                                        ),
+                                    );
                                 }
                             }
                         }
@@ -1180,12 +1214,10 @@ The backend may be misconfigured or overloaded."
                                     lower.contains("not in sandbox whitelist")
                                         && lower.contains("requires user confirmation")
                                 };
+                                // Replace with authoritative thinking from the completed response
+                                // (overrides any incremental reasoning accumulated during streaming)
                                 if !thinking.is_empty() {
-                                    if m.thinking.is_empty() {
-                                        m.thinking.clone_from(&thinking);
-                                    } else {
-                                        m.thinking.push_str(&thinking);
-                                    }
+                                    m.thinking = thinking;
                                 }
                                 // Update the model used.
                                 //   - Copilot auto → actual model name (e.g. "gemini-2.5-pro")

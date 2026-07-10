@@ -5,9 +5,23 @@ use tokio::task::JoinHandle;
 /// Maximum number of messages to keep per session to prevent unbounded memory growth.
 pub const MAX_MESSAGES: usize = 1000;
 
+/// A single segment of a message — either thinking or response content.
+/// Segments are ordered chronologically so the renderer can display them interleaved,
+/// matching Zed Chat's real-time thinking + response flow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MessageSegment {
+    /// Thinking/reasoning content (displayed with distinct background).
+    Thinking(String),
+    /// Response content (normal display).
+    Content(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
+    /// Full response text (legacy field, kept for backward compatibility).
+    /// New code should use `segments` instead.
+    #[serde(default)]
     pub content: String,
     pub timestamp: u64,
     pub attachments: Vec<Attachment>,
@@ -21,12 +35,16 @@ pub struct Message {
     pub output_tokens: usize,
     #[serde(default)]
     pub total_tokens: usize,
+    /// Legacy thinking field (kept for backward compatibility).
     #[serde(default)]
     pub thinking: String,
     #[serde(default)]
     pub sub_agent_records: Vec<SubAgentRecord>,
     #[serde(default)]
     pub command_records: Vec<CommandRecord>,
+    /// Zed-style interleaved segments: Thinking/Content pairs in chronological order.
+    #[serde(default)]
+    pub segments: Vec<MessageSegment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -264,13 +264,6 @@ impl SemanticCapabilityMatcher {
         // Tier 3: generic interaction-mode tags
         const LOW_SPECIFICITY: &[&str] = &["chat", "conversation", "general"];
 
-        let known_tags: HashSet<&str> = HIGH_SPECIFICITY
-            .iter()
-            .chain(MEDIUM_SPECIFICITY.iter())
-            .chain(LOW_SPECIFICITY.iter())
-            .copied()
-            .collect();
-
         if tags.is_empty() {
             return 0.1;
         }
@@ -289,17 +282,9 @@ impl SemanticCapabilityMatcher {
                 med_count += 1;
             } else if LOW_SPECIFICITY.contains(&t) {
                 low_count += 1;
-            } else if known_tags.contains(t) {
-                // Should not happen given the contains checks above,
-                // but kept as a safety net
-                low_count += 1;
             } else {
                 unknown_count += 1;
             }
-        }
-
-        if total == 0 {
-            return 0.1;
         }
 
         // Weighted average: high-specificity tags contribute 1.0,

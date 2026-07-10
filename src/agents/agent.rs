@@ -559,17 +559,14 @@ pub trait Agent: Send + Sync {
     /// Get available models for this provider
     ///
     /// Returns a list of models that can be used with this provider.
-    /// Default implementation returns an empty list (providers should override if applicable).
-    fn available_models(&self) -> Vec<ModelInfo> {
-        Vec::new()
-    }
+    /// Every provider must implement this with its actual model list.
+    fn available_models(&self) -> Vec<ModelInfo>;
 
-    /// Get the default model for this provider
-    ///
-    /// Returns the currently configured default model.
-    /// Default implementation returns None.
+    /// Get the default model from available models.
+    /// Default implementation finds the first model with `is_default == true`.
+    /// Agents with custom model resolution logic (e.g. Copilot, Wenxin) override this.
     fn default_model(&self) -> Option<ModelInfo> {
-        None
+        self.available_models().into_iter().find(|m| m.is_default)
     }
 
     /// Whether the provider supports overriding the target model through chat options.
@@ -1246,6 +1243,10 @@ struct LocalEchoAgent;
 
 #[async_trait]
 impl Agent for LocalEchoAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,
@@ -1268,6 +1269,10 @@ struct LocalApproveAgent;
 
 #[async_trait]
 impl Agent for LocalApproveAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
     async fn chat(
         &self,
         _messages: Vec<Message>,
@@ -1284,6 +1289,10 @@ struct LocalSlowApproveAgent;
 
 #[async_trait]
 impl Agent for LocalSlowApproveAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
     async fn chat(
         &self,
         _messages: Vec<Message>,

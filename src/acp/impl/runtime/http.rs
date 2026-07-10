@@ -541,7 +541,7 @@ async fn route_http_post(
                     const STREAM_INACTIVITY_TIMEOUT_SECS: u64 = 120;
                     let mut sse_event_count: usize = 0;
 
-                    let mut stream_timeout =
+                    let stream_timeout =
                         tokio::time::sleep(std::time::Duration::from_secs(STREAM_INACTIVITY_TIMEOUT_SECS));
                     tokio::pin!(stream_timeout);
                     loop {

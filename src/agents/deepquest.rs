@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
-use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
+use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct DeepQuestAgent {
     api_key_env: String,
@@ -64,12 +64,7 @@ impl DeepQuestAgent {
             "stream": true
         });
 
-        if let Some(value) = option_f64(options, "temperature") {
-            payload["temperature"] = Value::from(value);
-        }
-        if let Some(value) = option_f64(options, "top_p") {
-            payload["top_p"] = Value::from(value);
-        }
+        apply_openai_common_options(&mut payload, options);
 
         payload
     }
@@ -116,11 +111,9 @@ impl Agent for DeepQuestAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
-        let chat_messages = messages;
-
         retry_chat_once(
             || async {
-                self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                self.chat_once(&messages, &principles, &options, sender.clone())
                     .await
                     .map_err(Into::into)
             },
@@ -148,13 +141,5 @@ impl Agent for DeepQuestAgent {
                 context_window: Some(32768),
             },
         ]
-    }
-
-    fn default_model(&self) -> Option<ModelInfo> {
-        self.available_models().into_iter().find(|m| m.is_default)
-    }
-
-    fn supports_model_override(&self) -> bool {
-        true
     }
 }

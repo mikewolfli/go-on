@@ -1,7 +1,7 @@
 //! ACP method name constants.
 //!
 //! All standard ACP method names are defined here as associated constants.
-//! Handlers live in `protocol_pack.rs` and dispatch entries in `request.rs`:
+//! Handlers live in `acp/impl/` and dispatch through the ACP server.
 //!   - session/resume, session/close — session lifecycle management
 //!   - session/request_permission — permission response handler
 //!   - terminal/create, terminal/output, terminal/release, terminal/kill,

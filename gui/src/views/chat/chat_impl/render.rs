@@ -291,7 +291,7 @@ impl ChatView {
 fn parse_markdown_to_segments(text: &str) -> CachedMarkdownRender {
     let mut options = comrak::Options::default();
     options.extension.strikethrough = true;
-    options.extension.tagfilter = false;
+    options.extension.tagfilter = true;
     options.render.hardbreaks = true;
     options.render.github_pre_lang = true;
 

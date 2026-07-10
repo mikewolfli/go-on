@@ -188,7 +188,9 @@ impl ChatView {
             out.push('\n');
         }
 
-        out.trim().to_string()
+        // Strip HTML tags for readability (e.g., <body>, <div>, etc.)
+        let stripped = strip_html_tags(&out);
+        stripped.trim().to_string()
     }
 
     /// Improved token counting algorithm
@@ -988,6 +990,42 @@ impl ChatView {
         self.stream_progress = TokenProgress::default();
         self.stream_processor = None;
     }
+}
+
+/// Remove HTML tags from a string, keeping the text content between them.
+/// Used by markdown_to_plain_text for fallback plain text rendering.
+fn strip_html_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for c in input.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ => {
+                if !in_tag {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    // Collapse multiple spaces into one
+    let mut collapsed = String::with_capacity(out.len());
+    let mut prev_space = false;
+    for c in out.chars() {
+        if c == ' ' {
+            if !prev_space {
+                collapsed.push(' ');
+                prev_space = true;
+            }
+        } else {
+            collapsed.push(c);
+            prev_space = false;
+        }
+    }
+    collapsed
 }
 
 /// Format timestamp as absolute date+time in local timezone (e.g. "2025-05-07 14:30")

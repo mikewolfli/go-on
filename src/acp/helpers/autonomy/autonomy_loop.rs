@@ -170,7 +170,6 @@ pub async fn run_autonomy_loop(
 
         // ── Call agent with streaming ────────────────────────────────
         let (sender_inner, mut receiver) = mpsc::channel::<String>(1024);
-        let progress_tx = sender_inner.clone();
         let sender = StreamingSender::from(sender_inner);
 
         let agent_messages = if iteration == 0 {

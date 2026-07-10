@@ -107,6 +107,38 @@ impl OrchestrationCouncil {
         Ok(false)
     }
 
+    /// Determine a member's position based on their reputation record.
+    ///
+    /// Uses a heuristic derived from the member's voting accuracy:
+    /// - High accuracy (>= 0.6) or no record yet → Support
+    /// - Medium accuracy (0.3..0.6) → Oppose
+    /// - Low accuracy (< 0.3) → Abstain
+    fn member_position(&self, member_id: &str) -> CouncilPosition {
+        let reputation = self.reputation.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("council reputation lock poisoned in member_position, recovering");
+            poisoned.into_inner()
+        });
+
+        match reputation.get(member_id) {
+            Some(record) if record.accuracy >= 0.6 => CouncilPosition::Support,
+            Some(record) if record.accuracy >= 0.3 => CouncilPosition::Oppose,
+            Some(_) => CouncilPosition::Abstain,
+            // No reputation record yet — default to Support for first deliberations
+            None => CouncilPosition::Support,
+        }
+    }
+
+    /// Map a `CouncilPosition` to the corresponding vote option string
+    /// recognised by [`tally_deliberation_round_votes`](Self::tally_deliberation_round_votes).
+    fn position_to_vote_option(pos: &CouncilPosition) -> &'static str {
+        match pos {
+            CouncilPosition::Support => "support",
+            CouncilPosition::Oppose => "oppose",
+            CouncilPosition::Amend => "amend",
+            CouncilPosition::Abstain => "abstain",
+        }
+    }
+
     /// Run multi-round deliberation for a proposal.
     ///
     /// Orchestrates the full deliberation flow:
@@ -143,10 +175,16 @@ impl OrchestrationCouncil {
         loop {
             // Each active member submits a statement and casts a vote in the current round.
             for member in &members {
+                // Determine this member's position based on their reputation.
+                let position = self.member_position(&member.id);
+
                 let statement = DeliberationStatement {
                     member_id: member.id.clone(),
-                    position: CouncilPosition::Support,
-                    reasoning: format!("Deliberation vote by member '{}'", member.name),
+                    position: position.clone(),
+                    reasoning: format!(
+                        "Deliberation vote by member '{}' (position: {:?})",
+                        member.name, position
+                    ),
                     amendments: Vec::new(),
                     submitted_at: now_epoch_ms(),
                 };
@@ -155,10 +193,10 @@ impl OrchestrationCouncil {
                 let vote = CouncilVote {
                     member_id: member.id.clone(),
                     proposal_id: proposal_id.to_string(),
-                    selected_option: "support".to_string(),
+                    selected_option: Self::position_to_vote_option(&position).to_string(),
                     weight: member.voting_power,
                     vote_ms: now_epoch_ms(),
-                    rationale: None,
+                    rationale: Some(format!("Vote derived from reputation: {:?}", position)),
                 };
                 self.vote_in_round(&delib_id, vote)?;
             }
@@ -225,7 +263,7 @@ impl OrchestrationCouncil {
     pub fn auto_eject_low_performers(&mut self) -> Vec<String> {
         let eject_threshold = self.config.ejection_threshold.unwrap_or(0.3);
         let eject_window = self.config.ejection_window.unwrap_or(20);
-        let _warmup = self.config.ejection_warmup_rounds.unwrap_or(10);
+        let _ = self.config.ejection_warmup_rounds.unwrap_or(10);
         let mut ejected = Vec::new();
 
         let rep = self.reputation.lock().unwrap_or_else(|poisoned| {

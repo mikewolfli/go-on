@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message, ModelInfo};
+use crate::agent::{Agent, Message};
 use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -125,10 +125,6 @@ impl Agent for YiAgent {
         ]
     }
 
-    fn default_model(&self) -> Option<ModelInfo> {
-        self.available_models().into_iter().find(|m| m.is_default)
-    }
-
     async fn chat(
         &self,
         messages: Vec<Message>,
@@ -136,11 +132,9 @@ impl Agent for YiAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
-        let chat_messages = messages;
-
         retry_chat_once(
             || async {
-                self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                self.chat_once(&messages, &principles, &options, sender.clone())
                     .await
                     .map_err(Into::into)
             },

@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 
 use crate::i18n::runtime::tf;
 use crate::orchestration::brain_loop::{
-    BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopStep, StepStatus,
+    BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopProfile, BrainLoopStep, StepStatus,
 };
 use crate::orchestration::skill::Skill;
 use crate::orchestration::tool_recommender::ToolRecommendation;
@@ -555,6 +555,8 @@ impl FullAutoFlow {
         // ── BrainLoop re-execution (GAP-46-07) ─────────────────────────
         // Only re-run failed/skipped steps through the BrainLoop to avoid
         // wasting iteration budget on work that already completed successfully.
+        let mut brain_loop_metrics: Option<BrainLoopProfile> = None;
+
         let failed_indices: Vec<usize> = execution_log
             .iter()
             .enumerate()
@@ -611,6 +613,10 @@ impl FullAutoFlow {
                         if let Err(e) = bl.execute_step(&plan_id, &step_id, "").await {
                             warn!("BrainLoop step `{step_id}` execution failed: {e}");
                             errors.push(format!("BrainLoop re-execution failed for step {i}: {e}"));
+                        } else if let Some(step) = execution_log.get_mut(i) {
+                            // Merge the re-executed result back into the report
+                            step.success = true;
+                            step.error = None;
                         }
                     }
 
@@ -623,6 +629,7 @@ impl FullAutoFlow {
                         "BrainLoop plan `{plan_id}` completed: {} cycles, {} plans",
                         profile.total_cycles, profile.total_plans
                     );
+                    brain_loop_metrics = Some(profile);
                 }
                 Err(e) => warn!("BrainLoop plan creation failed: {e}"),
             }
@@ -637,6 +644,7 @@ impl FullAutoFlow {
             errors,
             total_duration_ms,
             cache_metrics: cache_snapshot,
+            brain_loop_metrics,
         }
     }
 }

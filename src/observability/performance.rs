@@ -540,16 +540,18 @@ pub(crate) fn get_memory_usage() -> u64 {
 /// On Linux this reads `/proc/stat` and performs a delta-based calculation
 /// similar to `top(1)`.  On other platforms a best-effort approach is used;
 /// returns 0.0 when no platform-specific implementation exists.
+#[cfg(target_os = "linux")]
 fn get_cpu_usage() -> f64 {
-    #[cfg(target_os = "linux")]
-    {
-        linux_cpu_usage()
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos_cpu_usage()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    linux_cpu_usage()
+}
+
+#[cfg(target_os = "macos")]
+fn get_cpu_usage() -> f64 {
+    macos_cpu_usage()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn get_cpu_usage() -> f64 {
     0.0
 }
 

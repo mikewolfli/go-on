@@ -138,13 +138,7 @@ impl Agent for ReplicateAgent {
         ]
     }
 
-    fn default_model(&self) -> Option<ModelInfo> {
-        self.available_models().into_iter().find(|m| m.is_default)
-    }
 
-    fn supports_model_override(&self) -> bool {
-        true
-    }
 
     async fn chat(
         &self,
@@ -153,11 +147,9 @@ impl Agent for ReplicateAgent {
         options: Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
-        let chat_messages = messages;
-
         retry_chat_once(
             || async {
-                self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                self.chat_once(&messages, &principles, &options, sender.clone())
                     .await
                     .map_err(Into::into)
             },

@@ -304,6 +304,7 @@ impl MultiAgentPipeline {
 mod tests {
     use super::*;
     use crate::agent::AgentTaskResult;
+    use crate::agents::agent::ModelInfo;
     use crate::orchestration::task_router::TaskType;
 
     /// Create a minimal mock agent for testing.
@@ -311,6 +312,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Agent for MockAgent {
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
         async fn chat(
             &self,
             _messages: Vec<crate::agent::Message>,

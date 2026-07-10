@@ -3,6 +3,7 @@
 //! Provides the audit trail types that capture what happened during
 //! a [`FullAutoFlow`](super::FullAutoFlow) execution run.
 
+use crate::orchestration::brain_loop::BrainLoopProfile;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -73,6 +74,8 @@ pub struct AutoExecutionReport {
     pub total_duration_ms: u64,
     /// Cache metrics snapshot from the fast-path cache.
     pub cache_metrics: Value,
+    /// Optional profile metrics from the BrainLoop re-execution phase.
+    pub brain_loop_metrics: Option<BrainLoopProfile>,
 }
 
 impl AutoExecutionReport {

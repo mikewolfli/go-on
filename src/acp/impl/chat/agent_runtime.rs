@@ -124,11 +124,6 @@ pub(crate) async fn run_agent_collecting(
             chunk_index += 1;
             total_chars += next_chars;
 
-            let display_token = if token.starts_with(TOKEN_THINKING_PREFIX) {
-                ""
-            } else {
-                &token
-            };
             emit_stream_chunk(
                 server,
                 stream_ctx.stream_observer.as_ref(),
@@ -137,7 +132,7 @@ pub(crate) async fn run_agent_collecting(
                     phase_name: stream_ctx.phase_name,
                     trace_id: stream_ctx.trace_id,
                 },
-                display_token,
+                &token,
                 chunk_index,
                 total_chars,
             )

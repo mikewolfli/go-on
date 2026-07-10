@@ -111,9 +111,9 @@ Commands:
   /compact     Summarize & compact conversation history
   /cost        Show token usage and estimated cost
   /diff        Show git diff (optional path filter)
-  /commit      Git commit with staged changes
-  /review      Review current git diff before committing
-  /plan        Show structured execution plan
+  /commit      AI-powered git commit (generates message, confirms before committing)
+  /review      AI-powered code review of current git diff
+  /plan        AI-generated structured execution plan from conversation context
   /find_path   Search for files by name glob
 
 The AI agent has access to tools:
@@ -665,8 +665,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     continue;
                 }
                 "commit" => {
-                    eprintln!("Preparing commit...");
-                    // Single git diff call for both status and stat context
+                    // ── Get diff stats ──
                     let diff_output = match tokio::process::Command::new("git")
                         .args(["diff", "--stat"])
                         .output()
@@ -682,68 +681,132 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         eprintln!("{}Nothing to commit.{}", ansi!("33"), ansi!("0"));
                         continue;
                     }
-                    eprintln!("Changes:\n{}", diff_output);
+                    eprintln!(
+                        "{}Changes:{} {}",
+                        ansi!("1"),
+                        ansi!("0"),
+                        diff_output.trim()
+                    );
 
-                    // Stage all changes
-                    let add_output = tokio::process::Command::new("git")
-                        .args(["add", "-A"])
+                    // ── Get full diff for AI analysis (truncated to 8K) ──
+                    let full_diff = match tokio::process::Command::new("git")
+                        .arg("diff")
                         .output()
-                        .await;
-                    match add_output {
-                        Ok(out) if !out.status.success() => {
-                            eprintln!(
-                                "{}Git add failed: {}{}",
-                                ansi!("31"),
-                                String::from_utf8_lossy(&out.stderr),
-                                ansi!("0")
-                            );
-                            continue;
+                        .await
+                    {
+                        Ok(out) => {
+                            let s = String::from_utf8_lossy(&out.stdout).to_string();
+                            if s.len() > 8000 {
+                                format!("{}...\n[truncated]", &s[..8000])
+                            } else {
+                                s
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("{}Git add failed: {}{}", ansi!("31"), e, ansi!("0"));
-                            continue;
-                        }
-                        _ => {}
-                    }
-
-                    // Build a meaningful commit message from the diff stats
-                    let files_changed: Vec<&str> =
-                        diff_output.lines().filter(|l| l.contains('|')).collect();
-                    let summary = if files_changed.len() <= 3 {
-                        files_changed
-                            .iter()
-                            .map(|l| l.split('|').next().unwrap_or("").trim())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    } else {
-                        format!("{} files", files_changed.len())
+                        Err(_) => String::new(),
                     };
-                    if summary.is_empty() {
-                        eprintln!("{}Nothing to commit.{}", ansi!("33"), ansi!("0"));
+
+                    // ── Generate commit message with AI ──
+                    eprint!("{}Generating commit message...{}", ansi!("90"), ansi!("0"));
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+                    let prompt_msg =
+                        Message {
+                            role: "user".to_string(),
+                            content: format!(
+                            "Generate a single-line conventional commit message for these changes.\
+                             \nFormat: <type>(<scope>): <description>\
+                             \nExamples:\
+                             \n  feat(api): add user authentication endpoint\
+                             \n  fix(cache): resolve TTL race condition\
+                             \n  refactor(cli): simplify command dispatch\
+                             \n  docs(readme): update installation steps\
+                             \n\nReturn ONLY the commit message, nothing else.\n\n{}",
+                            if full_diff.is_empty() { &diff_output } else { &full_diff }
+                        ),
+                        };
+
+                    let suggested_msg =
+                        match chat_simple(&current_agent, vec![prompt_msg], vec![]).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                eprintln!(
+                                    "\r{}AI commit message failed: {} — using fallback{}",
+                                    ansi!("31"),
+                                    e,
+                                    ansi!("0")
+                                );
+                                format!(
+                                    "feat: {}",
+                                    diff_output.lines().filter(|l| l.contains('|')).count()
+                                )
+                            }
+                        };
+
+                    // ── Show offer for confirmation/edit ──
+                    eprintln!(
+                        "\r{}✓ Message generated{} {}",
+                        ansi!("32"),
+                        ansi!("0"),
+                        suggested_msg
+                    );
+                    eprint!(
+                        "  {}Press Enter to commit, type a custom message, or n/N to cancel: {} ",
+                        ansi!("90"),
+                        ansi!("0")
+                    );
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+                    // Read user input via stdin channel (reuse existing)
+                    let user_line = tokio::select! {
+                        line = stdin_rx.recv() => line.unwrap_or_default(),
+                        _ = signal::ctrl_c() => { eprintln!("\nCancelled."); continue; }
+                    };
+                    let trimmed = user_line.trim().to_string();
+
+                    if trimmed.eq_ignore_ascii_case("n") || trimmed.eq_ignore_ascii_case("no") {
+                        eprintln!("{}Commit cancelled.{}", ansi!("33"), ansi!("0"));
                         continue;
                     }
-                    let msg = format!("feat: {}", summary);
+
+                    let final_msg = if trimmed.is_empty() {
+                        suggested_msg
+                    } else {
+                        trimmed
+                    };
+
+                    // ── Stage all and commit ──
+                    let stage_ok = tokio::process::Command::new("git")
+                        .args(["add", "-A"])
+                        .output()
+                        .await
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+
+                    if !stage_ok {
+                        eprintln!("{}Failed to stage changes.{}", ansi!("31"), ansi!("0"));
+                        continue;
+                    }
 
                     match tokio::process::Command::new("git")
-                        .args(["commit", "-m", &msg])
+                        .args(["commit", "-m", &final_msg])
                         .output()
                         .await
                     {
                         Ok(out) if out.status.success() => {
-                            let stdout = String::from_utf8_lossy(&out.stdout);
-                            eprintln!("{}✓{}{}", ansi!("32"), ansi!("0"), stdout.trim());
-                        }
-                        Ok(out) => {
                             eprintln!(
-                                "{}Commit failed: {}{}",
-                                ansi!("31"),
-                                String::from_utf8_lossy(&out.stderr),
-                                ansi!("0")
+                                "{}✓ Committed{}{}",
+                                ansi!("32"),
+                                ansi!("0"),
+                                String::from_utf8_lossy(&out.stdout).trim()
                             );
                         }
-                        Err(e) => {
-                            eprintln!("{}Git commit failed: {}{}", ansi!("31"), e, ansi!("0"));
-                        }
+                        Ok(out) => eprintln!(
+                            "{}Commit failed: {}{}",
+                            ansi!("31"),
+                            String::from_utf8_lossy(&out.stderr).trim(),
+                            ansi!("0")
+                        ),
+                        Err(e) => eprintln!("{}Git error: {}{}", ansi!("31"), e, ansi!("0")),
                     }
                     continue;
                 }
@@ -756,23 +819,46 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         );
                         continue;
                     }
-                    // Show a summary of the task context and suggest asking the agent
-                    let last_user = messages.iter().rev().find(|m| m.role == "user");
-                    let assistant_msgs = messages.iter().filter(|m| m.role == "assistant").count();
-                    if let Some(msg) = last_user {
-                        let preview: String = msg.content.chars().take(200).collect();
-                        eprintln!(
-                            "{}── Task Context ({} assistant messages) ──{}",
-                            ansi!("1"),
-                            assistant_msgs,
-                            ansi!("0")
-                        );
-                        eprintln!("Latest request: {}", preview);
-                        if msg.content.len() > 200 {
-                            eprintln!("... ({} more chars)", msg.content.len() - 200);
+
+                    // Build a plan prompt from the conversation context
+                    let context: Vec<String> = messages
+                        .iter()
+                        .filter(|m| m.role != "system")
+                        .take(10) // limit context to last 10 non-system messages
+                        .map(|m| {
+                            format!(
+                                "{}: {}",
+                                m.role,
+                                m.content.chars().take(500).collect::<String>()
+                            )
+                        })
+                        .collect();
+                    let context_str = context.join("\n---\n");
+
+                    eprint!("{}Generating execution plan...{}", ansi!("90"), ansi!("0"));
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+                    let plan_prompt = Message {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Based on this conversation, create a structured execution plan.\
+                             \nList specific steps with file paths where relevant.\
+                             \nFormat as a numbered list.\n\nConversation:\n{}",
+                            context_str
+                        ),
+                    };
+
+                    match chat_simple(&current_agent, vec![plan_prompt], vec![]).await {
+                        Ok(plan) => {
+                            eprintln!("\r{}── Execution Plan ──{}", ansi!("1"), ansi!("0"));
+                            eprintln!("{}", plan);
                         }
-                        eprintln!();
-                        eprintln!("To get a structured execution plan, ask the agent:\n  \"Create a step-by-step plan for this task.\"");
+                        Err(e) => eprintln!(
+                            "\r{}Plan generation failed: {}{}",
+                            ansi!("31"),
+                            e,
+                            ansi!("0")
+                        ),
                     }
                     continue;
                 }
@@ -797,8 +883,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     continue;
                 }
                 "review" => {
-                    // Single git diff call — extract stat from the same output
-                    // instead of running two separate processes.
+                    // ── Get full diff for review ──
                     let detailed = match tokio::process::Command::new("git")
                         .args(["diff"])
                         .output()
@@ -811,7 +896,8 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         eprintln!("{}No changes to review.{}", ansi!("33"), ansi!("0"));
                         continue;
                     }
-                    // Extract stat from the full diff: lines matching "file | N ++"
+
+                    // Show stat summary first
                     let stat_lines: Vec<&str> = detailed
                         .lines()
                         .filter(|l| {
@@ -824,27 +910,53 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                         })
                         .collect();
                     if !stat_lines.is_empty() {
-                        eprintln!("{}── Changes to review ──{}", ansi!("1"), ansi!("0"));
+                        eprintln!(
+                            "{}── Changes ({} file(s)) ──{}",
+                            ansi!("1"),
+                            stat_lines.len(),
+                            ansi!("0")
+                        );
                         for line in &stat_lines {
                             eprintln!("  {}", line);
                         }
                         eprintln!();
                     }
-                    let total_lines = detailed.lines().count();
-                    display_diff(&detailed, Some(60));
-                    if total_lines > 60 {
-                        eprintln!(
-                            "{}... ({} more lines){}  Use /diff for full view",
-                            ansi!("90"),
-                            total_lines - 60,
-                            ansi!("0")
-                        );
+
+                    // ── AI code review ──
+                    eprint!("{}Reviewing changes with AI...{}", ansi!("90"), ansi!("0"));
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+                    let truncated_diff = if detailed.len() > 12000 {
+                        format!(
+                            "{}...\n[truncated: {} total bytes]",
+                            &detailed[..12000],
+                            detailed.len()
+                        )
+                    } else {
+                        detailed.clone()
+                    };
+
+                    let review_prompt = Message {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Review this git diff for bugs, security issues, code quality, and improvement suggestions.\
+                             \nBe concise but specific. Point to exact lines where issues exist.\
+                             \nIf the code looks good, say so briefly.\n\n```diff\n{}\n```",
+                            truncated_diff
+                        ),
+                    };
+
+                    match chat_simple(&current_agent, vec![review_prompt], vec![]).await {
+                        Ok(review) => {
+                            eprintln!("\r{}── AI Code Review ──{}", ansi!("1"), ansi!("0"));
+                            eprintln!("{}", review);
+                        }
+                        Err(e) => {
+                            // Fallback: show raw diff
+                            eprintln!("\r{}AI review failed: {}{}", ansi!("31"), e, ansi!("0"));
+                            display_diff(&detailed, Some(60));
+                        }
                     }
-                    eprintln!(
-                        "{}Use /commit to stage and commit these changes.{}",
-                        ansi!("33"),
-                        ansi!("0")
-                    );
                     continue;
                 }
                 model_cmd if model_cmd.starts_with("model") => {
@@ -985,9 +1097,8 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
 async fn run_agent_with_tools(
     agent: &Arc<dyn Agent>,
     messages: &mut Vec<Message>,
-    principles: Option<Vec<String>>,
+    principles: Vec<String>,
 ) -> Result<(String, usize, usize)> {
-    let principles = principles.unwrap_or_default();
     // ── Estimate prompt tokens from existing messages using CJK-aware estimator ──
     let estimated_prompt_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
     let (tx, mut rx) = mpsc::channel::<String>(2048);
@@ -1009,8 +1120,11 @@ async fn run_agent_with_tools(
     let mut renderer = StreamMarkdownRenderer::new();
     let mut tool_calls: Vec<(String, String)> = Vec::new();
     let mut in_reasoning = false;
+    let mut thinking_buffer = String::new();
 
     // ── Streaming output with interrupt support ──
+    // Thinking tokens are buffered and printed AFTER the reply completes,
+    // so reply appears above and thinking appears below (Zed-style).
     loop {
         tokio::select! {
             token = rx.recv() => {
@@ -1026,18 +1140,23 @@ async fn run_agent_with_tools(
                         // Reasoning content markers
                         if token == REASONING_START {
                             in_reasoning = true;
-                            eprint!("{}", ansi!("90"));
                             continue;
                         }
                         if token == REASONING_END {
                             in_reasoning = false;
-                            eprint!("{}", ansi!("0"));
-                            eprintln!();
+                            continue;
+                        }
+
+                        // __thinking__ prefixed tokens (from reasoning_content field)
+                        if let Some(think) = token.strip_prefix("__thinking__") {
+                            eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                            thinking_buffer.push_str(think);
                             continue;
                         }
 
                         if in_reasoning {
-                            eprint!("{}", token);
+                            eprint!("{}💭 {}{}", ansi!("90"), token, ansi!("0"));
+                            thinking_buffer.push_str(&token);
                         } else {
                             // Feed to streaming renderer for ANSI formatting first,
                             // then display only the formatted output — avoids the raw-text
@@ -1082,7 +1201,7 @@ async fn run_agent_with_tools(
         }
     }
 
-    // ── Flush remaining renderer output ──
+    // ── Flush remaining renderer output and print thinking ──
     let mut response: String = {
         let (remaining, _) = renderer.flush();
         if !remaining.is_empty() {
@@ -1096,6 +1215,10 @@ async fn run_agent_with_tools(
             renderer.take_raw_response()
         }
     };
+
+    // ── End of inline streaming ──
+    // Thinking was already printed inline during streaming with dim styling.
+    // No further thinking print needed — matches Zed's real-time style.
 
     // ── Phase 2: Execute tools with progressive streaming ──
     let mut followup_round_executed = false;
@@ -1228,8 +1351,13 @@ async fn run_agent_with_tools(
                                     eprintln!();
                                     continue;
                                 }
+                                // __thinking__ prefixed tokens (from reasoning_content field)
+                                if let Some(think) = token.strip_prefix("__thinking__") {
+                                    eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                                    continue;
+                                }
                                 if in_reasoning2 {
-                                    eprint!("{}", token);
+                                    eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
                                 } else {
                                     // Feed to renderer first, display only formatted output
                                     followup_renderer.feed(&token);
@@ -1560,10 +1688,10 @@ fn format_tool_output(tool_name: &str, output: &ToolOutput) -> Result<String> {
 /// Cached build of CLI principles — rebuilt only when skills change.
 /// Uses a generation counter so that principles are re-built only when
 /// the skill registry content changes (detected via total skill count).
-fn build_cli_principles() -> Option<Vec<String>> {
-    static CACHED: std::sync::OnceLock<std::sync::Mutex<(Vec<String>, usize)>> =
+fn build_cli_principles() -> Vec<String> {
+    static CACHED: std::sync::OnceLock<std::sync::RwLock<(Vec<String>, usize)>> =
         std::sync::OnceLock::new();
-    let cache = CACHED.get_or_init(|| std::sync::Mutex::new((Vec::new(), usize::MAX)));
+    let cache = CACHED.get_or_init(|| std::sync::RwLock::new((Vec::new(), usize::MAX)));
 
     // Detect skill registry change by current skill count
     let current_skill_count = crate::orchestration::tool::skill_registry()
@@ -1571,49 +1699,46 @@ fn build_cli_principles() -> Option<Vec<String>> {
         .map(|g| g.list().len())
         .unwrap_or(0);
 
-    if let Ok(mut guard) = cache.lock() {
+    if let Ok(guard) = cache.read() {
         if guard.1 == current_skill_count && !guard.0.is_empty() {
-            return Some(guard.0.clone());
+            return guard.0.clone();
         }
+    }
 
-        let mut principles = vec![
-            "You are a helpful AI coding assistant with access to tools.".to_string(),
-            "You can use the following tools via __tool_call__:tool_name:json_args protocol:"
-                .to_string(),
-        ];
+    // Cache miss or expired — rebuild under write lock
+    let mut principles = vec![
+        "You are a helpful AI coding assistant with access to tools.".to_string(),
+        "You can use the following tools via __tool_call__:tool_name:json_args protocol:"
+            .to_string(),
+    ];
 
-        let tool_names = tool_registry().all_names();
-        if !tool_names.is_empty() {
-            principles.push(format!("  Built-in tools: {}", tool_names.join(", ")));
-        }
+    let tool_names = tool_registry().all_names();
+    if !tool_names.is_empty() {
+        principles.push(format!("  Built-in tools: {}", tool_names.join(", ")));
+    }
 
-        if let Some(registry) = crate::orchestration::tool::skill_registry() {
-            if let Ok(guard2) = registry.read() {
-                let skill_list = guard2.list();
-                if !skill_list.is_empty() {
-                    let skill_names: Vec<String> = skill_list
-                        .iter()
-                        .map(|d| format!("{}: {}", d.name, d.description))
-                        .collect();
-                    principles.push(format!("  Registered skills: {}", skill_names.join("; ")));
-                    principles.push(
-                        "Use skill_execute tool with skill_name and input to invoke a skill."
-                            .to_string(),
-                    );
-                }
+    if let Some(registry) = crate::orchestration::tool::skill_registry() {
+        if let Ok(guard2) = registry.read() {
+            let skill_list = guard2.list();
+            if !skill_list.is_empty() {
+                let skill_names: Vec<String> = skill_list
+                    .iter()
+                    .map(|d| format!("{}: {}", d.name, d.description))
+                    .collect();
+                principles.push(format!("  Registered skills: {}", skill_names.join("; ")));
+                principles.push(
+                    "Use skill_execute tool with skill_name and input to invoke a skill."
+                        .to_string(),
+                );
             }
         }
+    }
 
+    if let Ok(mut guard) = cache.write() {
         guard.0 = principles.clone();
         guard.1 = current_skill_count;
-        Some(principles)
-    } else {
-        // Fallback: rebuild uncached
-        Some(vec![
-            "You are a helpful AI coding assistant with access to tools.".to_string(),
-            "You can use __tool_call__:tool_name:json_args to invoke tools.".to_string(),
-        ])
     }
+    principles
 }
 
 /// Display a git diff with ANSI color highlighting, optionally limited to `max_lines`.
@@ -1665,6 +1790,45 @@ fn append_cmd_result(buf: &mut String, r: &serde_json::Value) {
         }
         let _ = write!(buf, "exit code: {code}");
     }
+}
+
+/// Send a simple prompt to the agent and collect the full response as a string.
+///
+/// Unlike `run_agent_with_tools`, this returns only the text response without
+/// tool execution. Ideal for AI-powered commands like `/commit`, `/plan`, `/review`.
+async fn chat_simple(
+    agent: &Arc<dyn Agent>,
+    prompt: Vec<Message>,
+    principles: Vec<String>,
+) -> Result<String> {
+    let (tx, mut rx) = mpsc::channel::<String>(1024);
+    let sender = StreamingSender::from(tx);
+    let principles_opt = if principles.is_empty() {
+        None
+    } else {
+        Some(principles)
+    };
+
+    let agent_ref = Arc::clone(agent);
+    tokio::spawn(async move { agent_ref.chat(prompt, principles_opt, None, sender).await });
+
+    let mut response = String::new();
+    while let Some(token) = rx.recv().await {
+        // Skip reasoning markers and tool calls for simple chat
+        if token == REASONING_START || token == REASONING_END {
+            continue;
+        }
+        if parse_tool_call_token(&token).is_some() {
+            continue;
+        }
+        // Strip __thinking__ prefix from reasoning tokens
+        if let Some(think) = token.strip_prefix("__thinking__") {
+            eprintln!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+            continue;
+        }
+        response.push_str(&token);
+    }
+    Ok(response.trim().to_string())
 }
 
 /// Format a command execution output (stdout + stderr + exit code) into a string.

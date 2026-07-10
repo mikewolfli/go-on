@@ -583,7 +583,6 @@ impl Agent for CopilotAgent {
         };
 
         let mut last_error: Option<anyhow::Error> = None;
-        let chat_messages = messages;
 
         'models: for model_id in &candidates {
             for attempt in 0..=2 {
@@ -592,7 +591,7 @@ impl Agent for CopilotAgent {
                 let model_options = Some(model_opts);
 
                 match self
-                    .chat_once(&chat_messages, &principles, &model_options, sender.clone())
+                    .chat_once(&messages, &principles, &model_options, sender.clone())
                     .await
                 {
                     Ok(()) => {

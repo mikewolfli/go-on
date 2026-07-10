@@ -8,7 +8,7 @@
 //! - Resource quota control (CPU / memory / wall-clock limits) for forked sub-agents
 //! - Snapshot/restore serialization for checkpointing fork groups
 //! - Merge logic for fan-out join semantics
-//! - Thread-safe via `Arc<Mutex<...>>`
+//! - Thread-safe via `Arc<RwLock<...>>`
 //! - Integration-ready for `AgentWorkerScheduler` fan-out (L2 scheduling)
 
 use anyhow::Result;
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -220,19 +220,19 @@ impl ForkEntry {
 
 /// Thread-safe registry for tracking forked sub-agent executions.
 ///
-/// All mutation is guarded by `Arc<Mutex<...>>`. Unique fork IDs are
+/// All mutation is guarded by `Arc<RwLock<...>>`. Unique fork IDs are
 /// generated from a monotonic counter combined with a timestamp prefix
 /// so they are both human-readable and collision-resistant.
 #[derive(Debug, Clone)]
 pub struct ForkRegistry {
-    inner: Arc<Mutex<ForkRegistryInner>>,
+    inner: Arc<RwLock<ForkRegistryInner>>,
     /// Global atomic counter for unique ID generation (shared across clones).
     counter: Arc<AtomicU64>,
     /// Immutable configuration.
     config: Arc<ForkConfig>,
 }
 
-/// Inner state locked behind a mutex.
+/// Inner state locked behind an RwLock.
 #[derive(Debug)]
 struct ForkRegistryInner {
     forks: HashMap<String, ForkEntry>,
@@ -242,7 +242,7 @@ impl ForkRegistry {
     /// Create a new `ForkRegistry` with the given configuration.
     pub fn new(config: ForkConfig) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ForkRegistryInner {
+            inner: Arc::new(RwLock::new(ForkRegistryInner {
                 forks: HashMap::with_capacity(config.max_forks),
             })),
             counter: Arc::new(AtomicU64::new(0)),
@@ -308,7 +308,7 @@ impl ForkRegistry {
         let fork_id = self.generate_id();
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         if inner.forks.len() >= self.config.max_forks {
             return Ok(None);
@@ -324,7 +324,7 @@ impl ForkRegistry {
     pub fn find(&self, id: &str) -> Result<Option<ForkEntry>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.get(id).cloned())
     }
@@ -333,7 +333,7 @@ impl ForkRegistry {
     pub fn list(&self) -> Result<Vec<ForkEntry>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.values().cloned().collect())
     }
@@ -345,7 +345,7 @@ impl ForkRegistry {
     pub fn remove(&self, id: &str) -> Result<bool> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.remove(id).is_some())
     }
@@ -354,7 +354,7 @@ impl ForkRegistry {
     pub fn clear(&self) -> Result<()> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         inner.forks.clear();
         Ok(())
@@ -366,7 +366,7 @@ impl ForkRegistry {
     pub fn len(&self) -> Result<usize> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.len())
     }
@@ -375,7 +375,7 @@ impl ForkRegistry {
     pub fn is_empty(&self) -> Result<bool> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.is_empty())
     }
@@ -384,7 +384,7 @@ impl ForkRegistry {
     pub fn active_count(&self) -> Result<usize> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.values().filter(|e| !e.completed).count())
     }
@@ -393,7 +393,7 @@ impl ForkRegistry {
     pub fn completed_count(&self) -> Result<usize> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.values().filter(|e| e.completed).count())
     }
@@ -404,7 +404,7 @@ impl ForkRegistry {
     pub fn complete(&self, fork_id: &str) -> Result<bool> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         if let Some(entry) = inner.forks.get_mut(fork_id) {
             entry.completed = true;
@@ -421,7 +421,7 @@ impl ForkRegistry {
     pub fn attach_snapshot(&self, fork_id: &str, snapshot: ForkSnapshot) -> Result<bool> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         if let Some(entry) = inner.forks.get_mut(fork_id) {
             entry.snapshot = Some(snapshot);
@@ -435,7 +435,7 @@ impl ForkRegistry {
     pub fn get_snapshot(&self, fork_id: &str) -> Result<Option<ForkSnapshot>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         Ok(inner.forks.get(fork_id).and_then(|e| e.snapshot.clone()))
     }
@@ -445,7 +445,7 @@ impl ForkRegistry {
     pub fn collect_completed_snapshots(&self) -> Result<HashMap<String, Vec<ForkSnapshot>>> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         let mut map: HashMap<String, Vec<ForkSnapshot>> = HashMap::new();
         for entry in inner.forks.values() {
@@ -467,7 +467,7 @@ impl ForkRegistry {
     pub fn merge_snapshots(&self, parent_task_id: &str) -> Result<ForkJoinResult> {
         let inner = self
             .inner
-            .lock()
+            .read()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         let mut snapshots: Vec<ForkSnapshot> = inner
             .forks
@@ -530,7 +530,7 @@ impl ForkRegistry {
     pub fn reap_completed(&self) -> Result<usize> {
         let mut inner = self
             .inner
-            .lock()
+            .write()
             .map_err(|e| anyhow::anyhow!("ForkRegistry lock poisoned: {e}"))?;
         let before = inner.forks.len();
         inner.forks.retain(|_, e| !e.completed);

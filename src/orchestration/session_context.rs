@@ -237,7 +237,18 @@ impl SessionContextManager {
 
     /// Generate a continuity marker for trimmed messages.
     pub fn generate_continuity_marker(&self, trimmed_indices: &[usize]) -> ContinuityMarker {
-        let key_concepts: Vec<String> = Vec::new();
+        // Extract key concepts from decisions of trimmed messages
+        let key_concepts: Vec<String> = self
+            .decisions
+            .iter()
+            .filter(|(_, i)| trimmed_indices.contains(i))
+            .flat_map(|(d, _)| {
+                d.split_whitespace()
+                    .filter(|w| w.len() > 4 && w.chars().all(|c| c.is_alphanumeric()))
+                    .map(|w| w.to_string())
+            })
+            .take(20)
+            .collect();
 
         let files = self.file_paths.iter().cloned().collect();
         let decisions = self

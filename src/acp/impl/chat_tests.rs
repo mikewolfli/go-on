@@ -71,6 +71,8 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     use crate::agent::{Agent, StreamingSender};
     #[cfg(not(feature = "backend-postgres"))]
+    use crate::agents::agent::ModelInfo;
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::config::{AppConfig, FlowConfig, PhaseConfig, PhaseOptions, VectorConfig};
     #[cfg(not(feature = "backend-postgres"))]
     use crate::flow::FlowManager;
@@ -113,6 +115,10 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[async_trait]
     impl Agent for RecordingAgent {
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
         async fn chat(
             &self,
             messages: Vec<Message>,

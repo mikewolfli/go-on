@@ -1144,41 +1144,47 @@ impl ChatView {
         };
 
         for msg_idx in start_idx..msg_count {
-            // Compute content hash for dirty check
-            {
-                let msgs = self.messages();
-                if msg_idx < msgs.len() {
-                    let m = &msgs[msg_idx];
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    m.content.hash(&mut hasher);
-                    m.thinking.hash(&mut hasher);
-                    m.sub_agent_records.len().hash(&mut hasher);
-                    m.command_records.len().hash(&mut hasher);
-                    let current_hash = hasher.finish();
-                    let prev_hash = self.rendered_content_hashes[msg_idx];
-                    let is_last = last_assistant_idx == Some(msg_idx);
-                    if current_hash == prev_hash && !is_last {
-                        // Content unchanged, render a thin placeholder instead
-                        // of re-running the full markdown pipeline.
-                        let (is_user, timestamp, model_name) =
-                            { (m.role == "user", m.timestamp, m.model.clone()) };
-                        messages::render_collapsed_bubble(
-                            ui,
-                            i18n,
-                            is_user,
-                            timestamp,
-                            &model_name,
-                            muted_text,
-                            weak_text,
-                            dark_mode,
-                        );
-                        continue;
+            let is_last = last_assistant_idx == Some(msg_idx);
+
+            // For the last (streaming) message, skip hash computation
+            // and always re-render — it changes continuously.
+            if !is_last {
+                // Compute content hash for dirty check
+                {
+                    let msgs = self.messages();
+                    if msg_idx < msgs.len() {
+                        let m = &msgs[msg_idx];
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        m.content.hash(&mut hasher);
+                        m.thinking.hash(&mut hasher);
+                        m.sub_agent_records.len().hash(&mut hasher);
+                        m.command_records.len().hash(&mut hasher);
+                        let current_hash = hasher.finish();
+                        let prev_hash = self.rendered_content_hashes[msg_idx];
+                        if current_hash == prev_hash {
+                            // Content unchanged, render a thin placeholder instead
+                            // of re-running the full markdown pipeline.
+                            let (is_user, timestamp, model_name) =
+                                { (m.role == "user", m.timestamp, m.model.clone()) };
+                            messages::render_collapsed_bubble(
+                                ui,
+                                i18n,
+                                is_user,
+                                timestamp,
+                                &model_name,
+                                muted_text,
+                                weak_text,
+                                dark_mode,
+                            );
+                            continue;
+                        }
+                        self.rendered_content_hashes[msg_idx] = current_hash;
                     }
-                    self.rendered_content_hashes[msg_idx] = current_hash;
                 }
             }
 
             // Full render for changed or last message
+            #[allow(clippy::type_complexity)]
             let (
                 is_user,
                 timestamp,
@@ -1188,6 +1194,7 @@ impl ChatView {
                 thinking_text,
                 sub_agent_records,
                 command_records,
+                segments,
             ) = {
                 let msgs = self.messages();
                 if msg_idx >= msgs.len() {
@@ -1203,6 +1210,7 @@ impl ChatView {
                     m.thinking.clone(),
                     m.sub_agent_records.clone(),
                     m.command_records.clone(),
+                    m.segments.clone(),
                 )
             };
             // ── Edit mode: show TextEdit instead of bubble ────────
@@ -1377,285 +1385,91 @@ impl ChatView {
                                 );
                             });
 
-                            // ── Content-hash cached markdown rendering ──
-                            let hash = {
-                                use std::hash::{Hash, Hasher};
-                                let mut h = std::collections::hash_map::DefaultHasher::new();
-                                content_text.hash(&mut h);
-                                h.finish()
-                            };
-                            let cached = self
-                                .rendered_content_hashes
-                                .get(msg_idx)
-                                .copied()
-                                .unwrap_or(0);
-                            let content_changed = cached != hash;
-                            if msg_idx < self.rendered_content_hashes.len() {
-                                self.rendered_content_hashes[msg_idx] = hash;
-                            }
+                                            // ── Content-hash cached markdown rendering ──
+                                            // Reuse the hash computed in the dirty-check above
+                                            // (already stored in rendered_content_hashes[msg_idx])
+                                            let content_changed = msg_idx < self.rendered_content_hashes.len()
+                                                && self.rendered_content_hashes[msg_idx] != 0;
 
                             // ── Streaming cursor: append ▊ to last AI message during streaming ──
                             let is_streaming = self.sending
                                 && !is_user
                                 && msg_idx == self.messages().len().saturating_sub(1);
-                            let display_content = if is_streaming && !content_text.is_empty() {
-                                format!("{}▊", content_text)
-                            } else {
-                                content_text.clone()
-                            };
-
-                            // ── Truncation check & expand button ──
-                            const MAX_MARKDOWN_CHARS: usize = 10_000;
-                            let is_truncated = display_content.len() > MAX_MARKDOWN_CHARS;
-                            let is_expanded = self.expand_full_text.contains(&msg_idx);
-                            let render_text = if is_truncated && !is_expanded {
-                                // Truncate on a UTF-8 char boundary
-                                let preview: String = display_content
-                                    .char_indices()
-                                    .take_while(|(idx, _)| *idx < MAX_MARKDOWN_CHARS)
-                                    .map(|(_, c)| c)
-                                    .collect();
-                                preview
-                            } else {
-                                display_content.clone()
-                            };
-
-                            // ── Try global-cache-first markdown rendering ──
-                            let globally_cached = Self::try_get_cached_markdown(&render_text);
-
-                            if let Some(cache) = globally_cached {
-                                // Global cache hit — render from pre-parsed segments (fast path)
-                                // No comrak parsing needed, no UI thread blocking.
-                                Self::render_markdown_from_cache(
-                                    ui,
-                                    &cache,
-                                    &i18n.t("chat.copyCode"),
-                                    text_color,
-                                );
-                            } else if !content_changed && !content_text.is_empty() && !self.sending
-                            {
-                                // Content unchanged and not streaming — show raw text
-                                // to avoid flickering "Rendering…" placeholders.
-                                // The parse will be done lazily when content changes.
-                                ui.label(egui::RichText::new(&render_text).color(text_color));
-                            } else {
-                                // Cache miss (new content or streaming): show placeholder
-                                // and spawn a background thread for CPU-bound comrak parsing.
-                                // `render_markdown` handles both the placeholder display
-                                // and the background thread — no separate call needed.
-                                let trunc_hint_msg =
-                                    i18n.t("chat.largeMessageTruncated").to_string();
-                                Self::render_markdown(
-                                    ui,
-                                    &render_text,
-                                    &i18n.t("chat.copyCode"),
-                                    enable_markdown_val,
-                                    text_color,
-                                    &trunc_hint_msg,
-                                );
-                            }
-
-                            // ── Expand / collapse button for truncated content ──
-                            if is_truncated {
-                                let btn_text = if is_expanded {
-                                    i18n.t("chat.collapseFullText")
-                                } else {
-                                    i18n.t("chat.expandFullText")
-                                };
-                                let total_chars = display_content.chars().count();
-                                let btn_label = if is_expanded {
-                                    format!(
-                                        "▲ {} ({} {})",
-                                        btn_text,
-                                        total_chars,
-                                        i18n.t("chat.chars")
-                                    )
-                                } else {
-                                    format!(
-                                        "▼ {} — {} {}",
-                                        btn_text,
-                                        total_chars,
-                                        i18n.t("chat.chars")
-                                    )
-                                };
-                                let btn_color = if ui.visuals().dark_mode {
-                                    egui::Color32::from_rgb(220, 170, 80)
-                                } else {
-                                    egui::Color32::from_rgb(180, 130, 40)
-                                };
-                                if ui
-                                    .button(
-                                        egui::RichText::new(btn_label).color(btn_color).size(12.0),
-                                    )
-                                    .clicked()
-                                {
-                                    if is_expanded {
-                                        self.expand_full_text.remove(&msg_idx);
-                                    } else {
-                                        self.expand_full_text.insert(msg_idx);
-                                    }
-                                }
-                            }
-
-                            // ── Thinking section ──
-                            if has_thinking {
-                                ui.add_space(6.0);
-
-                                let is_expanded = self.show_all_thinking
-                                    || self.show_thinking_idx == Some(msg_idx);
-                                let toggle_icon = if is_expanded { "▼" } else { "▶" };
-                                let char_count = thinking_text.chars().count();
+                            // ── Zed-style interleaved segment rendering ──
+                            // Render segments in chronological order: thinking (colored) and content (normal)
+                            // appear interleaved as they were produced during streaming.
+                            use crate::views::chat::types::MessageSegment;
+                            if !segments.is_empty() {
                                 let trunc_hint = i18n.t("chat.largeMessageTruncated").to_string();
-
-                                // Theme-aware colors for the thinking header
-                                let (bar_bg, bar_border, bar_text, accent) = if dark {
+                                let (think_bg, think_border, think_text) = if dark {
                                     (
-                                        egui::Color32::from_rgba_premultiplied(80, 60, 20, 50),
-                                        egui::Color32::from_rgba_premultiplied(180, 140, 60, 80),
-                                        egui::Color32::from_rgb(200, 170, 80),
-                                        egui::Color32::from_rgb(220, 180, 70),
+                                        egui::Color32::from_rgba_premultiplied(70, 55, 20, 60),
+                                        egui::Color32::from_rgba_premultiplied(160, 130, 60, 60),
+                                        egui::Color32::from_rgb(200, 180, 120),
                                     )
                                 } else {
                                     (
-                                        egui::Color32::from_rgba_premultiplied(255, 245, 220, 120),
-                                        egui::Color32::from_rgba_premultiplied(200, 170, 100, 100),
-                                        egui::Color32::from_rgb(140, 100, 40),
-                                        egui::Color32::from_rgb(180, 140, 50),
+                                        egui::Color32::from_rgba_premultiplied(255, 245, 225, 150),
+                                        egui::Color32::from_rgba_premultiplied(200, 180, 130, 80),
+                                        egui::Color32::from_rgb(120, 90, 40),
                                     )
                                 };
 
-                                // Header bar: clickable frame with toggle icon, emoji, label, stats
-                                let header_id = ui.next_auto_id();
-                                let header_rect = {
-                                    let mut header_frame = egui::Frame::new()
-                                        .fill(bar_bg)
-                                        .stroke(egui::Stroke::new(1.0, bar_border))
-                                        .corner_radius(6.0);
-                                    if is_expanded {
-                                        // Flat bottom when expanded so content blends
-                                        header_frame =
-                                            header_frame.corner_radius(egui::CornerRadius {
-                                                nw: 6,
-                                                ne: 6,
-                                                sw: 0,
-                                                se: 0,
-                                            });
-                                    }
-                                    header_frame
-                                        .inner_margin(egui::Margin::symmetric(10i8, 6i8))
-                                        .show(ui, |ui| {
-                                            ui.set_min_width(ui.available_width());
-                                            ui.horizontal(|ui| {
-                                                // Toggle icon + emoji + label
-                                                ui.label(
-                                                    egui::RichText::new(format!(
-                                                        "{} 💭  {}",
-                                                        toggle_icon,
-                                                        i18n.t("chat.thinkingLabel")
-                                                    ))
-                                                    .size(12.0)
-                                                    .color(bar_text)
-                                                    .strong(),
-                                                );
-                                                // Spacer to push stats to the right
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
+                                let total_segs = segments.len();
+                                for (seg_idx, seg) in segments.iter().enumerate() {
+                                    let is_last_seg = seg_idx == total_segs - 1;
+                                    ui.add_space(4.0);
+                                    match seg {
+                                        MessageSegment::Thinking(text) => {
+                                            egui::Frame::new()
+                                                .fill(think_bg)
+                                                .stroke(egui::Stroke::new(1.0, think_border))
+                                                .corner_radius(6.0)
+                                                .inner_margin(egui::Margin::symmetric(12i8, 10i8))
+                                                .show(ui, |ui| {
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new("💭 ").size(12.0));
                                                         ui.label(
-                                                            egui::RichText::new(format!(
-                                                                "{} {} (~{} tokens)",
-                                                                char_count,
-                                                                i18n.t("chat.charCount"),
-                                                                char_count / 4
-                                                            ))
-                                                            .size(10.0)
-                                                            .color(accent),
+                                                            egui::RichText::new(i18n.t("chat.thinkingLabel"))
+                                                                .size(11.0).color(think_text).strong(),
                                                         );
-                                                    },
-                                                );
-                                            });
-                                        })
-                                        .response
-                                        .rect
-                                };
-
-                                // Click detection on the header area
-                                let header_clicked = ui
-                                    .interact(
-                                        header_rect,
-                                        header_id.with("think_toggle"),
-                                        egui::Sense::click(),
-                                    )
-                                    .clicked();
-
-                                if header_clicked {
-                                    if self.show_all_thinking {
-                                        // Clicking one while all are shown: switch to single-message mode
-                                        self.show_all_thinking = false;
-                                        self.show_thinking_idx = Some(msg_idx);
-                                    } else if self.show_thinking_idx == Some(msg_idx) {
-                                        self.show_thinking_idx = None;
-                                    } else {
-                                        self.show_thinking_idx = Some(msg_idx);
+                                                    });
+                                                    ui.add_space(4.0);
+                                                    Self::render_markdown(
+                                                        ui, text,
+                                                        &i18n.t("chat.copyCode"),
+                                                        enable_markdown_val, think_text, &trunc_hint,
+                                                    );
+                                                });
+                                        }
+                                        MessageSegment::Content(text) => {
+                                            let display_text = if is_streaming && is_last_seg
+                                                {
+                                                format!("{}▊", text)
+                                            } else {
+                                                text.clone()
+                                            };
+                                            Self::render_markdown(
+                                                ui, &display_text,
+                                                &i18n.t("chat.copyCode"),
+                                                enable_markdown_val, text_color, &trunc_hint,
+                                            );
+                                        }
                                     }
                                 }
-
-                                // Expanded thinking content area
-                                if is_expanded {
-                                    let content_bg = if dark {
-                                        egui::Color32::from_rgba_premultiplied(50, 40, 15, 40)
-                                    } else {
-                                        egui::Color32::from_rgba_premultiplied(255, 248, 230, 180)
-                                    };
-                                    let content_border = if dark {
-                                        egui::Color32::from_rgba_premultiplied(180, 140, 60, 40)
-                                    } else {
-                                        egui::Color32::from_rgba_premultiplied(200, 170, 100, 60)
-                                    };
-                                    egui::Frame::new()
-                                        .fill(content_bg)
-                                        .stroke(egui::Stroke::new(1.0, content_border))
-                                        .corner_radius(egui::CornerRadius {
-                                            nw: 0,
-                                            ne: 0,
-                                            sw: 6,
-                                            se: 6,
-                                        })
-                                        .inner_margin(egui::Margin::symmetric(12i8, 10i8))
-                                        .show(ui, |ui| {
-                                            Self::render_markdown(
-                                                ui,
-                                                &thinking_text,
-                                                &i18n.t("chat.copyCode"),
-                                                enable_markdown_val,
-                                                weak_text,
-                                                &trunc_hint,
-                                            );
-                                            ui.horizontal(|ui| {
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        if ui
-                                                            .button(
-                                                                egui::RichText::new(
-                                                                    i18n.t("common.copyButton"),
-                                                                )
-                                                                .size(11.0),
-                                                            )
-                                                            .clicked()
-                                                        {
-                                                            ui.ctx()
-                                                                .copy_text(thinking_text.clone());
-                                                        }
-                                                    },
-                                                );
-                                            });
-                                        });
-                                }
+                            } else {
+                                // Legacy fallback: render content only (no segments)
+                                let display_content = if is_streaming && !content_text.is_empty() {
+                                    format!("{}▊", content_text)
+                                } else {
+                                    content_text.clone()
+                                };
+                                Self::render_markdown(
+                                    ui, &display_content,
+                                    &i18n.t("chat.copyCode"),
+                                    enable_markdown_val, text_color,
+                                    &i18n.t("chat.largeMessageTruncated"),
+                                );
                             }
 
                         // ── Sub-agent records panel ──

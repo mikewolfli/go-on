@@ -576,8 +576,8 @@ impl DriftProtectionEngine {
 /// meaningful (≈ absolute difference scaled by 1e6) rather than being
 /// clamped to an arbitrary 0.01 denominator.
 fn compute_deviation(current: f64, baseline: f64) -> f64 {
-    let denominator = if baseline.abs() < 1e-6 {
-        1e-6
+    let denominator = if baseline.abs() < 0.01 {
+        0.01
     } else {
         baseline.abs()
     };

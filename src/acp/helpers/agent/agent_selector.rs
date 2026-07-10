@@ -307,12 +307,17 @@ pub(crate) fn collect_reputation_scores(
 mod tests {
     use super::*;
     use crate::agent::Agent;
+    use crate::agents::agent::ModelInfo;
     use async_trait::async_trait;
     use serde_json::Value;
 
     struct MockAgent;
     #[async_trait]
     impl Agent for MockAgent {
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
         async fn chat(
             &self,
             _: Vec<crate::agent::Message>,

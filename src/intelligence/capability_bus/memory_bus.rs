@@ -387,28 +387,48 @@ fn now_iso8601() -> String {
     let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = dur.as_secs();
-    // Format as ISO-8601: 2024-01-15T12:34:56Z
-    let days = secs / 86400;
-    let time_secs = secs % 86400;
-    let hours = time_secs / 3600;
-    let minutes = (time_secs % 3600) / 60;
-    let seconds = time_secs % 60;
+    let total_secs = dur.as_secs();
+    let secs_of_day = total_secs % 86400;
+    let days = total_secs / 86400;
 
-    // Simple day count from Unix epoch; not astronomically accurate, but
-    // sufficient for memory entry timestamps.
-    let year = 1970f64 + days as f64 / 365.25;
-    let year_int = year as u64;
-    let day_of_year = days - ((year_int - 1970) * 365 + ((year_int - 1969) / 4));
+    // Compute year by subtracting days per year (accounting for leap years).
+    let mut y = 1970i64;
+    let mut remaining = days as i64;
+    loop {
+        let days_in_year = if (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        y += 1;
+    }
+
+    // Lookup month using proper month-day table.
+    const MONTH_DAYS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let is_leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+    let mut m = 0usize;
+    while m < 12 {
+        let days_in_month = if m == 1 && is_leap { 29 } else { MONTH_DAYS[m] };
+        if remaining < days_in_month {
+            break;
+        }
+        remaining -= days_in_month;
+        m += 1;
+    }
+    let month = m as u32 + 1;
+    let day = remaining as u32 + 1;
+
+    let hours = (secs_of_day / 3600) as u32;
+    let minutes = ((secs_of_day % 3600) / 60) as u32;
+    let seconds = (secs_of_day % 60) as u32;
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year_int,
-        (day_of_year / 30).clamp(1, 12),
-        (day_of_year % 30).clamp(1, 31),
-        hours,
-        minutes,
-        seconds
+        y, month, day, hours, minutes, seconds
     )
 }
 

@@ -39,14 +39,36 @@ impl ExecutionEnvironment {
 // ---------------------------------------------------------------------------
 
 impl FullAutoFlow {
-    /// Prepare the execution environment for the given task intent.
+    /// Check whether a single prerequisite (tool/service) is available.
     ///
-    /// Builds a snapshot of relevant context (mode, goals, constraints) and
-    /// checks whether prerequisites are declared (proxy for runtime
-    /// readiness).
-    ///
-    /// Results are cached keyed by the prerequisites list so that repeated
-    /// calls with the same prerequisites avoid recomputation.
+    /// Uses `command -v` to verify that the named executable is present on
+    /// the system PATH. Non-tool prerequisites (e.g. "network access") are
+    /// conservatively reported as unavailable so the operator can explicitly
+    /// whitelist them.
+    fn check_prerequisite_available(prereq: &str) -> bool {
+        // Skip empty strings.
+        if prereq.is_empty() {
+            return true;
+        }
+
+        // If the string looks like a simple command name (single word, no
+        // path separators) try to resolve it via the system shell.
+        if !prereq.contains(char::is_whitespace) && !prereq.contains('/') && !prereq.contains('\\')
+        {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("command -v '{}'", prereq.replace('\'', "'\\''")))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        } else {
+            // Non-trivial prerequisite string — cannot verify automatically.
+            false
+        }
+    }
+
     pub fn prepare_environment(&self, intent: &TaskIntent) -> ExecutionEnvironment {
         if !self.config.enable_env_check {
             return ExecutionEnvironment {
@@ -71,10 +93,22 @@ impl FullAutoFlow {
         env_snapshot.insert("task_goals".to_string(), intent.goals.join("; "));
         env_snapshot.insert("constraints".to_string(), intent.constraints.join("; "));
 
-        // If prerequisites are declared we consider them checkable; in a
-        // production setting this would invoke the actual dependency
-        // resolver.
-        let dependencies_checked = true;
+        // Actually check each declared prerequisite.
+        let missing: Vec<String> = intent
+            .prerequisites
+            .iter()
+            .filter(|p| !Self::check_prerequisite_available(p))
+            .cloned()
+            .collect();
+
+        let dependencies_checked = missing.is_empty();
+
+        if !dependencies_checked {
+            let error_msg = format!("Missing prerequisites: {}", missing.join(", "));
+            tracing::warn!("prepare_environment: {}", error_msg);
+            env_snapshot.insert("dependencies_error".to_string(), error_msg);
+        }
+
         // Runtime is ready when there are NO outstanding prerequisites.
         // Empty prerequisites means trivially ready.
         let runtime_ready = intent.prerequisites.is_empty();

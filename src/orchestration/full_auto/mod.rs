@@ -686,6 +686,7 @@ mod tests {
             errors: vec![],
             total_duration_ms: 1,
             cache_metrics: serde_json::json!({}),
+            brain_loop_metrics: None,
         };
         assert!(report.is_success());
         assert_eq!(report.success_count(), 1);
@@ -712,6 +713,7 @@ mod tests {
             errors: vec!["something went wrong".to_string()],
             total_duration_ms: 0,
             cache_metrics: serde_json::json!({}),
+            brain_loop_metrics: None,
         };
         assert!(!report.is_success());
     }
@@ -755,6 +757,7 @@ mod tests {
             errors: vec![],
             total_duration_ms: 3,
             cache_metrics: serde_json::json!({}),
+            brain_loop_metrics: None,
         };
         assert!(!report.is_success());
         assert_eq!(report.success_count(), 1);

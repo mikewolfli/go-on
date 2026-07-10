@@ -30,17 +30,6 @@ pub fn store_cache_metrics(metrics: Value) {
     *guard = Some(metrics);
 }
 
-/// Read the latest FastPathCache metrics snapshot.
-pub fn read_cache_metrics() -> Option<Value> {
-    LATEST_CACHE_METRICS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        })
-        .clone()
-}
-
 // ---------------------------------------------------------------------------
 // CacheEntry
 // ---------------------------------------------------------------------------
@@ -460,7 +449,6 @@ impl FastPathCache {
         // roundtrip — this wires `store_cache_metrics` and `read_cache_metrics`
         // into the metrics reporting flow (F-GAP-09).
         store_cache_metrics(snapshot.clone());
-        let _ = read_cache_metrics();
 
         snapshot
     }

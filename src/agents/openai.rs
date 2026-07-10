@@ -193,20 +193,13 @@ impl Agent for OpenAiAgent {
             None
         };
 
-        let chat_messages = messages;
         retry_chat_once(
             || async {
                 let result = if let Some(ref cfg) = compress_cfg {
-                    self.chat_once_compressed(
-                        &chat_messages,
-                        &principles,
-                        &options,
-                        sender.clone(),
-                        cfg,
-                    )
-                    .await
+                    self.chat_once_compressed(&messages, &principles, &options, sender.clone(), cfg)
+                        .await
                 } else {
-                    self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                    self.chat_once(&messages, &principles, &options, sender.clone())
                         .await
                 };
                 result.map_err(Into::into)
@@ -332,9 +325,5 @@ impl Agent for OpenAiAgent {
         }
 
         models
-    }
-
-    fn supports_model_override(&self) -> bool {
-        true
     }
 }
