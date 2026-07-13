@@ -4,12 +4,8 @@ use super::*;
 // Security Baseline
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_security_baseline(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, build_security_baseline_payload(server)).await
+pub(super) async fn security_baseline_payload(server: &AcpServer, _params: Value) -> Result<Value> {
+    Ok(build_security_baseline_payload(server))
 }
 
 fn build_security_baseline_payload(server: &AcpServer) -> Value {
@@ -121,11 +117,7 @@ fn build_security_baseline_payload(server: &AcpServer) -> Value {
 // Release Readiness
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_release_readiness(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let status = server.get_status();
     let metrics = server.observability.metrics.snapshot();
 
@@ -605,272 +597,267 @@ pub(super) async fn handle_release_readiness(
         json!({ "name": "blue35_release_closure", "ready": blue35_release_closure_gate }),
     ];
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "readiness": {
-                "version": "blue26-release-readiness-v2",
+    Ok(json!({
+        "ok": true,
+        "readiness": {
+            "version": "blue26-release-readiness-v2",
+            "schema_version": readiness_schema_version,
+            "artifact_contract": {
                 "schema_version": readiness_schema_version,
-                "artifact_contract": {
-                    "schema_version": readiness_schema_version,
+            },
+            "overall_pass": overall_pass,
+            "multi_user_server": {
+                "mode": if multi_user_enabled { "multi_user" } else { "single_user" },
+                "inference": {
+                    "source": server_mode_source,
                 },
-                "overall_pass": overall_pass,
-                "multi_user_server": {
-                    "mode": if multi_user_enabled { "multi_user" } else { "single_user" },
-                    "inference": {
-                        "source": server_mode_source,
-                    },
-                    "lifecycle": {
-                        "ready": multi_user_lifecycle_gate,
-                        "blocking_issues": lifecycle_blocking_issues,
-                    },
-                    "gate_ready": multi_user_server_gate,
-                    "release_gate_ready": multi_user_server_gate,
+                "lifecycle": {
+                    "ready": multi_user_lifecycle_gate,
+                    "blocking_issues": lifecycle_blocking_issues,
                 },
-                "summary": {
-                    "multi_user_inference_source": server_mode_source,
-                    "multi_user_lifecycle_ready": multi_user_lifecycle_gate,
-                    "dual_track_consistency_ready": dual_track_consistency_gate,
-                },
-                "dual_track_consistency": {
-                    "ready": dual_track_consistency_gate,
-                    "issues": dual_track_consistency_issues,
-                },
-                "blocked_gate_names": blocked_gate_names,
-                "zero_trust_compliance": { "ready": zero_trust_compliance_gate },
-                "rbac_policy_engine": { "ready": rbac_policy_engine_gate },
-                "sla_governance": { "ready": sla_governance_gate },
-                "skill_engine_core": { "ready": skill_engine_core_gate },
-                "workflow_to_skill_conversion": { "ready": workflow_to_skill_conversion_gate },
-                "workflow_skill_chain_integration": { "ready": workflow_skill_chain_integration_gate },
-                "skill_management_console": { "ready": skill_management_console_gate },
-                "enterprise_skill_controls": { "ready": enterprise_skill_controls_gate },
-                "core_mode_consistency": { "ready": core_mode_consistency_gate },
-                "mode_scenario_adaptability": { "ready": mode_scenario_adaptability_gate },
-                "cross_mode_quality_assurance": { "ready": cross_mode_quality_assurance_gate },
-                "mode_issue_prevention": { "ready": mode_issue_prevention_gate },
-                "subagent_architecture": { "ready": subagent_architecture_gate },
-                "subagent_collaboration": { "ready": subagent_collaboration_gate },
-                "subagent_observability": { "ready": subagent_observability_gate },
-                "knowledge_management": { "ready": knowledge_management_gate },
-                "performance_optimization": { "ready": performance_optimization_gate },
-                "enterprise_deploy_ops": { "ready": enterprise_deploy_ops_gate },
-                "ecosystem_extensibility": { "ready": ecosystem_extensibility_gate },
-                "shared_learning_mainchain": { "ready": shared_learning_mainchain_gate },
-                "self_evolution_mainchain": { "ready": self_evolution_mainchain_gate },
-                "capability_consistency_mainchain": { "ready": capability_consistency_mainchain_gate },
-                "shared_learning_data_flow": { "ready": shared_learning_data_flow_gate },
-                "self_evolution_flow": { "ready": self_evolution_flow_gate },
-                "task_graph_persistence": { "ready": task_graph_persistence_gate },
-                "evaluation_harness_baseline": { "ready": evaluation_harness_baseline_gate },
-                "memory_write_policy": { "ready": memory_write_policy_gate },
-                "task_routing_mainchain": { "ready": task_routing_mainchain_gate },
-                "tool_budget_enforcement": { "ready": tool_budget_enforcement_gate },
-                "state_store_trait": { "ready": state_store_trait_gate },
-                "adversarial_verification": { "ready": adversarial_verification_gate },
-                "planner_executor_separation": { "ready": planner_executor_separation_gate },
-                "multi_agent_handoff": { "ready": multi_agent_handoff_gate },
-                "evaluation_replay_engine": { "ready": evaluation_replay_engine_gate },
-                "trace_model_agent_graph": { "ready": trace_model_agent_graph_gate },
-                "dynamic_workflow_optimization": { "ready": dynamic_workflow_optimization_gate },
-                "think_act_observe_loop": { "ready": think_act_observe_loop_gate },
-                "model_degradation_detection": { "ready": model_degradation_detection_gate },
-                "task_decomposition_pipeline": { "ready": task_decomposition_pipeline_gate },
-                "omnipotent_mode_readiness": { "ready": omnipotent_mode_readiness_gate },
-                "sota_gap_benchmark": { "ready": sota_gap_benchmark_gate },
-                "blue27_release_closure": { "ready": blue27_release_closure_gate },
-                "schema_migration_versioning": { "ready": blue28_release_closure_gate },
-                "tenant_auth_api_key": { "ready": blue28_release_closure_gate },
-                "sqlite_postgres_migration": { "ready": blue28_release_closure_gate },
-                "solution_discovery_hub": { "ready": blue28_release_closure_gate },
-                "scenario_matcher": { "ready": blue28_release_closure_gate },
-                "subai_factory": { "ready": blue28_release_closure_gate },
-                "training_orchestrator": { "ready": blue28_release_closure_gate },
-                "auto_integration_runtime": { "ready": blue28_release_closure_gate },
-                "reinforcement_loop": { "ready": blue28_release_closure_gate },
-                "coordinator_council": { "ready": blue28_release_closure_gate },
-                "worker_swarm": { "ready": blue28_release_closure_gate },
-                "consensus_engine": { "ready": blue28_release_closure_gate },
-                "brain_loop": { "ready": blue28_release_closure_gate },
-                "node_reputation": { "ready": blue28_release_closure_gate },
-                "self_model_core": { "ready": blue28_release_closure_gate },
-                "meta_cognition": { "ready": blue28_release_closure_gate },
-                "drift_guard": { "ready": blue28_release_closure_gate },
-                "blue28_release_closure": { "ready": blue28_release_closure_gate },
-                "federated_rl": { "ready": blue29_release_closure_gate },
-                "distributed_memory_bus": { "ready": blue29_release_closure_gate },
-                "adaptive_swarm_optimizer": { "ready": blue29_release_closure_gate },
-                "hyper_node_network": { "ready": blue29_release_closure_gate },
-                "world_model_pipeline": { "ready": blue29_release_closure_gate },
-                "continual_learning_hub": { "ready": blue29_release_closure_gate },
-                "blue29_release_closure": { "ready": blue29_release_closure_gate },
-                "multi_channel_messaging": { "ready": blue30_release_closure_gate },
-                "collaboration_game_engine": { "ready": blue30_release_closure_gate },
-                "consciousness_proxy_metrics": { "ready": blue30_release_closure_gate },
-                "hyper_resilience": { "ready": blue30_release_closure_gate },
-                "dual_track_awakening_parity": { "ready": blue30_release_closure_gate },
-                "cicd_awareness_gate": { "ready": blue30_release_closure_gate },
-                "blue30_release_closure": { "ready": blue30_release_closure_gate },
-                "autonomy_boundary_governance": { "ready": blue31_release_closure_gate },
-                "emergency_stop_protocol": { "ready": blue31_release_closure_gate },
-                "collaboration_ab_evaluation": { "ready": blue31_release_closure_gate },
-                "hypernode_topology": { "ready": blue31_release_closure_gate },
-                "cross_region_priority_routing": { "ready": blue31_release_closure_gate },
-                "meta_controller_replan": { "ready": blue31_release_closure_gate },
-                "blue31_release_closure": { "ready": blue31_release_closure_gate },
-                "game_theory_balancer": { "ready": blue32_release_closure_gate },
-                "federated_rl_v2_guardrail": { "ready": blue32_release_closure_gate },
-                "continuous_learning_distillation": { "ready": blue32_release_closure_gate },
-                "drift_auto_takeover": { "ready": blue32_release_closure_gate },
-                "byzantine_fault_injection": { "ready": blue32_release_closure_gate },
-                "recovery_consistency_recheck": { "ready": blue32_release_closure_gate },
-                "blue32_release_closure": { "ready": blue32_release_closure_gate },
-                "local_reflection_track": { "ready": blue33_release_closure_gate },
-                "server_awakening_track": { "ready": blue33_release_closure_gate },
-                "ci_gate_continuous_green": { "ready": blue33_release_closure_gate },
-                "staged_rollout_guard": { "ready": blue33_release_closure_gate },
-                "release_train_freeze": { "ready": blue33_release_closure_gate },
-                "rollout_audit_replay": { "ready": blue33_release_closure_gate },
-                "blue33_release_closure": { "ready": blue33_release_closure_gate },
-                "autonomy_scope_matrix": { "ready": blue33_remaining_closure_gate },
-                "redline_policy_runtime": { "ready": blue33_remaining_closure_gate },
-                "human_approval_checkpoint": { "ready": blue33_remaining_closure_gate },
-                "supernode_hot_standby": { "ready": blue33_remaining_closure_gate },
-                "cross_zone_state_snapshot": { "ready": blue33_remaining_closure_gate },
-                "failover_recovery_drill": { "ready": blue33_remaining_closure_gate },
-                "blue33_remaining_closure": { "ready": blue33_remaining_closure_gate },
-                "dual_track_boundary_freeze": { "ready": blue34_release_closure_gate },
-                "state_vector_store_trait_unified": { "ready": blue34_release_closure_gate },
-                "local_server_profile_matrix": { "ready": blue34_release_closure_gate },
-                "postgres_pgvector_schema_versioning": { "ready": blue34_release_closure_gate },
-                "sqlite_to_pg_migration_dryrun": { "ready": blue34_release_closure_gate },
-                "planner_executor_taskgraph_resume": { "ready": blue34_release_closure_gate },
-                "think_act_observe_tool_governance": { "ready": blue34_release_closure_gate },
-                "role_handoff_schema_and_conflict_arbiter": { "ready": blue34_release_closure_gate },
-                "deterministic_adversarial_double_checks": { "ready": blue34_release_closure_gate },
-                "memory_write_promotion_gc_policy": { "ready": blue34_release_closure_gate },
-                "benchmark_replay_and_3d_scoring": { "ready": blue34_release_closure_gate },
-                "capability_discovery_registry_baseline": { "ready": blue34_release_closure_gate },
-                "staged_rollout_canary_rollback_gate": { "ready": blue34_release_closure_gate },
-                "distributed_node_registry_heartbeat": { "ready": blue34_release_closure_gate },
-                "consensus_with_dissent_preservation": { "ready": blue34_release_closure_gate },
-                "brain_loop_artifact_and_safe_degrade": { "ready": blue34_release_closure_gate },
-                "fault_injection_recovery_recheck": { "ready": blue34_release_closure_gate },
-                "blue34_release_closure": { "ready": blue34_release_closure_gate },
-                "custom_role_registry": {
-                    "ready": custom_role_registry_gate,
-                },
-                "custom_role_dynamic_matching": {
-                    "ready": custom_role_dynamic_matching_gate,
-                },
-                "compliance_audit_metadata": {
-                    "ready": compliance_audit_metadata_gate,
-                },
-                "self_rationalization_guard": {
-                    "ready": self_rationalization_guard_gate,
-                },
-                "startup_context_loader": {
-                    "ready": startup_context_loader_gate,
-                },
-                "layered_prompt_builder": {
-                    "ready": layered_prompt_builder_gate,
-                },
-                "layered_token_trigger": {
-                    "ready": layered_token_trigger_gate,
-                    "gate_chain": [
-                        "entry_auth",
-                        "strict_mode",
-                        "quality_compass",
-                    ],
-                },
-                "multi_priority_scheduler": {
-                    "ready": multi_priority_scheduler_gate,
-                },
-                "worker_scheduler_backpressure": {
-                    "ready": worker_scheduler_backpressure_gate,
-                },
-                "fork_isolation_guard": {
-                    "ready": fork_isolation_guard_gate,
-                    "zombie_reap": true,
-                },
-                "capability_graph": {
-                    "ready": capability_graph_gate,
-                    "node_dependency_graph": true,
-                },
-                "provenance_ledger": {
-                    "ready": provenance_ledger_gate,
-                },
-                "node_reputation_tracker": {
-                    "ready": node_reputation_tracker_gate,
-                },
-                "k8s_delivery_pack": {
-                    "ready": k8s_delivery_pack_gate,
-                },
-                "sdk_multi_language": {
-                    "ready": sdk_multi_language_gate,
-                },
-                "workflow_type_tri_mode": {
-                    "ready": workflow_type_tri_mode_gate,
-                    "auto_detection": true,
-                },
-                "blue35_release_closure": {
-                    "ready": blue35_release_closure_gate,
-                },
-                "gates": gate_items,
-                "gate_map": {
-                    "stability": stability_gate,
-                    "security": security_gate,
-                    "provider": provider_gate,
-                    "reproducibility": reproducibility_gate,
-                    "observability": observability_gate,
-                    "dual_track_consistency": dual_track_consistency_gate,
-                    "multi_user_server": multi_user_server_gate,
-                    "multi_user_lifecycle_ops": multi_user_lifecycle_gate,
-                    "zero_trust_compliance": zero_trust_compliance_gate,
-                    "rbac_policy_engine": rbac_policy_engine_gate,
-                    "sla_governance": sla_governance_gate,
-                    "skill_engine_core": skill_engine_core_gate,
-                    "workflow_to_skill_conversion": workflow_to_skill_conversion_gate,
-                    "workflow_skill_chain_integration": workflow_skill_chain_integration_gate,
-                    "skill_management_console": skill_management_console_gate,
-                    "enterprise_skill_controls": enterprise_skill_controls_gate,
-                    "core_mode_consistency": core_mode_consistency_gate,
-                    "mode_scenario_adaptability": mode_scenario_adaptability_gate,
-                    "cross_mode_quality_assurance": cross_mode_quality_assurance_gate,
-                    "mode_issue_prevention": mode_issue_prevention_gate,
-                    "subagent_architecture": subagent_architecture_gate,
-                    "subagent_collaboration": subagent_collaboration_gate,
-                    "subagent_observability": subagent_observability_gate,
-                    "knowledge_management": knowledge_management_gate,
-                    "performance_optimization": performance_optimization_gate,
-                    "enterprise_deploy_ops": enterprise_deploy_ops_gate,
-                    "ecosystem_extensibility": ecosystem_extensibility_gate,
-                    "shared_learning_mainchain": shared_learning_mainchain_gate,
-                    "self_evolution_mainchain": self_evolution_mainchain_gate,
-                    "capability_consistency_mainchain": capability_consistency_mainchain_gate,
-                    "shared_learning_data_flow": shared_learning_data_flow_gate,
-                    "self_evolution_flow": self_evolution_flow_gate,
-                },
-                "blue_gates": {
-                    "blue27_release_closure": blue27_release_closure_gate,
-                    "blue28_release_closure": blue28_release_closure_gate,
-                    "blue29_release_closure": blue29_release_closure_gate,
-                    "blue30_release_closure": blue30_release_closure_gate,
-                    "blue31_release_closure": blue31_release_closure_gate,
-                    "blue32_release_closure": blue32_release_closure_gate,
-                    "blue33_release_closure": blue33_release_closure_gate,
-                    "blue33_remaining_closure": blue33_remaining_closure_gate,
-                    "blue34_release_closure": blue34_release_closure_gate,
-                    "blue35_release_closure": blue35_release_closure_gate,
-                },
-                "recommendations": recommendations,
-                "timestamp": status.timestamp,
-            }
-        }),
-    )
-    .await
+                "gate_ready": multi_user_server_gate,
+                "release_gate_ready": multi_user_server_gate,
+            },
+            "summary": {
+                "multi_user_inference_source": server_mode_source,
+                "multi_user_lifecycle_ready": multi_user_lifecycle_gate,
+                "dual_track_consistency_ready": dual_track_consistency_gate,
+            },
+            "dual_track_consistency": {
+                "ready": dual_track_consistency_gate,
+                "issues": dual_track_consistency_issues,
+            },
+            "blocked_gate_names": blocked_gate_names,
+            "zero_trust_compliance": { "ready": zero_trust_compliance_gate },
+            "rbac_policy_engine": { "ready": rbac_policy_engine_gate },
+            "sla_governance": { "ready": sla_governance_gate },
+            "skill_engine_core": { "ready": skill_engine_core_gate },
+            "workflow_to_skill_conversion": { "ready": workflow_to_skill_conversion_gate },
+            "workflow_skill_chain_integration": { "ready": workflow_skill_chain_integration_gate },
+            "skill_management_console": { "ready": skill_management_console_gate },
+            "enterprise_skill_controls": { "ready": enterprise_skill_controls_gate },
+            "core_mode_consistency": { "ready": core_mode_consistency_gate },
+            "mode_scenario_adaptability": { "ready": mode_scenario_adaptability_gate },
+            "cross_mode_quality_assurance": { "ready": cross_mode_quality_assurance_gate },
+            "mode_issue_prevention": { "ready": mode_issue_prevention_gate },
+            "subagent_architecture": { "ready": subagent_architecture_gate },
+            "subagent_collaboration": { "ready": subagent_collaboration_gate },
+            "subagent_observability": { "ready": subagent_observability_gate },
+            "knowledge_management": { "ready": knowledge_management_gate },
+            "performance_optimization": { "ready": performance_optimization_gate },
+            "enterprise_deploy_ops": { "ready": enterprise_deploy_ops_gate },
+            "ecosystem_extensibility": { "ready": ecosystem_extensibility_gate },
+            "shared_learning_mainchain": { "ready": shared_learning_mainchain_gate },
+            "self_evolution_mainchain": { "ready": self_evolution_mainchain_gate },
+            "capability_consistency_mainchain": { "ready": capability_consistency_mainchain_gate },
+            "shared_learning_data_flow": { "ready": shared_learning_data_flow_gate },
+            "self_evolution_flow": { "ready": self_evolution_flow_gate },
+            "task_graph_persistence": { "ready": task_graph_persistence_gate },
+            "evaluation_harness_baseline": { "ready": evaluation_harness_baseline_gate },
+            "memory_write_policy": { "ready": memory_write_policy_gate },
+            "task_routing_mainchain": { "ready": task_routing_mainchain_gate },
+            "tool_budget_enforcement": { "ready": tool_budget_enforcement_gate },
+            "state_store_trait": { "ready": state_store_trait_gate },
+            "adversarial_verification": { "ready": adversarial_verification_gate },
+            "planner_executor_separation": { "ready": planner_executor_separation_gate },
+            "multi_agent_handoff": { "ready": multi_agent_handoff_gate },
+            "evaluation_replay_engine": { "ready": evaluation_replay_engine_gate },
+            "trace_model_agent_graph": { "ready": trace_model_agent_graph_gate },
+            "dynamic_workflow_optimization": { "ready": dynamic_workflow_optimization_gate },
+            "think_act_observe_loop": { "ready": think_act_observe_loop_gate },
+            "model_degradation_detection": { "ready": model_degradation_detection_gate },
+            "task_decomposition_pipeline": { "ready": task_decomposition_pipeline_gate },
+            "omnipotent_mode_readiness": { "ready": omnipotent_mode_readiness_gate },
+            "sota_gap_benchmark": { "ready": sota_gap_benchmark_gate },
+            "blue27_release_closure": { "ready": blue27_release_closure_gate },
+            "schema_migration_versioning": { "ready": blue28_release_closure_gate },
+            "tenant_auth_api_key": { "ready": blue28_release_closure_gate },
+            "sqlite_postgres_migration": { "ready": blue28_release_closure_gate },
+            "solution_discovery_hub": { "ready": blue28_release_closure_gate },
+            "scenario_matcher": { "ready": blue28_release_closure_gate },
+            "subai_factory": { "ready": blue28_release_closure_gate },
+            "training_orchestrator": { "ready": blue28_release_closure_gate },
+            "auto_integration_runtime": { "ready": blue28_release_closure_gate },
+            "reinforcement_loop": { "ready": blue28_release_closure_gate },
+            "coordinator_council": { "ready": blue28_release_closure_gate },
+            "worker_swarm": { "ready": blue28_release_closure_gate },
+            "consensus_engine": { "ready": blue28_release_closure_gate },
+            "brain_loop": { "ready": blue28_release_closure_gate },
+            "node_reputation": { "ready": blue28_release_closure_gate },
+            "self_model_core": { "ready": blue28_release_closure_gate },
+            "meta_cognition": { "ready": blue28_release_closure_gate },
+            "drift_guard": { "ready": blue28_release_closure_gate },
+            "blue28_release_closure": { "ready": blue28_release_closure_gate },
+            "federated_rl": { "ready": blue29_release_closure_gate },
+            "distributed_memory_bus": { "ready": blue29_release_closure_gate },
+            "adaptive_swarm_optimizer": { "ready": blue29_release_closure_gate },
+            "hyper_node_network": { "ready": blue29_release_closure_gate },
+            "world_model_pipeline": { "ready": blue29_release_closure_gate },
+            "continual_learning_hub": { "ready": blue29_release_closure_gate },
+            "blue29_release_closure": { "ready": blue29_release_closure_gate },
+            "multi_channel_messaging": { "ready": blue30_release_closure_gate },
+            "collaboration_game_engine": { "ready": blue30_release_closure_gate },
+            "consciousness_proxy_metrics": { "ready": blue30_release_closure_gate },
+            "hyper_resilience": { "ready": blue30_release_closure_gate },
+            "dual_track_awakening_parity": { "ready": blue30_release_closure_gate },
+            "cicd_awareness_gate": { "ready": blue30_release_closure_gate },
+            "blue30_release_closure": { "ready": blue30_release_closure_gate },
+            "autonomy_boundary_governance": { "ready": blue31_release_closure_gate },
+            "emergency_stop_protocol": { "ready": blue31_release_closure_gate },
+            "collaboration_ab_evaluation": { "ready": blue31_release_closure_gate },
+            "hypernode_topology": { "ready": blue31_release_closure_gate },
+            "cross_region_priority_routing": { "ready": blue31_release_closure_gate },
+            "meta_controller_replan": { "ready": blue31_release_closure_gate },
+            "blue31_release_closure": { "ready": blue31_release_closure_gate },
+            "game_theory_balancer": { "ready": blue32_release_closure_gate },
+            "federated_rl_v2_guardrail": { "ready": blue32_release_closure_gate },
+            "continuous_learning_distillation": { "ready": blue32_release_closure_gate },
+            "drift_auto_takeover": { "ready": blue32_release_closure_gate },
+            "byzantine_fault_injection": { "ready": blue32_release_closure_gate },
+            "recovery_consistency_recheck": { "ready": blue32_release_closure_gate },
+            "blue32_release_closure": { "ready": blue32_release_closure_gate },
+            "local_reflection_track": { "ready": blue33_release_closure_gate },
+            "server_awakening_track": { "ready": blue33_release_closure_gate },
+            "ci_gate_continuous_green": { "ready": blue33_release_closure_gate },
+            "staged_rollout_guard": { "ready": blue33_release_closure_gate },
+            "release_train_freeze": { "ready": blue33_release_closure_gate },
+            "rollout_audit_replay": { "ready": blue33_release_closure_gate },
+            "blue33_release_closure": { "ready": blue33_release_closure_gate },
+            "autonomy_scope_matrix": { "ready": blue33_remaining_closure_gate },
+            "redline_policy_runtime": { "ready": blue33_remaining_closure_gate },
+            "human_approval_checkpoint": { "ready": blue33_remaining_closure_gate },
+            "supernode_hot_standby": { "ready": blue33_remaining_closure_gate },
+            "cross_zone_state_snapshot": { "ready": blue33_remaining_closure_gate },
+            "failover_recovery_drill": { "ready": blue33_remaining_closure_gate },
+            "blue33_remaining_closure": { "ready": blue33_remaining_closure_gate },
+            "dual_track_boundary_freeze": { "ready": blue34_release_closure_gate },
+            "state_vector_store_trait_unified": { "ready": blue34_release_closure_gate },
+            "local_server_profile_matrix": { "ready": blue34_release_closure_gate },
+            "postgres_pgvector_schema_versioning": { "ready": blue34_release_closure_gate },
+            "sqlite_to_pg_migration_dryrun": { "ready": blue34_release_closure_gate },
+            "planner_executor_taskgraph_resume": { "ready": blue34_release_closure_gate },
+            "think_act_observe_tool_governance": { "ready": blue34_release_closure_gate },
+            "role_handoff_schema_and_conflict_arbiter": { "ready": blue34_release_closure_gate },
+            "deterministic_adversarial_double_checks": { "ready": blue34_release_closure_gate },
+            "memory_write_promotion_gc_policy": { "ready": blue34_release_closure_gate },
+            "benchmark_replay_and_3d_scoring": { "ready": blue34_release_closure_gate },
+            "capability_discovery_registry_baseline": { "ready": blue34_release_closure_gate },
+            "staged_rollout_canary_rollback_gate": { "ready": blue34_release_closure_gate },
+            "distributed_node_registry_heartbeat": { "ready": blue34_release_closure_gate },
+            "consensus_with_dissent_preservation": { "ready": blue34_release_closure_gate },
+            "brain_loop_artifact_and_safe_degrade": { "ready": blue34_release_closure_gate },
+            "fault_injection_recovery_recheck": { "ready": blue34_release_closure_gate },
+            "blue34_release_closure": { "ready": blue34_release_closure_gate },
+            "custom_role_registry": {
+                "ready": custom_role_registry_gate,
+            },
+            "custom_role_dynamic_matching": {
+                "ready": custom_role_dynamic_matching_gate,
+            },
+            "compliance_audit_metadata": {
+                "ready": compliance_audit_metadata_gate,
+            },
+            "self_rationalization_guard": {
+                "ready": self_rationalization_guard_gate,
+            },
+            "startup_context_loader": {
+                "ready": startup_context_loader_gate,
+            },
+            "layered_prompt_builder": {
+                "ready": layered_prompt_builder_gate,
+            },
+            "layered_token_trigger": {
+                "ready": layered_token_trigger_gate,
+                "gate_chain": [
+                    "entry_auth",
+                    "strict_mode",
+                    "quality_compass",
+                ],
+            },
+            "multi_priority_scheduler": {
+                "ready": multi_priority_scheduler_gate,
+            },
+            "worker_scheduler_backpressure": {
+                "ready": worker_scheduler_backpressure_gate,
+            },
+            "fork_isolation_guard": {
+                "ready": fork_isolation_guard_gate,
+                "zombie_reap": true,
+            },
+            "capability_graph": {
+                "ready": capability_graph_gate,
+                "node_dependency_graph": true,
+            },
+            "provenance_ledger": {
+                "ready": provenance_ledger_gate,
+            },
+            "node_reputation_tracker": {
+                "ready": node_reputation_tracker_gate,
+            },
+            "k8s_delivery_pack": {
+                "ready": k8s_delivery_pack_gate,
+            },
+            "sdk_multi_language": {
+                "ready": sdk_multi_language_gate,
+            },
+            "workflow_type_tri_mode": {
+                "ready": workflow_type_tri_mode_gate,
+                "auto_detection": true,
+            },
+            "blue35_release_closure": {
+                "ready": blue35_release_closure_gate,
+            },
+            "gates": gate_items,
+            "gate_map": {
+                "stability": stability_gate,
+                "security": security_gate,
+                "provider": provider_gate,
+                "reproducibility": reproducibility_gate,
+                "observability": observability_gate,
+                "dual_track_consistency": dual_track_consistency_gate,
+                "multi_user_server": multi_user_server_gate,
+                "multi_user_lifecycle_ops": multi_user_lifecycle_gate,
+                "zero_trust_compliance": zero_trust_compliance_gate,
+                "rbac_policy_engine": rbac_policy_engine_gate,
+                "sla_governance": sla_governance_gate,
+                "skill_engine_core": skill_engine_core_gate,
+                "workflow_to_skill_conversion": workflow_to_skill_conversion_gate,
+                "workflow_skill_chain_integration": workflow_skill_chain_integration_gate,
+                "skill_management_console": skill_management_console_gate,
+                "enterprise_skill_controls": enterprise_skill_controls_gate,
+                "core_mode_consistency": core_mode_consistency_gate,
+                "mode_scenario_adaptability": mode_scenario_adaptability_gate,
+                "cross_mode_quality_assurance": cross_mode_quality_assurance_gate,
+                "mode_issue_prevention": mode_issue_prevention_gate,
+                "subagent_architecture": subagent_architecture_gate,
+                "subagent_collaboration": subagent_collaboration_gate,
+                "subagent_observability": subagent_observability_gate,
+                "knowledge_management": knowledge_management_gate,
+                "performance_optimization": performance_optimization_gate,
+                "enterprise_deploy_ops": enterprise_deploy_ops_gate,
+                "ecosystem_extensibility": ecosystem_extensibility_gate,
+                "shared_learning_mainchain": shared_learning_mainchain_gate,
+                "self_evolution_mainchain": self_evolution_mainchain_gate,
+                "capability_consistency_mainchain": capability_consistency_mainchain_gate,
+                "shared_learning_data_flow": shared_learning_data_flow_gate,
+                "self_evolution_flow": self_evolution_flow_gate,
+            },
+            "blue_gates": {
+                "blue27_release_closure": blue27_release_closure_gate,
+                "blue28_release_closure": blue28_release_closure_gate,
+                "blue29_release_closure": blue29_release_closure_gate,
+                "blue30_release_closure": blue30_release_closure_gate,
+                "blue31_release_closure": blue31_release_closure_gate,
+                "blue32_release_closure": blue32_release_closure_gate,
+                "blue33_release_closure": blue33_release_closure_gate,
+                "blue33_remaining_closure": blue33_remaining_closure_gate,
+                "blue34_release_closure": blue34_release_closure_gate,
+                "blue35_release_closure": blue35_release_closure_gate,
+            },
+            "recommendations": recommendations,
+            "timestamp": status.timestamp,
+        }
+    }))
 }
 
 // BLUE gate helper functions (extracted inline to reduce duplication)
@@ -927,11 +914,7 @@ fn classify_harness_suite(name: &str) -> &'static str {
     }
 }
 
-pub(super) async fn handle_harness_status(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn harness_status_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let fixed_seed = params
         .get("seed")
         .and_then(Value::as_u64)
@@ -1001,69 +984,64 @@ pub(super) async fn handle_harness_status(
 
     let scenario_total = smoke.len() + regression.len() + adversarial.len() + long_chain.len();
     let metrics = server.observability.metrics.snapshot();
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "harness": {
-                "fixed_seed": fixed_seed,
-                "scenario_total": scenario_total,
-                "suites": {
-                    "smoke": {
-                        "count": smoke.len(),
-                        "files": smoke,
-                    },
-                    "regression": {
-                        "count": regression.len(),
-                        "files": regression,
-                    },
-                    "adversarial": {
-                        "count": adversarial.len(),
-                        "files": adversarial,
-                    },
-                    "long_chain": {
-                        "count": long_chain.len(),
-                        "files": long_chain,
-                    },
+    Ok(json!({
+        "ok": true,
+        "harness": {
+            "fixed_seed": fixed_seed,
+            "scenario_total": scenario_total,
+            "suites": {
+                "smoke": {
+                    "count": smoke.len(),
+                    "files": smoke,
                 },
-                "scorecard": [
-                    {
-                        "dimension": "correctness",
-                        "target": "all scenarios pass without rpc error",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "stability",
-                        "target": "runtime.health remains healthy across suites",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "latency",
-                        "target": "p95 bounded by phase timeout budget",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "cost",
-                        "target": "timeout spikes remain within baseline",
-                        "status": "tracked",
-                    },
-                    {
-                        "dimension": "safety",
-                        "target": "security.baseline level stays warn/ok before deploy",
-                        "status": "tracked",
-                    }
-                ],
-                "runtime_snapshot": {
-                    "total_requests": metrics.total_requests,
-                    "failed_requests": metrics.failed_requests,
-                    "agent_timeout_failures_total": metrics.agent_timeout_failures_total,
-                    "review_gate_timeout_total": metrics.review_gate_timeout_total,
-                    "runtime_probe_timeout_total": metrics.runtime_probe_timeout_total,
+                "regression": {
+                    "count": regression.len(),
+                    "files": regression,
                 },
-                "warnings": warnings,
+                "adversarial": {
+                    "count": adversarial.len(),
+                    "files": adversarial,
+                },
+                "long_chain": {
+                    "count": long_chain.len(),
+                    "files": long_chain,
+                },
             },
-        }),
-    )
-    .await
+            "scorecard": [
+                {
+                    "dimension": "correctness",
+                    "target": "all scenarios pass without rpc error",
+                    "status": "tracked",
+                },
+                {
+                    "dimension": "stability",
+                    "target": "runtime.health remains healthy across suites",
+                    "status": "tracked",
+                },
+                {
+                    "dimension": "latency",
+                    "target": "p95 bounded by phase timeout budget",
+                    "status": "tracked",
+                },
+                {
+                    "dimension": "cost",
+                    "target": "timeout spikes remain within baseline",
+                    "status": "tracked",
+                },
+                {
+                    "dimension": "safety",
+                    "target": "security.baseline level stays warn/ok before deploy",
+                    "status": "tracked",
+                }
+            ],
+            "runtime_snapshot": {
+                "total_requests": metrics.total_requests,
+                "failed_requests": metrics.failed_requests,
+                "agent_timeout_failures_total": metrics.agent_timeout_failures_total,
+                "review_gate_timeout_total": metrics.review_gate_timeout_total,
+                "runtime_probe_timeout_total": metrics.runtime_probe_timeout_total,
+            },
+            "warnings": warnings,
+        },
+    }))
 }

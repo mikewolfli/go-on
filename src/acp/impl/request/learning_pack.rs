@@ -1,10 +1,6 @@
 use super::*;
 
-pub(super) async fn handle_learning_summary(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn learning_summary_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let ledger = clone_artifact_ledger(server);
     let window = params
         .get("limit")
@@ -25,25 +21,20 @@ pub(super) async fn handle_learning_summary(
         "spec",
         "latest-learning.json",
     ) else {
-        return send_result(
-            server,
-            request_id,
-            json!({
-                "ok": true,
-                "summary": {"sampled_events": 0, "totals": {}, "averages": {}, "rates": {}},
-                "guardrail": guardrail,
-                "knowledge": knowledge_bus.as_ref().map(|bus| json!({
-                    "total_events": bus.total_events,
-                    "sampled_events": bus.events.len().min(window),
-                    "latest_generated_at": bus.generated_at,
-                    "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
-                })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
-                "events": [],
-                "learning_profile": learning_profile,
-                "knowledge_refinement": knowledge_refinement,
-            }),
-        )
-        .await;
+        return Ok(json!({
+            "ok": true,
+            "summary": {"sampled_events": 0, "totals": {}, "averages": {}, "rates": {}},
+            "guardrail": guardrail,
+            "knowledge": knowledge_bus.as_ref().map(|bus| json!({
+                "total_events": bus.total_events,
+                "sampled_events": bus.events.len().min(window),
+                "latest_generated_at": bus.generated_at,
+                "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
+            })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
+            "events": [],
+            "learning_profile": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
+        }));
     };
 
     let events = bus
@@ -81,43 +72,38 @@ pub(super) async fn handle_learning_summary(
         .sum::<u64>();
     let gates_pass_rate = events.iter().filter(|item| item.gates_ok).count() as f64 / count as f64;
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "summary": {
-                "total_events": bus.total_events,
-                "sampled_events": events.len(),
-                "latest_generated_at": bus.generated_at,
-                "totals": {
-                    "requirement_change_count": requirement_change_total,
-                    "failover_count": failover_total,
-                },
-                "averages": {
-                    "predicted_success_rate": avg_success,
-                    "parallel_speedup": avg_speedup,
-                    "risk_score": avg_risk,
-                    "clarification_rounds": avg_rounds,
-                    "clarification_quality_score": avg_quality,
-                },
-                "rates": {
-                    "gates_pass_rate": gates_pass_rate,
-                }
+    Ok(json!({
+        "ok": true,
+        "summary": {
+            "total_events": bus.total_events,
+            "sampled_events": events.len(),
+            "latest_generated_at": bus.generated_at,
+            "totals": {
+                "requirement_change_count": requirement_change_total,
+                "failover_count": failover_total,
             },
-            "guardrail": guardrail,
-            "knowledge": knowledge_bus.as_ref().map(|bus| json!({
-                "total_events": bus.total_events,
-                "sampled_events": bus.events.len().min(window),
-                "latest_generated_at": bus.generated_at,
-                "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
-            })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
-            "events": events,
-            "learning_profile": learning_profile,
-            "knowledge_refinement": knowledge_refinement,
-        }),
-    )
-    .await
+            "averages": {
+                "predicted_success_rate": avg_success,
+                "parallel_speedup": avg_speedup,
+                "risk_score": avg_risk,
+                "clarification_rounds": avg_rounds,
+                "clarification_quality_score": avg_quality,
+            },
+            "rates": {
+                "gates_pass_rate": gates_pass_rate,
+            }
+        },
+        "guardrail": guardrail,
+        "knowledge": knowledge_bus.as_ref().map(|bus| json!({
+            "total_events": bus.total_events,
+            "sampled_events": bus.events.len().min(window),
+            "latest_generated_at": bus.generated_at,
+            "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
+        })).unwrap_or_else(|| json!({"total_events": 0, "sampled_events": 0, "recent": []})),
+        "events": events,
+        "learning_profile": learning_profile,
+        "knowledge_refinement": knowledge_refinement,
+    }))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -470,11 +456,7 @@ fn summarize_learning_guardrail(window: usize, params: &Value) -> Result<Value> 
     }))
 }
 
-pub(super) async fn handle_learning_guardrail(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn learning_guardrail_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let window = params
         .get("limit")
         .or_else(|| params.get("window"))
@@ -487,14 +469,12 @@ pub(super) async fn handle_learning_guardrail(
     let learning_profile = build_learning_profile("learning.guardrail", task, &params);
     let knowledge_refinement =
         build_knowledge_refinement_profile("learning.guardrail", task, &params, &learning_profile);
-    send_result(server, request_id, json!({ "ok": true, "guardrail": guardrail, "learning_profile": learning_profile, "knowledge_refinement": knowledge_refinement })).await
+    Ok(
+        json!({ "ok": true, "guardrail": guardrail, "learning_profile": learning_profile, "knowledge_refinement": knowledge_refinement }),
+    )
 }
 
-pub(super) async fn handle_learning_replay(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn learning_replay_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let ledger = clone_artifact_ledger(server);
     let window = params
         .get("limit")
@@ -524,35 +504,30 @@ pub(super) async fn handle_learning_replay(
     let knowledge_refinement =
         build_knowledge_refinement_profile("learning.replay", task, &params, &learning_profile);
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "replay": {
-                "source": storage_dir.display().to_string(),
-                "window": window,
-                "records_total": records.len(),
-                "workflow_records": workflow_count,
-                "pua_records": pua_count,
-                "records": records,
-                "learning_bus": learning_bus.as_ref().map(|bus| json!({
-                    "generated_at": bus.generated_at,
-                    "total_events": bus.total_events,
-                    "sampled_events": bus.events.len().min(window),
-                    "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
-                })).unwrap_or_else(|| json!({
-                    "generated_at": 0,
-                    "total_events": 0,
-                    "sampled_events": 0,
-                    "recent": []
-                }))
-            },
-            "learning_profile": learning_profile,
-            "knowledge_refinement": knowledge_refinement,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "replay": {
+            "source": storage_dir.display().to_string(),
+            "window": window,
+            "records_total": records.len(),
+            "workflow_records": workflow_count,
+            "pua_records": pua_count,
+            "records": records,
+            "learning_bus": learning_bus.as_ref().map(|bus| json!({
+                "generated_at": bus.generated_at,
+                "total_events": bus.total_events,
+                "sampled_events": bus.events.len().min(window),
+                "recent": bus.events.iter().rev().take(window).cloned().collect::<Vec<_>>()
+            })).unwrap_or_else(|| json!({
+                "generated_at": 0,
+                "total_events": 0,
+                "sampled_events": 0,
+                "recent": []
+            }))
+        },
+        "learning_profile": learning_profile,
+        "knowledge_refinement": knowledge_refinement,
+    }))
 }
 
 const KNOWLEDGE_TOMBSTONE_FILE: &str = "tombstones.ndjson";
@@ -713,11 +688,7 @@ fn detect_knowledge_conflicts(
     (conflicts, tombstones)
 }
 
-pub(super) async fn handle_knowledge_distill(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn knowledge_distill_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let ledger = clone_artifact_ledger(server);
     let window = params
         .get("limit")
@@ -819,48 +790,43 @@ pub(super) async fn handle_knowledge_distill(
         }));
     }
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "distillation": {
-                "window": window,
-                "layers": {
-                    "evidence": {
-                        "source": learning_dir.display().to_string(),
-                        "records_total": evidence_records.len(),
-                        "workflow_records": workflow_records,
-                        "pua_records": pua_records,
-                        "records": evidence_records.into_iter().map(|record| serde_json::to_value(record).unwrap_or_else(|_| json!({}))).collect::<Vec<_>>()
-                    },
-                    "summary": {
-                        "source": "spec/latest-knowledge.json",
-                        "total_events": knowledge_bus.as_ref().map(|bus| bus.total_events).unwrap_or(0),
-                        "sampled_events": summary_events.len(),
-                        "latest_generated_at": knowledge_bus.as_ref().map(|bus| bus.generated_at).unwrap_or(0),
-                        "recent": summary_events,
-                    },
-                    "strategy": {
-                        "rules_total": strategy_rules.len(),
-                        "rules": strategy_rules,
-                    },
-                    "conflicts": {
-                        "count": conflicts.len(),
-                        "items": conflicts,
-                    },
-                    "tombstones": {
-                        "added_count": new_tombstones.len(),
-                        "stored_count": tombstones.len(),
-                        "items": tombstones,
-                    }
+    Ok(json!({
+        "ok": true,
+        "distillation": {
+            "window": window,
+            "layers": {
+                "evidence": {
+                    "source": learning_dir.display().to_string(),
+                    "records_total": evidence_records.len(),
+                    "workflow_records": workflow_records,
+                    "pua_records": pua_records,
+                    "records": evidence_records.into_iter().map(|record| serde_json::to_value(record).unwrap_or_else(|_| json!({}))).collect::<Vec<_>>()
+                },
+                "summary": {
+                    "source": "spec/latest-knowledge.json",
+                    "total_events": knowledge_bus.as_ref().map(|bus| bus.total_events).unwrap_or(0),
+                    "sampled_events": summary_events.len(),
+                    "latest_generated_at": knowledge_bus.as_ref().map(|bus| bus.generated_at).unwrap_or(0),
+                    "recent": summary_events,
+                },
+                "strategy": {
+                    "rules_total": strategy_rules.len(),
+                    "rules": strategy_rules,
+                },
+                "conflicts": {
+                    "count": conflicts.len(),
+                    "items": conflicts,
+                },
+                "tombstones": {
+                    "added_count": new_tombstones.len(),
+                    "stored_count": tombstones.len(),
+                    "items": tombstones,
                 }
-            },
-            "learning_profile": learning_profile,
-            "knowledge_refinement": knowledge_refinement,
-        }),
-    )
-    .await
+            }
+        },
+        "learning_profile": learning_profile,
+        "knowledge_refinement": knowledge_refinement,
+    }))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1138,11 +1104,10 @@ pub(super) fn build_rl_alignment_offline_eval_payload(params: &Value) -> Value {
     })
 }
 
-pub(super) async fn handle_rl_alignment_offline_eval(
-    server: &AcpServer,
+pub(super) fn rl_alignment_offline_eval_payload(
+    _server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let task = params.get("task").and_then(Value::as_str).unwrap_or("");
     let learning_profile = build_learning_profile("rl.alignment.offline_eval", task, &params);
     let knowledge_refinement = build_knowledge_refinement_profile(
@@ -1156,14 +1121,10 @@ pub(super) async fn handle_rl_alignment_offline_eval(
         obj.insert("learning_profile".to_string(), learning_profile);
         obj.insert("knowledge_refinement".to_string(), knowledge_refinement);
     }
-    send_result(server, request_id, payload).await
+    Ok(payload)
 }
 
-pub(super) async fn handle_phase_policy_replay(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn phase_policy_replay_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let window = params
         .get("limit")
         .or_else(|| params.get("window"))
@@ -1271,38 +1232,32 @@ pub(super) async fn handle_phase_policy_replay(
     let knowledge_refinement =
         build_knowledge_refinement_profile("phase.policy.replay", task, &params, &learning_profile);
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "mode": mode,
-            "sampled_events": events.len(),
-            "candidate_phases": candidate_phases,
-            "controller_recommended_phase": controller_recommended,
-            "empirical_best_phase": empirical_best,
-            "controller_phase_policy": controller_snapshot.into_iter().map(|(phase, mean_reward, reliability, pulls)| json!({
-                "phase": phase,
-                "mean_reward": mean_reward,
-                "reliability": reliability,
-                "pulls": pulls,
-            })).collect::<Vec<_>>(),
-            "phase_scores": ranked,
-            "agreement": {
-                "matches_empirical_best": controller_recommended.is_some() && controller_recommended == empirical_best,
-            },
-            "learning_profile": learning_profile,
-            "knowledge_refinement": knowledge_refinement,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "mode": mode,
+        "sampled_events": events.len(),
+        "candidate_phases": candidate_phases,
+        "controller_recommended_phase": controller_recommended,
+        "empirical_best_phase": empirical_best,
+        "controller_phase_policy": controller_snapshot.into_iter().map(|(phase, mean_reward, reliability, pulls)| json!({
+            "phase": phase,
+            "mean_reward": mean_reward,
+            "reliability": reliability,
+            "pulls": pulls,
+        })).collect::<Vec<_>>(),
+        "phase_scores": ranked,
+        "agreement": {
+            "matches_empirical_best": controller_recommended.is_some() && controller_recommended == empirical_best,
+        },
+        "learning_profile": learning_profile,
+        "knowledge_refinement": knowledge_refinement,
+    }))
 }
 
-pub(super) async fn handle_primary_secondary_summary(
+pub(super) fn primary_secondary_summary_payload(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let ledger = clone_artifact_ledger(server);
     let window = params
         .get("limit")
@@ -1370,27 +1325,22 @@ pub(super) async fn handle_primary_secondary_summary(
         &learning_profile,
     );
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "summary": {
-                "total_events": events.len(),
-                "averages": {
-                    "primary_stability_score": avg_primary_stability,
-                    "secondary_utilization_rate": avg_secondary_utilization,
-                },
-                "totals": {
-                    "failover_count": total_failovers,
-                },
-                "failover_root_causes": root_causes,
-                "latest_policy": policy,
-                "latest_failover": failover,
+    Ok(json!({
+        "ok": true,
+        "summary": {
+            "total_events": events.len(),
+            "averages": {
+                "primary_stability_score": avg_primary_stability,
+                "secondary_utilization_rate": avg_secondary_utilization,
             },
-            "learning_profile": learning_profile,
-            "knowledge_refinement": knowledge_refinement,
-        }),
-    )
-    .await
+            "totals": {
+                "failover_count": total_failovers,
+            },
+            "failover_root_causes": root_causes,
+            "latest_policy": policy,
+            "latest_failover": failover,
+        },
+        "learning_profile": learning_profile,
+        "knowledge_refinement": knowledge_refinement,
+    }))
 }

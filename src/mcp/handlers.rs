@@ -723,7 +723,7 @@ impl McpServer {
                         request_id: "mcp-tool-call".to_string(),
                     };
                     crate::acp::r#impl::request::exec_pack::handle_workflow_execute(
-                        acp, params, None, &trace,
+                        acp, params, &trace,
                     )
                     .await?;
                     record_tool_call_audit_with_protocol(
@@ -757,7 +757,7 @@ impl McpServer {
                         request_id: "mcp-tool-call".to_string(),
                     };
                     crate::acp::r#impl::request::workflow_pack::handle_workflow_ask(
-                        acp, params, None, &trace,
+                        acp, params, &trace,
                     )
                     .await?;
                     record_tool_call_audit_with_protocol(
@@ -786,8 +786,8 @@ impl McpServer {
                         method: tool_name.clone(),
                         request_id: "mcp-tool-call".to_string(),
                     };
-                    crate::acp::r#impl::request::workflow_pack::handle_workflow_generate(
-                        acp, params, None, &trace,
+                    crate::acp::r#impl::request::workflow_pack::workflow_generate_payload(
+                        acp, params, &trace,
                     )
                     .await?;
                     record_tool_call_audit_with_protocol(

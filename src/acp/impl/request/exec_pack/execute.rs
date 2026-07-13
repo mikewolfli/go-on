@@ -449,9 +449,8 @@ async fn execute_runtime_subtasks_with_repair_loop(
 pub(crate) async fn handle_workflow_execute(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
     _trace: &RequestTraceContext,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let task_text = params_task(&params).unwrap_or_default();
     let phase_name = params.get("phase").and_then(Value::as_str);
     let run =
@@ -486,25 +485,16 @@ pub(crate) async fn handle_workflow_execute(
         {
             crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason("incomplete");
             super::workflow::complete_workflow_run(&run_id, "waiting_clarification", Some(reason.clone()), Vec::new());
-            return send_result(server, request_id, json!({"ok": true, "run_id": run_id,
+            return Ok(DispatchOutput::ok(json!({"ok": true, "run_id": run_id,
                 "run_status": "waiting_clarification", "status": "clarification_required",
                 "kind": kind, "reason": reason, "next_step": next_step,
                 "requirement_gate": blocked_payload,
-                "requirement_continuation": requirement_continuation.next_step})).await;
+                "requirement_continuation": requirement_continuation.next_step})));
         }
         crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason("failed");
         super::workflow::complete_workflow_run(&run_id, "failed", Some(reason.clone()), Vec::new());
-        return send_error(
-            server,
-            request_id,
-            -32006,
-            reason,
-            Some(json!({
-            "run_id": run_id, "run_status": "failed", "kind": kind, "next_step": next_step,
-            "requirement_gate": blocked_payload,
-            "requirement_continuation": requirement_continuation.next_step})),
-        )
-        .await;
+        let err_msg = format!("workflow execution failed: {}", reason);
+        anyhow::bail!(err_msg);
     }
 
     let _auto_clarification_in_progress = matches!(requirement_continuation.kind,
@@ -544,7 +534,7 @@ pub(crate) async fn handle_workflow_execute(
             decision_confidence: 0.75,
             handoff_primary_agent: "local_echo".to_string(),
         };
-        let consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
+        let _consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
         let blocked_reason = crate::i18n::runtime::t("error.consultation_blocked");
         super::workflow::complete_workflow_run(
             &run_id,
@@ -552,16 +542,7 @@ pub(crate) async fn handle_workflow_execute(
             Some(blocked_reason.clone()),
             Vec::new(),
         );
-        return send_error(
-            server,
-            request_id,
-            -32007,
-            blocked_reason,
-            Some(json!({
-            "kind": "consultation_blocked", "run_id": run_id, "run_status": "failed",
-            "consultation_artifact_path": consultation_artifact_path.display().to_string()})),
-        )
-        .await;
+        anyhow::bail!(blocked_reason);
     }
 
     let mut plan = build_task_plan(&task_text);
@@ -817,7 +798,7 @@ pub(crate) async fn handle_workflow_execute(
     );
     let trace_ref = build_trace_ref(
         "workflow.execute",
-        request_id.as_ref(),
+        None,
         Some(artifact_path.display().to_string().as_str()),
     );
     let capability_profile = build_capability_profile("workflow.execute", &task_text, &params);
@@ -921,5 +902,5 @@ pub(crate) async fn handle_workflow_execute(
         "replay_scoring": build_replay_scoring(execution_report.subtasks_completed, execution_report.subtasks_failed),
     });
 
-    send_result(server, request_id, response_payload).await
+    Ok(DispatchOutput::ok(response_payload))
 }

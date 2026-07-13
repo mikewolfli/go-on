@@ -82,6 +82,7 @@ mod checkpoint_pack;
 mod config_handlers;
 mod config_pack;
 mod diagnostic_pack;
+mod dispatch;
 pub(crate) mod exec_pack;
 mod governance_handlers;
 mod governance_pack;
@@ -97,6 +98,7 @@ mod protocol;
 mod protocol_pack;
 mod pua_pack;
 mod repro_handlers;
+pub(crate) use dispatch::{dispatch_to_client, CheckpointResult, DispatchOutput};
 mod repro_pack;
 mod runtime_pack;
 mod status_pack;
@@ -607,187 +609,301 @@ pub async fn handle_request(
     let result = DISPATCH_REQUEST_METHOD
         .scope(method.to_string(), async {
             match method.as_ref() {
-                "initialize" => protocol_pack::handle_initialize(server, request_id).await,
+                "initialize" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::initialize_payload(server).await,
+                    )
+                    .await
+                }
                 // Standard ACP session lifecycle methods
                 "session/new" => {
-                    protocol_pack::handle_session_new(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.clone().unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_new_payload(
+                            server,
+                            request.params.clone().unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/load" => {
-                    protocol_pack::handle_session_load(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_load_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/prompt" => {
-                    protocol_pack::handle_session_prompt(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_prompt_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/cancel" => {
-                    protocol_pack::handle_session_cancel(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_cancel_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/list" => {
-                    protocol_pack::handle_session_list(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_list_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/set_mode" => {
-                    protocol_pack::handle_session_set_mode(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_set_mode_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/set_config_option" => {
-                    protocol_pack::handle_session_set_config_option(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_set_config_option_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/resume" => {
-                    protocol_pack::handle_session_resume(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_resume_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/close" => {
-                    protocol_pack::handle_session_close(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_close_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "session/request_permission" => {
-                    protocol_pack::handle_session_request_permission(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::session_request_permission_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 // Standard ACP authentication methods
                 "authenticate" => {
-                    protocol_pack::handle_authenticate(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::authenticate_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "logout" => {
-                    protocol_pack::handle_logout(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::logout_payload(server, request.params.unwrap_or_default())
+                            .await,
                     )
                     .await
                 }
                 // Protocol-level notifications
                 "$/cancel_request" => {
-                    protocol_pack::handle_cancel_request(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::cancel_request_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 // MCP methods bridged through ACP dispatch
-                "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
+                "mcp.initialize" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::mcp_initialize_payload(server).await,
+                    )
+                    .await
+                }
                 "mcp.notifications_initialized" => {
                     // MCP notification — no response expected per JSON-RPC spec
                     Ok(())
                 }
-                "mcp.ping" => protocol_pack::handle_mcp_ping(server, request_id).await,
-                "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
-                "mcp.tools.call" => {
-                    protocol_pack::handle_mcp_tools_call(
+                "mcp.ping" => {
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::mcp_ping_payload(server).await,
+                    )
+                    .await
+                }
+                "mcp.tools.list" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::mcp_tools_list_payload(server).await,
+                    )
+                    .await
+                }
+                "mcp.tools.call" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::mcp_tools_call_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "mcp.resources.list" => {
-                    protocol_pack::handle_mcp_resources_list(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::mcp_resources_list_payload(server).await,
+                    )
+                    .await
                 }
                 "mcp.resources.read" => {
-                    protocol_pack::handle_mcp_resources_read(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::mcp_resources_read_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "mcp.resources.subscribe" => {
-                    protocol_pack::handle_mcp_resources_subscribe(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::mcp_resources_subscribe_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "mcp.logging.setLevel" => {
-                    protocol_pack::handle_mcp_logging_set_level(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::mcp_logging_set_level_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "mcp.completion.complete" => {
-                    protocol_pack::handle_mcp_completion_complete(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::mcp_completion_complete_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "mcp.sampling.createMessage" => {
-                    protocol_pack::handle_mcp_sampling_create_message(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::mcp_sampling_create_message_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 // Terminal methods
                 "terminal/create" => {
-                    protocol_pack::handle_terminal_create(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::terminal_create_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "terminal/output" => {
-                    protocol_pack::handle_terminal_output(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::terminal_output_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -808,10 +924,14 @@ pub async fn handle_request(
                     .await
                 }
                 "terminal/wait_for_exit" => {
-                    protocol_pack::handle_terminal_wait_for_exit(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::terminal_wait_for_exit_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -822,22 +942,13 @@ pub async fn handle_request(
                         .and_then(|p| p.get("lang"))
                         .and_then(|v| v.as_str())
                         .unwrap_or(&server.runtime_config.i18n_default_language);
-                    match prompts_pack::handle_prompts_list(&server.prompt_manager, lang) {
-                        Ok(v) => send_result(server, request_id, v).await,
-                        Err(e) => {
-                            send_error(
-                                server,
-                                request_id,
-                                AcpErrorCode::InternalError as i32,
-                                tf(
-                                    "error.request.prompts_list_failed",
-                                    &[("error", &e.to_string())],
-                                ),
-                                None,
-                            )
-                            .await
-                        }
-                    }
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        prompts_pack::handle_prompts_list(&server.prompt_manager, lang)
+                            .map_err(|e| anyhow::anyhow!("{}", e)),
+                    )
+                    .await
                 }
                 "prompts.search" => {
                     let lang = request
@@ -846,31 +957,22 @@ pub async fn handle_request(
                         .and_then(|p| p.get("lang"))
                         .and_then(|v| v.as_str())
                         .unwrap_or(&server.runtime_config.i18n_default_language);
-                    match prompts_pack::handle_prompts_search(
-                        &server.prompt_manager,
-                        lang,
-                        request
-                            .params
-                            .as_ref()
-                            .and_then(|p| p.get("query"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(""),
-                    ) {
-                        Ok(v) => send_result(server, request_id, v).await,
-                        Err(e) => {
-                            send_error(
-                                server,
-                                request_id,
-                                AcpErrorCode::InternalError as i32,
-                                tf(
-                                    "error.request.prompts_search_failed",
-                                    &[("error", &e.to_string())],
-                                ),
-                                None,
-                            )
-                            .await
-                        }
-                    }
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        prompts_pack::handle_prompts_search(
+                            &server.prompt_manager,
+                            lang,
+                            request
+                                .params
+                                .as_ref()
+                                .and_then(|p| p.get("query"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(""),
+                        )
+                        .map_err(|e| anyhow::anyhow!("{}", e)),
+                    )
+                    .await
                 }
                 "prompts.get" => {
                     let lang = request
@@ -886,20 +988,13 @@ pub async fn handle_request(
                         .and_then(|v| v.as_str());
                     match id {
                         Some(id) => {
-                            match prompts_pack::handle_prompts_get(&server.prompt_manager, lang, id)
-                            {
-                                Ok(v) => send_result(server, request_id, v).await,
-                                Err(e) => {
-                                    send_error(
-                                        server,
-                                        request_id,
-                                        AcpErrorCode::InvalidParams as i32,
-                                        format!("{}", e),
-                                        None,
-                                    )
-                                    .await
-                                }
-                            }
+                            crate::acp::r#impl::io::respond(
+                                server,
+                                request_id,
+                                prompts_pack::handle_prompts_get(&server.prompt_manager, lang, id)
+                                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                            )
+                            .await
                         }
                         None => {
                             send_error(
@@ -921,23 +1016,13 @@ pub async fn handle_request(
                         .and_then(|v| v.as_str())
                         .unwrap_or(&server.runtime_config.i18n_default_language);
                     let params = request.params.clone().unwrap_or_default();
-                    match prompts_pack::handle_prompts_create(&server.prompt_manager, lang, &params)
-                    {
-                        Ok(v) => send_result(server, request_id, v).await,
-                        Err(e) => {
-                            send_error(
-                                server,
-                                request_id,
-                                AcpErrorCode::InternalError as i32,
-                                tf(
-                                    "error.request.prompts_create_failed",
-                                    &[("error", &e.to_string())],
-                                ),
-                                None,
-                            )
-                            .await
-                        }
-                    }
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        prompts_pack::handle_prompts_create(&server.prompt_manager, lang, &params)
+                            .map_err(|e| anyhow::anyhow!("{}", e)),
+                    )
+                    .await
                 }
                 "prompts.update" => {
                     let lang = request
@@ -947,23 +1032,13 @@ pub async fn handle_request(
                         .and_then(|v| v.as_str())
                         .unwrap_or(&server.runtime_config.i18n_default_language);
                     let params = request.params.clone().unwrap_or_default();
-                    match prompts_pack::handle_prompts_update(&server.prompt_manager, lang, &params)
-                    {
-                        Ok(v) => send_result(server, request_id, v).await,
-                        Err(e) => {
-                            send_error(
-                                server,
-                                request_id,
-                                AcpErrorCode::InternalError as i32,
-                                tf(
-                                    "error.request.prompts_update_failed",
-                                    &[("error", &e.to_string())],
-                                ),
-                                None,
-                            )
-                            .await
-                        }
-                    }
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        prompts_pack::handle_prompts_update(&server.prompt_manager, lang, &params)
+                            .map_err(|e| anyhow::anyhow!("{}", e)),
+                    )
+                    .await
                 }
                 "prompts.delete" => {
                     let lang = request
@@ -973,90 +1048,114 @@ pub async fn handle_request(
                         .and_then(|v| v.as_str())
                         .unwrap_or(&server.runtime_config.i18n_default_language);
                     let params = request.params.clone().unwrap_or_default();
-                    match prompts_pack::handle_prompts_delete(&server.prompt_manager, lang, &params)
-                    {
-                        Ok(v) => send_result(server, request_id, v).await,
-                        Err(e) => {
-                            send_error(
-                                server,
-                                request_id,
-                                AcpErrorCode::InternalError as i32,
-                                tf(
-                                    "error.request.prompts_delete_failed",
-                                    &[("error", &e.to_string())],
-                                ),
-                                None,
-                            )
-                            .await
-                        }
-                    }
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        prompts_pack::handle_prompts_delete(&server.prompt_manager, lang, &params)
+                            .map_err(|e| anyhow::anyhow!("{}", e)),
+                    )
+                    .await
                 }
                 "skill.import" => {
-                    protocol_pack::handle_skill_import(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::skill_import_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "skill.enable" => {
-                    protocol_pack::handle_skill_enabled_toggle(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        true,
+                        protocol_pack::skill_enabled_toggle_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                            true,
+                        )
+                        .await,
                     )
                     .await
                 }
                 "skill.disable" => {
-                    protocol_pack::handle_skill_enabled_toggle(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        false,
+                        protocol_pack::skill_enabled_toggle_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                            false,
+                        )
+                        .await,
                     )
                     .await
                 }
                 "skill.list_imported" | "skill.list" => {
-                    protocol_pack::handle_skill_list_imported(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::skill_list_imported_payload(server).await,
+                    )
+                    .await
                 }
                 "skill.create" => {
-                    protocol_pack::handle_skill_create(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::skill_create_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "skill.update" => {
-                    protocol_pack::handle_skill_update(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::skill_update_payload(
+                            server,
+                            &request.params.clone().unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "skill.version.list" => {
-                    protocol_pack::handle_skill_version_list(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::skill_version_list_payload(
+                            server,
+                            &request.params.clone().unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "skill.version.rollback" => {
-                    protocol_pack::handle_skill_version_rollback(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::skill_version_rollback_payload(
+                            server,
+                            &request.params.clone().unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "skill.remove" => {
-                    protocol_pack::handle_skill_remove(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::skill_remove_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -1070,131 +1169,255 @@ pub async fn handle_request(
                     .await
                 }
                 "phase" | "phase.status" => {
-                    protocol_pack::handle_phase(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        protocol_pack::phase_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                            &trace,
+                        )
+                        .await,
                     )
                     .await
                 }
-                "metrics.get" => metrics_pack::handle_metrics_get(server, request_id).await,
-                "metrics" => metrics_pack::handle_metrics(server, request_id).await,
+                "metrics.get" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        metrics_pack::metrics_get_payload(server).await,
+                    )
+                    .await
+                }
+                "metrics" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        metrics_pack::metrics_payload(server).await,
+                    )
+                    .await
+                }
                 "metrics.prometheus" => {
                     metrics_pack::handle_metrics_prometheus(server, request_id).await
                 }
                 "metrics.window.query" => {
-                    metrics_pack::handle_metrics_window_query(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        metrics_pack::metrics_window_query_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "metrics.errors.summary" => {
-                    metrics_pack::handle_metrics_errors_summary(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        metrics_pack::metrics_errors_summary_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
-                "metrics.reset" => metrics_pack::handle_metrics_reset(server, request_id).await,
-                "debug_panel.get" | "debug.panel.get" => {
-                    config_handlers::handle_debug_panel_get(
+                "metrics.reset" => {
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        metrics_pack::metrics_reset_payload(server).await,
+                    )
+                    .await
+                }
+                "debug_panel.get" | "debug.panel.get" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        config_handlers::debug_panel_payload(server).await,
                     )
                     .await
                 }
                 "trace.get" => {
-                    config_handlers::handle_trace_get(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        config_handlers::trace_payload_result(&request.params.unwrap_or_default()),
                     )
                     .await
                 }
-                "trace.metrics" => config_handlers::handle_trace_metrics(server, request_id).await,
-                "shutdown" => lifecycle_handlers::handle_shutdown(server, request_id).await,
+                "trace.metrics" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        Ok(trace_metrics_snapshot(server)),
+                    )
+                    .await
+                }
+                "shutdown" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        lifecycle_handlers::shutdown_payload(server),
+                    )
+                    .await
+                }
                 "health" | "runtime.health" => {
-                    lifecycle_handlers::handle_health(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        lifecycle_handlers::health_payload(server).await,
+                    )
+                    .await
                 }
                 "health.probes" => {
-                    lifecycle_handlers::handle_health_probes(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        lifecycle_handlers::build_health_probes_payload(server),
+                    )
+                    .await
                 }
                 "lock.status" => {
-                    handle_lock_status(server, request.params.unwrap_or_default(), request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        lock_status_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
                 "runtime.self_model" => {
-                    lifecycle_handlers::handle_runtime_self_model(
+                    let params = request.params.unwrap_or_default();
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        lifecycle_handlers::build_runtime_self_model_payload(server, &params),
                     )
                     .await
                 }
                 "provider.status" => {
-                    lifecycle_handlers::handle_provider_status(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        lifecycle_handlers::build_provider_status_payload(server),
                     )
                     .await
                 }
                 "release.readiness" => {
-                    handle_release_readiness(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        release_readiness_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
                 "runtime.stability" => {
-                    lifecycle_handlers::handle_runtime_stability(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        lifecycle_handlers::build_runtime_stability_payload(server),
                     )
                     .await
                 }
                 "runtime.features" => {
-                    lifecycle_handlers::handle_runtime_features(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        lifecycle_handlers::runtime_features_payload(server),
+                    )
+                    .await
                 }
                 "observability.alerts" => {
-                    handle_observability_alerts(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        observability_alerts_payload(server, request.params.unwrap_or_default())
+                            .await,
                     )
                     .await
                 }
                 "security.baseline" => {
-                    handle_security_baseline(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        security_baseline_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
                 "harness.status" => {
-                    handle_harness_status(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        harness_status_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
-                "breaker.status" => handle_breaker_status(server, request_id).await,
+                "breaker.status" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        breaker_status_payload(server).await,
+                    )
+                    .await
+                }
                 "breaker.reset" => {
-                    handle_breaker_reset(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        breaker_reset_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
                 "breaker.recovery" => {
-                    handle_breaker_recovery(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        breaker_recovery_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
-                "cache.clear" => handle_cache_clear(server, request_id).await,
-                "vector.clear" => handle_vector_clear(server, request_id).await,
-                "maintenance.gc" => handle_maintenance_gc(server, request_id).await,
+                "cache.clear" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        cache_clear_payload(server).await,
+                    )
+                    .await
+                }
+                "vector.clear" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        vector_clear_payload(server).await,
+                    )
+                    .await
+                }
+                "maintenance.gc" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        maintenance_gc_payload(server).await,
+                    )
+                    .await
+                }
                 "data.lifecycle" => {
-                    handle_data_lifecycle(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        data_lifecycle_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
                 "action.check" => {
-                    runtime_pack::handle_action_check(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::action_check_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
@@ -1230,261 +1453,398 @@ pub async fn handle_request(
                     )
                     .await
                 }
-                "config.reload" => handle_config_reload(server, request_id).await,
+                "config.reload" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        config_reload_payload(server).await,
+                    )
+                    .await
+                }
                 "config.baseline" => {
-                    handle_config_baseline(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        config_baseline_payload(server, request.params.unwrap_or_default()).await,
+                    )
+                    .await
                 }
-                "build.repro" => repro_pack::handle_build_repro(server, request_id).await,
+                "build.repro" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        repro_pack::build_repro_payload(server).await,
+                    )
+                    .await
+                }
                 "optimization.peak" => {
-                    repro_handlers::handle_optimization_peak(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        repro_handlers::optimization_peak_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
-                "error.contract" => runtime_pack::handle_error_contract(server, request_id).await,
-                "autotune.get" => runtime_pack::handle_autotune_get(server, request_id).await,
-                "autotune.status" => runtime_pack::handle_autotune_status(server, request_id).await,
+                "error.contract" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        runtime_pack::error_contract_payload(server),
+                    )
+                    .await
+                }
+                "autotune.get" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        runtime_pack::autotune_get_payload(server).await,
+                    )
+                    .await
+                }
+                "autotune.status" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        runtime_pack::autotune_status_payload(server).await,
+                    )
+                    .await
+                }
                 "autotune.reset" => {
-                    runtime_pack::handle_autotune_reset(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::autotune_reset_payload(server).await,
                     )
                     .await
                 }
-                "selector.status" => runtime_pack::handle_selector_status(server, request_id).await,
-                "hardness.status" => {
-                    runtime_pack::handle_hardness_status(
+                "selector.status" => {
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::selector_status_payload(server),
+                    )
+                    .await
+                }
+                "hardness.status" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        runtime_pack::hardness_status_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "cost.status" => {
-                    runtime_pack::handle_cost_status(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::cost_status_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "workflow.confirm" => {
-                    workflow_pack::handle_workflow_confirm(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::workflow_confirm_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "workflow.clarify" => {
-                    workflow_pack::handle_workflow_clarify(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::workflow_clarify_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "workflow.research" => {
-                    workflow_pack::handle_workflow_research(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::workflow_research_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "workflow.consult" => {
-                    workflow_pack::handle_workflow_consult(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::workflow_consult_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "workflow.ask" => {
-                    workflow_pack::handle_workflow_ask(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::handle_workflow_ask(
+                            server,
+                            request.params.unwrap_or_default(),
+                            &trace,
+                        )
+                        .await,
                     )
                     .await
                 }
                 "workflow.generate_from_chat" => {
-                    workflow_pack::handle_workflow_generate_from_chat(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::handle_workflow_generate_from_chat(
+                            server,
+                            request.params.unwrap_or_default(),
+                            &trace,
+                        )
+                        .await,
                     )
                     .await
                 }
                 "workflow.generate" => {
-                    workflow_pack::handle_workflow_generate(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::workflow_generate_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                            &trace,
+                        )
+                        .await,
                     )
                     .await
                 }
                 "workflow.execute" => {
-                    handle_workflow_execute(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        handle_workflow_execute(server, request.params.unwrap_or_default(), &trace)
+                            .await,
                     )
                     .await
                 }
                 "workflow.run.list" => {
-                    handle_workflow_run_list(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        exec_pack::workflow_run_list_payload(&request.params.unwrap_or_default()),
+                    )
+                    .await
                 }
                 "workflow.run.get" => {
-                    handle_workflow_run_get(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        exec_pack::workflow_run_get_payload(&request.params.unwrap_or_default()),
+                    )
+                    .await
                 }
                 "workflow.run.cancel" => {
-                    handle_workflow_run_cancel(
+                    let params = request.params.unwrap_or_default();
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        exec_pack::workflow::workflow_run_transition_payload(&params, "cancelled"),
                     )
                     .await
                 }
                 "workflow.run.pause" => {
-                    handle_workflow_run_pause(
+                    let params = request.params.unwrap_or_default();
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        exec_pack::workflow::workflow_run_transition_payload(&params, "paused"),
                     )
                     .await
                 }
                 "workflow.run.resume" => {
-                    handle_workflow_run_resume(
+                    let params = request.params.unwrap_or_default();
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        exec_pack::workflow::workflow_run_transition_payload(&params, "running"),
                     )
                     .await
                 }
                 "task.plan" => {
-                    workflow_pack::handle_task_plan(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        workflow_pack::task_plan_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                            &trace,
+                        )
+                        .await,
                     )
                     .await
                 }
                 "task.execute" => {
-                    handle_task_execute(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        handle_task_execute(server, request.params.unwrap_or_default(), &trace)
+                            .await,
                     )
                     .await
                 }
                 "learning.summary" => {
-                    learning_pack::handle_learning_summary(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        learning_summary_payload(server, request.params.unwrap_or_default()).await,
                     )
                     .await
                 }
                 "learning.replay" => {
-                    learning_pack::handle_learning_replay(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        learning_pack::learning_replay_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "learning.guardrail" => {
-                    learning_pack::handle_learning_guardrail(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        learning_pack::learning_guardrail_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "knowledge.distill" => {
-                    learning_pack::handle_knowledge_distill(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        learning_pack::knowledge_distill_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "rl.alignment.offline_eval" => {
-                    learning_pack::handle_rl_alignment_offline_eval(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        learning_pack::rl_alignment_offline_eval_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "governance.status" => {
-                    governance_handlers::handle_governance_status(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        governance_handlers::governance_status_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "capabilities.list" => {
-                    lifecycle_handlers::handle_capabilities_list(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        lifecycle_handlers::capabilities_list_payload(server),
+                    )
+                    .await
                 }
                 "models.list" | "models/list" => {
-                    protocol_pack::handle_models_list(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::models_list_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "governance.plan.get" => {
-                    governance_handlers::handle_governance_plan_get(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        governance_handlers::governance_plan_get_payload(server),
+                    )
+                    .await
                 }
                 "governance.plan.update" => {
-                    governance_handlers::handle_governance_plan_update(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        governance_handlers::governance_plan_update_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "governance.audit.recent" => {
-                    governance_handlers::handle_governance_audit_recent(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        governance_handlers::governance_audit_recent_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "phase.policy.replay" => {
-                    learning_pack::handle_phase_policy_replay(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        learning_pack::phase_policy_replay_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "primary_secondary.summary" | "summary/primary_secondary" => {
-                    learning_pack::handle_primary_secondary_summary(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        learning_pack::primary_secondary_summary_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
@@ -1492,21 +1852,28 @@ pub async fn handle_request(
                     if let Err(e) = run_health_check(server).await {
                         tracing::warn!("health.check: run_health_check failed: {}", e);
                     }
-                    send_result(server, request_id, json!({ "ok": true })).await
+                    crate::acp::r#impl::io::respond(server, request_id, Ok(json!({ "ok": true })))
+                        .await
                 }
                 "governance.remediate" => {
-                    governance_handlers::handle_governance_remediate(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        governance_handlers::governance_remediate_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
                 "governance.config.save" => {
-                    governance_handlers::handle_governance_config_save(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        governance_handlers::governance_config_save_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
                     )
                     .await
                 }
@@ -1519,18 +1886,20 @@ pub async fn handle_request(
                     .await
                 }
                 "provider.test_connection" => {
-                    runtime_pack::handle_provider_test_connection(
+                    let params = request.params.unwrap_or_default();
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::provider_test_connection_payload(server, &params),
                     )
                     .await
                 }
                 "provider.test_completion" => {
-                    runtime_pack::handle_provider_test_completion(
+                    let params = request.params.unwrap_or_default();
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::provider_test_completion_payload(server, &params),
                     )
                     .await
                 }
@@ -1551,55 +1920,72 @@ pub async fn handle_request(
                     .await
                 }
                 "provider.capabilities" => {
-                    runtime_pack::handle_provider_capabilities(
+                    let params = request.params.unwrap_or_default();
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::provider_capabilities_payload(server, &params),
                     )
                     .await
                 }
                 "provider.catalog" => {
-                    runtime_pack::handle_provider_catalog(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::provider_catalog_payload(server),
                     )
                     .await
                 }
                 "provider.list_models" => {
-                    runtime_pack::handle_provider_list_models(
+                    crate::acp::r#impl::io::respond(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::provider_list_models_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "tool.approve" => {
                     let params = request.params.clone().unwrap_or_default();
-                    let tool_name = params
-                        .get("tool_name")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("tool.approve: missing 'tool_name' parameter")
-                        })?;
+                    let tool_name = match params.get("tool_name").and_then(|v| v.as_str()) {
+                        Some(name) => name,
+                        None => {
+                            return send_error(
+                                server,
+                                request_id,
+                                AcpErrorCode::InvalidParams as i32,
+                                "tool.approve: missing 'tool_name' parameter".to_string(),
+                                None,
+                            )
+                            .await;
+                        }
+                    };
 
                     if let Some(ref harness_bus) = server.governance_deps.harness_bus {
                         harness_bus.evaluator.approve_tool(tool_name);
                         tracing::info!("tool.approve: user approved tool '{}'", tool_name);
                     }
 
-                    send_result(
+                    crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        serde_json::json!({
+                        Ok(serde_json::json!({
                             "approved": true,
                             "tool_name": tool_name,
-                        }),
+                        })),
                     )
                     .await
                 }
                 "runtime.restart" => {
-                    lifecycle_handlers::handle_runtime_restart(server, request_id).await
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        lifecycle_handlers::runtime_restart_payload(server),
+                    )
+                    .await
                 }
                 _ => {
                     let localized = tf(
@@ -1822,7 +2208,7 @@ mod tests {
     #[test]
     fn with_error_contract_data_preserves_explicit_kind_and_detail() {
         let data = with_error_contract_data(
-            AcpErrorCode::InternalError as i32,
+            -32603_i32,
             "generic failure",
             Some(json!({"kind": "PuaViolation", "detail": "acp.handle_request.dispatch"})),
         )

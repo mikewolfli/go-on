@@ -594,50 +594,26 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
     })
 }
 
-pub(super) async fn handle_action_check(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn action_check_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let kind = params
         .get("kind")
         .and_then(Value::as_str)
         .and_then(ActionCheckKind::parse)
         .unwrap_or(ActionCheckKind::All);
     let report = run_action_check(&clone_artifact_ledger(server), kind)?;
-    send_result(
-        server,
-        request_id,
-        json!({"ok": report.ok, "report": report}),
-    )
-    .await
+    Ok(json!({"ok": report.ok, "report": report}))
 }
 
 pub(super) async fn handle_conversation_checkpoint_create(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.conversation_id_required"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.conversation_id_required"));
     };
 
     if conversation_id.trim().is_empty() {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.conversation_id_required"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.conversation_id_required"));
     }
     let branch_id = params
         .get("branch_id")
@@ -645,26 +621,12 @@ pub(super) async fn handle_conversation_checkpoint_create(
         .and_then(Value::as_str)
         .unwrap_or("main");
     if branch_id.trim().is_empty() || branch_id.chars().any(char::is_whitespace) {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.branch_id_invalid"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.branch_id_invalid"));
     }
     let messages = match parse_messages(&params) {
         Some(messages) if !messages.is_empty() => messages,
         _ => {
-            return send_error(
-                server,
-                request_id,
-                -32602,
-                t("error.messages_required"),
-                None,
-            )
-            .await;
+            anyhow::bail!(t("error.messages_required"));
         }
     };
 
@@ -675,31 +637,18 @@ pub(super) async fn handle_conversation_checkpoint_create(
     let checkpoint =
         create_checkpoint_record(server, conversation_id, branch_id, messages, note, None).await;
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "checkpoint": checkpoint,
-        }),
-    )
-    .await
+    Ok(DispatchOutput::ok(json!({
+        "ok": true,
+        "checkpoint": checkpoint,
+    })))
 }
 
 pub(super) async fn handle_conversation_checkpoint_list(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.conversation_id_required"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.conversation_id_required"));
     };
     let branch_id = params
         .get("branch_id")
@@ -711,43 +660,23 @@ pub(super) async fn handle_conversation_checkpoint_list(
         .map(|v| v as usize);
     let checkpoints = list_checkpoint_records(server, conversation_id, branch_id, limit).await;
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "conversation_id": conversation_id,
-            "count": checkpoints.len(),
-            "checkpoints": checkpoints,
-        }),
-    )
-    .await
+    Ok(DispatchOutput::ok(json!({
+        "ok": true,
+        "conversation_id": conversation_id,
+        "count": checkpoints.len(),
+        "checkpoints": checkpoints,
+    })))
 }
 
 pub(super) async fn handle_conversation_rollback(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.conversation_id_required"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.conversation_id_required"));
     };
     let Some(checkpoint_id) = params.get("checkpoint_id").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.checkpoint_id_required"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.checkpoint_id_required"));
     };
 
     let branch_id = params
@@ -758,14 +687,7 @@ pub(super) async fn handle_conversation_rollback(
     let checkpoint = match find_checkpoint(server, conversation_id, checkpoint_id).await {
         Some(checkpoint) => checkpoint,
         None => {
-            return send_error(
-                server,
-                request_id,
-                -32004,
-                tf("error.checkpoint_not_found", &[("id", checkpoint_id)]),
-                None,
-            )
-            .await;
+            anyhow::bail!(tf("error.checkpoint_not_found", &[("id", checkpoint_id)]));
         }
     };
     let previous_head = get_branch_head_id(server, conversation_id, branch_id).await;
@@ -795,47 +717,27 @@ pub(super) async fn handle_conversation_rollback(
     .await;
     rollback.metacognitive_loop = Some(metacognitive_loop.clone());
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "conversation_id": conversation_id,
-            "branch_id": branch_id,
-            "checkpoint": rollback,
-            "metacognitive_loop": metacognitive_loop,
-            "previous_head": previous_head,
-            "current_head": rollback.checkpoint_id,
-        }),
-    )
-    .await
+    Ok(DispatchOutput::ok(json!({
+        "ok": true,
+        "conversation_id": conversation_id,
+        "branch_id": branch_id,
+        "checkpoint": rollback,
+        "metacognitive_loop": metacognitive_loop,
+        "previous_head": previous_head,
+        "current_head": rollback.checkpoint_id,
+    })))
 }
 
 pub(super) async fn handle_conversation_checkpoint_prune(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let Some(conversation_id) = params.get("conversation_id").and_then(Value::as_str) else {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.conversation_id_required"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.conversation_id_required"));
     };
     let keep = params.get("keep").and_then(Value::as_u64).unwrap_or(1) as usize;
     if keep == 0 {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            t("error.keep_must_be_ge_1"),
-            None,
-        )
-        .await;
+        anyhow::bail!(t("error.keep_must_be_ge_1"));
     }
     let branch_id = params
         .get("branch_id")
@@ -845,23 +747,15 @@ pub(super) async fn handle_conversation_checkpoint_prune(
     let (removed, repaired_heads, dropped_heads) =
         prune_checkpoints(server, conversation_id, branch_id, keep).await;
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "removed": removed,
-            "repaired_heads": repaired_heads,
-            "dropped_heads": dropped_heads,
-        }),
-    )
-    .await
+    Ok(DispatchOutput::ok(json!({
+        "ok": true,
+        "removed": removed,
+        "repaired_heads": repaired_heads,
+        "dropped_heads": dropped_heads,
+    })))
 }
 
-pub(super) async fn handle_autotune_status(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn autotune_status_payload(server: &AcpServer) -> Result<Value> {
     let autotune_state = if let Some(autotune) = server.cache_deps.autotune.as_ref() {
         let lock = autotune.lock().await;
         Some(lock.clone())
@@ -875,36 +769,23 @@ pub(super) async fn handle_autotune_status(
         .map(|cfg| cfg.enabled)
         .unwrap_or(false);
 
-    send_result(
-        server,
-        request_id,
-        json!({
+    Ok(json!({
+        "enabled": enabled,
+        "state": autotune_state,
+        "autotune": {
             "enabled": enabled,
             "state": autotune_state,
-            "autotune": {
-                "enabled": enabled,
-                "state": autotune_state,
-            },
-        }),
-    )
-    .await
+        },
+    }))
 }
 
-pub(super) async fn handle_autotune_get(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn autotune_get_payload(server: &AcpServer) -> Result<Value> {
     let Some(autotune) = server.cache_deps.autotune.as_ref() else {
-        return send_result(
-            server,
-            request_id,
-            json!({
-                "enabled": false,
-                "autotune": null,
-                "params": null,
-            }),
-        )
-        .await;
+        return Ok(json!({
+            "enabled": false,
+            "autotune": null,
+            "params": null,
+        }));
     };
 
     let state = autotune.lock().await;
@@ -915,13 +796,10 @@ pub(super) async fn handle_autotune_get(
         map.insert("autotune".to_string(), snap.clone());
         map.insert("params".to_string(), snap);
     }
-    send_result(server, request_id, result).await
+    Ok(result)
 }
 
-pub(super) async fn handle_selector_status(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn selector_status_payload(server: &AcpServer) -> Result<Value> {
     let snapshot = server
         .model_deps
         .adaptive_model_selector
@@ -929,14 +807,10 @@ pub(super) async fn handle_selector_status(
         .map(|selector| selector.snapshot())
         .unwrap_or_default();
 
-    send_result(server, request_id, json!({ "selector": snapshot })).await
+    Ok(json!({ "selector": snapshot }))
 }
 
-pub(super) async fn handle_hardness_status(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn hardness_status_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let task = params
         .get("task")
         .and_then(Value::as_str)
@@ -944,94 +818,77 @@ pub(super) async fn handle_hardness_status(
         .unwrap_or("");
     let hardness = summarize_hardness(task, &params);
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "hardness": hardness,
-            "routing": {
-                "mode": hardness.budget.recommended_mode,
-                "parallelism_cap": hardness.budget.parallelism_cap,
-                "timeout_seconds": hardness.budget.timeout_seconds,
-                "required_reviews": hardness.budget.required_reviews,
-            },
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "hardness": hardness,
+        "routing": {
+            "mode": hardness.budget.recommended_mode,
+            "parallelism_cap": hardness.budget.parallelism_cap,
+            "timeout_seconds": hardness.budget.timeout_seconds,
+            "required_reviews": hardness.budget.required_reviews,
+        },
+    }))
 }
 
-pub(super) async fn handle_error_contract(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(
-        server,
-        request_id,
-        json!({
-            "contract": {
-                "version": "x8-error-contract-v1",
-                "kinds": [
-                    {
-                        "kind": "InvalidParams",
-                        "codes": [-32602],
-                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
-                    },
-                    {
-                        "kind": "MethodNotFound",
-                        "codes": [-32601],
-                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
-                    },
-                    {
-                        "kind": "AuthRequired",
-                        "codes": [-32003],
-                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
-                    },
-                    {
-                        "kind": "RateLimited",
-                        "codes": [-32029],
-                        "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
-                    },
-                    {
-                        "kind": "UpstreamTimeout",
-                        "codes": [-32603],
-                        "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
-                    },
-                    {
-                        "kind": "PuaViolation",
-                        "codes": [-32603],
-                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
-                    },
-                    {
-                        "kind": "BudgetExceeded",
-                        "codes": [-32603],
-                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
-                    },
-                    {
-                        "kind": "SandboxBlocked",
-                        "codes": [-32603],
-                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
-                    },
-                    {
-                        "kind": "InternalError",
-                        "codes": [-32603],
-                        "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
-                    }
-                ],
-                "compatibility": {
-                    "request_error_context_prefix": "acp.handle_request.dispatch"
+pub(super) fn error_contract_payload(_server: &AcpServer) -> Result<Value> {
+    Ok(json!({
+    "contract": {
+            "version": "x8-error-contract-v1",
+            "kinds": [
+                {
+                    "kind": "InvalidParams",
+                    "codes": [-32602],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "MethodNotFound",
+                    "codes": [-32601],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "AuthRequired",
+                    "codes": [-32003],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "RateLimited",
+                    "codes": [-32029],
+                    "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
+                },
+                {
+                    "kind": "UpstreamTimeout",
+                    "codes": [-32603],
+                    "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
+                },
+                {
+                    "kind": "PuaViolation",
+                    "codes": [-32603],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "BudgetExceeded",
+                    "codes": [-32603],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "SandboxBlocked",
+                    "codes": [-32603],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "InternalError",
+                    "codes": [-32603],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
                 }
+            ],
+            "compatibility": {
+                "request_error_context_prefix": "acp.handle_request.dispatch"
             }
-        }),
-    )
-    .await
+        }
+    }))
 }
 
-pub(super) async fn handle_cost_status(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn cost_status_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let task = params
         .get("task")
         .and_then(Value::as_str)
@@ -1045,29 +902,20 @@ pub(super) async fn handle_cost_status(
         &server.observability.metrics.snapshot(),
     );
 
-    send_result(server, request_id, json!({ "ok": true, "cost": cost })).await
+    Ok(json!({ "ok": true, "cost": cost }))
 }
 
-pub(super) async fn handle_autotune_reset(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn autotune_reset_payload(server: &AcpServer) -> Result<Value> {
     let (Some(autotune), Some(config)) = (
         server.cache_deps.autotune.as_ref(),
         server.cache_deps.autotune_config.as_ref(),
     ) else {
-        return send_result(
-            server,
-            request_id,
-            json!({
-                "ok": true,
-                "autotune": "disabled",
-                "reset": false,
-                "enabled": false,
-            }),
-        )
-        .await;
+        return Ok(json!({
+            "ok": true,
+            "autotune": "disabled",
+            "reset": false,
+            "enabled": false,
+        }));
     };
 
     let mut lock = autotune.lock().await;
@@ -1097,21 +945,16 @@ pub(super) async fn handle_autotune_reset(
         }
     }
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "autotune": "reset",
-            "reset": true,
-            "enabled": true,
-            "persisted": persisted,
-            "state_before": before,
-            "state_after": after,
-            "warning": warning,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "autotune": "reset",
+        "reset": true,
+        "enabled": true,
+        "persisted": persisted,
+        "state_before": before,
+        "state_after": after,
+        "warning": warning,
+    }))
 }
 
 fn provider_models_for(server: &AcpServer, provider: &str) -> Vec<crate::agent::ModelInfo> {
@@ -1335,47 +1178,10 @@ pub(super) fn provider_capabilities_payload(server: &AcpServer, params: &Value) 
     }))
 }
 
-pub(super) async fn handle_provider_test_connection(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    match provider_test_connection_payload(server, &params) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
-    }
-}
-
-pub(super) async fn handle_provider_test_completion(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    match provider_test_completion_payload(server, &params) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
-    }
-}
-
-pub(super) async fn handle_provider_capabilities(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    match provider_capabilities_payload(server, &params) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
-    }
-}
-
 /// Handle `provider.catalog` RPC — returns the full built-in provider catalog
 /// with all spec metadata (URL, model, api_key_env, capabilities, etc.)
 /// so GUI and VS Code extension can avoid hardcoding provider data.
-pub(super) async fn handle_provider_catalog(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn provider_catalog_payload(_server: &AcpServer) -> Result<Value> {
     let specs = crate::core::config::provider_specs();
     let catalog: Vec<Value> = specs
         .iter()
@@ -1396,23 +1202,17 @@ pub(super) async fn handle_provider_catalog(
         })
         .collect();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "catalog": catalog,
-            "total": catalog.len(),
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "catalog": catalog,
+        "total": catalog.len(),
+    }))
 }
 
-pub(super) async fn handle_provider_list_models(
+pub(super) async fn provider_list_models_payload(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let provider = params
         .get("provider")
         .or_else(|| params.get("name"))
@@ -1422,14 +1222,7 @@ pub(super) async fn handle_provider_list_models(
         .to_string();
 
     if provider.is_empty() {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "provider is required".to_string(),
-            None,
-        )
-        .await;
+        anyhow::bail!("provider is required");
     }
 
     let static_models = provider_models_for(server, &provider);
@@ -1476,19 +1269,14 @@ pub(super) async fn handle_provider_list_models(
         })
         .collect::<Vec<_>>();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "provider": provider,
-            "default_model": default_model,
-            "model_ids": model_order,
-            "models": models,
-            "source": if provider.eq_ignore_ascii_case("copilot") { "copilot_models" } else { "registry" },
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "provider": provider,
+        "default_model": default_model,
+        "model_ids": model_order,
+        "models": models,
+        "source": if provider.eq_ignore_ascii_case("copilot") { "copilot_models" } else { "registry" },
+    }))
 }
 
 /// Configure a keychain item's ACL so ANY process (not just the creator)
@@ -1530,8 +1318,7 @@ fn ensure_keyring_item_accessible(_account: &str) {
 pub(super) async fn handle_provider_configure(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -1620,16 +1407,11 @@ pub(super) async fn handle_provider_configure(
         }
     }
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "provider": name,
-            "model": model,
-        }),
-    )
-    .await
+    Ok(DispatchOutput::ok(json!({
+        "ok": true,
+        "provider": name,
+        "model": model,
+    })))
 }
 
 /// Handle GitHub Copilot OAuth Device Code flow initiation.
@@ -1639,8 +1421,7 @@ pub(super) async fn handle_provider_configure(
 pub(super) async fn handle_copilot_device_code_request(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     info!("GitHub Copilot Device Code flow requested");
 
     let client_id = params
@@ -1673,7 +1454,7 @@ pub(super) async fn handle_copilot_device_code_request(
                 let body = resp.text().await.unwrap_or_default();
                 let err_msg = format!("GitHub device code request failed ({status}): {body}");
                 tracing::error!("{}", err_msg);
-                return send_error(server, request_id, -32000, err_msg, None).await;
+                anyhow::bail!(err_msg);
             }
             match resp.json::<Value>().await {
                 Ok(body) => {
@@ -1690,30 +1471,25 @@ pub(super) async fn handle_copilot_device_code_request(
                         user_code, verification_uri
                     );
 
-                    send_result(
-                        server,
-                        request_id,
-                        json!({
-                            "ok": true,
-                            "device_code": device_code,
-                            "user_code": user_code,
-                            "verification_uri": verification_uri,
-                            "interval": interval,
-                        }),
-                    )
-                    .await
+                    Ok(DispatchOutput::ok(json!({
+                        "ok": true,
+                        "device_code": device_code,
+                        "user_code": user_code,
+                        "verification_uri": verification_uri,
+                        "interval": interval,
+                    })))
                 }
                 Err(e) => {
                     let err_msg = format!("Failed to parse GitHub device code response: {}", e);
                     tracing::error!("{}", err_msg);
-                    send_error(server, request_id, -32000, err_msg, None).await
+                    anyhow::bail!(err_msg)
                 }
             }
         }
         Err(e) => {
             let err_msg = format!("Failed to connect to GitHub device code endpoint: {}", e);
             tracing::error!("{}", err_msg);
-            send_error(server, request_id, -32000, err_msg, None).await
+            anyhow::bail!(err_msg)
         }
     }
 }
@@ -1724,8 +1500,7 @@ pub(super) async fn handle_copilot_device_code_request(
 pub(super) async fn handle_copilot_device_code_poll(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let device_code = params
         .get("device_code")
         .and_then(Value::as_str)
@@ -1733,14 +1508,7 @@ pub(super) async fn handle_copilot_device_code_poll(
         .to_string();
 
     if device_code.is_empty() {
-        return send_error(
-            server,
-            request_id,
-            -32602,
-            "Missing 'device_code' parameter".to_string(),
-            None,
-        )
-        .await;
+        anyhow::bail!("Missing 'device_code' parameter");
     }
 
     info!(
@@ -1778,66 +1546,41 @@ pub(super) async fn handle_copilot_device_code_poll(
                         match error {
                             "authorization_pending" => {
                                 // User hasn't authorized yet — keep polling
-                                return send_result(
-                                    server,
-                                    request_id,
-                                    json!({
-                                        "ok": true,
-                                        "status": "pending",
-                                        "error": error,
-                                    }),
-                                )
-                                .await;
+                                return Ok(DispatchOutput::ok(json!({
+                                    "ok": true,
+                                    "status": "pending",
+                                    "error": error,
+                                })));
                             }
                             "slow_down" => {
                                 // Poll too fast — slow down
-                                return send_result(
-                                    server,
-                                    request_id,
-                                    json!({
-                                        "ok": true,
-                                        "status": "slow_down",
-                                        "error": error,
-                                    }),
-                                )
-                                .await;
+                                return Ok(DispatchOutput::ok(json!({
+                                    "ok": true,
+                                    "status": "slow_down",
+                                    "error": error,
+                                })));
                             }
                             "expired_token" => {
                                 // Device code expired
-                                return send_result(
-                                    server,
-                                    request_id,
-                                    json!({
-                                        "ok": true,
-                                        "status": "expired",
-                                        "error": error,
-                                    }),
-                                )
-                                .await;
+                                return Ok(DispatchOutput::ok(json!({
+                                    "ok": true,
+                                    "status": "expired",
+                                    "error": error,
+                                })));
                             }
                             "access_denied" => {
-                                return send_result(
-                                    server,
-                                    request_id,
-                                    json!({
-                                        "ok": true,
-                                        "status": "denied",
-                                        "error": error,
-                                    }),
-                                )
-                                .await;
+                                return Ok(DispatchOutput::ok(json!({
+                                    "ok": true,
+                                    "status": "denied",
+                                    "error": error,
+                                })));
                             }
                             _ => {
-                                return send_result(
-                                    server,
-                                    request_id,
-                                    json!({
-                                        "ok": true,
-                                        "status": "error",
-                                        "error": error,
-                                    }),
-                                )
-                                .await;
+                                return Ok(DispatchOutput::ok(json!({
+                                    "ok": true,
+                                    "status": "error",
+                                    "error": error,
+                                })));
                             }
                         }
                     }
@@ -1905,30 +1648,25 @@ pub(super) async fn handle_copilot_device_code_poll(
                         }
                     }
 
-                    send_result(
-                        server,
-                        request_id,
-                        json!({
-                            "ok": true,
-                            "status": "authorized",
-                            "access_token": access_token,
-                            "token_type": token_type,
-                            "scope": scope,
-                        }),
-                    )
-                    .await
+                    Ok(DispatchOutput::ok(json!({
+                        "ok": true,
+                        "status": "authorized",
+                        "access_token": access_token,
+                        "token_type": token_type,
+                        "scope": scope,
+                    })))
                 }
                 Err(e) => {
                     let err_msg = format!("Failed to parse GitHub token response: {}", e);
                     tracing::error!("{}", err_msg);
-                    send_error(server, request_id, -32000, err_msg, None).await
+                    anyhow::bail!(err_msg)
                 }
             }
         }
         Err(e) => {
             let err_msg = format!("Failed to connect to GitHub token endpoint: {}", e);
             tracing::error!("{}", err_msg);
-            send_error(server, request_id, -32000, err_msg, None).await
+            anyhow::bail!(err_msg)
         }
     }
 }

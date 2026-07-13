@@ -6,11 +6,7 @@
 
 use super::*;
 
-pub(super) async fn handle_optimization_peak(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn optimization_peak_payload(server: &AcpServer, _params: Value) -> Result<Value> {
     let status = server.get_status();
     let total_requests = status.metrics.total_requests;
     let failed_requests = status.metrics.failed_requests;
@@ -29,29 +25,24 @@ pub(super) async fn handle_optimization_peak(
         .iter()
         .all(|gate| gate.get("ready").and_then(Value::as_bool).unwrap_or(false));
 
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({
-            "ok": true,
-            "peak": {
-                "total_requests": total_requests,
-                "failed_requests": failed_requests,
-                "gates": gates,
-                "overall_pass": overall_pass,
-                "indicators": {
-                    "task_success_rate": task_success_rate,
-                    "failure_ratio": 1.0 - task_success_rate,
-                },
-                "scorecard": {
-                    "dimensions": {
-                        "knowledge_refinement_score": (task_success_rate * 100.0),
-                        "reliability_score": (task_success_rate * 100.0),
-                    }
-                }
+    Ok(serde_json::json!({
+        "ok": true,
+        "peak": {
+            "total_requests": total_requests,
+            "failed_requests": failed_requests,
+            "gates": gates,
+            "overall_pass": overall_pass,
+            "indicators": {
+                "task_success_rate": task_success_rate,
+                "failure_ratio": 1.0 - task_success_rate,
             },
-            "recommendations": [],
-        }),
-    )
-    .await
+            "scorecard": {
+                "dimensions": {
+                    "knowledge_refinement_score": (task_success_rate * 100.0),
+                    "reliability_score": (task_success_rate * 100.0),
+                }
+            }
+        },
+        "recommendations": [],
+    }))
 }

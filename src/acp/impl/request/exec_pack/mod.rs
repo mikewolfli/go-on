@@ -25,9 +25,7 @@ use super::*;
 
 #[allow(unused_imports)] // re-exports used by sibling packs via super::exec_pack::*
 pub(super) use workflow::{
-    complete_workflow_run, handle_workflow_run_cancel, handle_workflow_run_get,
-    handle_workflow_run_list, handle_workflow_run_pause, handle_workflow_run_resume,
-    start_workflow_run, workflow_run_get_payload, workflow_run_list_payload,
+    complete_workflow_run, start_workflow_run, workflow_run_get_payload, workflow_run_list_payload,
     workflow_run_transition_payload, WorkflowRunRecord,
 };
 

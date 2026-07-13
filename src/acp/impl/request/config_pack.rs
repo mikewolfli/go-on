@@ -325,10 +325,7 @@ fn resolve_protocol_source(
     }
 }
 
-pub(super) async fn handle_config_reload(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
     let path = server
         .config_path
         .clone()
@@ -359,34 +356,25 @@ pub(super) async fn handle_config_reload(
 
     let report = validate_runtime_readiness(&config_path, &config)?;
     let warnings = report.warning_messages();
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "note": "config validated and runtime_config updated; agent/cache/vector changes require restart",
-            "path": config_path.display().to_string(),
-            "warning_count": warnings.len(),
-            "warnings": warnings,
-            "profile_recommendation": report.profile_recommendation,
-            "recommendations": report.recommendations,
-            "runtime_config_updated": config.runtime.is_some(),
-            "health": {
-                "score": report.score,
-                "critical_count": report.critical_count,
-                "warn_count": report.warn_count,
-                "info_count": report.info_count,
-            }
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "note": "config validated and runtime_config updated; agent/cache/vector changes require restart",
+        "path": config_path.display().to_string(),
+        "warning_count": warnings.len(),
+        "warnings": warnings,
+        "profile_recommendation": report.profile_recommendation,
+        "recommendations": report.recommendations,
+        "runtime_config_updated": config.runtime.is_some(),
+        "health": {
+            "score": report.score,
+            "critical_count": report.critical_count,
+            "warn_count": report.warn_count,
+            "info_count": report.info_count,
+        }
+    }))
 }
 
-pub(super) async fn handle_config_baseline(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn config_baseline_payload(server: &AcpServer, _params: Value) -> Result<Value> {
     let config_summary = governance_config_summary(server.config_path.as_deref());
 
     let config_path = server
@@ -433,78 +421,73 @@ pub(super) async fn handle_config_baseline(
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "baseline": {
-                "status": if legacy_mappings.is_empty() { "frozen" } else { "migration_required" },
-                "source_precedence": ["cli_override", "env", "config_file", "default"],
-                "effective": {
-                    "configured_mode": access_selection.configured_mode,
-                    "protocol_mode": server.runtime_config.protocol_mode.clone().unwrap_or_else(|| "adaptive".to_string()),
-                    "protocol_capability": access_selection.protocol_capability.as_str(),
-                    "request_dispatch_mode": access_selection.request_dispatch_mode.as_str(),
-                    "startup_transport": access_selection.startup_transport.as_str(),
-                    "transport_strategy": access_selection.transport_strategy,
-                    "selection_reason": access_selection.selection_reason,
-                    "maintenance_interval_seconds": server.runtime_config.maintenance_interval_seconds,
-                    "health_interval_seconds": server.runtime_config.health_interval_seconds,
-                    "shutdown_drain_seconds": server.runtime_config.shutdown_drain_seconds,
-                    "acp_http_bind_addr": server.runtime_config.acp_http_bind_addr.clone(),
-                    "entry_auth_enabled": server.runtime_config.entry_auth_enabled,
-                    "entry_auth_api_key_env": entry_auth_key_env,
-                    "entry_auth_key_configured": entry_auth_key_configured,
-                    "entry_rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
-                    "entry_rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
-                    "production_strict": server.runtime_config.production_strict,
-                    "trace_slow_top_n": server.runtime_config.trace_slow_top_n,
-                },
-                "sources": {
-                    "protocol_mode": protocol_source,
-                    "maintenance_interval_seconds": runtime_field_source(&explicit_runtime_keys, "maintenance_interval_seconds"),
-                    "health_interval_seconds": runtime_field_source(&explicit_runtime_keys, "health_interval_seconds"),
-                    "shutdown_drain_seconds": runtime_field_source(&explicit_runtime_keys, "shutdown_drain_seconds"),
-                    "acp_http_bind_addr": runtime_field_source(&explicit_runtime_keys, "acp_http_bind_addr"),
-                    "entry_auth_enabled": runtime_field_source(&explicit_runtime_keys, "entry_auth_enabled"),
-                    "entry_auth_api_key_env": runtime_field_source(&explicit_runtime_keys, "entry_auth_api_key_env"),
-                    "entry_auth_key_configured": "env",
-                    "entry_rate_limit_rpm": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_rpm"),
-                    "entry_rate_limit_burst": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_burst"),
-                    "production_strict": runtime_field_source(&explicit_runtime_keys, "production_strict"),
-                    "trace_slow_top_n": runtime_field_source(&explicit_runtime_keys, "trace_slow_top_n"),
-                },
-                "config": config_summary,
-                "migration": {
-                    "legacy_key_count": legacy_mappings.len(),
-                    "legacy_keys": legacy_mappings,
-                    "compatibility_window": "v0.6.x",
-                    "replacement_map": [
-                        {"from": "runtime.auth_enabled", "to": "runtime.entry_auth_enabled"},
-                        {"from": "runtime.auth_api_key_env", "to": "runtime.entry_auth_api_key_env"},
-                        {"from": "runtime.rate_limit_rpm", "to": "runtime.entry_rate_limit_rpm"},
-                        {"from": "runtime.rate_limit_burst", "to": "runtime.entry_rate_limit_burst"},
-                        {"from": "runtime.http_bind_addr", "to": "runtime.acp_http_bind_addr"},
-                        {"from": "runtime.strict_mode", "to": "runtime.production_strict"},
-                        {"from": "runtime.protocol_mode", "to": "protocol.mode"}
-                    ],
-                    "next_actions": [
-                        "Replace deprecated keys with replacement_map equivalents",
-                        "Keep only one protocol source: prefer [protocol].mode",
-                        "Run config.reload and runtime.health after migration"
-                    ]
-                },
-                "file": {
-                    "path": config_path,
-                    "runtime_explicit_field_count": explicit_runtime_fields.len(),
-                    "runtime_explicit_fields": explicit_runtime_fields,
-                    "protocol_mode_from_protocol_table": protocol_mode_from_protocol_table,
-                    "protocol_mode_from_runtime_legacy": protocol_mode_from_runtime_legacy,
-                    "warnings": document_warnings,
-                }
+    Ok(json!({
+        "ok": true,
+        "baseline": {
+            "status": if legacy_mappings.is_empty() { "frozen" } else { "migration_required" },
+            "source_precedence": ["cli_override", "env", "config_file", "default"],
+            "effective": {
+                "configured_mode": access_selection.configured_mode,
+                "protocol_mode": server.runtime_config.protocol_mode.clone().unwrap_or_else(|| "adaptive".to_string()),
+                "protocol_capability": access_selection.protocol_capability.as_str(),
+                "request_dispatch_mode": access_selection.request_dispatch_mode.as_str(),
+                "startup_transport": access_selection.startup_transport.as_str(),
+                "transport_strategy": access_selection.transport_strategy,
+                "selection_reason": access_selection.selection_reason,
+                "maintenance_interval_seconds": server.runtime_config.maintenance_interval_seconds,
+                "health_interval_seconds": server.runtime_config.health_interval_seconds,
+                "shutdown_drain_seconds": server.runtime_config.shutdown_drain_seconds,
+                "acp_http_bind_addr": server.runtime_config.acp_http_bind_addr.clone(),
+                "entry_auth_enabled": server.runtime_config.entry_auth_enabled,
+                "entry_auth_api_key_env": entry_auth_key_env,
+                "entry_auth_key_configured": entry_auth_key_configured,
+                "entry_rate_limit_rpm": server.runtime_config.entry_rate_limit_rpm,
+                "entry_rate_limit_burst": server.runtime_config.entry_rate_limit_burst,
+                "production_strict": server.runtime_config.production_strict,
+                "trace_slow_top_n": server.runtime_config.trace_slow_top_n,
+            },
+            "sources": {
+                "protocol_mode": protocol_source,
+                "maintenance_interval_seconds": runtime_field_source(&explicit_runtime_keys, "maintenance_interval_seconds"),
+                "health_interval_seconds": runtime_field_source(&explicit_runtime_keys, "health_interval_seconds"),
+                "shutdown_drain_seconds": runtime_field_source(&explicit_runtime_keys, "shutdown_drain_seconds"),
+                "acp_http_bind_addr": runtime_field_source(&explicit_runtime_keys, "acp_http_bind_addr"),
+                "entry_auth_enabled": runtime_field_source(&explicit_runtime_keys, "entry_auth_enabled"),
+                "entry_auth_api_key_env": runtime_field_source(&explicit_runtime_keys, "entry_auth_api_key_env"),
+                "entry_auth_key_configured": "env",
+                "entry_rate_limit_rpm": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_rpm"),
+                "entry_rate_limit_burst": runtime_field_source(&explicit_runtime_keys, "entry_rate_limit_burst"),
+                "production_strict": runtime_field_source(&explicit_runtime_keys, "production_strict"),
+                "trace_slow_top_n": runtime_field_source(&explicit_runtime_keys, "trace_slow_top_n"),
+            },
+            "config": config_summary,
+            "migration": {
+                "legacy_key_count": legacy_mappings.len(),
+                "legacy_keys": legacy_mappings,
+                "compatibility_window": "v0.6.x",
+                "replacement_map": [
+                    {"from": "runtime.auth_enabled", "to": "runtime.entry_auth_enabled"},
+                    {"from": "runtime.auth_api_key_env", "to": "runtime.entry_auth_api_key_env"},
+                    {"from": "runtime.rate_limit_rpm", "to": "runtime.entry_rate_limit_rpm"},
+                    {"from": "runtime.rate_limit_burst", "to": "runtime.entry_rate_limit_burst"},
+                    {"from": "runtime.http_bind_addr", "to": "runtime.acp_http_bind_addr"},
+                    {"from": "runtime.strict_mode", "to": "runtime.production_strict"},
+                    {"from": "runtime.protocol_mode", "to": "protocol.mode"}
+                ],
+                "next_actions": [
+                    "Replace deprecated keys with replacement_map equivalents",
+                    "Keep only one protocol source: prefer [protocol].mode",
+                    "Run config.reload and runtime.health after migration"
+                ]
+            },
+            "file": {
+                "path": config_path,
+                "runtime_explicit_field_count": explicit_runtime_fields.len(),
+                "runtime_explicit_fields": explicit_runtime_fields,
+                "protocol_mode_from_protocol_table": protocol_mode_from_protocol_table,
+                "protocol_mode_from_runtime_legacy": protocol_mode_from_runtime_legacy,
+                "warnings": document_warnings,
             }
-        }),
-    )
-    .await
+        }
+    }))
 }

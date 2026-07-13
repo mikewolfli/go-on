@@ -256,42 +256,53 @@ pub struct ProviderStatus {
 }
 
 impl BackendClient {
-    /// Check backend health (5s timeout, silent on failure)
+    /// Check backend health via direct HTTP GET /health (5s timeout, silent on failure)
+    /// Uses GET /health instead of RPC to avoid the /rpc serial lock bottleneck.
     pub async fn health(&self) -> HealthStatus {
-        match self.rpc_call_quick("runtime.health", None).await {
-            Some(val) => {
-                #[cfg(debug_assertions)]
-                if !val.is_object() {
-                    eprintln!("health: unexpected response type: {:?}", val);
-                }
-                HealthStatus {
-                    connected: true,
-                    healthy: val["lifecycle"]["is_healthy"].as_bool().unwrap_or(false),
-                    uptime: val["lifecycle"]["uptime_seconds"].as_u64().unwrap_or(0),
-                    requests_per_minute: val["stats"]["requests_per_minute"]
-                        .as_f64()
-                        .unwrap_or(0.0),
-                    success_rate: val["stats"]["success_rate"].as_f64().unwrap_or(0.0),
-                    avg_latency_ms: val["stats"]["avg_latency_ms"].as_f64().unwrap_or(0.0),
-                    backend_version: val
-                        .pointer("/lifecycle/version")
-                        .and_then(Value::as_str)
-                        .or_else(|| val.get("version").and_then(Value::as_str))
-                        .or_else(|| val.pointer("/meta/version").and_then(Value::as_str))
-                        .or_else(|| val.pointer("/info/version").and_then(Value::as_str))
-                        .map(ToString::to_string),
-                    backend_build: val
-                        .pointer("/lifecycle/build")
-                        .and_then(Value::as_str)
-                        .or_else(|| val.pointer("/lifecycle/build_id").and_then(Value::as_str))
-                        .or_else(|| val.pointer("/meta/build").and_then(Value::as_str))
-                        .or_else(|| val.pointer("/meta/git_commit").and_then(Value::as_str))
-                        .or_else(|| val.pointer("/info/build").and_then(Value::as_str))
-                        .or_else(|| val.pointer("/info/build_id").and_then(Value::as_str))
-                        .map(ToString::to_string),
+        let url = format!("{}/health", self.base_url);
+        match self.quick_client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(val) => HealthStatus {
+                        connected: true,
+                        healthy: val["lifecycle"]["is_healthy"].as_bool().unwrap_or(false),
+                        uptime: val["lifecycle"]["uptime_seconds"].as_u64().unwrap_or(0),
+                        requests_per_minute: {
+                            let total = val["metrics"]["total_requests"].as_u64().unwrap_or(0);
+                            let uptime = val["lifecycle"]["uptime_seconds"]
+                                .as_u64()
+                                .unwrap_or(1)
+                                .max(1);
+                            (total as f64 / uptime as f64) * 60.0
+                        },
+                        success_rate: {
+                            let total = val["metrics"]["total_requests"]
+                                .as_u64()
+                                .unwrap_or(0)
+                                .max(1);
+                            let success =
+                                val["metrics"]["successful_requests"].as_u64().unwrap_or(0);
+                            (success as f64 / total as f64) * 100.0
+                        },
+                        avg_latency_ms: val["metrics"]["avg_request_duration_ms"]
+                            .as_f64()
+                            .unwrap_or(0.0),
+                        backend_version: None,
+                        backend_build: None,
+                    },
+                    Err(_) => HealthStatus {
+                        connected: true,
+                        healthy: false,
+                        uptime: 0,
+                        requests_per_minute: 0.0,
+                        success_rate: 0.0,
+                        avg_latency_ms: 0.0,
+                        backend_version: None,
+                        backend_build: None,
+                    },
                 }
             }
-            None => HealthStatus {
+            _ => HealthStatus {
                 connected: false,
                 healthy: false,
                 uptime: 0,

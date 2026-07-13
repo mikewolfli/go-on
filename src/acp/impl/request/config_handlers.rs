@@ -4,15 +4,11 @@
 
 use super::*;
 
-pub(super) async fn handle_debug_panel_get(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, build_debug_panel_payload(server).await).await
+pub(super) async fn debug_panel_payload(server: &AcpServer) -> Result<Value> {
+    Ok(build_debug_panel_payload_impl(server).await)
 }
 
-pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
+async fn build_debug_panel_payload_impl(server: &AcpServer) -> Value {
     let state = server.session.conversation_state.lock().await;
     let conversation_count = state
         .checkpoints
@@ -106,12 +102,9 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
     })
 }
 
-pub(super) async fn handle_trace_get(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, build_trace_payload(&params)).await
+/// Returns wrapped Result<Value> for use with respond() dispatch.
+pub(super) fn trace_payload_result(params: &Value) -> Result<Value> {
+    Ok(build_trace_payload(params))
 }
 
 pub(super) fn build_trace_payload(params: &Value) -> Value {
@@ -134,9 +127,4 @@ pub(super) fn build_trace_payload(params: &Value) -> Value {
     })
 }
 
-pub(super) async fn handle_trace_metrics(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, trace_metrics_snapshot(server)).await
-}
+// trace_metrics_snapshot is already a pure function returning Value in trace_pack.rs

@@ -280,6 +280,7 @@ impl ChatView {
 
     /// Try to retrieve a cached markdown render from the global cache.
     /// Returns `None` if the text hasn't been parsed yet.
+    #[allow(dead_code)]
     pub(super) fn try_get_cached_markdown(text: &str) -> Option<CachedMarkdownRender> {
         let hash = hash_text(text);
         markdown_cache().lock().ok()?.get(&hash).cloned()

@@ -574,18 +574,14 @@ fn fast_extract_token(data: &str) -> Option<String> {
         }
     }
 
-    // ── Reasoning / thinking content (fast path) ─────────────────────
-    if let Some(scope) = delta_scope {
-        if let Some(thinking) = try_fast_extract_field(scope, r#""reasoning_content":""#, true) {
-            // Check if content also exists in the same delta
-            if let Some(text) = try_fast_extract_field(scope, r#""content":""#, true) {
-                return Some(build_thinking_token(&thinking, Some(&text)));
-            }
-            return Some(build_thinking_token(&thinking, None));
-        }
-    }
-
     // ── Fallback: full JSON parsing for complex cases ───────────────
+    // reasoning_content/thinking tokens are handled by the full JSON path
+    // (extract_token) which properly scopes to the delta object using
+    // structured JSON traversal. The fast string-search path above only
+    // searches from "delta" onward and can falsely match fields outside
+    // the delta object (e.g. top-level reasoning_content), causing the
+    // string "thinking" to be injected into every token.
+    // See: try_fast_extract_field + delta_scope false-match bug.
     // Tool calls, content arrays (OpenAI text parts), non-standard
     // fields like `result`, `text`, and final `message.content` all
     // require proper JSON parsing.

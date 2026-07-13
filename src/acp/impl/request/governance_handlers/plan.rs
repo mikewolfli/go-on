@@ -6,10 +6,7 @@ use super::*;
 // governance.plan.get — retrieve current PUA enforcement plan
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_governance_plan_get(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(crate) fn governance_plan_get_payload(server: &AcpServer) -> Result<Value> {
     let plan = server
         .governance_deps
         .pua_enforcement_plan
@@ -17,18 +14,14 @@ pub(crate) async fn handle_governance_plan_get(
         .map(|guard| guard.clone())
         .unwrap_or_default();
 
-    send_result(server, request_id, json!({ "ok": true, "plan": plan })).await
+    Ok(json!({ "ok": true, "plan": plan }))
 }
 
 // ---------------------------------------------------------------------------
 // governance.plan.update — modify PUA enforcement plan
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_governance_plan_update(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(crate) fn governance_plan_update_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let plan = match server.governance_deps.pua_enforcement_plan.lock() {
         Ok(mut guard) => {
             if let Some(level) = params.get("escalation_level").and_then(Value::as_str) {
@@ -86,7 +79,7 @@ pub(crate) async fn handle_governance_plan_update(
     };
     let _ = super::audit::append_governance_audit_event(&event);
 
-    send_result(server, request_id, json!({ "ok": true, "plan": plan })).await
+    Ok(json!({ "ok": true, "plan": plan }))
 }
 
 /// Helper: extract tracked norms from a PUA enforcement plan.

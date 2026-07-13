@@ -6,11 +6,7 @@ use super::*;
 // governance.audit.recent — recent governance audit events
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_governance_audit_recent(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(crate) fn governance_audit_recent_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
@@ -19,29 +15,20 @@ pub(crate) async fn handle_governance_audit_recent(
         .clamp(1, 200);
     let events = super::audit::load_governance_audit_events(limit).unwrap_or_default();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "audit": {
-                "limit": limit,
-                "events": events,
-            }
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "audit": {
+            "limit": limit,
+            "events": events,
+        }
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // governance.remediate — apply a fix for a given risk type
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_governance_remediate(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(crate) fn governance_remediate_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let risk_id = params
         .get("risk_id")
         .and_then(Value::as_str)
@@ -55,7 +42,7 @@ pub(crate) async fn handle_governance_remediate(
                 "governance.remediate: resetting PUA counters"
             );
             let mut plan = server.governance_deps.pua_enforcement_plan.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("PUA enforcement plan lock poisoned in handle_governance_remediate, recovering");
+                tracing::warn!("PUA enforcement plan lock poisoned in governance_remediate_payload, recovering");
                 poisoned.into_inner()
             });
             *plan = PuaEnforcementPlan::default();
@@ -124,27 +111,18 @@ pub(crate) async fn handle_governance_remediate(
         }
     };
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "risk_id": risk_id,
-            "action_taken": action_taken,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "risk_id": risk_id,
+        "action_taken": action_taken,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // governance.config.save — persist governance settings
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_governance_config_save(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(crate) fn governance_config_save_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let auto_mask_sensitive = params
         .get("autoMaskSensitive")
         .and_then(Value::as_bool)
@@ -175,13 +153,8 @@ pub(crate) async fn handle_governance_config_save(
         "governance.config.save: runtime state updated (disk persistence is a future enhancement)"
     );
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "applied": applied,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "applied": applied,
+    }))
 }

@@ -61,7 +61,7 @@ pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
             supports_system: false,
         },
         "copilot" => ProviderSpec {
-            agent_type: "openai_compatible",
+            agent_type: "copilot",
             default_url: Some("https://api.githubcopilot.com"),
             default_model: "auto",
             supports_system: false,

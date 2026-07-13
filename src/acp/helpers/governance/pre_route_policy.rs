@@ -13,6 +13,32 @@ use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::orchestration::mode::ModeKind;
 
+// Pre-compiled regex patterns for mode-capability validation (compiled once).
+static RE_URL: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"https?://[^\s)\]\]]+").expect("valid URL regex"));
+static RE_FILE_REF: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b[a-zA-Z0-9_\-./]+\.(rs|py|js|ts|go|rb|c|cpp|h|hpp|java|kt|swift|md|txt|json|yaml|toml|xml|html|css|sql|sh|bash|zsh|ps1|bat)\b",
+    )
+    .expect("valid file extension regex")
+});
+static RE_EXEC_KEYWORD: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(r"(?i)\b(create|build|write|implement|delete|remove|deploy|connect)\b")
+        .expect("valid execution keyword regex")
+});
+static RE_SEC_KEYWORD: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(password|secret|token|credential|ssh|private\.key|api\.key|certificate|authorization|authentication)\b",
+    )
+    .expect("valid security keyword regex")
+});
+static RE_PLAN_KEYWORD: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(plan|design|architect|architecture|diagram|flowchart|blueprint|schema|proposal)\b",
+    )
+    .expect("valid planning keyword regex")
+});
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -169,35 +195,13 @@ fn validate_mode_capability(mode: &ModeKind, messages: &[Message]) -> Result<()>
         return Ok(());
     }
 
-    // ── Pattern detection ─────────────────────────────────────────────────
-    let has_url = Regex::new(r"https?://[^\s)\]]+")
-        .expect("valid URL regex")
-        .is_match(&task_description);
-
+    // ── Pattern detection (using pre-compiled LazyLock regexes) ────────────
+    let has_url = RE_URL.is_match(&task_description);
     let has_code_block = task_description.contains("```");
-
-    let has_file_ref = Regex::new(
-        r"(?i)\b[a-zA-Z0-9_\-./]+\.(rs|py|js|ts|go|rb|c|cpp|h|hpp|java|kt|swift|md|txt|json|yaml|toml|xml|html|css|sql|sh|bash|zsh|ps1|bat)\b",
-    )
-    .expect("valid file extension regex")
-    .is_match(&task_description);
-
-    let has_execution_keyword =
-        Regex::new(r"(?i)\b(create|build|write|implement|delete|remove|deploy|connect)\b")
-            .expect("valid execution keyword regex")
-            .is_match(&task_description);
-
-    let has_security_keyword = Regex::new(
-        r"(?i)\b(password|secret|token|credential|ssh|private.key|api.key|certificate|authorization|authentication)\b",
-    )
-    .expect("valid security keyword regex")
-    .is_match(&task_description);
-
-    let has_planning_keyword = Regex::new(
-        r"(?i)\b(plan|design|architect|architecture|diagram|flowchart|blueprint|schema|proposal)\b",
-    )
-    .expect("valid planning keyword regex")
-    .is_match(&task_description);
+    let has_file_ref = RE_FILE_REF.is_match(&task_description);
+    let has_execution_keyword = RE_EXEC_KEYWORD.is_match(&task_description);
+    let has_security_keyword = RE_SEC_KEYWORD.is_match(&task_description);
+    let has_planning_keyword = RE_PLAN_KEYWORD.is_match(&task_description);
 
     let is_short_question = task_description.len() < 50
         && !has_url

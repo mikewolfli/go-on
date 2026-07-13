@@ -59,11 +59,7 @@ pub(super) fn summarize_lock_health(components: &[LockHealthSummary]) -> LockHea
 }
 
 /// Handle "lock.status" request — return empty lock status (monitoring removed).
-pub(super) async fn handle_lock_status(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn lock_status_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
     let summary = LockHealthSummary {
         status: "healthy",
         poisoned_total: 0,
@@ -73,32 +69,26 @@ pub(super) async fn handle_lock_status(
         components_tracked: 0,
     };
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "locks": {
-                "status": summary.status,
-                "poisoned_total": summary.poisoned_total,
-                "recovered_total": summary.recovered_total,
-                "slow_wait_total": summary.slow_wait_total,
-                "max_wait_ms": summary.max_wait_ms,
-                "components_tracked": summary.components_tracked,
-                "contention_top": [],
-                "components": [],
-            },
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "locks": {
+            "status": summary.status,
+            "poisoned_total": summary.poisoned_total,
+            "recovered_total": summary.recovered_total,
+            "slow_wait_total": summary.slow_wait_total,
+            "max_wait_ms": summary.max_wait_ms,
+            "components_tracked": summary.components_tracked,
+            "contention_top": [],
+            "components": [],
+        },
+    }))
 }
 
 /// Handle "observability.alerts" request — return current observability alerts.
-pub(super) async fn handle_observability_alerts(
+pub(super) async fn observability_alerts_payload(
     server: &AcpServer,
     _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let metrics = server.observability.metrics.snapshot();
     let mut alerts: Vec<Value> = Vec::new();
 
@@ -129,17 +119,12 @@ pub(super) async fn handle_observability_alerts(
 
     let alert_total = alerts.len();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "alerts": {
-                "items": alerts,
-                "total": alert_total,
-            },
+    Ok(json!({
+        "ok": true,
+        "alerts": {
+            "items": alerts,
             "total": alert_total,
-        }),
-    )
-    .await
+        },
+        "total": alert_total,
+    }))
 }

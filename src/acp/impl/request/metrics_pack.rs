@@ -5,68 +5,40 @@
 
 use super::*;
 
-pub(super) async fn handle_metrics(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+pub(super) async fn metrics_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({ "ok": true, "metrics": status.metrics }),
-    )
-    .await
+    Ok(serde_json::json!({ "ok": true, "metrics": status.metrics }))
 }
 
-pub(super) async fn handle_metrics_get(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn metrics_get_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let m = &status.metrics;
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({
-            "ok": true,
-            "total_requests": m.total_requests,
-            "active_requests": m.active_requests,
-            "failed_requests": m.failed_requests,
-            "chat_requests_total": m.chat_requests_total,
-        }),
-    )
-    .await
+    Ok(serde_json::json!({
+        "ok": true,
+        "total_requests": m.total_requests,
+        "active_requests": m.active_requests,
+        "failed_requests": m.failed_requests,
+        "chat_requests_total": m.chat_requests_total,
+    }))
 }
 
-pub(super) async fn handle_metrics_reset(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn metrics_reset_payload(server: &AcpServer) -> Result<Value> {
     server.observability.metrics.reset_all();
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({ "ok": true, "reset": true }),
-    )
-    .await
+    Ok(serde_json::json!({ "ok": true, "reset": true }))
 }
 
-pub(super) async fn handle_metrics_window_query(
-    server: &AcpServer,
+pub(super) async fn metrics_window_query_payload(
+    _server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let window = params.get("window").and_then(Value::as_str).unwrap_or("5m");
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({ "ok": true, "window": window }),
-    )
-    .await
+    Ok(serde_json::json!({ "ok": true, "window": window }))
 }
 
-pub(super) async fn handle_metrics_errors_summary(
+pub(super) async fn metrics_errors_summary_payload(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
@@ -74,22 +46,14 @@ pub(super) async fn handle_metrics_errors_summary(
         .unwrap_or(20)
         .min(200);
     let status = server.get_status();
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({
-            "ok": true,
-            "total": limit,
-            "error_count": status.metrics.failed_requests,
-        }),
-    )
-    .await
+    Ok(serde_json::json!({
+        "ok": true,
+        "total": limit,
+        "error_count": status.metrics.failed_requests,
+    }))
 }
 
-pub(super) async fn handle_metrics_prometheus(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn handle_metrics_prometheus(server: &AcpServer) -> Result<DispatchOutput> {
     let status = server.get_status();
     let m = &status.metrics;
     let lines = vec![
@@ -141,10 +105,5 @@ pub(super) async fn handle_metrics_prometheus(
         format!("# TYPE go_on_review_gate_total counter"),
         format!("go_on_review_gate_total {}", m.review_gate_total),
     ];
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({ "text": lines.join("\n") + "\n" }),
-    )
-    .await
+    Ok(DispatchOutput::text(lines.join("\n") + "\n"))
 }

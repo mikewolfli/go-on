@@ -555,7 +555,7 @@ pub(crate) async fn execute_mcp_tool_call(
             }))
         }
         "acp_debug_panel_get" => Ok(build_debug_panel_payload(server).await),
-        "goon_workflow_run_list" => Ok(workflow_run_list_payload(arguments)),
+        "goon_workflow_run_list" => workflow_run_list_payload(arguments),
         "goon_workflow_run_get" => workflow_run_get_payload(arguments),
         "goon_workflow_run_cancel" => workflow_run_transition_payload(arguments, "cancelled"),
         "goon_workflow_run_pause" => workflow_run_transition_payload(arguments, "paused"),

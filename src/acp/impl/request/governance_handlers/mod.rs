@@ -24,14 +24,14 @@ pub(super) use audit::{
 };
 
 #[allow(unused_imports)]
-pub(super) use status::handle_governance_status;
+pub(super) use status::governance_status_payload;
 
 #[allow(unused_imports)]
 pub(super) use plan::{
-    handle_governance_plan_get, handle_governance_plan_update, norms_tracked_for,
+    governance_plan_get_payload, governance_plan_update_payload, norms_tracked_for,
 };
 
 #[allow(unused_imports)]
 pub(super) use actions::{
-    handle_governance_audit_recent, handle_governance_config_save, handle_governance_remediate,
+    governance_audit_recent_payload, governance_config_save_payload, governance_remediate_payload,
 };

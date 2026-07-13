@@ -5,12 +5,22 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
 
 use crate::acp::server::AcpServer;
 use crate::rpc_protocol::{JsonRpcError, JsonRpcResponse};
+
+// Per-request output buffer for HTTP RPC calls.
+// When set, write_json_line writes into this buffer instead of server.output.
+// This eliminates the need for pipe-swapping and the rpc_serial lock.
+tokio::task_local! {
+    pub(crate) static RPC_BUFFER: Arc<Mutex<Vec<u8>>>;
+}
 
 /// Send result response
 ///
@@ -40,16 +50,6 @@ pub async fn send_empty_ok(server: &AcpServer, id: Option<Value>) -> Result<()> 
         serde_json::Value::Object(serde_json::Map::new()),
     )
     .await
-}
-
-/// Serialize a typed struct and send it as a result.
-pub async fn send_typed<T: serde::Serialize>(
-    server: &AcpServer,
-    id: Option<Value>,
-    value: &T,
-) -> Result<()> {
-    let result = serde_json::to_value(value)?;
-    send_result(server, id, result).await
 }
 
 /// Send error response
@@ -106,14 +106,58 @@ pub async fn write_response(server: &AcpServer, response: JsonRpcResponse) -> Re
     write_json_line(server, &value).await
 }
 
-/// Write JSON line to output
+/// Respond with a Result<Value>, writing the JSON-RPC response directly.
+/// Skips send_result/send_error to reduce indirection for the pure-handler dispatch path.
+pub async fn respond(
+    server: &AcpServer,
+    request_id: Option<Value>,
+    result: Result<Value>,
+) -> Result<()> {
+    // JSON-RPC notification (no id) must not produce a response.
+    let id = match request_id {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+    let response = match result {
+        Ok(value) => JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(id),
+            result: Some(value),
+            error: None,
+        },
+        Err(e) => JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(id),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32602,
+                message: format!("{:#}", e),
+                data: Some(serde_json::json!({
+                    "code": "DISPATCH_ERROR",
+                })),
+            }),
+        },
+    };
+    write_response(server, response).await
+}
+
+/// Write JSON line to output.
 ///
-/// This function replaces the `AcpServer::write_json_line` method.
-pub async fn write_json_line(server: &AcpServer, value: &Value) -> Result<()> {
-    let mut stdout = server.output.lock().await;
+/// In HTTP RPC mode, writes to the per-request buffer (set via RPC_BUFFER task-local).
+/// In stdio mode, writes directly to tokio::io::stdout() — no lock, no heap-allocated writer.
+pub async fn write_json_line(_server: &AcpServer, value: &Value) -> Result<()> {
+    // Prefer per-request RPC buffer over global output
+    if let Ok(buffer) = RPC_BUFFER.try_with(|b| b.clone()) {
+        let mut buf = buffer.lock().await;
+        let mut encoded = serde_json::to_vec(value)?;
+        encoded.push(b'\n');
+        buf.extend_from_slice(&encoded);
+        return Ok(());
+    }
+    // Fallback: stdout (stdio mode) — direct write, no Box<dyn> indirection
     let mut encoded = serde_json::to_vec(value)?;
     encoded.push(b'\n');
-    stdout.write_all(&encoded).await?;
-    stdout.flush().await?;
+    tokio::io::stdout().write_all(&encoded).await?;
+    tokio::io::stdout().flush().await?;
     Ok(())
 }

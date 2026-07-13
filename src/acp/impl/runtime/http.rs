@@ -4,7 +4,6 @@
 //! JSON response writing, CORS preflight and header computation.
 //! Extracted from the parent `runtime.rs` to reduce the monolithic file size.
 
-use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -603,9 +602,6 @@ async fn route_http_post(
                     .await?;
                 }
                 "/" | "/rpc" => {
-                    // SERIALIZED via per-server rpc_serial: only one RPC call at a time.
-                    let _rpc_guard = server.rpc_serial.lock().await;
-
                     let request: JsonRpcRequest = match serde_json::from_value(body) {
                         Ok(r) => r,
                         Err(e) => {
@@ -621,71 +617,33 @@ async fn route_http_post(
                         }
                     };
 
-                    let (pipe_writer, mut pipe_reader) = tokio::io::duplex(10 * 1024 * 1024);
-
-                    // Temporarily swap stdout with the pipe writer
-                    {
-                        let mut guard = server.output.lock().await;
-                        let _ = mem::replace(&mut *guard, Box::new(pipe_writer));
-                    }
-
-                    let server_ref = Arc::clone(&server);
+                    // Per-request output buffer — no pipe swap, no serial lock.
+                    // The handler writes to this buffer via task-local RPC_BUFFER;
+                    // write_json_line checks the task-local before falling back to stdout.
+                    let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+                    let buffer_for_scope = buffer.clone();
                     let headers_owned = header_part.to_string();
-                    let rpc_task = tokio::spawn(async move {
-                        handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await
-                    });
+                    let server_ref = Arc::clone(&server);
 
-                    let rpc_result = rpc_task.await;
+                    let rpc_result = crate::acp::r#impl::io::RPC_BUFFER
+                        .scope(buffer_for_scope, async move {
+                            handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await
+                        })
+                        .await;
 
-                    // Wait for the RPC task first, THEN restore stdout.
-                    // This drops the pipe writer BEFORE we read, so
-                    // read_to_end can complete (otherwise it would block
-                    // indefinitely waiting for the pipe to close).
-                    // Restore stdout
-                    {
-                        let mut guard = server.output.lock().await;
-                        let _ = mem::replace(
-                            &mut *guard,
-                            Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
-                        );
+                    if let Err(err) = &rpc_result {
+                        write_http_json_response_with_context(
+                            socket,
+                            500,
+                            serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
+                            path,
+                            cors_headers,
+                        )
+                        .await?;
+                        return Ok(());
                     }
 
-                    let mut response_bytes = Vec::new();
-                    let read_result = tokio::time::timeout(
-                        std::time::Duration::from_secs(60),
-                        pipe_reader.read_to_end(&mut response_bytes),
-                    ).await;
-
-                    match rpc_result {
-                        Err(join_err) => {
-                            write_http_json_response_with_context(
-                                socket,
-                                500,
-                                serde_json::json!({"error": format!("RPC task panicked: {}", join_err)}),
-                                path,
-                                cors_headers,
-                            )
-                            .await?;
-                            return Ok(());
-                        }
-                        Ok(Err(err)) => {
-                            write_http_json_response_with_context(
-                                socket,
-                                500,
-                                serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
-                                path,
-                                cors_headers,
-                            )
-                            .await?;
-                            return Ok(());
-                        }
-                        Ok(Ok(())) => {}
-                    }
-
-                    read_result
-                        .map_err(|_| anyhow::anyhow!("timeout reading RPC pipe response"))?
-                        .map_err(|e| anyhow::anyhow!("RPC pipe read error: {e}"))?;
-
+                    let response_bytes = buffer.lock().await.clone();
                     let response_str = String::from_utf8_lossy(&response_bytes);
                     let response_value: serde_json::Value = {
                         let mut last_response =

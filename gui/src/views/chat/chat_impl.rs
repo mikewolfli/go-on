@@ -138,6 +138,7 @@ pub struct ChatView {
     rendered_content_hashes: Vec<u64>,
     /// Per-message "expand full text" toggle for truncated content.
     /// Key = message index, value = whether full text is shown.
+    #[allow(dead_code)]
     expand_full_text: std::collections::HashSet<usize>,
 
     /// Shared abort controller for cancelling in-progress streaming generations.

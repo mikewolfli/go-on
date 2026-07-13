@@ -10,9 +10,6 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::warn;
 
-use super::{send_error, send_result};
-use crate::acp::server::AcpServer;
-
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct WorkflowRunRecord {
     pub(super) run_id: String,
@@ -174,7 +171,7 @@ fn transition_workflow_run(run_id: &str, target_status: &str) -> Result<Workflow
     Ok(record.clone())
 }
 
-pub(crate) fn workflow_run_list_payload(params: &Value) -> Value {
+pub(crate) fn workflow_run_list_payload(params: &Value) -> Result<Value> {
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
@@ -234,13 +231,13 @@ pub(crate) fn workflow_run_list_payload(params: &Value) -> Value {
         Err(_) => (0usize, Vec::new()),
     };
 
-    json!({
+    Ok(json!({
         "ok": true,
         "total": total,
         "offset": offset,
         "limit": limit,
         "runs": runs,
-    })
+    }))
 }
 
 pub(crate) fn workflow_run_get_payload(params: &Value) -> Result<Value> {
@@ -266,59 +263,4 @@ pub(crate) fn workflow_run_transition_payload(
 
     let run = transition_workflow_run(run_id, target_status)?;
     Ok(json!({"ok": true, "run": run, "action": target_status}))
-}
-
-pub(crate) async fn handle_workflow_run_list(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, workflow_run_list_payload(&params)).await
-}
-
-pub(crate) async fn handle_workflow_run_get(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    match workflow_run_get_payload(&params) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
-    }
-}
-
-async fn handle_workflow_run_transition(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-    target_status: &str,
-) -> Result<()> {
-    match workflow_run_transition_payload(&params, target_status) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
-    }
-}
-
-pub(crate) async fn handle_workflow_run_cancel(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    handle_workflow_run_transition(server, params, request_id, "cancelled").await
-}
-
-pub(crate) async fn handle_workflow_run_pause(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    handle_workflow_run_transition(server, params, request_id, "paused").await
-}
-
-pub(crate) async fn handle_workflow_run_resume(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    handle_workflow_run_transition(server, params, request_id, "running").await
 }

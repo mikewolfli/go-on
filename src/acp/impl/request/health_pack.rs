@@ -4,10 +4,7 @@ use super::*;
 // Breaker Status
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_breaker_status(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn breaker_status_payload(server: &AcpServer) -> Result<Value> {
     let breakers = server
         .resilience
         .circuit_breakers
@@ -19,29 +16,20 @@ pub(super) async fn handle_breaker_status(
         .filter(|item| item.state.eq_ignore_ascii_case("open"))
         .count();
     let degraded_services = collect_degraded_services(server);
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "open_count": open_count,
-            "degraded_count": degraded_services.len(),
-            "degraded_services": degraded_services,
-            "breakers": breakers,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "open_count": open_count,
+        "degraded_count": degraded_services.len(),
+        "degraded_services": degraded_services,
+        "breakers": breakers,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Breaker Reset
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_breaker_reset(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn breaker_reset_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let target = params
         .get("agent")
         .or_else(|| params.get("name"))
@@ -59,17 +47,12 @@ pub(super) async fn handle_breaker_reset(
         .map(|guard| guard.snapshots())
         .unwrap_or_default();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "removed": reset_count,
-            "target": target,
-            "breakers": breakers,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "removed": reset_count,
+        "target": target,
+        "breakers": breakers,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -164,11 +147,7 @@ pub(super) fn collect_degraded_services(server: &AcpServer) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-pub(super) async fn handle_breaker_recovery(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn breaker_recovery_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let target = params
         .get("agent")
         .or_else(|| params.get("name"))
@@ -210,33 +189,25 @@ pub(super) async fn handle_breaker_recovery(
     };
     let degraded_after = collect_degraded_services(server);
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "dry_run": dry_run,
-            "target": target,
-            "candidates": candidates,
-            "candidate_count": candidates.len(),
-            "recovered_services": recovered_services,
-            "recovered_count": recovered_services.len(),
-            "breaker_reset_count": breaker_reset_count,
-            "remaining_degraded_count": degraded_after.len(),
-            "remaining_degraded_services": degraded_after,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "dry_run": dry_run,
+        "target": target,
+        "candidates": candidates,
+        "candidate_count": candidates.len(),
+        "recovered_services": recovered_services,
+        "recovered_count": recovered_services.len(),
+        "breaker_reset_count": breaker_reset_count,
+        "remaining_degraded_count": degraded_after.len(),
+        "remaining_degraded_services": degraded_after,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Cache Clear
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_cache_clear(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn cache_clear_payload(server: &AcpServer) -> Result<Value> {
     let memory_removed = server
         .cache_deps
         .cache
@@ -250,27 +221,19 @@ pub(super) async fn handle_cache_clear(
         0
     };
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "memory_removed": memory_removed,
-            "sqlite_removed": persistent_removed,
-            "total_removed": memory_removed + persistent_removed,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "memory_removed": memory_removed,
+        "sqlite_removed": persistent_removed,
+        "total_removed": memory_removed + persistent_removed,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Vector Clear
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_vector_clear(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn vector_clear_payload(server: &AcpServer) -> Result<Value> {
     let (memory_removed, summary_removed) =
         if let Some(store) = server.cache_deps.cache.vector_store.clone() {
             store.clear_all()?
@@ -278,26 +241,18 @@ pub(super) async fn handle_vector_clear(
             (0, 0)
         };
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "vector_removed": memory_removed,
-            "summary_removed": summary_removed,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "vector_removed": memory_removed,
+        "summary_removed": summary_removed,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Maintenance GC
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_maintenance_gc(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn maintenance_gc_payload(server: &AcpServer) -> Result<Value> {
     let cycle = crate::acp::background::run_maintenance_cycle(server).await?;
     let maintenance = server
         .resilience
@@ -306,16 +261,11 @@ pub(super) async fn handle_maintenance_gc(
         .map(|guard| guard.snapshot())
         .unwrap_or_default();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "memory_expired_removed": cycle.memory_expired_removed,
-            "maintenance": maintenance,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "memory_expired_removed": cycle.memory_expired_removed,
+        "maintenance": maintenance,
+    }))
 }
 
 #[cfg(test)]

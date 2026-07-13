@@ -1164,12 +1164,19 @@ impl ChatView {
                         if current_hash == prev_hash {
                             // Content unchanged, render a thin placeholder instead
                             // of re-running the full markdown pipeline.
-                            let (is_user, timestamp, model_name) =
-                                { (m.role == "user", m.timestamp, m.model.clone()) };
+                            let (is_user, content, timestamp, model_name) = {
+                                (
+                                    m.role == "user",
+                                    m.content.clone(),
+                                    m.timestamp,
+                                    m.model.clone(),
+                                )
+                            };
                             messages::render_collapsed_bubble(
                                 ui,
                                 i18n,
                                 is_user,
+                                &content,
                                 timestamp,
                                 &model_name,
                                 muted_text,
@@ -1190,8 +1197,8 @@ impl ChatView {
                 timestamp,
                 model_name,
                 content_text,
-                has_thinking,
-                thinking_text,
+                _has_thinking,
+                _thinking_text,
                 sub_agent_records,
                 command_records,
                 segments,
@@ -1335,8 +1342,8 @@ impl ChatView {
                 ui.add_space(2.0);
             }
 
-            // Bubble content width
-            let max_bubble_width = (ui.available_width() - 40.0).clamp(200.0, 800.0);
+            // Bubble content width — no upper cap so text fills available space
+            let max_bubble_width = (ui.available_width() - 40.0).max(200.0);
 
             let enable_markdown_val = self.enable_markdown;
             // All messages left-aligned — color differentiates user vs AI.
@@ -1353,42 +1360,12 @@ impl ChatView {
                         .show(ui, |ui| {
                             ui.set_max_width(max_bubble_width - 20.0);
 
-                            // Inline action bar
-                            ui.horizontal(|ui| {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::TOP),
-                                    |ui| {
-                                        if ui
-                                            .button("📋")
-                                            .on_hover_text(i18n.t("chat.copyMessage"))
-                                            .clicked()
-                                        {
-                                            ui.ctx().copy_text(content_text.clone());
-                                        }
-                                        if ui
-                                            .button("✏️")
-                                            .on_hover_text(i18n.t("chat.edit"))
-                                            .clicked()
-                                        {
-                                            self.edit_msg_idx = Some(msg_idx);
-                                            self.edit_msg_buf = content_text.clone();
-                                        }
-                                        if ui
-                                            .button("🗑")
-                                            .on_hover_text(i18n.t("chat.delete"))
-                                            .clicked()
-                                        {
-                                            self.remove_message_at(msg_idx);
-                                            self.save_sessions_to_disk();
-                                        }
-                                    },
-                                );
-                            });
+
 
                                             // ── Content-hash cached markdown rendering ──
                                             // Reuse the hash computed in the dirty-check above
                                             // (already stored in rendered_content_hashes[msg_idx])
-                                            let content_changed = msg_idx < self.rendered_content_hashes.len()
+                                            let _content_changed = msg_idx < self.rendered_content_hashes.len()
                                                 && self.rendered_content_hashes[msg_idx] != 0;
 
                             // ── Streaming cursor: append ▊ to last AI message during streaming ──
@@ -1415,12 +1392,20 @@ impl ChatView {
                                     )
                                 };
 
+                                // Zed-style interleaved rendering: render segments in chronological
+                                // order as they were produced during streaming. Thinking segments
+                                // get a colored background box, content segments render as regular markdown.
                                 let total_segs = segments.len();
                                 for (seg_idx, seg) in segments.iter().enumerate() {
                                     let is_last_seg = seg_idx == total_segs - 1;
                                     ui.add_space(4.0);
                                     match seg {
                                         MessageSegment::Thinking(text) => {
+                                            let thinking_visible = self.show_all_thinking
+                                                || self.show_thinking_idx == Some(msg_idx);
+                                            if !thinking_visible {
+                                                continue;
+                                            }
                                             egui::Frame::new()
                                                 .fill(think_bg)
                                                 .stroke(egui::Stroke::new(1.0, think_border))
@@ -1443,8 +1428,7 @@ impl ChatView {
                                                 });
                                         }
                                         MessageSegment::Content(text) => {
-                                            let display_text = if is_streaming && is_last_seg
-                                                {
+                                            let display_text = if is_streaming && is_last_seg {
                                                 format!("{}▊", text)
                                             } else {
                                                 text.clone()
@@ -1471,6 +1455,65 @@ impl ChatView {
                                     &i18n.t("chat.largeMessageTruncated"),
                                 );
                             }
+
+                        // ── Action bar (Zed/Copilot-style) ──
+                        ui.add_space(4.0);
+                        let action_color = if dark_mode {
+                            egui::Color32::from_rgb(130, 135, 145)
+                        } else {
+                            egui::Color32::from_rgb(110, 115, 125)
+                        };
+                        ui.horizontal(|ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::TOP),
+                                |ui| {
+                                    let copy_label = format!("📋 {}", i18n.t("chat.copy"));
+                                    if ui
+                                        .add(egui::Button::new(
+                                            egui::RichText::new(&copy_label)
+                                                .size(11.0)
+                                                .color(action_color),
+                                        )
+                                        .frame(false)
+                                        .fill(egui::Color32::TRANSPARENT))
+                                        .on_hover_text(i18n.t("chat.copyMessage"))
+                                        .clicked()
+                                    {
+                                        ui.ctx().copy_text(content_text.clone());
+                                    }
+                                    let edit_label = format!("✏️ {}", i18n.t("chat.edit"));
+                                    if ui
+                                        .add(egui::Button::new(
+                                            egui::RichText::new(&edit_label)
+                                                .size(11.0)
+                                                .color(action_color),
+                                        )
+                                        .frame(false)
+                                        .fill(egui::Color32::TRANSPARENT))
+                                        .on_hover_text(i18n.t("chat.edit"))
+                                        .clicked()
+                                    {
+                                        self.edit_msg_idx = Some(msg_idx);
+                                        self.edit_msg_buf = content_text.clone();
+                                    }
+                                    let del_label = format!("🗑 {}", i18n.t("chat.delete"));
+                                    if ui
+                                        .add(egui::Button::new(
+                                            egui::RichText::new(&del_label)
+                                                .size(11.0)
+                                                .color(action_color),
+                                        )
+                                        .frame(false)
+                                        .fill(egui::Color32::TRANSPARENT))
+                                        .on_hover_text(i18n.t("chat.delete"))
+                                        .clicked()
+                                    {
+                                        self.remove_message_at(msg_idx);
+                                        self.save_sessions_to_disk();
+                                    }
+                                },
+                            );
+                        });
 
                         // ── Sub-agent records panel ──
                         let has_sub_agents = !sub_agent_records.is_empty();

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tracing::warn;
 
 use super::http::http_trace_context;
@@ -67,11 +68,17 @@ pub(crate) fn build_root_capabilities_response() -> serde_json::Value {
 /// Process a JSON-RPC request over an mTLS connection and return the
 /// JSON-RPC response value.
 async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serde_json::Value {
-    // SERIALIZED via per-server rpc_serial: only one RPC call at a time.
-    let _rpc_guard = server.rpc_serial.lock().await;
-
     let method = request.method.clone();
-    match handle_request(server, request, None).await {
+
+    // Use per-request buffer via task-local, same as HTTP /rpc handler.
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let result = crate::acp::r#impl::io::RPC_BUFFER
+        .scope(buffer, async {
+            handle_request(server, request, None).await
+        })
+        .await;
+
+    match result {
         Ok(()) => {
             serde_json::json!({
                 "ok": true,

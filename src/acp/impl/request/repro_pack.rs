@@ -247,19 +247,11 @@ pub(super) fn reproducible_build_summary(config_path: Option<&str>) -> Value {
     })
 }
 
-pub(super) async fn handle_build_repro(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn build_repro_payload(server: &AcpServer) -> Result<Value> {
     let summary = reproducible_build_summary(server.config_path.as_deref());
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "build": summary,
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "build": summary,
+    }))
 }

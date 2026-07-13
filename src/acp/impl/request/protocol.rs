@@ -14,8 +14,6 @@ pub enum AcpErrorCode {
     MethodNotFound = -32601,
     /// Invalid method parameter(s) (-32602).
     InvalidParams = -32602,
-    /// Internal JSON-RPC error (-32603).
-    InternalError = -32603,
     /// Authentication is required (-32001).
     AuthRequired = -32001,
 }

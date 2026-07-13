@@ -112,11 +112,13 @@ pub fn render_token_stats(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
 }
 
 /// Render a thin collapsed bubble for unchanged messages (avoids expensive markdown re-render).
+/// Shows a one-line preview of the actual content instead of a generic placeholder.
 #[allow(clippy::too_many_arguments)]
 pub fn render_collapsed_bubble(
     ui: &mut egui::Ui,
     i18n: &I18n,
     is_user: bool,
+    content: &str,
     timestamp: u64,
     model_name: &str,
     muted_text: egui::Color32,
@@ -150,11 +152,14 @@ pub fn render_collapsed_bubble(
         draw_role_avatar(ui, is_user);
         ui.add_space(6.0);
 
+        // Constrain the bubble to remaining horizontal width so text wraps properly
+        let bubble_max_w = ui.available_width().max(100.0);
         egui::Frame::new()
             .fill(bubble_color)
             .corner_radius(12.0)
             .inner_margin(egui::Margin::symmetric(14i8, 6i8))
             .show(ui, |ui| {
+                ui.set_max_width(bubble_max_w - 28.0);
                 if !model_name.is_empty() {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -171,14 +176,26 @@ pub fn render_collapsed_bubble(
                     });
                     ui.add_space(2.0);
                 }
-                ui.label(
-                    egui::RichText::new(if is_user {
-                        i18n.t("chat.userMessagePlaceholder")
+                let display_text: std::borrow::Cow<'_, str> = {
+                    let trimmed = content.trim();
+                    if trimmed.is_empty() {
+                        // Fall back to placeholder when there's no content to show
+                        if is_user {
+                            i18n.t("chat.userMessagePlaceholder")
+                        } else {
+                            i18n.t("chat.assistantMessagePlaceholder")
+                        }
                     } else {
-                        i18n.t("chat.assistantMessagePlaceholder")
-                    })
-                    .color(text_color)
-                    .size(11.0),
+                        trimmed.into()
+                    }
+                };
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(display_text)
+                            .color(text_color)
+                            .size(11.0),
+                    )
+                    .wrap(),
                 );
             });
         ui.add_space(if is_user { 8.0 } else { 60.0 });

@@ -1174,9 +1174,8 @@ fn execute_model_tool_calls(
 pub(crate) async fn handle_task_execute(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
     _trace: &crate::rpc_protocol::RequestTraceContext,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let task_text = params_task(&params).unwrap_or_default();
     let phase_name = params.get("phase").and_then(Value::as_str);
     let run = workflow::start_workflow_run("task.execute", &task_text, phase_name, &params);
@@ -1395,7 +1394,7 @@ pub(crate) async fn handle_task_execute(
     );
     let trace_ref = build_trace_ref(
         "task.execute",
-        request_id.as_ref(),
+        None,
         Some(artifact_path.display().to_string().as_str()),
     );
     let capability_profile = build_capability_profile("task.execute", &task_text, &params);
@@ -1467,5 +1466,5 @@ pub(crate) async fn handle_task_execute(
         "multi_agent": build_execution_cycle("multi_agent_summary", "complete", "passed", Vec::<String>::new()),
     });
 
-    send_result(server, request_id, response_payload).await
+    Ok(DispatchOutput::ok(response_payload))
 }

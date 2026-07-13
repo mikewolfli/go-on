@@ -10,27 +10,24 @@ use super::*;
 // handle_shutdown
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_shutdown(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+/// Returns shutdown confirmation payload (pure, no send_result).
+pub(super) fn shutdown_payload(server: &AcpServer) -> Result<Value> {
     info!("{}", t("info.shutdown_requested"));
     server.begin_shutdown();
     server.shutdown_notify.notify_waiters();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "shutdown": "initiated"
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "shutdown": "initiated"
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // handle_health
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+/// Build health status payload (pure, no send_result).
+pub(super) async fn health_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let metrics = server.observability.metrics.snapshot();
 
@@ -78,50 +75,45 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
             .saturating_sub(metrics.review_gate_approved_total),
     );
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "lifecycle": {
-                "shutting_down": status.lifecycle.shutdown_requested,
-                "is_healthy": status.lifecycle.is_healthy,
-                "uptime_seconds": status.lifecycle.uptime_seconds,
-                "version": env!("CARGO_PKG_VERSION"),
-                "build": backend_build_label(),
-            },
+    Ok(json!({
+        "lifecycle": {
+            "shutting_down": status.lifecycle.shutdown_requested,
+            "is_healthy": status.lifecycle.is_healthy,
+            "uptime_seconds": status.lifecycle.uptime_seconds,
             "version": env!("CARGO_PKG_VERSION"),
-            "stats": {
-                "total_requests": status.metrics.total_requests,
-                "successful_requests": status.metrics.successful_requests,
-                "failed_requests": status.metrics.failed_requests,
-                "requests_per_minute": (requests_per_minute * 100.0).round() / 100.0,
-                "success_rate": (success_rate * 100.0).round() / 100.0,
-                "avg_latency_ms": (status.metrics.avg_request_duration_ms * 100.0).round() / 100.0,
-                "active_requests": status.metrics.active_requests,
-            },
-            "maintenance": status.maintenance,
-            "review_gate": {
-                "total": metrics.review_gate_total,
-                "approved": metrics.review_gate_approved_total,
-                "rejected": metrics.review_gate_rejected_total,
-                "timeout": review_timeout_compat,
-                "degraded": metrics.review_gate_degraded_total,
-                "invalid_response": metrics.review_gate_invalid_response_total,
-            },
-            "timeouts": {
-                "agent_request_total": metrics.agent_timeout_failures_total,
-                "review_gate_total": review_timeout_compat,
-                "runtime_probe_total": metrics.runtime_probe_timeout_total,
-            },
-            "token_cache": token_cache_report,
-            "modules": {
-                "harness_bus": harness_profile,
-                "capability_bus": capability_profile,
-            },
-            "timestamp": status.timestamp,
-        }),
-    )
-    .await
+            "build": backend_build_label(),
+        },
+        "version": env!("CARGO_PKG_VERSION"),
+        "stats": {
+            "total_requests": status.metrics.total_requests,
+            "successful_requests": status.metrics.successful_requests,
+            "failed_requests": status.metrics.failed_requests,
+            "requests_per_minute": (requests_per_minute * 100.0).round() / 100.0,
+            "success_rate": (success_rate * 100.0).round() / 100.0,
+            "avg_latency_ms": (status.metrics.avg_request_duration_ms * 100.0).round() / 100.0,
+            "active_requests": status.metrics.active_requests,
+        },
+        "maintenance": status.maintenance,
+        "review_gate": {
+            "total": metrics.review_gate_total,
+            "approved": metrics.review_gate_approved_total,
+            "rejected": metrics.review_gate_rejected_total,
+            "timeout": review_timeout_compat,
+            "degraded": metrics.review_gate_degraded_total,
+            "invalid_response": metrics.review_gate_invalid_response_total,
+        },
+        "timeouts": {
+            "agent_request_total": metrics.agent_timeout_failures_total,
+            "review_gate_total": review_timeout_compat,
+            "runtime_probe_total": metrics.runtime_probe_timeout_total,
+        },
+        "token_cache": token_cache_report,
+        "modules": {
+            "harness_bus": harness_profile,
+            "capability_bus": capability_profile,
+        },
+        "timestamp": status.timestamp,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +133,7 @@ fn check_status_label(value: CheckStatus) -> &'static str {
 // Helper: build_health_probes_payload
 // ---------------------------------------------------------------------------
 
-fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
+pub(super) fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let metrics = server.observability.metrics.snapshot();
 
@@ -352,10 +344,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
 // handle_capabilities_list
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_capabilities_list(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn capabilities_list_payload(server: &AcpServer) -> Result<Value> {
     let capability_profile = server
         .governance_deps
         .capability_bus
@@ -377,14 +366,9 @@ pub(super) async fn handle_capabilities_list(
             })
         });
 
-    send_result(
-        server,
-        request_id,
-        serde_json::json!({
-            "capabilities": capability_profile,
-        }),
-    )
-    .await
+    Ok(serde_json::json!({
+        "capabilities": capability_profile,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -406,13 +390,6 @@ fn backend_build_label() -> String {
 // ---------------------------------------------------------------------------
 // handle_health_probes
 // ---------------------------------------------------------------------------
-
-pub(super) async fn handle_health_probes(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, build_health_probes_payload(server)?).await
-}
 
 // ---------------------------------------------------------------------------
 // Helper: build_runtime_stability_payload
@@ -569,40 +546,18 @@ pub(super) fn build_runtime_stability_payload(server: &AcpServer) -> Result<Valu
 // handle_runtime_stability
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_runtime_stability(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, build_runtime_stability_payload(server)?).await
-}
-
 // ---------------------------------------------------------------------------
-// handle_runtime_self_model
+// Helper: build_runtime_self_model_payload
 // ---------------------------------------------------------------------------
-
-pub(super) async fn handle_runtime_self_model(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
-    let learning_profile = build_learning_profile("runtime.self_model", task, &params);
-    let knowledge_refinement =
-        build_knowledge_refinement_profile("runtime.self_model", task, &params, &learning_profile);
-    let mut payload = build_runtime_self_model_payload(server, &params)?;
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert("learning_profile".to_string(), learning_profile);
-        obj.insert("knowledge_refinement".to_string(), knowledge_refinement);
-    }
-    send_result(server, request_id, payload).await
-}
 
 // ---------------------------------------------------------------------------
 // Helper: build_runtime_self_model_payload
 // ---------------------------------------------------------------------------
 
-fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Result<Value> {
+pub(super) fn build_runtime_self_model_payload(
+    server: &AcpServer,
+    params: &Value,
+) -> Result<Value> {
     let probes_payload = build_health_probes_payload(server)?;
     let stability_payload = build_runtime_stability_payload(server)?;
     let offline_eval_payload = build_rl_alignment_offline_eval_payload(params);
@@ -731,6 +686,12 @@ fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Resul
         known_limits.push("none_detected");
     }
 
+    // Augment with learning and knowledge_refinement profiles from governance_pack
+    let task = params.get("task").and_then(Value::as_str).unwrap_or("");
+    let learning_profile = build_learning_profile("runtime.self_model", task, params);
+    let knowledge_refinement =
+        build_knowledge_refinement_profile("runtime.self_model", task, params, &learning_profile);
+
     Ok(json!({
         "ok": true,
         "self_model": {
@@ -782,6 +743,8 @@ fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Resul
             "recommendations": recommendations,
             "source_methods": ["health.probes", "runtime.stability", "rl.alignment.offline_eval"],
             "timestamp": timestamp,
+            "learning": learning_profile,
+            "knowledge_refinement": knowledge_refinement,
         }
     }))
 }
@@ -880,42 +843,26 @@ pub(super) fn build_provider_status_payload(server: &AcpServer) -> Result<Value>
 // handle_provider_status
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_provider_status(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(server, request_id, build_provider_status_payload(server)?).await
-}
-
 // ---------------------------------------------------------------------------
 // handle_runtime_features
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_runtime_features(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "features": {
-                "harness_bus": server.governance_deps.harness_bus.is_some(),
-                "capability_bus": server.governance_deps.capability_bus.is_some(),
-                "vector_store": server.cache_deps.cache.vector_store.is_some(),
-                "response_cache": server.cache_deps.cache.response_cache.is_some(),
-                "autotune": server.cache_deps.autotune.is_some(),
-                "skills_enabled": server.runtime_config.skills_enabled,
-                "skills_import": server.runtime_config.skills_import_enabled,
-                "entry_auth": server.runtime_config.entry_auth_enabled,
-                "otel": server.runtime_config.otel_enabled,
-                "production_strict": server.runtime_config.production_strict,
-            }
-        }),
-    )
-    .await
+pub(super) fn runtime_features_payload(server: &AcpServer) -> Result<Value> {
+    Ok(json!({
+        "ok": true,
+        "features": {
+            "harness_bus": server.governance_deps.harness_bus.is_some(),
+            "capability_bus": server.governance_deps.capability_bus.is_some(),
+            "vector_store": server.cache_deps.cache.vector_store.is_some(),
+            "response_cache": server.cache_deps.cache.response_cache.is_some(),
+            "autotune": server.cache_deps.autotune.is_some(),
+            "skills_enabled": server.runtime_config.skills_enabled,
+            "skills_import": server.runtime_config.skills_import_enabled,
+            "entry_auth": server.runtime_config.entry_auth_enabled,
+            "otel": server.runtime_config.otel_enabled,
+            "production_strict": server.runtime_config.production_strict,
+        }
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -924,22 +871,15 @@ pub(super) async fn handle_runtime_features(
 
 /// Handle runtime restart request from GUI or other clients.
 /// Initiates a graceful shutdown so the process manager can restart the service.
-pub(super) async fn handle_runtime_restart(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) fn runtime_restart_payload(server: &AcpServer) -> Result<Value> {
     info!("{}", t("info.restart_requested"));
 
     server.begin_shutdown();
     server.shutdown_notify.notify_waiters();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "restart": "initiated",
-        }),
-    )
-    .await
+    Ok(json!({
+        "ok": true,
+        "restart": "initiated",
+        "message": t("info.restart_message"),
+    }))
 }

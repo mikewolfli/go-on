@@ -239,7 +239,7 @@ fn build_chat_params_from_acp(params: Value, session_state: &AcpSessionState) ->
     .unwrap_or_default()
 }
 
-pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+pub(super) async fn initialize_payload(_server: &AcpServer) -> Result<Value> {
     use crate::schema::{
         AgentCapabilities, Implementation, InitializeResponse, McpCapabilities, PromptCapabilities,
         ProtocolVersion, SessionCapabilities, SessionCloseCapabilities, SessionListCapabilities,
@@ -319,17 +319,14 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
         .unwrap_or_else(|_| "initialize".to_string());
     let value = super::inject_platform_profiles_if_absent(value, &method);
 
-    crate::acp::r#impl::io::send_result(server, request_id, value).await
+    Ok(value)
 }
 
 /// Module-level storage for the negotiated protocol version, initially unset.
 /// When unset, `handle_initialize` falls back to `ProtocolVersion::LATEST`.
 static NEGOTIATED_PROTOCOL_VERSION: OnceLock<ProtocolVersion> = OnceLock::new();
 
-pub(super) async fn handle_mcp_initialize(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn mcp_initialize_payload(_server: &AcpServer) -> Result<Value> {
     use crate::mcp::{McpInitializeResult, ServerInfo};
     let result = McpInitializeResult::new(
         MCP_VERSION,
@@ -339,7 +336,7 @@ pub(super) async fn handle_mcp_initialize(
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
     );
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
+    Ok(serde_json::to_value(&result)?)
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -372,11 +369,7 @@ fn generate_terminal_id() -> String {
 ///
 /// Standard ACP: client sends `cwd` + optional `mcpServers`,
 /// agent responds with `sessionId`.
-pub(super) async fn handle_session_new(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = generate_acp_session_id();
     let modes = build_default_modes();
     let current_mode = normalize_acp_mode(params.get("mode").and_then(|m| m.as_str()));
@@ -407,28 +400,18 @@ pub(super) async fn handle_session_new(
 
     let config_options = build_model_config_options(server);
 
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        serde_json::to_value(
-            crate::schema::NewSessionResponse::new(crate::schema::SessionId::new(session_id))
-                .modes(modes)
-                .config_options(config_options),
-        )
-        .expect("B48: NewSessionResponse serialization should never fail"),
-    )
-    .await
+    Ok(serde_json::to_value(
+        crate::schema::NewSessionResponse::new(crate::schema::SessionId::new(session_id))
+            .modes(modes)
+            .config_options(config_options),
+    )?)
 }
 
 /// Handle `session/load` — loads an existing session.
 ///
 /// Standard ACP: client sends `sessionId` + optional `cwd`,
 /// agent restores the session context and returns available modes/config.
-pub(super) async fn handle_session_load(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn session_load_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -443,17 +426,11 @@ pub(super) async fn handle_session_load(
 
     let config_options = build_model_config_options(server);
 
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        serde_json::to_value(&crate::schema::LoadSessionResponse {
-            modes: Some(modes),
-            config_options: Some(config_options),
-            meta: None,
-        })
-        .expect("B48: LoadSessionResponse serialization should never fail"),
-    )
-    .await
+    Ok(serde_json::to_value(&crate::schema::LoadSessionResponse {
+        modes: Some(modes),
+        config_options: Some(config_options),
+        meta: None,
+    })?)
 }
 
 /// Handle `session/prompt` — processes a user prompt within a session.
@@ -462,11 +439,7 @@ pub(super) async fn handle_session_load(
 /// agent streams notifications and returns a `PromptResponse` with `stopReason`.
 /// Maps to Go-On's internal chat handler for the actual AI processing.
 /// Converts ACP `prompt` content blocks to Go-On `messages` format.
-pub(super) async fn handle_session_prompt(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result<Value> {
     // Use process_chat_request for proper agent selection via the Capability Bus.
     // This ensures correct agent routing and orchestration.
     use crate::acp::r#impl::chat::{process_chat_request, ChatParams};
@@ -485,18 +458,11 @@ pub(super) async fn handle_session_prompt(
     let mut chat_params: ChatParams = match serde_json::from_value(chat_params_value) {
         Ok(p) => p,
         Err(e) => {
-            return crate::acp::r#impl::io::send_error(
-                server,
-                request_id,
-                -32602,
-                format!("invalid chat params: {}", e),
-                None,
-            )
-            .await;
+            return Err(anyhow::anyhow!("invalid chat params: {}", e));
         }
     };
 
-    let pipeline_trace = chat_trace_context(&request_id, "session.prompt");
+    let pipeline_trace = chat_trace_context(&None, "session.prompt");
 
     tracing::info!("ACP session/prompt: delegating to process_chat_request");
 
@@ -569,19 +535,23 @@ pub(super) async fn handle_session_prompt(
                 // sent as agent_thought_chunk, everything else as agent_message_chunk.
                 // This lets Zed render thinking in a collapsible box rather than
                 // as raw text.
-                let re = regex::Regex::new(r"<thinking>(.*?)</thinking>")
-                    .expect("B48: hardcoded thinking regex is valid");
+                static THINKING_RE: std::sync::LazyLock<regex::Regex> =
+                    std::sync::LazyLock::new(|| {
+                        regex::Regex::new(r"<thinking>(.*?)</thinking>")
+                            .expect("B48: hardcoded thinking regex is valid")
+                    });
                 let mut last_end = 0;
                 let sid = sid.as_str();
 
-                for cap in re.captures_iter(response_text) {
-                    let m = cap
-                        .get(0)
-                        .expect("B48: regex capture group 0 (full match) is always present");
-                    let thought_content = cap
-                        .get(1)
-                        .expect("B48: regex capture group 1 (thinking content) is always present")
-                        .as_str();
+                for cap in THINKING_RE.captures_iter(response_text) {
+                    let m = match cap.get(0) {
+                        Some(m) => m,
+                        None => continue,
+                    };
+                    let thought_content = match cap.get(1) {
+                        Some(c) => c.as_str(),
+                        None => continue,
+                    };
 
                     // Send text before this thinking block as a regular message chunk
                     let before = &response_text[last_end..m.start()];
@@ -641,34 +611,26 @@ pub(super) async fn handle_session_prompt(
             // ─────────────────────────────────────────────────────────────────
             let prompt_response = serde_json::to_value(crate::schema::PromptResponse::new(
                 crate::schema::StopReason::EndTurn,
-            ))
-            .expect("B48: PromptResponse serialization should never fail");
+            ))?;
 
             // Use io::send_result directly to bypass inject_platform_profiles_if_absent.
             // The chat_pack::send_result adds a "platform_context" field that Zed's
             // ACP client does not expect and fails to parse.
-            crate::acp::r#impl::io::send_result(server, request_id, prompt_response).await
+            Ok(prompt_response)
         }
         Ok(Err(err)) => {
             let msg = err.to_string();
             tracing::warn!("ACP session/prompt: error: {}", msg);
             if is_rate_limited_message(&msg) {
-                crate::acp::r#impl::io::send_error(
-                    server,
-                    request_id,
-                    -32029,
-                    normalize_rate_limited_message(&msg),
-                    None,
-                )
-                .await
+                Err(anyhow::anyhow!(normalize_rate_limited_message(&msg)))
             } else {
-                crate::acp::r#impl::io::send_error(server, request_id, -32603, msg, None).await
+                Err(anyhow::anyhow!(msg))
             }
         }
         Err(_elapsed) => {
             let msg = "prompt request timed out after 300s".to_string();
             tracing::warn!("ACP session/prompt: timeout");
-            crate::acp::r#impl::io::send_error(server, request_id, -32030, msg, None).await
+            Err(anyhow::anyhow!(msg))
         }
     }
 }
@@ -694,11 +656,7 @@ async fn send_chunk(server: &AcpServer, session_id: &str, chunk_type: &str, text
 }
 
 /// agent stops processing and returns `StopReason::Cancelled`.
-pub(super) async fn handle_session_cancel(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn session_cancel_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(|v| v.as_str())
@@ -706,30 +664,15 @@ pub(super) async fn handle_session_cancel(
     tracing::warn!(
         target: "acp::protocol_pack",
         session_id = %session_id,
-        "handle_session_cancel: session {} cancelled via notification",
+        "session_cancel_payload: session {} cancelled via notification",
         session_id
     );
 
     // session/cancel is a notification per JSON-RPC spec
-    if let Some(rid) = request_id {
-        crate::acp::r#impl::io::send_error(
-            server,
-            Some(rid),
-            -32800,
-            format!("session {} cancelled", session_id),
-            None,
-        )
-        .await
-    } else {
-        Ok(())
-    }
+    Err(anyhow::anyhow!("session {} cancelled", session_id))
 }
 
-pub(super) async fn handle_cancel_request(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn cancel_request_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let target_id = params
         .get("id")
         .and_then(|v| v.as_str())
@@ -737,56 +680,33 @@ pub(super) async fn handle_cancel_request(
     tracing::warn!(
         target: "acp::protocol_pack",
         target_request = %target_id,
-        "handle_cancel_request: cancelling request {}",
+        "cancel_request_payload: cancelling request {}",
         target_id
     );
 
     // $/cancel_request is a notification per JSON-RPC spec
-    if let Some(rid) = request_id {
-        crate::acp::r#impl::io::send_error(
-            server,
-            Some(rid),
-            -32800,
-            format!("request {} cancelled", target_id),
-            None,
-        )
-        .await
-    } else {
-        Ok(())
-    }
+    Err(anyhow::anyhow!("request {} cancelled", target_id))
 }
 
 /// Handle `session/list` — lists existing sessions.
 ///
 /// Standard ACP: client may send optional `cwd` filter,
 /// agent returns list of known sessions.
-pub(super) async fn handle_session_list(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        serde_json::to_value(&crate::schema::ListSessionsResponse {
+pub(super) async fn session_list_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
+    Ok(serde_json::to_value(
+        &crate::schema::ListSessionsResponse {
             sessions: vec![],
             next_cursor: None,
             meta: None,
-        })
-        .expect("B48: ListSessionsResponse serialization should never fail"),
-    )
-    .await
+        },
+    )?)
 }
 
 /// Handle `session/set_mode` — sets the current mode for a session.
 ///
 /// Standard ACP: client sends `sessionId` + `modeId`,
 /// agent switches mode. Returns updated config options per spec.
-pub(super) async fn handle_session_set_mode(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn session_set_mode_payload(server: &AcpServer, params: Value) -> Result<Value> {
     use crate::schema::{
         CurrentModeUpdate, SessionId, SessionNotification, SessionUpdate, SetSessionModeResponse,
     };
@@ -814,20 +734,13 @@ pub(super) async fn handle_session_set_mode(
                 crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
         }
     }
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        serde_json::to_value(&SetSessionModeResponse { meta: None })?,
-    )
-    .await
+    Ok(serde_json::to_value(&SetSessionModeResponse {
+        meta: None,
+    })?)
 }
 
 /// Handle `session/resume` — resumes an existing session.
-pub(super) async fn handle_session_resume(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn session_resume_payload(server: &AcpServer, params: Value) -> Result<Value> {
     use crate::schema::{ResumeSessionResponse, SessionModeId};
     let session_id = params
         .get("sessionId")
@@ -855,24 +768,15 @@ pub(super) async fn handle_session_resume(
     modes.current_mode_id = SessionModeId::new(current_mode);
     let config_options = build_model_config_options(server);
 
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        serde_json::to_value(&ResumeSessionResponse {
-            modes: Some(modes),
-            config_options: Some(config_options),
-            meta: None,
-        })?,
-    )
-    .await
+    Ok(serde_json::to_value(&ResumeSessionResponse {
+        modes: Some(modes),
+        config_options: Some(config_options),
+        meta: None,
+    })?)
 }
 
 /// Handle `session/close` — closes and cleans up a session.
-pub(super) async fn handle_session_close(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn session_close_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -882,16 +786,13 @@ pub(super) async fn handle_session_close(
         state.remove(session_id);
         // B51-36: Evict tenant rate limiter state on session close.
         #[cfg(feature = "multi-users-server")]
-        if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
+        if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
             limiter.evict_tenant(session_id).await;
         }
     }
-    crate::acp::r#impl::io::send_typed(
-        server,
-        request_id,
+    Ok(serde_json::to_value(
         &crate::schema::CloseSessionResponse { meta: None },
-    )
-    .await
+    )?)
 }
 
 /// Handle `session/request_permission` — client responds to a permission request.
@@ -900,11 +801,10 @@ pub(super) async fn handle_session_close(
 /// operations. The server sends a permission request notification to the client,
 /// and the client responds via this handler. The response is stored so the
 /// waiting tool execution can resume with the user's decision.
-pub(super) async fn handle_session_request_permission(
-    server: &AcpServer,
+pub(super) async fn session_request_permission_payload(
+    _server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     use crate::schema::PermissionOptionId;
     let session_id = params
         .get("sessionId")
@@ -925,18 +825,17 @@ pub(super) async fn handle_session_request_permission(
     }
 
     // Return empty success — the client just needs acknowledgement.
-    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
+    Ok(serde_json::Value::Object(serde_json::Map::new()))
 }
 
 /// Handle `session/set_config_option` — sets a configuration option for a session.
 ///
 /// Standard ACP: client sends `sessionId` + `configId` + `value`,
 /// agent applies the option and returns updated config options list.
-pub(super) async fn handle_session_set_config_option(
-    server: &AcpServer,
+pub(super) async fn session_set_config_option_payload(
+    _server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -958,16 +857,12 @@ pub(super) async fn handle_session_set_config_option(
         }
     }
 
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        serde_json::to_value(&crate::schema::SetSessionConfigOptionResponse {
+    Ok(serde_json::to_value(
+        &crate::schema::SetSessionConfigOptionResponse {
             config_options: vec![],
             meta: None,
-        })
-        .expect("B48: SetSessionConfigOptionResponse serialization should never fail"),
-    )
-    .await
+        },
+    )?)
 }
 
 /// Build config options for model selection, populated from the agent registry.
@@ -1046,128 +941,92 @@ fn build_default_modes() -> crate::schema::SessionModeState {
 
 /// Handle `authenticate` — authenticates the client.
 /// Standard ACP: client sends `methodId`, agent performs auth and returns success.
-pub(super) async fn handle_authenticate(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_typed(
-        server,
-        request_id,
+pub(super) async fn authenticate_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
+    Ok(serde_json::to_value(
         &crate::schema::AuthenticateResponse::new(),
-    )
-    .await
+    )?)
 }
 
 /// Handle `logout` — terminates the current authenticated session.
-pub(super) async fn handle_logout(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn logout_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
     // B51-36: Evict tenant rate limiter state on logout if session info is present.
     #[cfg(feature = "multi-users-server")]
     {
         if let Some(session_id) = _params.get("sessionId").and_then(Value::as_str) {
             if !session_id.is_empty() {
-                if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
+                if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
                     limiter.evict_tenant(session_id).await;
                 }
             }
         }
     }
 
-    crate::acp::r#impl::io::send_typed(
-        server,
-        request_id,
-        &crate::schema::LogoutResponse { meta: None },
-    )
-    .await
+    Ok(serde_json::to_value(&crate::schema::LogoutResponse {
+        meta: None,
+    })?)
 }
 
 // ── MCP bridge handlers (mcp.* methods routed through ACP dispatch) ──────
 
 /// Handle `mcp.ping` — health check ping.
-pub(super) async fn handle_mcp_ping(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
+pub(super) async fn mcp_ping_payload(_server: &AcpServer) -> Result<Value> {
+    Ok(serde_json::Value::Object(serde_json::Map::new()))
 }
 
 /// Handle `mcp.resources.list` — list available resources.
-pub(super) async fn handle_mcp_resources_list(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn mcp_resources_list_payload(_server: &AcpServer) -> Result<Value> {
     use crate::mcp::McpListResourcesResult;
     let result = McpListResourcesResult::new(vec![]);
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
+    Ok(serde_json::to_value(&result)?)
 }
 
 /// Handle `mcp.resources.read` — read a specific resource by URI.
-pub(super) async fn handle_mcp_resources_read(
-    server: &AcpServer,
+pub(super) async fn mcp_resources_read_payload(
+    _server: &AcpServer,
     _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_error(
-        server,
-        request_id,
-        -32602,
+) -> Result<Value> {
+    Err(anyhow::anyhow!(
         "Resource reading via MCP bridge is not supported; use the dedicated MCP server instead"
-            .to_string(),
-        None,
-    )
-    .await
+    ))
 }
 
 /// Handle `mcp.resources.subscribe` — subscribe to resource changes.
-pub(super) async fn handle_mcp_resources_subscribe(
-    server: &AcpServer,
+pub(super) async fn mcp_resources_subscribe_payload(
+    _server: &AcpServer,
     _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
+) -> Result<Value> {
+    Ok(serde_json::Value::Object(serde_json::Map::new()))
 }
 
 /// Handle `mcp.logging.setLevel` — set the MCP logging level.
-pub(super) async fn handle_mcp_logging_set_level(
-    server: &AcpServer,
+pub(super) async fn mcp_logging_set_level_payload(
+    _server: &AcpServer,
     _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
+) -> Result<Value> {
+    Ok(serde_json::Value::Object(serde_json::Map::new()))
 }
 
 /// Handle `mcp.completion.complete` — complete a text input.
-pub(super) async fn handle_mcp_completion_complete(
-    server: &AcpServer,
+pub(super) async fn mcp_completion_complete_payload(
+    _server: &AcpServer,
     _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
+) -> Result<Value> {
+    Ok(serde_json::Value::Object(serde_json::Map::new()))
 }
 
 /// Handle `mcp.sampling.createMessage` — create a sampling request.
-pub(super) async fn handle_mcp_sampling_create_message(
-    server: &AcpServer,
+pub(super) async fn mcp_sampling_create_message_payload(
+    _server: &AcpServer,
     _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_error(
-        server,
-        request_id,
-        -32602,
-        "Sampling via MCP bridge is not supported; use the chat/session API instead".to_string(),
-        None,
-    )
-    .await
+) -> Result<Value> {
+    Err(anyhow::anyhow!(
+        "Sampling via MCP bridge is not supported; use the chat/session API instead"
+    ))
 }
 
 // ── MCP tool handlers ────────────────────────────────────────────────────
 
-pub(super) async fn handle_mcp_tools_list(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn mcp_tools_list_payload(server: &AcpServer) -> Result<Value> {
     use crate::mcp::McpListToolsResult;
     let tools = build_mcp_tool_descriptors(Some(server));
     let result = McpListToolsResult::new(tools);
@@ -1177,14 +1036,10 @@ pub(super) async fn handle_mcp_tools_list(
         .try_with(|m| m.clone())
         .unwrap_or_else(|_| "mcp.tools.list".to_string());
     let value = super::inject_platform_profiles_if_absent(value, &method);
-    crate::acp::r#impl::io::send_result(server, request_id, value).await
+    Ok(value)
 }
 
-pub(super) async fn handle_mcp_tools_call(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn mcp_tools_call_payload(server: &AcpServer, params: Value) -> Result<Value> {
     use crate::mcp::McpCallToolResult;
 
     let name = params
@@ -1201,14 +1056,7 @@ pub(super) async fn handle_mcp_tools_call(
         Ok(structured) => structured,
         Err(err) => {
             record_mcp_tool_audit(name, &arguments, false, &err.to_string());
-            return crate::acp::r#impl::io::send_error(
-                server,
-                request_id,
-                -32602,
-                err.to_string(),
-                None,
-            )
-            .await;
+            return Err(anyhow::anyhow!(err.to_string()));
         }
     };
     record_mcp_tool_audit(name, &arguments, true, "tool executed successfully");
@@ -1217,7 +1065,7 @@ pub(super) async fn handle_mcp_tools_call(
     content.insert("type".to_string(), Value::String("text".to_string()));
     content.insert("text".to_string(), Value::String(structured.to_string()));
     let result = McpCallToolResult::new(vec![Value::Object(content)], Some(structured));
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
+    Ok(serde_json::to_value(&result)?)
 }
 
 fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &str) {
@@ -1413,11 +1261,7 @@ fn push_skill_version_snapshot(name: &str, snapshot: Value) {
     }
 }
 
-pub(super) async fn handle_skill_import(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn skill_import_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let request: SkillImportRequest =
         serde_json::from_value(params).context("invalid params for skill.import")?;
     let mut store = open_skill_import_store(server)?;
@@ -1425,14 +1269,7 @@ pub(super) async fn handle_skill_import(
         Ok(record) => record,
         Err(err) => {
             record_skill_admin_audit("import", "skill.import", false, &err.to_string());
-            return crate::acp::r#impl::io::send_error(
-                server,
-                request_id,
-                -32602,
-                err.to_string(),
-                None,
-            )
-            .await;
+            return Err(anyhow::anyhow!(err.to_string()));
         }
     };
     store.save()?;
@@ -1459,13 +1296,10 @@ pub(super) async fn handle_skill_import(
         versions: None,
     })
     .unwrap_or_default();
-    crate::acp::r#impl::io::send_result(server, request_id, payload).await
+    Ok(payload)
 }
 
-pub(super) async fn handle_skill_list_imported(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn skill_list_imported_payload(server: &AcpServer) -> Result<Value> {
     let store = open_skill_import_store(server)?;
     let imported_skills = store.list();
     let imported_names: HashSet<String> = imported_skills.iter().map(|r| r.name.clone()).collect();
@@ -1532,28 +1366,20 @@ pub(super) async fn handle_skill_list_imported(
         versions: None,
     })
     .unwrap_or_default();
-    crate::acp::r#impl::io::send_result(server, request_id, payload).await
+    Ok(payload)
 }
 
-pub(super) async fn handle_skill_enabled_toggle(
+pub(super) async fn skill_enabled_toggle_payload(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
     enabled: bool,
-) -> Result<()> {
+) -> Result<Value> {
     let action = if enabled { "enable" } else { "disable" };
     let name = match parse_skill_name_param(&params) {
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit(action, "skill.toggle", false, &err.to_string());
-            return crate::acp::r#impl::io::send_error(
-                server,
-                request_id,
-                -32602,
-                err.to_string(),
-                None,
-            )
-            .await;
+            return Err(anyhow::anyhow!(err.to_string()));
         }
     };
     let mut store = open_skill_import_store(server)?;
@@ -1592,12 +1418,11 @@ pub(super) async fn handle_skill_enabled_toggle(
                     versions: None,
                 })
                 .unwrap_or_default();
-                return crate::acp::r#impl::io::send_result(server, request_id, payload).await;
+                return Ok(payload);
             }
             let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
             record_skill_admin_audit(action, &name, false, &reason);
-            return crate::acp::r#impl::io::send_error(server, request_id, -32602, reason, None)
-                .await;
+            return Err(anyhow::anyhow!(reason));
         }
     };
     record_skill_admin_audit(action, &name, true, "updated imported skill state");
@@ -1616,26 +1441,15 @@ pub(super) async fn handle_skill_enabled_toggle(
         versions: None,
     })
     .unwrap_or_default();
-    crate::acp::r#impl::io::send_result(server, request_id, payload).await
+    Ok(payload)
 }
 
-pub(super) async fn handle_skill_remove(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn skill_remove_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let name = match parse_skill_name_param(&params) {
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit("remove", "skill.remove", false, &err.to_string());
-            return crate::acp::r#impl::io::send_error(
-                server,
-                request_id,
-                -32602,
-                err.to_string(),
-                None,
-            )
-            .await;
+            return Err(anyhow::anyhow!(err.to_string()));
         }
     };
     let mut store = open_skill_import_store(server)?;
@@ -1671,11 +1485,11 @@ pub(super) async fn handle_skill_remove(
                 versions: None,
             })
             .unwrap_or_default();
-            return crate::acp::r#impl::io::send_result(server, request_id, payload).await;
+            return Ok(payload);
         }
         let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
         record_skill_admin_audit("remove", &name, false, &reason);
-        return crate::acp::r#impl::io::send_error(server, request_id, -32602, reason, None).await;
+        return Err(anyhow::anyhow!(reason));
     }
     let unregistered = server
         .orchestration_deps
@@ -1708,26 +1522,15 @@ pub(super) async fn handle_skill_remove(
         versions: None,
     })
     .unwrap_or_default();
-    crate::acp::r#impl::io::send_result(server, request_id, payload).await
+    Ok(payload)
 }
 
-pub(super) async fn handle_skill_create(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn skill_create_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let name = match parse_skill_name_param(&params) {
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit("create", "skill.create", false, &err.to_string());
-            return crate::acp::r#impl::io::send_error(
-                server,
-                request_id,
-                -32602,
-                err.to_string(),
-                None,
-            )
-            .await;
+            return Err(anyhow::anyhow!(err.to_string()));
         }
     };
     let description = params
@@ -1760,14 +1563,7 @@ pub(super) async fn handle_skill_create(
     // Lock is dropped before await
     if let Err(err) = result {
         record_skill_admin_audit("create", &name, false, &err.to_string());
-        return crate::acp::r#impl::io::send_error(
-            server,
-            request_id,
-            -32602,
-            err.to_string(),
-            None,
-        )
-        .await;
+        return Err(anyhow::anyhow!(err.to_string()));
     }
 
     record_skill_admin_audit("create", &name, true, "created skill from prompt template");
@@ -1786,24 +1582,10 @@ pub(super) async fn handle_skill_create(
         versions: None,
     })
     .unwrap_or_default();
-    crate::acp::r#impl::io::send_result(server, request_id, payload).await
+    Ok(payload)
 }
 
-pub(super) async fn handle_skill_update(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    match skill_update_payload(server, &params) {
-        Ok(payload) => crate::acp::r#impl::io::send_result(server, request_id, payload).await,
-        Err(err) => {
-            crate::acp::r#impl::io::send_error(server, request_id, -32602, err.to_string(), None)
-                .await
-        }
-    }
-}
-
-pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result<Value> {
+pub(crate) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let name = match parse_skill_name_param(params) {
         Ok(name) => name,
         Err(err) => {
@@ -1943,21 +1725,7 @@ pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result
     .unwrap_or_default())
 }
 
-pub(super) async fn handle_skill_version_list(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    match skill_version_list_payload(server, &params) {
-        Ok(payload) => crate::acp::r#impl::io::send_result(server, request_id, payload).await,
-        Err(err) => {
-            crate::acp::r#impl::io::send_error(server, request_id, -32602, err.to_string(), None)
-                .await
-        }
-    }
-}
-
-pub(super) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> Result<Value> {
+pub(crate) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let name = match parse_skill_name_param(params) {
         Ok(name) => name,
         Err(err) => {
@@ -2034,21 +1802,7 @@ pub(super) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> 
     .unwrap_or_default())
 }
 
-pub(super) async fn handle_skill_version_rollback(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    match skill_version_rollback_payload(server, &params) {
-        Ok(payload) => crate::acp::r#impl::io::send_result(server, request_id, payload).await,
-        Err(err) => {
-            crate::acp::r#impl::io::send_error(server, request_id, -32602, err.to_string(), None)
-                .await
-        }
-    }
-}
-
-pub(super) fn skill_version_rollback_payload(server: &AcpServer, params: &Value) -> Result<Value> {
+pub(crate) fn skill_version_rollback_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let name = match parse_skill_name_param(params) {
         Ok(name) => name,
         Err(err) => {
@@ -2244,12 +1998,11 @@ pub(super) async fn handle_chat(
     }
 }
 
-pub(super) async fn handle_phase(
+pub(super) async fn phase_payload(
     server: &AcpServer,
     _params: Value,
-    request_id: Option<Value>,
     _trace: &RequestTraceContext,
-) -> Result<()> {
+) -> Result<Value> {
     let rate_limiter = server
         .resilience
         .phase_rate_limiter
@@ -2298,14 +2051,10 @@ pub(super) async fn handle_phase(
         rate_limiter,
         inflight,
     };
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&response)?).await
+    Ok(serde_json::to_value(&response)?)
 }
 
-pub(super) async fn handle_models_list(
-    server: &AcpServer,
-    _params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn models_list_payload(server: &AcpServer, _params: Value) -> Result<Value> {
     let models = server
         .model_deps
         .agent_registry
@@ -2340,15 +2089,10 @@ pub(super) async fn handle_models_list(
         .unwrap_or_default();
 
     let response = ModelsListResponse { models };
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&response)?).await
+    Ok(serde_json::to_value(&response)?)
 }
 
-/// Handle `terminal/create` — spawns a new terminal process.
-pub(super) async fn handle_terminal_create(
-    _server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn terminal_create_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let command = params
         .get("command")
         .and_then(Value::as_str)
@@ -2398,23 +2142,16 @@ pub(super) async fn handle_terminal_create(
         );
     }
 
-    crate::acp::r#impl::io::send_result(
-        _server,
-        request_id,
-        serde_json::to_value(&crate::schema::CreateTerminalResponse {
+    Ok(serde_json::to_value(
+        &crate::schema::CreateTerminalResponse {
             terminal_id: crate::schema::TerminalId::new(&terminal_id),
             meta: None,
-        })?,
-    )
-    .await
+        },
+    )?)
 }
 
 /// Handle `terminal/output` — reads buffered terminal output.
-pub(super) async fn handle_terminal_output(
-    _server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn terminal_output_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let terminal_id = params
         .get("terminalId")
         .and_then(Value::as_str)
@@ -2481,25 +2218,21 @@ pub(super) async fn handle_terminal_output(
     .await
     .unwrap_or((String::new(), false, None));
 
-    crate::acp::r#impl::io::send_result(
-        _server,
-        request_id,
-        serde_json::to_value(&crate::schema::TerminalOutputResponse {
+    Ok(serde_json::to_value(
+        &crate::schema::TerminalOutputResponse {
             output,
             truncated,
             exit_status,
             meta: None,
-        })?,
-    )
-    .await
+        },
+    )?)
 }
 
 /// Handle `terminal/release` — releases terminal resources.
 pub(super) async fn handle_terminal_release(
     _server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let terminal_id = params
         .get("terminalId")
         .and_then(Value::as_str)
@@ -2525,15 +2258,14 @@ pub(super) async fn handle_terminal_release(
         }
     }
 
-    crate::acp::r#impl::io::send_empty_ok(_server, request_id).await
+    Ok(DispatchOutput::empty())
 }
 
 /// Handle `terminal/kill` — kills a terminal process.
 pub(super) async fn handle_terminal_kill(
     _server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     let terminal_id = params
         .get("terminalId")
         .and_then(Value::as_str)
@@ -2549,15 +2281,14 @@ pub(super) async fn handle_terminal_kill(
         }
     }
 
-    crate::acp::r#impl::io::send_empty_ok(_server, request_id).await
+    Ok(DispatchOutput::empty())
 }
 
 /// Handle `terminal/wait_for_exit` — waits for a terminal process to exit.
-pub(super) async fn handle_terminal_wait_for_exit(
+pub(super) async fn terminal_wait_for_exit_payload(
     _server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+) -> Result<Value> {
     let terminal_id = params
         .get("terminalId")
         .and_then(Value::as_str)
@@ -2589,19 +2320,16 @@ pub(super) async fn handle_terminal_wait_for_exit(
         None
     };
 
-    crate::acp::r#impl::io::send_result(
-        _server,
-        request_id,
-        serde_json::to_value(&crate::schema::WaitForTerminalExitResponse {
+    Ok(serde_json::to_value(
+        &crate::schema::WaitForTerminalExitResponse {
             exit_status: crate::schema::TerminalExitStatus {
                 exit_code: exit_code.map(|c| c as u32),
                 signal: None,
                 meta: None,
             },
             meta: None,
-        })?,
-    )
-    .await
+        },
+    )?)
 }
 
 #[cfg(test)]

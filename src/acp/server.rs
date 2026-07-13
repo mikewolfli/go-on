@@ -507,11 +507,6 @@ pub struct AcpServer {
     pub prompt_manager: PromptManager,
     /// Verbose logging flag
     pub verbose: bool,
-    /// Output stream for responses
-    pub output: Arc<Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>>,
-    /// Serializes concurrent `/rpc` calls to prevent pipe-swapping race conditions.
-    /// Per-server-instance (not global) to avoid the RPC_SERIAL bottleneck (F-GAP-49).
-    pub rpc_serial: tokio::sync::Mutex<()>,
     /// Shutdown notification mechanism
     pub shutdown_notify: Arc<Notify>,
     /// Skill market registry for external skill discovery and installation
@@ -1439,10 +1434,6 @@ impl ServerBuilder {
             prompt_assembler: PromptAssembler,
             prompt_manager,
             verbose: self.verbose,
-            output: Arc::new(Mutex::new(
-                Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
-            )),
-            rpc_serial: tokio::sync::Mutex::new(()),
             shutdown_notify: Arc::new(Notify::new()),
             skill_market_registry: None,
             drain_guard: DrainGuard::default(),

@@ -119,11 +119,7 @@ fn storage_target_report(
     })
 }
 
-pub(super) async fn handle_data_lifecycle(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn data_lifecycle_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let execute_gc = params
         .get("execute_gc")
         .and_then(Value::as_bool)
@@ -203,63 +199,58 @@ pub(super) async fn handle_data_lifecycle(
         })
         .collect::<Vec<_>>();
 
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "lifecycle": {
-                "version": "x10-data-lifecycle-v1",
-                "policy": {
-                    "cache": {
-                        "retention": "ttl_and_expired_cleanup",
-                        "cleanup_frequency_seconds": server.runtime_config.maintenance_interval_seconds,
-                        "archive_rule": "expired cache records removed by maintenance.gc; sqlite vacuum follows maintenance policy",
-                    },
-                    "vector": {
-                        "retention": "explicit_clear_or_maintenance_vacuum",
-                        "cleanup_frequency_seconds": server.runtime_config.maintenance_interval_seconds,
-                        "archive_rule": "vector index compaction handled by maintenance cycle and manual vector.clear",
-                    },
-                    "ledger": {
-                        "retention": "latest_snapshots_plus_auditable_history",
-                        "cleanup_frequency_seconds": server.runtime_config.maintenance_interval_seconds,
-                        "archive_rule": "latest pointers rotate while historical artifacts remain replayable",
-                    }
+    Ok(json!({
+        "ok": true,
+        "lifecycle": {
+            "version": "x10-data-lifecycle-v1",
+            "policy": {
+                "cache": {
+                    "retention": "ttl_and_expired_cleanup",
+                    "cleanup_frequency_seconds": server.runtime_config.maintenance_interval_seconds,
+                    "archive_rule": "expired cache records removed by maintenance.gc; sqlite vacuum follows maintenance policy",
                 },
-                "storage": {
-                    "workspace": base_dir.to_string_lossy().to_string(),
-                    "targets": targets,
-                    "total_bytes": total_bytes,
-                    "waterline": {
-                        "warn_bytes": 2_u64 * 1024 * 1024 * 1024,
-                        "critical_bytes": 6_u64 * 1024 * 1024 * 1024,
-                        "status": waterline_status,
-                        "alerts": alerts,
-                    }
+                "vector": {
+                    "retention": "explicit_clear_or_maintenance_vacuum",
+                    "cleanup_frequency_seconds": server.runtime_config.maintenance_interval_seconds,
+                    "archive_rule": "vector index compaction handled by maintenance cycle and manual vector.clear",
                 },
-                "cleanup": {
-                    "execute_gc": execute_gc,
-                    "cycle": gc_cycle.as_ref().map(|cycle| json!({
-                        "memory_expired_removed": cycle.memory_expired_removed,
-                    })),
-                },
-                "audit": {
-                    "maintenance": maintenance,
-                    "replay_sequence": [
-                        "data.lifecycle",
-                        "maintenance.gc",
-                        "runtime.health",
-                        "data.lifecycle"
-                    ],
-                    "next_actions": [
-                        "Check storage.waterline alerts and execute maintenance.gc when warn/critical",
-                        "Run runtime.health after cleanup to verify runtime remains healthy",
-                        "Archive release artifacts together with build.repro metadata for rollback traceability"
-                    ]
+                "ledger": {
+                    "retention": "latest_snapshots_plus_auditable_history",
+                    "cleanup_frequency_seconds": server.runtime_config.maintenance_interval_seconds,
+                    "archive_rule": "latest pointers rotate while historical artifacts remain replayable",
                 }
+            },
+            "storage": {
+                "workspace": base_dir.to_string_lossy().to_string(),
+                "targets": targets,
+                "total_bytes": total_bytes,
+                "waterline": {
+                    "warn_bytes": 2_u64 * 1024 * 1024 * 1024,
+                    "critical_bytes": 6_u64 * 1024 * 1024 * 1024,
+                    "status": waterline_status,
+                    "alerts": alerts,
+                }
+            },
+            "cleanup": {
+                "execute_gc": execute_gc,
+                "cycle": gc_cycle.as_ref().map(|cycle| json!({
+                    "memory_expired_removed": cycle.memory_expired_removed,
+                })),
+            },
+            "audit": {
+                "maintenance": maintenance,
+                "replay_sequence": [
+                    "data.lifecycle",
+                    "maintenance.gc",
+                    "runtime.health",
+                    "data.lifecycle"
+                ],
+                "next_actions": [
+                    "Check storage.waterline alerts and execute maintenance.gc when warn/critical",
+                    "Run runtime.health after cleanup to verify runtime remains healthy",
+                    "Archive release artifacts together with build.repro metadata for rollback traceability"
+                ]
             }
-        }),
-    )
-    .await
+        }
+    }))
 }
