@@ -31,12 +31,13 @@ use super::{process_chat_request, should_escalate_approval_strategy};
 /// Handle chat request
 ///
 /// This function replaces the `AcpServer::handle_chat` method.
-pub async fn handle_chat(
+pub(crate) async fn handle_chat(
     server: &AcpServer,
     id: Option<Value>,
     params: Option<Value>,
     request_span: Option<OtelContext>,
     parent_trace: Option<RequestTraceContext>,
+    stream_observer: Option<StreamObserver>,
 ) -> Result<()> {
     let started = Instant::now();
     let pipeline_trace = parent_trace
@@ -303,19 +304,33 @@ pub async fn handle_chat(
             // This will be implemented when we migrate the escalation logic
         }
 
+        // Determine which observer to use — external (SSE) or internal (JSON-RPC).
+        let observer = stream_observer.unwrap_or_else(|| StreamObserver::jsonrpc(id.clone()));
+
         // Process chat request
         let result = process_chat_request(
             server,
             &mut chat_params,
-            Some(StreamObserver::jsonrpc(id.clone())),
+            Some(observer.clone()),
             &pipeline_trace,
             chat_span.as_ref(),
             None,
         )
         .await?;
 
-        // Send success response
-        send_result(server, id, json!(result)).await?;
+        // If using an external SSE observer, send the final result as a stream frame
+        // so dispatch_to_client can forward it. Otherwise send as a JSON-RPC result.
+        if let Some(sender) = observer.sse_sender() {
+            use crate::acp::r#impl::chat::streaming::StreamFrame;
+            let _ = sender
+                .send(StreamFrame {
+                    event: "result",
+                    payload: json!(result),
+                })
+                .await;
+        } else {
+            send_result(server, id, json!(result)).await?;
+        }
 
         Ok(())
     }

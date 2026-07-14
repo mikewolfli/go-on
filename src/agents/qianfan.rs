@@ -261,5 +261,4 @@ impl Agent for QianfanAgent {
             },
         ]
     }
-
 }

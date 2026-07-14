@@ -133,7 +133,6 @@ impl Agent for FireworksAgent {
         ]
     }
 
-
     async fn chat(
         &self,
         messages: Vec<Message>,

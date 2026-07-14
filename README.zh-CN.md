@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.3.0
+  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.4.0
 </p>
 
 <p align="center">
@@ -12,7 +12,7 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.3.0-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.4.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-1946-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
@@ -94,7 +94,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **ACP**（Agent Client Protocol）— stdio + HTTP，JSON-RPC 2.0
 - **MCP**（Model Context Protocol）— stdio + HTTP，工具列表/调用、流式传输、取消、超时
 - **5 种传输模式**：`adaptive`（双栈）、`acp-stdio`、`acp-http`、`mcp-stdio`、`mcp-http`
-- **SSE 流式传输协议** — 12 种事件类型（chunk、done、telemetry、error、state_sync、sub_agent、command + Responses API 事件）
+- **SSE 流式传输协议** — chunk、done、telemetry、error、state_sync、sub_agent、command + Responses API 事件
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
 ### 工具系统
@@ -162,7 +162,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 
 ## 架构
 
-go-on 采用 **14 条总线能力架构**，含认知循环：
+go-on 采用 **14 条总线能力架构**，含认知循环和统一的 **DispatchOutput** handler 模式：
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -176,6 +176,25 @@ go-on 采用 **14 条总线能力架构**，含认知循环：
 ├──────────┼──────────┼──────────┼──────────┼───────────────┤
 │ OrchestB.│          │          │ DistMemB.│               │
 └──────────┴──────────┴──────────┴──────────┴───────────────┘
+```
+
+### 请求处理分发
+
+所有 122+ 个 JSON-RPC handler 返回统一的 `DispatchOutput` 枚举，dispatch 层自动序列化为对应的传输响应：
+
+```
+Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain
+  ├─ Json(Value)          → 标准 JSON-RPC 成功响应
+  ├─ Error { code, msg }  → 带精确错误码的 JSON-RPC 错误
+  ├─ Stream { receiver }  → 基于 channel 的流式输出（chat）
+  │    ├─ "chunk"     → JSON-RPC notification chat.stream.chunk
+  │    ├─ "done"      → JSON-RPC notification chat.stream.done
+  │    ├─ "telemetry" → JSON-RPC notification chat.stream.telemetry
+  │    ├─ "result"    → JSON-RPC result（最终响应）
+  │    └─ "error"     → JSON-RPC error
+  ├─ Text(String)        → 含 __text_plain__ sentinel 的 JSON-RPC
+  ├─ Checkpoint(...)     → 自动分解为 checkpoint 成功/错误
+  └─ Silent              → 无响应（JSON-RPC notification）
 ```
 
 ### 对话执行流水线（SSE）

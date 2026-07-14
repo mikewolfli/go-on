@@ -636,11 +636,9 @@ pub(super) async fn handle_conversation_checkpoint_create(
         .map(str::to_string);
     let checkpoint =
         create_checkpoint_record(server, conversation_id, branch_id, messages, note, None).await;
+    let ck_value = serde_json::to_value(&checkpoint).unwrap_or_default();
 
-    Ok(DispatchOutput::ok(json!({
-        "ok": true,
-        "checkpoint": checkpoint,
-    })))
+    Ok(DispatchOutput::created(ck_value))
 }
 
 pub(super) async fn handle_conversation_checkpoint_list(
@@ -747,8 +745,8 @@ pub(super) async fn handle_conversation_checkpoint_prune(
     let (removed, repaired_heads, dropped_heads) =
         prune_checkpoints(server, conversation_id, branch_id, keep).await;
 
-    Ok(DispatchOutput::ok(json!({
-        "ok": true,
+    Ok(DispatchOutput::deleted(json!({
+        "conversation_id": conversation_id,
         "removed": removed,
         "repaired_heads": repaired_heads,
         "dropped_heads": dropped_heads,
@@ -1316,7 +1314,7 @@ fn ensure_keyring_item_accessible(_account: &str) {
 /// Handle provider configuration request from GUI or other clients.
 /// Stores the provider config to system keyring.
 pub(super) async fn handle_provider_configure(
-    server: &AcpServer,
+    _server: &AcpServer,
     params: Value,
 ) -> Result<DispatchOutput> {
     let name = params
@@ -1419,7 +1417,7 @@ pub(super) async fn handle_provider_configure(
 /// The caller (GUI) should display the URI + user_code and then poll
 /// `provider.copilot_device_code_poll` with the returned `device_code`.
 pub(super) async fn handle_copilot_device_code_request(
-    server: &AcpServer,
+    _server: &AcpServer,
     params: Value,
 ) -> Result<DispatchOutput> {
     info!("GitHub Copilot Device Code flow requested");
@@ -1498,7 +1496,7 @@ pub(super) async fn handle_copilot_device_code_request(
 /// The GUI should call this repeatedly (every `interval` seconds) until
 /// either a token is returned or the device_code expires.
 pub(super) async fn handle_copilot_device_code_poll(
-    server: &AcpServer,
+    _server: &AcpServer,
     params: Value,
 ) -> Result<DispatchOutput> {
     let device_code = params

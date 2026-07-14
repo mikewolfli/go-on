@@ -133,8 +133,6 @@ impl Agent for TogetherAgent {
         ]
     }
 
-
-
     async fn chat(
         &self,
         messages: Vec<Message>,

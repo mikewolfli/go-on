@@ -98,7 +98,7 @@ mod protocol;
 mod protocol_pack;
 mod pua_pack;
 mod repro_handlers;
-pub(crate) use dispatch::{dispatch_to_client, CheckpointResult, DispatchOutput};
+pub(crate) use dispatch::{dispatch_to_client, DispatchOutput};
 mod repro_pack;
 mod runtime_pack;
 mod status_pack;
@@ -106,7 +106,7 @@ pub(crate) mod tools_pack;
 mod trace_pack;
 mod util;
 pub(crate) mod workflow_pack;
-use self::chat_pack::{parse_messages, send_error, send_result};
+use self::chat_pack::{parse_messages, send_error};
 pub(crate) use self::checkpoint_pack::create_checkpoint_record;
 pub(crate) use self::checkpoint_pack::persist_checkpoint_metacognitive_loop;
 use self::checkpoint_pack::*;
@@ -762,16 +762,20 @@ pub async fn handle_request(
                 }
                 // Protocol-level notifications
                 "$/cancel_request" => {
-                    crate::acp::r#impl::io::respond(
-                        server,
-                        request_id,
-                        protocol_pack::cancel_request_payload(
-                            server,
-                            request.params.unwrap_or_default(),
-                        )
-                        .await,
-                    )
-                    .await
+                    // $/cancel_request is a notification per JSON-RPC spec — no response
+                    let target_id = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    tracing::warn!(
+                        target: "acp::protocol_pack",
+                        target_request = %target_id,
+                        "cancel_request_payload: cancelling request {}",
+                        target_id
+                    );
+                    dispatch_to_client(server, request_id, Ok(DispatchOutput::silent())).await
                 }
                 // MCP methods bridged through ACP dispatch
                 "mcp.initialize" => {
@@ -784,7 +788,7 @@ pub async fn handle_request(
                 }
                 "mcp.notifications_initialized" => {
                     // MCP notification — no response expected per JSON-RPC spec
-                    Ok(())
+                    dispatch_to_client(server, request_id, Ok(DispatchOutput::silent())).await
                 }
                 "mcp.ping" => {
                     crate::acp::r#impl::io::respond(
@@ -908,18 +912,26 @@ pub async fn handle_request(
                     .await
                 }
                 "terminal/release" => {
-                    protocol_pack::handle_terminal_release(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::handle_terminal_release(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "terminal/kill" => {
-                    protocol_pack::handle_terminal_kill(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        protocol_pack::handle_terminal_kill(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -997,12 +1009,13 @@ pub async fn handle_request(
                             .await
                         }
                         None => {
-                            send_error(
+                            dispatch_to_client(
                                 server,
                                 request_id,
-                                AcpErrorCode::InvalidParams as i32,
-                                tf("error.request.missing_field_id", &[]),
-                                None,
+                                Ok(DispatchOutput::error(
+                                    AcpErrorCode::InvalidParams as i32,
+                                    tf("error.request.missing_field_id", &[]),
+                                )),
                             )
                             .await
                         }
@@ -1160,11 +1173,15 @@ pub async fn handle_request(
                     .await
                 }
                 "chat" => {
-                    protocol_pack::handle_chat(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
-                        &trace,
+                        protocol_pack::handle_chat(
+                            server,
+                            request.params.unwrap_or_default(),
+                            &trace,
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -1198,7 +1215,12 @@ pub async fn handle_request(
                     .await
                 }
                 "metrics.prometheus" => {
-                    metrics_pack::handle_metrics_prometheus(server, request_id).await
+                    dispatch_to_client(
+                        server,
+                        request_id,
+                        metrics_pack::handle_metrics_prometheus(server).await,
+                    )
+                    .await
                 }
                 "metrics.window.query" => {
                     crate::acp::r#impl::io::respond(
@@ -1422,34 +1444,50 @@ pub async fn handle_request(
                     .await
                 }
                 "conversation.checkpoint.create" => {
-                    runtime_pack::handle_conversation_checkpoint_create(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::handle_conversation_checkpoint_create(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "conversation.checkpoint.list" | "checkpoint.list" => {
-                    runtime_pack::handle_conversation_checkpoint_list(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::handle_conversation_checkpoint_list(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "conversation.rollback" => {
-                    runtime_pack::handle_conversation_rollback(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::handle_conversation_rollback(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "conversation.checkpoint.prune" => {
-                    runtime_pack::handle_conversation_checkpoint_prune(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::handle_conversation_checkpoint_prune(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -1878,10 +1916,14 @@ pub async fn handle_request(
                     .await
                 }
                 "provider.configure" => {
-                    runtime_pack::handle_provider_configure(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::handle_provider_configure(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -1904,18 +1946,26 @@ pub async fn handle_request(
                     .await
                 }
                 "provider.copilot_device_code" => {
-                    runtime_pack::handle_copilot_device_code_request(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::handle_copilot_device_code_request(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
                 "provider.copilot_device_code_poll" => {
-                    runtime_pack::handle_copilot_device_code_poll(
+                    dispatch_to_client(
                         server,
-                        request.params.unwrap_or_default(),
                         request_id,
+                        runtime_pack::handle_copilot_device_code_poll(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
                     )
                     .await
                 }
@@ -1949,35 +1999,35 @@ pub async fn handle_request(
                     .await
                 }
                 "tool.approve" => {
-                    let params = request.params.clone().unwrap_or_default();
-                    let tool_name = match params.get("tool_name").and_then(|v| v.as_str()) {
-                        Some(name) => name,
-                        None => {
-                            return send_error(
-                                server,
-                                request_id,
-                                AcpErrorCode::InvalidParams as i32,
-                                "tool.approve: missing 'tool_name' parameter".to_string(),
-                                None,
-                            )
-                            .await;
+                    let params = request.params.unwrap_or_default();
+                    let tool_name = params
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if tool_name.is_empty() {
+                        dispatch_to_client(
+                            server,
+                            request_id,
+                            Err(anyhow::anyhow!(
+                                "tool.approve: missing 'tool_name' parameter"
+                            )),
+                        )
+                        .await
+                    } else {
+                        if let Some(ref harness_bus) = server.governance_deps.harness_bus {
+                            harness_bus.evaluator.approve_tool(tool_name);
+                            tracing::info!("tool.approve: user approved tool '{}'", tool_name);
                         }
-                    };
-
-                    if let Some(ref harness_bus) = server.governance_deps.harness_bus {
-                        harness_bus.evaluator.approve_tool(tool_name);
-                        tracing::info!("tool.approve: user approved tool '{}'", tool_name);
+                        crate::acp::r#impl::io::respond(
+                            server,
+                            request_id,
+                            Ok(serde_json::json!({
+                                "approved": true,
+                                "tool_name": tool_name,
+                            })),
+                        )
+                        .await
                     }
-
-                    crate::acp::r#impl::io::respond(
-                        server,
-                        request_id,
-                        Ok(serde_json::json!({
-                            "approved": true,
-                            "tool_name": tool_name,
-                        })),
-                    )
-                    .await
                 }
                 "runtime.restart" => {
                     crate::acp::r#impl::io::respond(
@@ -1993,18 +2043,19 @@ pub async fn handle_request(
                         &[("method", &request.method)],
                     );
                     let descriptive = format!("unknown method: {}", request.method);
-                    send_error(
+                    dispatch_to_client(
                         server,
                         request_id,
-                        AcpErrorCode::MethodNotFound as i32,
-                        if localized.contains("unknown method")
-                            || localized.contains("method not found")
-                        {
-                            localized
-                        } else {
-                            format!("{} ({})", descriptive, localized)
-                        },
-                        None,
+                        Ok(DispatchOutput::error(
+                            AcpErrorCode::MethodNotFound as i32,
+                            if localized.contains("unknown method")
+                                || localized.contains("method not found")
+                            {
+                                localized
+                            } else {
+                                format!("{} ({})", descriptive, localized)
+                            },
+                        )),
                     )
                     .await
                 }
@@ -2045,7 +2096,7 @@ mod tests {
     use super::{
         attach_request_dispatch_context, classify_request_error_kind, infer_workflow_parallelism,
         is_acp_request, rebalance_execution_order, session_id_for_task, summarize_lock_health,
-        with_error_contract_data, AcpErrorCode, LockHealthSummary,
+        with_error_contract_data, LockHealthSummary,
     };
     #[cfg(not(feature = "backend-postgres"))]
     use crate::vector::VectorStore;

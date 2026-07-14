@@ -138,8 +138,6 @@ impl Agent for ReplicateAgent {
         ]
     }
 
-
-
     async fn chat(
         &self,
         messages: Vec<Message>,

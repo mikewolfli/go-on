@@ -3,7 +3,7 @@ use super::*;
 // NOTE: The handler functions handle_chat, handle_phase, handle_primary_secondary_summary
 // were previously here but were dead code — the dispatch in request.rs routes to
 // protocol_pack and learning_pack versions. These utility functions
-// (parse_messages, send_error, send_result) remain because they are actively used.
+// (parse_messages, send_error) remain because they are actively used.
 
 pub(super) fn parse_messages(params: &Value) -> Option<Vec<Message>> {
     if let Some(messages) = params.get("messages") {
@@ -48,21 +48,4 @@ pub(super) async fn send_error(
     };
     let data = with_error_contract_data(code, &message, data);
     crate::acp::r#impl::io::send_error(server, id, code, message, data).await
-}
-
-/// Send result response
-pub(super) async fn send_result(
-    server: &AcpServer,
-    id: Option<Value>,
-    result: Value,
-) -> Result<()> {
-    let method = DISPATCH_REQUEST_METHOD
-        .try_with(|m| m.clone())
-        .unwrap_or_default();
-    let result = inject_platform_profiles_if_absent(result, &method);
-    let result = match take_pua_report(id.as_ref()) {
-        Some(encoded) => inject_pua_report_into_result(result, encoded),
-        None => result,
-    };
-    crate::acp::r#impl::io::send_result(server, id, result).await
 }

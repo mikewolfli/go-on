@@ -181,7 +181,6 @@ impl Agent for XaiAgent {
             },
         ]
     }
-
 }
 
 #[cfg(test)]

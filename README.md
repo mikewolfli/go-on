@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.3.0
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.4.0
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.3.0-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.4.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-1946-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
@@ -98,7 +98,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **ACP** (Agent Client Protocol) — stdio + HTTP, JSON-RPC 2.0
 - **MCP** (Model Context Protocol) — stdio + HTTP, tool list/call, streaming, cancellation, timeout
 - **5 transport modes**: `adaptive` (dual-stack), `acp-stdio`, `acp-http`, `mcp-stdio`, `mcp-http`
-- **SSE streaming protocol** — 12 event types (chunk, done, telemetry, error, state_sync, sub_agent, command + Responses API events)
+- **SSE streaming protocol** — chunk, done, telemetry, error, state_sync, sub_agent, command + Responses API events
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
 
 ### Tool System
@@ -166,7 +166,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 
 ## Architecture
 
-go-on uses a **14-bus capability architecture** with a cognitive loop:
+go-on uses a **14-bus capability architecture** with a cognitive loop and a unified **DispatchOutput** handler pattern:
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -180,6 +180,25 @@ go-on uses a **14-bus capability architecture** with a cognitive loop:
 ├──────────┼──────────┼──────────┼──────────┼───────────────┤
 │ OrchestB.│          │          │ DistMemB.│               │
 └──────────┴──────────┴──────────┴──────────┴───────────────┘
+```
+
+### Request Handler Dispatch
+
+All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum. The dispatch layer serializes each variant to the appropriate transport response:
+
+```
+Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain
+  ├─ Json(Value)          → standard JSON-RPC success
+  ├─ Error { code, msg }  → JSON-RPC error with precise error code
+  ├─ Stream { receiver }  → channel-based streaming (chat)
+  │    ├─ "chunk"     → JSON-RPC notification chat.stream.chunk
+  │    ├─ "done"      → JSON-RPC notification chat.stream.done
+  │    ├─ "telemetry" → JSON-RPC notification chat.stream.telemetry
+  │    ├─ "result"    → JSON-RPC result (final response)
+  │    └─ "error"     → JSON-RPC error
+  ├─ Text(String)        → JSON-RPC with __text_plain__ sentinel
+  ├─ Checkpoint(...)     → auto-decomposed checkpoint success/error
+  └─ Silent              → no response (JSON-RPC notification)
 ```
 
 ### Chat Execution Pipeline (SSE)

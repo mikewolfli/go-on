@@ -274,5 +274,4 @@ impl Agent for CohereAgent {
             },
         ]
     }
-
 }

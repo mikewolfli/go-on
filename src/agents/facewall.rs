@@ -142,5 +142,4 @@ impl Agent for FaceWallAgent {
             },
         ]
     }
-
 }

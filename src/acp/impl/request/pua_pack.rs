@@ -34,24 +34,6 @@ pub(super) fn take_pua_report(id: Option<&Value>) -> Option<String> {
         .and_then(|mut guard| guard.remove(&value_to_id(id)))
 }
 
-pub(super) fn inject_pua_report_into_result(result: Value, encoded: String) -> Value {
-    match result {
-        Value::Object(mut object) => {
-            let meta = object
-                .entry("meta".to_string())
-                .or_insert_with(|| json!({}));
-            if let Value::Object(meta_obj) = meta {
-                meta_obj.insert("x_pua_report".to_string(), Value::String(encoded));
-            }
-            Value::Object(object)
-        }
-        other => json!({
-            "value": other,
-            "meta": { "x_pua_report": encoded }
-        }),
-    }
-}
-
 pub(super) fn inject_pua_report_into_error_data(data: Option<Value>, encoded: String) -> Value {
     match data {
         Some(Value::Object(mut object)) => {

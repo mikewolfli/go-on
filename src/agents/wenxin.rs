@@ -253,7 +253,6 @@ impl Agent for WenxinAgent {
             },
         ]
     }
-
 }
 
 #[cfg(test)]

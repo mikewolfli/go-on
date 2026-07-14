@@ -1,11 +1,14 @@
 # go-on Documentation
 
-This book documents the current `1.3.0` architecture and usage model of `go-on`.
+This book documents the current `1.4.0` architecture and usage model of `go-on`.
 
-The runtime implements a **14-bus capability architecture** with **35+ AI provider integrations**,
-**1962 unit tests** (zero failures), and **zero clippy warnings across all build profiles**.
+The runtime implements a **14-bus capability architecture** with **38 AI provider integrations**,
+**1946 unit tests** (zero failures), and **zero clippy warnings across all build profiles**.
 
-It is organized as a bilingual mdBook:
+All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum, with the dispatch layer
+handling serialization for JSON-RPC, SSE streaming, text/plain, and silent responses.
+
+It is organized as a trilingual mdBook:
 
 - English chapters start at [Architecture Overview](en/overview.md).
 - 简体中文章节从 [架构总览](zh-CN/overview.md) 开始。
@@ -15,6 +18,7 @@ The content is based on the current workspace structure and runtime surfaces:
 
 - Rust backend runtime and CLI (three build profiles: local / simple-server / multi-users-server)
 - 14-bus capability architecture (CapabilityBus + HarnessBus + 12 sub-buses)
+- Unified `DispatchOutput` handler dispatch pattern (Json / Error / Stream / Text / Checkpoint / Silent)
 - Autonomous agent orchestration, DAG task execution, and cognitive modules
 - Setup wizard and secret management (system keyring, Vault)
 - Zed integration through ACP stdio and ACP or MCP HTTP

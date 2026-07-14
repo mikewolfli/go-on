@@ -672,22 +672,6 @@ pub(super) async fn session_cancel_payload(_server: &AcpServer, params: Value) -
     Err(anyhow::anyhow!("session {} cancelled", session_id))
 }
 
-pub(super) async fn cancel_request_payload(_server: &AcpServer, params: Value) -> Result<Value> {
-    let target_id = params
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    tracing::warn!(
-        target: "acp::protocol_pack",
-        target_request = %target_id,
-        "cancel_request_payload: cancelling request {}",
-        target_id
-    );
-
-    // $/cancel_request is a notification per JSON-RPC spec
-    Err(anyhow::anyhow!("request {} cancelled", target_id))
-}
-
 /// Handle `session/list` — lists existing sessions.
 ///
 /// Standard ACP: client may send optional `cwd` filter,
@@ -1965,34 +1949,41 @@ fn normalize_rate_limited_message(message: &str) -> String {
 pub(super) async fn handle_chat(
     server: &AcpServer,
     params: Value,
-    request_id: Option<Value>,
     trace: &RequestTraceContext,
-) -> Result<()> {
+) -> Result<DispatchOutput> {
     use crate::acp::r#impl::chat::handle_chat as chat_handler;
+    use crate::acp::r#impl::chat::streaming::StreamFrame;
+    use crate::acp::r#impl::chat::streaming::StreamObserver;
+    use tokio::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel::<StreamFrame>(256);
+    let observer = StreamObserver::sse(tx);
 
     match chat_handler(
         server,
-        request_id.clone(),
+        None, // id=None so send_result is skipped; result goes via SSE stream
         Some(params),
         None,
         Some(trace.clone()),
+        Some(observer),
     )
     .await
     {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(DispatchOutput::Stream { receiver: rx }),
         Err(err) => {
             let message = err.to_string();
             if is_rate_limited_message(&message) {
-                crate::acp::r#impl::io::send_error(
-                    server,
-                    request_id,
-                    -32029,
-                    normalize_rate_limited_message(&message),
-                    None,
-                )
-                .await
+                Ok(DispatchOutput::Error {
+                    code: -32029,
+                    message: normalize_rate_limited_message(&message),
+                    data: None,
+                })
             } else {
-                crate::acp::r#impl::io::send_error(server, request_id, -32603, message, None).await
+                Ok(DispatchOutput::Error {
+                    code: -32603,
+                    message,
+                    data: None,
+                })
             }
         }
     }

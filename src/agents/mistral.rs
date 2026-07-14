@@ -155,7 +155,6 @@ impl Agent for MistralAgent {
         ]
     }
 
-
     async fn chat(
         &self,
         messages: Vec<Message>,

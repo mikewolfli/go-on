@@ -662,7 +662,16 @@ async fn route_http_post(
                         last_response
                     };
 
-                    write_http_json_response(socket, 200, response_value, cors_headers).await?;
+                    // Check for __text_plain__ sentinel key — serve as text/plain
+                    if let Some(text) = response_value
+                        .get("result")
+                        .and_then(|r| r.get("__text_plain__"))
+                        .and_then(|v| v.as_str())
+                    {
+                        write_http_text_response(socket, 200, text, cors_headers).await?;
+                    } else {
+                        write_http_json_response(socket, 200, response_value, cors_headers).await?;
+                    }
                 }
                 "/v1/responses" => {
                     handle_responses_api(
@@ -813,6 +822,42 @@ pub(crate) async fn write_http_json_response(
     );
     tcp_write_timeout(socket, headers.as_bytes()).await?;
     tcp_write_timeout(socket, &body).await?;
+    let _ = socket.shutdown().await;
+    Ok(())
+}
+
+/// Write HTTP text/plain response.
+///
+/// Used when the JSON-RPC result contains a `__text_plain__` sentinel key,
+/// instructing the HTTP transport to serve the value as text/plain instead of
+/// the default application/json.
+pub(crate) async fn write_http_text_response(
+    socket: &mut TcpStream,
+    status: u16,
+    text: &str,
+    extra_headers: &str,
+) -> Result<()> {
+    let status_text = match status {
+        200 => "OK",
+        401 => "Unauthorized",
+        429 => "Too Many Requests",
+        400 => "Bad Request",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        _ => "OK",
+    };
+    let body = text.as_bytes();
+    let headers = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+        status,
+        status_text,
+        body.len(),
+        extra_headers
+    );
+    tcp_write_timeout(socket, headers.as_bytes()).await?;
+    tcp_write_timeout(socket, body).await?;
     let _ = socket.shutdown().await;
     Ok(())
 }

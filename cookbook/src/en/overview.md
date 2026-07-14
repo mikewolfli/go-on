@@ -2,15 +2,15 @@
 
 `go-on` is a three-surface runtime around a Rust backend:
 
-- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with cognitive modules.
+- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with cognitive modules. All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum.
 - **GUI**: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.
 - **VS Code addon**: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.
 
 ## Version
 
-- Core runtime: **1.3.0**
-- GUI desktop: **1.3.0**
-- VS Code addon: **1.3.0**
+- Core runtime: **1.4.0**
+- GUI desktop: **1.4.0**
+- VS Code addon: **1.4.0**
 
 ## GUI Desktop App
 
@@ -22,7 +22,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 Key features:
 - **Monitor**: Backend health, AI provider status, real-time metrics
-- **Chat**: Multi-session conversations with phase (coding/review/debug/test/deploy) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status
+- **Chat**: Multi-session conversations with phase (coding/review/debug/test/deploy) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status. Action bar (copy/edit/delete) at bottom of each message bubble.
 - **Skills**: Create and import AI skills; built-in `skill-creator` lets AI define new skills autonomously
 - **Settings**: Feature toggles, language switching (en/zh-CN/zh-TW), 5 visual themes
 - **Backend Connection**: ACP+HTTP JSON-RPC with automatic health polling
@@ -42,12 +42,35 @@ Four build profiles support different deployment scenarios:
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **local** | ✅ **Zero warnings** | **2114** |
+| **local** | ✅ **Zero warnings** | **1946** |
 | **simple-server** | ✅ **Zero warnings** | **all pass** |
 | **full** | ✅ **Zero warnings** | **all pass** |
 | **multi-users-server** | ✅ **Zero warnings** | **all pass** |
 
-All 2114 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
+All 1946 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
+
+## Unified Handler Dispatch Pattern
+
+All 122+ JSON-RPC handlers return `Result<DispatchOutput>`. The `dispatch_to_client` function converts each variant to the appropriate transport response:
+
+```
+Handler → Result<DispatchOutput> → dispatch_to_client → transport response
+
+DispatchOutput variants:
+  Json(Value)          → standard JSON-RPC success
+  Error { code, msg }  → JSON-RPC error with precise error code
+  Stream { receiver }  → channel-based streaming (chat)
+    chunk     → JSON-RPC notification chat.stream.chunk
+    done      → JSON-RPC notification chat.stream.done
+    telemetry → JSON-RPC notification chat.stream.telemetry
+    result    → JSON-RPC result (final response)
+    error     → JSON-RPC error
+  Text(String)        → JSON-RPC with __text_plain__ sentinel
+  Checkpoint(...)     → auto-decomposed checkpoint result
+  Silent              → no response (JSON-RPC notification)
+```
+
+This replaces the previous ad-hoc `send_result`/`send_error` pattern, eliminating manual I/O calls from handler bodies and ensuring consistent error handling (platform profile injection, precise error codes).
 
 ## Runtime Protocol Modes
 
@@ -89,7 +112,7 @@ go-on implements a **14-bus architecture** centered on `CapabilityBus` and `Harn
 | **CapabilityBus** | `src/intelligence/capability_bus/core.rs` | Central intelligence bus; orchestrates sense/decide/evolve lifecycle |
 | **HarnessBus** | `src/governance/harness_bus.rs` | Governance entry; policy evaluation, drift/resilience/security checks |
 
-### Sub-Buses (Phase 4)
+### Sub-Buses
 
 | Bus | Module | Description |
 |:----|--------|-------------|
@@ -142,12 +165,12 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 | Chinese (Simplified) | `languages/zh_CN.json` | 448+ |
 | Chinese (Traditional) | `languages/zh_TW.json` | 448+ |
 
-Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 35 providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
+Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 38 providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
 
 ## Repository areas that map to the architecture
 
 - `src/`: backend runtime, CLI, setup, ACP and MCP implementation.
-  - `src/acp/`: ACP server, request routing, workflow/task/chat/checkpoint
+  - `src/acp/`: ACP server, request routing, workflow/task/chat/checkpoint, unified DispatchOutput dispatch
   - `src/agents/`: Provider adapters (OpenAI, Anthropic, DeepSeek, Gemini, xAI Grok, SiliconFlow, and 30+ more), AgentFactory
   - `src/core/`: Config, setup, readiness, error model
   - `src/governance/`: Policy/rule governance, audit, security governor, drift protection

@@ -190,7 +190,6 @@ impl Agent for SiliconFlowAgent {
             },
         ]
     }
-
 }
 
 #[cfg(test)]

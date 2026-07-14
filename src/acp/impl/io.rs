@@ -43,6 +43,7 @@ pub async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -
 }
 
 /// Send an empty JSON object `{}` as a successful result.
+#[allow(dead_code)]
 pub async fn send_empty_ok(server: &AcpServer, id: Option<Value>) -> Result<()> {
     send_result(
         server,
@@ -118,27 +119,30 @@ pub async fn respond(
         Some(id) => id,
         None => return Ok(()),
     };
-    let response = match result {
-        Ok(value) => JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: Some(id),
-            result: Some(value),
-            error: None,
-        },
-        Err(e) => JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: Some(id),
-            result: None,
-            error: Some(JsonRpcError {
-                code: -32602,
-                message: format!("{:#}", e),
-                data: Some(serde_json::json!({
-                    "code": "DISPATCH_ERROR",
-                })),
-            }),
-        },
-    };
-    write_response(server, response).await
+    match result {
+        Ok(value) => {
+            write_response(
+                server,
+                JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: Some(id),
+                    result: Some(value),
+                    error: None,
+                },
+            )
+            .await
+        }
+        Err(e) => {
+            send_error(
+                server,
+                Some(id),
+                -32602,
+                format!("{:#}", e),
+                Some(serde_json::json!({"code": "DISPATCH_ERROR"})),
+            )
+            .await
+        }
+    }
 }
 
 /// Write JSON line to output.

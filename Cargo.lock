@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "go-on"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "go-on-gui-egui"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -2488,7 +2488,7 @@ dependencies = [
 
 [[package]]
 name = "go_on_sdk"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "fastrand",
  "futures",

@@ -207,7 +207,6 @@ impl Agent for GroqAgent {
         ]
     }
 
-
     async fn chat(
         &self,
         messages: Vec<Message>,

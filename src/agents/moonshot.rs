@@ -150,5 +150,4 @@ impl Agent for MoonshotAgent {
             },
         ]
     }
-
 }

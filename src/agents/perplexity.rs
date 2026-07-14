@@ -177,7 +177,6 @@ impl Agent for PerplexityAgent {
         ]
     }
 
-
     async fn chat(
         &self,
         messages: Vec<Message>,

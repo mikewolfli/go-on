@@ -576,17 +576,16 @@ impl ProvidersView {
             let tx = self.pending_tx.clone();
             let ctx_clone = ctx.clone();
             tokio::spawn(async move {
-                let models: std::collections::HashMap<String, Vec<String>> =
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(5),
-                        backend_clone.fetch_models(),
-                    )
-                    .await
-                    .unwrap_or_else(|_| {
-                        #[cfg(debug_assertions)]
-                        eprintln!("Warning: Failed to fetch models from backend (timeout)");
-                        std::collections::HashMap::new()
-                    });
+                let models: std::collections::HashMap<String, Vec<String>> = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend_clone.fetch_models(),
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Warning: Failed to fetch models from backend (timeout)");
+                    std::collections::HashMap::new()
+                });
                 let msg = format!(
                     "__models__:{}",
                     serde_json::to_string(&models).unwrap_or_default()
