@@ -1253,7 +1253,7 @@ impl Agent for CachedAgentWrapper {
         // immediately while a background task collects the full response
         // for asynchronous cache storage. This avoids blocking the caller
         // on cache write and eliminates unnecessary intermediate channels.
-        let (collect_tx, mut collect_rx) = tokio::sync::mpsc::channel::<String>(2048);
+        let (collect_tx, mut collect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let inner_sender = StreamingSender::from(collect_tx);
 
         let inner = self.inner.clone();

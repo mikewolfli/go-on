@@ -431,7 +431,7 @@ async fn run_single_review(
     let agent_options = phase_options.and_then(|opts| opts.agent_options());
 
     // Spawn and collect agent response, enforcing the reviewer deadline via tokio timeout
-    let (sender, mut receiver) = mpsc::channel::<String>(2048);
+    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
     let sender = crate::agent::StreamingSender::from(sender);
     let agent_clone = agent.clone();
     let task = tokio::spawn(async move {

@@ -110,12 +110,10 @@ pub(crate) async fn emit_stream_chunk(
             payload["reasoning"] = json!(reasoning_token);
         }
         // Send failure is expected when client disconnects — non-critical.
-        let _ = sender
-            .send(StreamFrame {
-                event: STREAM_EVENT_CHUNK,
-                payload,
-            })
-            .await;
+        let _ = sender.send(StreamFrame {
+            event: STREAM_EVENT_CHUNK,
+            payload,
+        });
     }
 
     Ok(())
@@ -181,12 +179,10 @@ pub(crate) async fn emit_stream_done(
             }
         }
         // Send failure is expected when client disconnects — non-critical.
-        let _ = sender
-            .send(StreamFrame {
-                event: STREAM_EVENT_DONE,
-                payload,
-            })
-            .await;
+        let _ = sender.send(StreamFrame {
+            event: STREAM_EVENT_DONE,
+            payload,
+        });
     }
 
     Ok(())
@@ -220,17 +216,15 @@ pub(crate) async fn emit_stream_token_economy(
 
     if let Some(sender) = &observer.sse_sender {
         // Send failure is expected when client disconnects — non-critical.
-        let _ = sender
-            .send(StreamFrame {
-                event: STREAM_EVENT_TELEMETRY,
-                payload: json!({
-                    "agent": meta.agent_name,
-                    "phase": meta.phase_name,
-                    "trace_id": meta.trace_id,
-                    "token_economy": token_economy,
-                }),
-            })
-            .await;
+        let _ = sender.send(StreamFrame {
+            event: STREAM_EVENT_TELEMETRY,
+            payload: json!({
+                "agent": meta.agent_name,
+                "phase": meta.phase_name,
+                "trace_id": meta.trace_id,
+                "token_economy": token_economy,
+            }),
+        });
     }
 
     Ok(())
@@ -270,15 +264,15 @@ pub(crate) struct StreamFrame {
 #[derive(Debug, Clone)]
 pub(crate) struct StreamObserver {
     jsonrpc_response_id: Option<Value>,
-    sse_sender: Option<mpsc::Sender<StreamFrame>>,
+    sse_sender: Option<mpsc::UnboundedSender<StreamFrame>>,
 }
 
 impl StreamObserver {
     /// Send an SSE frame through this observer, if SSE is configured.
     /// Returns `true` if the frame was sent, `false` if no SSE sender is available.
-    pub(crate) async fn send_sse(&self, frame: StreamFrame) -> bool {
+    pub(crate) fn send_sse(&self, frame: StreamFrame) -> bool {
         if let Some(sender) = &self.sse_sender {
-            sender.send(frame).await.is_ok()
+            sender.send(frame).is_ok()
         } else {
             false
         }
@@ -291,7 +285,7 @@ impl StreamObserver {
         }
     }
 
-    pub(crate) fn sse(sender: mpsc::Sender<StreamFrame>) -> Self {
+    pub(crate) fn sse(sender: mpsc::UnboundedSender<StreamFrame>) -> Self {
         Self {
             jsonrpc_response_id: None,
             sse_sender: Some(sender),
@@ -300,7 +294,7 @@ impl StreamObserver {
 
     /// Clone the SSE sender, if present, so callers can send progress
     /// frames through the same channel without owning the observer.
-    pub(crate) fn sse_sender(&self) -> Option<mpsc::Sender<StreamFrame>> {
+    pub(crate) fn sse_sender(&self) -> Option<mpsc::UnboundedSender<StreamFrame>> {
         self.sse_sender.clone()
     }
 }

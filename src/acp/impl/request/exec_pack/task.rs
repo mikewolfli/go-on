@@ -1056,7 +1056,7 @@ async fn run_agent_chat_collecting(
     use tokio::sync::mpsc;
     use tokio::time::timeout;
 
-    let (tx, mut rx) = mpsc::channel::<String>(128);
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let sender = crate::agent::StreamingSender::new(tx);
     let chat_future = agent.chat(messages, principles, options, sender);
     let timeout_duration = timeout_seconds

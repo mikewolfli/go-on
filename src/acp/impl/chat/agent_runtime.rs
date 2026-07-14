@@ -46,7 +46,7 @@ pub(crate) async fn run_agent_collecting(
     let followup_principles = principles.clone();
     let followup_options = options.clone();
 
-    let (sender, mut receiver) = mpsc::channel::<String>(2048);
+    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
     let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 

@@ -55,7 +55,7 @@ pub struct AutonomyLoopConfig {
     /// If set, progress frames are sent before/after each tool call to
     /// keep the SSE inactivity timeout from firing during long tool runs.
     #[serde(skip)]
-    pub(crate) progress_tx: Option<mpsc::Sender<StreamFrame>>,
+    pub(crate) progress_tx: Option<mpsc::UnboundedSender<StreamFrame>>,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -169,7 +169,7 @@ pub async fn run_autonomy_loop(
         let mut tool_calls: Vec<(String, String)> = Vec::new();
 
         // ── Call agent with streaming ────────────────────────────────
-        let (sender_inner, mut receiver) = mpsc::channel::<String>(1024);
+        let (sender_inner, mut receiver) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::from(sender_inner);
 
         let agent_messages = if iteration == 0 {
@@ -229,15 +229,15 @@ pub async fn run_autonomy_loop(
                             if let Some(rt) = t.strip_prefix(TOKEN_THINKING_PREFIX) {
                                 reasoning.push_str(rt);
                                 if let Some(ref tx) = config.progress_tx {
-                                    if let Err(e) = tx.try_send(StreamFrame {
+                                    if tx.send(StreamFrame {
                                         event: "chunk",
                                         payload: serde_json::json!({
                                             "token": "",
                                             "reasoning": rt,
                                         }),
-                                    }) {
+                                    }).is_err() {
                                         tracing::warn!(
-                                            "autonomy_loop: progress_tx send failed: {}", e
+                                            "autonomy_loop: progress_tx send failed: receiver dropped"
                                         );
                                     }
                                 }
@@ -248,7 +248,7 @@ pub async fn run_autonomy_loop(
                             round_response.push_str(&t);
                             response.push_str(&t);
                             if let Some(ref tx) = config.progress_tx {
-                                let _ = tx.try_send(StreamFrame {
+                                let _ = tx.send(StreamFrame {
                                     event: "chunk",
                                     payload: serde_json::json!({
                                         "token": t,
@@ -306,14 +306,12 @@ pub async fn run_autonomy_loop(
             // ── Stream tool execution progress as visible chat tokens ──
             // Send SSE progress event before executing tool ────────
             if let Some(ref tx) = config.progress_tx {
-                let _ = tx
-                    .send(StreamFrame {
-                        event: "progress",
-                        payload: serde_json::json!({
-                            "message": format!("executing tool {}...", tool_name),
-                        }),
-                    })
-                    .await;
+                let _ = tx.send(StreamFrame {
+                    event: "progress",
+                    payload: serde_json::json!({
+                        "message": format!("executing tool {}...", tool_name),
+                    }),
+                });
             }
 
             if let Some(tool) = tool_registry.get_arc(tool_name) {
@@ -332,15 +330,13 @@ pub async fn run_autonomy_loop(
 
                 // ── Send completion notification as visible chunk token ──
                 if let Some(ref tx) = config.progress_tx {
-                    let _ = tx
-                        .send(StreamFrame {
-                            event: "chunk",
-                            payload: serde_json::json!({
-                                "token": format!("✅ **{}** completed
-                            ", tool_name),
-                            }),
-                        })
-                        .await;
+                    let _ = tx.send(StreamFrame {
+                        event: "chunk",
+                        payload: serde_json::json!({
+                            "token": format!("✅ **{}** completed
+                        ", tool_name),
+                        }),
+                    });
                 }
                 let result_str = format!("{:?}", tool_output);
                 round_response

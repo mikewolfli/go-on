@@ -425,7 +425,7 @@ impl SelfEvolutionAgent {
                     content: llm_instruction,
                 },
             ];
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let sender = crate::agent::StreamingSender::from(tx);
             if let Err(e) = agent.chat(messages, None, None, sender).await {
                 warn!("LLM agent patch generation failed: {e}, falling back to heuristic");

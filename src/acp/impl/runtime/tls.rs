@@ -194,7 +194,7 @@ async fn handle_tls_http_stream(
                 }
             };
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let trace = http_trace_context("chat.stream");
         let server_ref = Arc::clone(server);
         let sse_tx = tx.clone();
@@ -209,14 +209,12 @@ async fn handle_tls_http_stream(
             )
             .await
             {
-                let _ = sse_tx
-                    .send(crate::acp::r#impl::chat::streaming::StreamFrame {
-                        event: "error",
-                        payload: serde_json::json!({
-                            "error": err.to_string(),
-                        }),
-                    })
-                    .await;
+                let _ = sse_tx.send(crate::acp::r#impl::chat::streaming::StreamFrame {
+                    event: "error",
+                    payload: serde_json::json!({
+                        "error": err.to_string(),
+                    }),
+                });
             }
         });
 

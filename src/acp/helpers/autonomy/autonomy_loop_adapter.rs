@@ -37,7 +37,7 @@ pub(crate) async fn run_acp_autonomy_loop(
     options: Option<std::collections::HashMap<String, Value>>,
     timeout_duration: Option<std::time::Duration>,
     stream_tx: Option<mpsc::UnboundedSender<String>>,
-    progress_sse_tx: Option<mpsc::Sender<StreamFrame>>,
+    progress_sse_tx: Option<mpsc::UnboundedSender<StreamFrame>>,
 ) -> Result<AutonomyLoopResult> {
     let objective = extract_objective(&messages);
     let option_bool = |key: &str, default: bool| -> bool {

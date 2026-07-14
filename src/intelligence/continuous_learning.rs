@@ -602,7 +602,7 @@ Memories:
             ];
 
             // Collect streamed response using proper async patterns.
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let sender = StreamingSender::new(tx);
 
             let result = agent.chat(messages, None, None, sender).await;

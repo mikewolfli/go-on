@@ -399,7 +399,7 @@ impl DeepReasoningEngine {
             role: "user".to_string(),
             content: prompt.to_string(),
         };
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1024);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::from(tx);
         let agent_clone = Arc::clone(agent);
         let msg_clone = msg.clone();

@@ -470,8 +470,8 @@ async fn route_http_post(
                     write_http_json_response(socket, 200, result, cors_headers).await?;
                 }
                 "/chat/stream" => {
-                    async fn handle_chat_stream_task_error(
-                        sse_tx: &tokio::sync::mpsc::Sender<
+                    fn handle_chat_stream_task_error(
+                        sse_tx: &tokio::sync::mpsc::UnboundedSender<
                             crate::acp::r#impl::chat::streaming::StreamFrame,
                         >,
                         err: anyhow::Error,
@@ -482,14 +482,12 @@ async fn route_http_post(
                         // previous "done" event from agent streaming with
                         // an empty response + "system" agent.
                         // The TLS handler already does this correctly.
-                        let _ = sse_tx
-                            .send(crate::acp::r#impl::chat::streaming::StreamFrame {
-                                event: "error",
-                                payload: serde_json::json!({
-                                    "error": err_str,
-                                }),
-                            })
-                            .await;
+                        let _ = sse_tx.send(crate::acp::r#impl::chat::streaming::StreamFrame {
+                            event: "error",
+                            payload: serde_json::json!({
+                                "error": err_str,
+                            }),
+                        });
                     }
                     let mut params: crate::acp::r#impl::chat::ChatParams =
                         match serde_json::from_value(body) {
@@ -509,7 +507,7 @@ async fn route_http_post(
                     use super::sse::{flush_sse, write_sse_event, write_sse_headers};
                     write_sse_headers(socket, cors_headers).await?;
 
-                    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
                     let trace = http_trace_context("chat.stream");
                     let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
                         user_session,
@@ -527,7 +525,7 @@ async fn route_http_post(
                         )
                         .await
                         {
-                            handle_chat_stream_task_error(&sse_tx, err).await;
+                            handle_chat_stream_task_error(&sse_tx, err);
                         }
                     });
 

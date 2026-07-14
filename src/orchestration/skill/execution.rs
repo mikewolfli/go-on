@@ -252,7 +252,7 @@ impl PromptSkillAgent for ChatBasedSkillAgent {
             content: prompt.to_string(),
         }];
 
-        let (tx, mut rx) = mpsc::channel::<String>(256);
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::new(tx);
 
         self.agent

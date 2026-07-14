@@ -202,7 +202,7 @@ pub async fn llm_summarize(entries: &[MemoryEntry], agent: Option<&Arc<dyn Agent
             role: "user".to_string(),
             content: prompt,
         };
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1024);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::from(tx);
         let agent = Arc::clone(agent);
 

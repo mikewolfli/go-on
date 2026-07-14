@@ -117,7 +117,7 @@ async fn execute_agent_chat_async(
     principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Result<String> {
-    let (tx, mut rx) = mpsc::channel::<String>(64);
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let sender = StreamingSender::new(tx);
 
     let agent_ref: &dyn Agent = agent;

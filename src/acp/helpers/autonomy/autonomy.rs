@@ -20,7 +20,7 @@ pub(crate) async fn run_followup_after_tool_observation(
     options: Option<HashMap<String, Value>>,
     timeout_duration: Option<Duration>,
 ) -> Result<(String, String, Option<String>)> {
-    let (sender, mut receiver) = mpsc::channel::<String>(1024);
+    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
     let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
 

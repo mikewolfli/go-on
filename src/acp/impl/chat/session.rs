@@ -322,12 +322,10 @@ pub(crate) async fn handle_chat(
         // so dispatch_to_client can forward it. Otherwise send as a JSON-RPC result.
         if let Some(sender) = observer.sse_sender() {
             use crate::acp::r#impl::chat::streaming::StreamFrame;
-            let _ = sender
-                .send(StreamFrame {
-                    event: "result",
-                    payload: json!(result),
-                })
-                .await;
+            let _ = sender.send(StreamFrame {
+                event: "result",
+                payload: json!(result),
+            });
         } else {
             send_result(server, id, json!(result)).await?;
         }

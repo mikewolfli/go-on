@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn phase_tokens_are_emitted_on_change() {
-        let (tx, mut rx) = mpsc::channel::<String>(16);
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::new(tx);
         let mut reporter = ProgressReporter::new(Some(sender), 10);
 
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn progress_tokens_are_emitted_in_order() {
-        let (tx, mut rx) = mpsc::channel::<String>(16);
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::new(tx);
         let mut reporter = ProgressReporter::new(Some(sender), 10);
 
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn progress_resets_on_phase_change() {
-        let (tx, mut rx) = mpsc::channel::<String>(16);
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::new(tx);
         let mut reporter = ProgressReporter::new(Some(sender), 10);
 
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn complete_token_is_emitted() {
-        let (tx, mut rx) = mpsc::channel::<String>(16);
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::new(tx);
         let mut reporter = ProgressReporter::new(Some(sender), 0);
 

@@ -1952,16 +1952,15 @@ pub(super) async fn handle_chat(
     trace: &RequestTraceContext,
 ) -> Result<DispatchOutput> {
     use crate::acp::r#impl::chat::handle_chat as chat_handler;
-    use crate::acp::r#impl::chat::streaming::StreamFrame;
-    use crate::acp::r#impl::chat::streaming::StreamObserver;
+    use crate::acp::r#impl::chat::streaming::{StreamFrame, StreamObserver};
     use tokio::sync::mpsc;
 
-    let (tx, rx) = mpsc::channel::<StreamFrame>(256);
+    let (tx, rx) = mpsc::unbounded_channel::<StreamFrame>();
     let observer = StreamObserver::sse(tx);
 
     match chat_handler(
         server,
-        None, // id=None so send_result is skipped; result goes via SSE stream
+        None, // id = None so session::handle_chat skips send_result and sends through SSE
         Some(params),
         None,
         Some(trace.clone()),
@@ -1973,17 +1972,12 @@ pub(super) async fn handle_chat(
         Err(err) => {
             let message = err.to_string();
             if is_rate_limited_message(&message) {
-                Ok(DispatchOutput::Error {
-                    code: -32029,
-                    message: normalize_rate_limited_message(&message),
-                    data: None,
-                })
+                Ok(DispatchOutput::error(
+                    -32029,
+                    normalize_rate_limited_message(&message),
+                ))
             } else {
-                Ok(DispatchOutput::Error {
-                    code: -32603,
-                    message,
-                    data: None,
-                })
+                Ok(DispatchOutput::error(-32603, message))
             }
         }
     }

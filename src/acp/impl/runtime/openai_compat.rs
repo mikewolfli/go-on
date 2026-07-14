@@ -487,7 +487,7 @@ pub(crate) async fn handle_openai_chat_completions(
 
     write_sse_headers(socket, cors_headers).await?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let trace = http_trace_context("openai.chat.completions.stream");
     let ctx = Some(ChatRequestContext::new(user_session));
     let server_ref = Arc::clone(&server);
@@ -1750,7 +1750,7 @@ async fn handle_response_stream(
     )
     .await?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamFrame>(256);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamFrame>();
     let observer = StreamObserver::sse(tx);
     let ctx = Some(ChatRequestContext::new(user_session));
     let server_ref = Arc::clone(&server);

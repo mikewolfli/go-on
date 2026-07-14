@@ -42,17 +42,6 @@ pub async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -
     .await
 }
 
-/// Send an empty JSON object `{}` as a successful result.
-#[allow(dead_code)]
-pub async fn send_empty_ok(server: &AcpServer, id: Option<Value>) -> Result<()> {
-    send_result(
-        server,
-        id,
-        serde_json::Value::Object(serde_json::Map::new()),
-    )
-    .await
-}
-
 /// Send error response
 ///
 /// This function replaces the `AcpServer::send_error` method.

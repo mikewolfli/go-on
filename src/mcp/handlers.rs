@@ -1151,7 +1151,7 @@ impl McpServer {
         }
 
         // Channel to collect streaming response
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1024);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let sender = crate::agents::agent::StreamingSender::new(tx);
 
         let model_name = agent

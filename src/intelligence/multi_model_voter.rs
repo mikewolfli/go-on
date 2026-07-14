@@ -358,7 +358,7 @@ impl FusionEngine {
         synthesis_prompt.push_str("3. Presents the answer clearly and concisely\n");
         synthesis_prompt.push_str("4. References areas of disagreement honestly\n");
 
-        let (tx, mut rx) = mpsc::channel::<String>(256);
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::new(tx);
 
         let messages = vec![Message {
@@ -1130,7 +1130,8 @@ async fn collect_votes(
             let vote_start = Instant::now();
 
             let response = tokio::time::timeout(deadline, async {
-                let (tx, mut rx) = mpsc::channel::<String>(256);
+                let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+                let (tx, mut rx) = mpsc::unbounded_channel::<String>();
                 let sender = StreamingSender::new(tx);
 
                 let messages = vec![Message {

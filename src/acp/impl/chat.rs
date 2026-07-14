@@ -556,12 +556,10 @@ pub(crate) async fn process_chat_request(
                 obj.insert("plan_output".to_string(), po.clone());
             }
         }
-        observer
-            .send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
-                event: "result",
-                payload,
-            })
-            .await;
+        observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
+            event: "result",
+            payload,
+        });
     }
 
     Ok(result)
@@ -774,7 +772,7 @@ pub(crate) async fn execute_autonomy_round(
     agent_messages: &[Message],
     base_agent_options: &HashMap<String, Value>,
     cache_hit: bool,
-    progress_sse_tx: Option<mpsc::Sender<StreamFrame>>,
+    progress_sse_tx: Option<mpsc::UnboundedSender<StreamFrame>>,
 ) -> AutonomyOutcome {
     if cache_hit {
         return AutonomyOutcome {

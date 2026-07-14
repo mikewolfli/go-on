@@ -593,7 +593,8 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                     summarize_msgs.push(summarize_prompt);
 
                     // Call agent to generate summary via streaming
-                    let (summary_tx, mut summary_rx) = tokio::sync::mpsc::channel::<String>(2048);
+                    let (summary_tx, mut summary_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<String>();
                     let summary_sender = crate::agents::agent::StreamingSender::from(summary_tx);
                     let agent_for_summary = Arc::clone(&current_agent);
                     let summarize_task = tokio::spawn(async move {
@@ -1101,7 +1102,7 @@ async fn run_agent_with_tools(
 ) -> Result<(String, usize, usize)> {
     // ── Estimate prompt tokens from existing messages using CJK-aware estimator ──
     let estimated_prompt_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
-    let (tx, mut rx) = mpsc::channel::<String>(2048);
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let sender = StreamingSender::from(tx);
     let msgs = messages.clone();
     let initial_principles = if principles.is_empty() {
@@ -1317,7 +1318,7 @@ async fn run_agent_with_tools(
             std::io::Write::flush(&mut std::io::stdout()).ok();
 
             // Streaming follow-up
-            let (tx2, mut rx2) = mpsc::channel::<String>(2048);
+            let (tx2, mut rx2) = mpsc::unbounded_channel::<String>();
             let sender2 = StreamingSender::from(tx2);
             let msgs2 = messages.clone();
 
@@ -1801,7 +1802,7 @@ async fn chat_simple(
     prompt: Vec<Message>,
     principles: Vec<String>,
 ) -> Result<String> {
-    let (tx, mut rx) = mpsc::channel::<String>(1024);
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let sender = StreamingSender::from(tx);
     let principles_opt = if principles.is_empty() {
         None
