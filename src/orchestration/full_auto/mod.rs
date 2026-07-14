@@ -527,10 +527,12 @@ mod tests {
         let registry = setup_registry();
         let flow = make_flow(registry);
 
+        // Use 'sh' as a prerequisite since it is universally available on Unix.
+        // Avoids CI failures when 'rust' or 'cargo' are not on PATH.
         let intent = TaskIntent {
             goals: vec!["build project".to_string()],
             constraints: vec![],
-            prerequisites: vec!["rust".to_string(), "cargo".to_string()],
+            prerequisites: vec!["sh".to_string()],
             deliverables: vec![],
         };
 

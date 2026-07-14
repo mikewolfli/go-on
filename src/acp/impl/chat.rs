@@ -820,17 +820,18 @@ pub(crate) async fn execute_autonomy_round(
             ))
         };
 
-        let result = crate::acp::helpers::autonomy_loop_adapter::run_acp_autonomy_loop(
+        let acp_params = crate::acp::helpers::autonomy_loop_adapter::AcpAutonomyLoopParams {
             agent,
-            autonomy_tool_registry,
-            agent_messages.to_vec(),
-            phase.principles.clone(),
-            agent_opts,
-            request_timeout(phase.options.as_ref()),
-            None,
-            progress_sse_tx.clone(),
-        )
-        .await;
+            tool_registry: autonomy_tool_registry,
+            messages: agent_messages.to_vec(),
+            principles: phase.principles.clone(),
+            options: agent_opts,
+            timeout_duration: request_timeout(phase.options.as_ref()),
+            stream_tx: None,
+            progress_sse_tx: progress_sse_tx.clone(),
+        };
+        let result =
+            crate::acp::helpers::autonomy_loop_adapter::run_acp_autonomy_loop(acp_params).await;
 
         match result {
             Ok(loop_result) => {

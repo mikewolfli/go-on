@@ -547,13 +547,22 @@ impl Drop for EvolutionHistory {
         // Best-effort flush of history to disk using a background thread.
         // We avoid tokio::runtime::Handle::block_on here because it can panic
         // when called from a non-async context or cause deadlocks.
+        // Must write in NDJSON format (one JSON entry per line) to match
+        // load_from_disk which expects NDJSON, not a single JSON object.
         let path = self.history_path.clone();
         if let Ok(entries) = self.entries.try_lock() {
-            let data = entries.clone();
+            let data: Vec<EvolutionEntry> = entries.values().cloned().collect();
             drop(entries);
             std::thread::spawn(move || {
-                if let Ok(json) = serde_json::to_string(&data) {
-                    let _ = std::fs::write(&path, &json);
+                let mut out = String::new();
+                for entry in &data {
+                    if let Ok(json) = serde_json::to_string(entry) {
+                        out.push_str(&json);
+                        out.push('\n');
+                    }
+                }
+                if !out.is_empty() {
+                    let _ = std::fs::write(&path, out.as_bytes());
                 }
             });
         }

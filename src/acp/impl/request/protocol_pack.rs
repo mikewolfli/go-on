@@ -927,7 +927,7 @@ fn build_default_modes() -> crate::schema::SessionModeState {
 /// Standard ACP: client sends `methodId`, agent performs auth and returns success.
 pub(super) async fn authenticate_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
     Ok(serde_json::to_value(
-        &crate::schema::AuthenticateResponse::new(),
+        crate::schema::AuthenticateResponse::new(),
     )?)
 }
 

@@ -1274,8 +1274,7 @@ The backend may be misconfigured or overloaded."
                                 let last_user_idx = self
                                     .sessions
                                     .get(self.active_session)
-                                    .map(|s| s.messages.iter().rposition(|m| m.role == "user"))
-                                    .flatten()
+                                    .and_then(|s| s.messages.iter().rposition(|m| m.role == "user"))
                                     .unwrap_or(0);
                                 self.pending_tool_approval =
                                     Some((tool_name.clone(), last_user_idx));
@@ -1372,10 +1371,9 @@ The backend may be misconfigured or overloaded."
                                 let last_user_idx = self
                                     .sessions
                                     .get(self.active_session)
-                                    .map(|session| {
+                                    .and_then(|session| {
                                         session.messages.iter().rposition(|m| m.role == "user")
                                     })
-                                    .flatten()
                                     .unwrap_or(0);
                                 self.pending_tool_approval =
                                     Some((tool_name.clone(), last_user_idx));

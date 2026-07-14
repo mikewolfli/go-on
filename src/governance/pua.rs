@@ -899,8 +899,7 @@ pub fn tool_execution_report(tool_name: &str, verification: Option<&str>) -> Pua
 // explicitly requested the action, approve it. Security is enforced at runtime
 // by tool-level sandboxing and audit logging.
 pub fn review_gate_prompt() -> String {
-    format!(
-        "You are a lightweight intent-confirmation gate. Your ONLY job:
+    "You are a lightweight intent-confirmation gate. Your ONLY job:
 \
          1. Reply APPROVE on the first line if the user asked for this action.
 \
@@ -912,7 +911,7 @@ pub fn review_gate_prompt() -> String {
          Security is enforced at runtime by the tool execution sandbox.
 \
          Your job is just to confirm: did the user ask for this?"
-    )
+        .to_string()
 }
 
 fn dedupe_strings(values: &mut Vec<String>) {

@@ -28,6 +28,20 @@ use crate::orchestration::tool::ToolRegistry;
 // Configuration
 // ---------------------------------------------------------------------------
 
+/// Parameters for `run_autonomy_loop`, bundled to avoid clippy `too_many_arguments`.
+#[allow(
+    missing_docs,
+    reason = "intentional field bundle for run_autonomy_loop"
+)]
+pub struct AutonomyLoopParams {
+    pub agent: Arc<dyn Agent>,
+    pub tool_registry: Option<Arc<ToolRegistry>>,
+    pub objective: String,
+    pub messages: Vec<Message>,
+    pub principles: Option<Vec<String>>,
+    pub options: Option<HashMap<String, Value>>,
+}
+
 /// Configuration for the autonomy loop execution.
 /// Used by autonomy_loop_adapter to create the loop config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,22 +153,19 @@ pub struct AutonomyLoopResult {
 
 /// Execute a full autonomy loop: plan → (execute + observe × N) → finalize.
 pub async fn run_autonomy_loop(
-    agent: Arc<dyn Agent>,
-    tool_registry: Option<Arc<ToolRegistry>>,
-    objective: &str,
-    messages: Vec<Message>,
-    principles: &Option<Vec<String>>,
-    options: &Option<HashMap<String, Value>>,
+    params: AutonomyLoopParams,
     config: AutonomyLoopConfig,
     timeout_duration: Option<std::time::Duration>,
 ) -> Result<AutonomyLoopResult, anyhow::Error> {
     let start = Instant::now();
-    let tool_registry = tool_registry.unwrap_or_else(|| Arc::new(ToolRegistry::new()));
+    let tool_registry = params
+        .tool_registry
+        .unwrap_or_else(|| Arc::new(ToolRegistry::new()));
 
     tracing::debug!(
         target: "autonomy_loop",
-        objective = %objective,
-        messages = messages.len(),
+        objective = %params.objective,
+        messages = params.messages.len(),
         max_iterations = config.max_iterations,
         "autonomy loop starting"
     );
@@ -173,10 +184,11 @@ pub async fn run_autonomy_loop(
         let sender = StreamingSender::from(sender_inner);
 
         let agent_messages = if iteration == 0 {
-            messages.clone()
+            params.messages.clone()
         } else {
             // For follow-up rounds, the response text serves as context
-            let principles_context = principles
+            let principles_context = params
+                .principles
                 .as_ref()
                 .map(|p| format!("\n\nPUA principles:\n- {}", p.join("\n- ")))
                 .unwrap_or_default();
@@ -184,14 +196,14 @@ pub async fn run_autonomy_loop(
                 role: "user".to_string(),
                 content: format!(
                     "Continue with the task. Context so far: {}{}\n\nOriginal objective: {}",
-                    response, principles_context, objective
+                    response, principles_context, params.objective
                 ),
             }]
         };
 
-        let agent_clone = Arc::clone(&agent);
-        let principles_clone = principles.clone();
-        let options_clone = options.clone();
+        let agent_clone = Arc::clone(&params.agent);
+        let principles_clone = params.principles.clone();
+        let options_clone = params.options.clone();
         let chat_task = tokio::spawn(async move {
             agent_clone
                 .chat(agent_messages, principles_clone, options_clone, sender)
@@ -320,7 +332,7 @@ pub async fn run_autonomy_loop(
                     task_id: format!("autonomy-{}-{}", iteration, tool_name),
                     phase: "execute".to_string(),
                     agent_role: "assistant".to_string(),
-                    objective: objective.to_string(),
+                    objective: params.objective.clone(),
                     constraints: None,
                     evidence: None,
                     payload: serde_json::from_str(tool_args).unwrap_or_default(),

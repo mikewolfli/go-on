@@ -136,10 +136,6 @@ pub struct ChatView {
     /// Per-message content hash cache: skips re-parsing unchanged messages.
     /// Key = message index, value = hash of content last rendered.
     rendered_content_hashes: Vec<u64>,
-    /// Per-message "expand full text" toggle for truncated content.
-    /// Key = message index, value = whether full text is shown.
-    #[allow(dead_code)]
-    expand_full_text: std::collections::HashSet<usize>,
 
     /// Shared abort controller for cancelling in-progress streaming generations.
     abort_controller: Option<AbortController>,
@@ -534,7 +530,6 @@ impl ChatView {
                         .unwrap_or_else(|_| reqwest::Client::new())
                 }),
             rendered_content_hashes: Vec::new(),
-            expand_full_text: std::collections::HashSet::new(),
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,
@@ -1124,7 +1119,6 @@ mod tests {
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
-            expand_full_text: std::collections::HashSet::new(),
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,

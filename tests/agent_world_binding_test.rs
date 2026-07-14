@@ -285,7 +285,7 @@ async fn test_full_binding_flow() {
         "  confirmation_wait_channel: {:?}",
         confirm_channel.and_then(|c| c.get("websocket_path").and_then(|v| v.as_str()))
     );
-    println!("");
+    println!();
     println!("  🔗 请实名责任人在网页确认绑定：");
     println!("     https://{}/agent-binding/confirm/{}", host, brid);
     println!("     确认窗口：24 小时");

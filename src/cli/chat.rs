@@ -115,6 +115,8 @@ Commands:
   /review      AI-powered code review of current git diff
   /plan        AI-generated structured execution plan from conversation context
   /find_path   Search for files by name glob
+  /models      List available models for current agent
+  /retry       Re-send the last user message
 
 The AI agent has access to tools:
   - Read/write files (read_file, write_file, read_file_lines)
@@ -261,7 +263,8 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     eprintln!("╠════════════════════════════════════════════════════════════════╣");
     eprintln!("║  Agent: {:<60} ║", current_agent_name);
     eprintln!("║  Commands: /help /quit /clear /save /load /cost /compact    ║");
-    eprintln!("║   /diff /commit /plan /model /context /tools /skills /stats /find_path  ║");
+    eprintln!("║   /diff /commit /plan /model /models /retry /context /tools /skills   ║");
+    eprintln!("║   /stats /find_path  ║");
     eprintln!("╚════════════════════════════════════════════════════════════════╝");
     eprintln!();
 
@@ -956,6 +959,87 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
                             // Fallback: show raw diff
                             eprintln!("\r{}AI review failed: {}{}", ansi!("31"), e, ansi!("0"));
                             display_diff(&detailed, Some(60));
+                        }
+                    }
+                    continue;
+                }
+                "models" => {
+                    let models = current_agent.available_models();
+                    if models.is_empty() {
+                        eprintln!(
+                            "{}No model information available for '{}'.{}",
+                            ansi!("33"),
+                            current_agent_name,
+                            ansi!("0")
+                        );
+                    } else {
+                        eprintln!(
+                            "{}Available models for '{}'{}:",
+                            ansi!("1"),
+                            current_agent_name,
+                            ansi!("0")
+                        );
+                        for m in &models {
+                            let default_flag = if m.is_default { " (default)" } else { "" };
+                            eprintln!("  {:<30} {} {}{}", m.id, m.name, ansi!("90"), default_flag);
+                        }
+                    }
+                    continue;
+                }
+                "retry" => {
+                    if messages.len() < 2 {
+                        eprintln!(
+                            "{}No messages to retry. Send a message first.{}",
+                            ansi!("33"),
+                            ansi!("0")
+                        );
+                        continue;
+                    }
+                    // Find the last user message
+                    let last_user_idx = messages.iter().rposition(|m| m.role == "user");
+                    match last_user_idx {
+                        Some(idx) => {
+                            let last_user_msg = messages[idx].content.clone();
+                            // Truncate messages after the last user message
+                            messages.truncate(idx + 1);
+                            eprintln!(
+                                "{}Retrying last message{}: {}",
+                                ansi!("33"),
+                                ansi!("0"),
+                                last_user_msg.chars().take(60).collect::<String>()
+                            );
+                            // Run agent with tools inline instead of looping back
+                            let principles = build_cli_principles();
+                            match run_agent_with_tools(&current_agent, &mut messages, principles)
+                                .await
+                            {
+                                Ok((resp, prompt_tokens, completion_tokens)) => {
+                                    token_tracker.record_usage(prompt_tokens, completion_tokens);
+                                    if !resp.trim().is_empty() {
+                                        eprintln!(
+                                            "{}── Turn complete (est. {} tokens) ──{}",
+                                            ansi!("90"),
+                                            prompt_tokens + completion_tokens,
+                                            ansi!("0")
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "\n{}⚠️  Retry failed: {}{}",
+                                        ansi!("31"),
+                                        e,
+                                        ansi!("0")
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            eprintln!(
+                                "{}No user message found to retry.{}",
+                                ansi!("33"),
+                                ansi!("0")
+                            );
                         }
                     }
                     continue;

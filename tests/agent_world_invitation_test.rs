@@ -355,7 +355,7 @@ async fn test_live_task_package_fetch() {
     assert!(prohibited
         .unwrap()
         .iter()
-        .any(|a| { a.as_str().map_or(false, |s| s.contains("账号密码")) }));
+        .any(|a| { a.as_str().is_some_and(|s| s.contains("账号密码")) }));
 
     println!("✅ Live API test PASSED");
     println!("   invitation_id:     {}", invitation_id.unwrap());
@@ -383,15 +383,10 @@ fn test_context_construction_is_neutral() {
         TEST_INVITE_URL, fake_spa
     );
 
-    let mut spa_info = format!(
-        "\n\n[SPA Page Analysis]\nPath segments: agent-world-test.chuanshuo.com.cn / agent-invite / invite_8486d728...
-Fragment params: [(\"task_access_token\", \"task_d2add96d25fd4a007a83cdff2134c8da3c6a7e4e235589bc\")]"
-    );
+    let mut spa_info = "\n\n[SPA Page Analysis]\nPath segments: agent-world-test.chuanshuo.com.cn / agent-invite / invite_8486d728...\nFragment params: [(\"task_access_token\", \"task_d2add96d25fd4a007a83cdff2134c8da3c6a7e4e235589bc\")]".to_string();
 
     // A shortened mock of the API response insertion
-    spa_info.push_str(&format!(
-        "\n\n[API: POST .../api/v1/agent-binding/invitations/.../agent-task]\nStatus: 200 OK\nResponse:\n{{\"ok\":true,\"data\":{{\"task\":\"bind_yourself_to_agent_world\",\"invitation_id\":\"...\",\"one_time_token\":\"...\"}}}}"
-    ));
+    spa_info.push_str("\n\n[API: POST .../api/v1/agent-binding/invitations/.../agent-task]\nStatus: 200 OK\nResponse:\n{\"ok\":true,\"data\":{\"task\":\"bind_yourself_to_agent_world\",\"invitation_id\":\"...\",\"one_time_token\":\"...\"}}");
 
     // The new code just adds the task package as data, no instructions
     spa_info.push_str(&format!(

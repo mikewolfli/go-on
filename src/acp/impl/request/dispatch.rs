@@ -157,34 +157,29 @@ pub async fn dispatch_to_client(
         },
         Ok(DispatchOutput::Stream { mut receiver }) => {
             use crate::acp::r#impl::io::{send_error, send_notification, send_result};
-            loop {
-                match receiver.recv().await {
-                    Some(frame) => match frame.event {
-                        "chunk" => {
-                            send_notification(server, "chat.stream.chunk", frame.payload).await?;
-                        }
-                        "done" => {
-                            send_notification(server, "chat.stream.done", frame.payload).await?;
-                        }
-                        "telemetry" => {
-                            send_notification(server, "chat.stream.telemetry", frame.payload)
-                                .await?;
-                        }
-                        "result" => {
-                            send_result(server, Some(id.clone()), frame.payload).await?;
-                        }
-                        "error" => {
-                            let msg = frame
-                                .payload
-                                .get("message")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("stream error");
-                            send_error(server, Some(id.clone()), -32603, msg.to_string(), None)
-                                .await?;
-                        }
-                        _ => {} // unknown events are ignored
-                    },
-                    None => break, // channel closed — stream ended
+            while let Some(frame) = receiver.recv().await {
+                match frame.event {
+                    "chunk" => {
+                        send_notification(server, "chat.stream.chunk", frame.payload).await?;
+                    }
+                    "done" => {
+                        send_notification(server, "chat.stream.done", frame.payload).await?;
+                    }
+                    "telemetry" => {
+                        send_notification(server, "chat.stream.telemetry", frame.payload).await?;
+                    }
+                    "result" => {
+                        send_result(server, Some(id.clone()), frame.payload).await?;
+                    }
+                    "error" => {
+                        let msg = frame
+                            .payload
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("stream error");
+                        send_error(server, Some(id.clone()), -32603, msg.to_string(), None).await?;
+                    }
+                    _ => {} // unknown events are ignored
                 }
             }
             Ok(())

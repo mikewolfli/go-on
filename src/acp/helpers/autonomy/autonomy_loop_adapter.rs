@@ -15,12 +15,26 @@ use crate::acp::r#impl::chat::StreamFrame;
 use crate::agent::{Agent, Message};
 
 use super::autonomy_loop::{
-    run_autonomy_loop, AutonomyLoopConfig, AutonomyLoopReport, AutonomyLoopResult,
+    run_autonomy_loop, AutonomyLoopConfig, AutonomyLoopParams, AutonomyLoopReport,
+    AutonomyLoopResult,
 };
 use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopProfile, BrainLoopStep, StepStatus,
 };
 use crate::orchestration::tool::ToolRegistry;
+
+/// Parameters for `run_acp_autonomy_loop`, bundled to avoid clippy `too_many_arguments`.
+#[allow(missing_docs)]
+pub(crate) struct AcpAutonomyLoopParams {
+    pub agent: Arc<dyn Agent>,
+    pub tool_registry: Option<Arc<ToolRegistry>>,
+    pub messages: Vec<Message>,
+    pub principles: Option<Vec<String>>,
+    pub options: Option<std::collections::HashMap<String, Value>>,
+    pub timeout_duration: Option<std::time::Duration>,
+    pub stream_tx: Option<mpsc::UnboundedSender<String>>,
+    pub progress_sse_tx: Option<mpsc::UnboundedSender<StreamFrame>>,
+}
 
 /// Run the multi-round autonomy loop in an ACP-compatible way.
 ///
@@ -30,18 +44,12 @@ use crate::orchestration::tool::ToolRegistry;
 ///   - Tool-observation follow-up is handled transparently inside the loop.
 ///   - The final response, reasoning, and model are returned.
 pub(crate) async fn run_acp_autonomy_loop(
-    agent: Arc<dyn Agent>,
-    tool_registry: Option<Arc<ToolRegistry>>,
-    messages: Vec<Message>,
-    principles: Option<Vec<String>>,
-    options: Option<std::collections::HashMap<String, Value>>,
-    timeout_duration: Option<std::time::Duration>,
-    stream_tx: Option<mpsc::UnboundedSender<String>>,
-    progress_sse_tx: Option<mpsc::UnboundedSender<StreamFrame>>,
+    params: AcpAutonomyLoopParams,
 ) -> Result<AutonomyLoopResult> {
-    let objective = extract_objective(&messages);
+    let objective = extract_objective(&params.messages);
     let option_bool = |key: &str, default: bool| -> bool {
-        options
+        params
+            .options
             .as_ref()
             .and_then(|map| map.get(key))
             .and_then(Value::as_bool)
@@ -62,7 +70,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         enable_agent_reroute: option_bool("enable_agent_reroute", true),
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
         recovery_orchestrator: Some("auto".to_string()),
-        progress_tx: progress_sse_tx,
+        progress_tx: params.progress_sse_tx.clone(),
         max_messages: 200,
         use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default.
         tool_timeout_ms: None,
@@ -72,23 +80,22 @@ pub(crate) async fn run_acp_autonomy_loop(
     };
 
     let result = if config.use_brain_loop {
-        run_acp_autonomy_loop_with_brain_loop(agent, &objective, &messages, config).await?
+        run_acp_autonomy_loop_with_brain_loop(params.agent, &objective, &params.messages, config)
+            .await?
     } else {
-        run_autonomy_loop(
-            agent,
-            tool_registry,
-            &objective,
-            messages,
-            &principles,
-            &options,
-            config,
-            timeout_duration,
-        )
-        .await?
+        let loop_params = AutonomyLoopParams {
+            agent: params.agent,
+            tool_registry: params.tool_registry,
+            objective,
+            messages: params.messages,
+            principles: params.principles,
+            options: params.options,
+        };
+        run_autonomy_loop(loop_params, config, params.timeout_duration).await?
     };
 
     // Stream the final response if a channel was provided
-    if let Some(tx) = stream_tx {
+    if let Some(tx) = params.stream_tx {
         for chunk in split_for_streaming(&result.response, 256) {
             if tx.send(chunk).is_err() {
                 tracing::warn!("autonomy_loop_adapter: streaming receiver disconnected");
