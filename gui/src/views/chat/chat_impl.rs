@@ -685,17 +685,9 @@ impl ChatView {
             self.selected_model = "auto".to_string();
         }
 
-        // ── Rule 1: If the selected agent is "copilot", force model to "copilot-auto" ──
-        //   The GitHub Copilot service (not Go-on) decides which model to use.
-        if self.selected_agent == "copilot" && self.selected_model != Self::COPILOT_AUTO_MODEL {
-            self.selected_model = Self::COPILOT_AUTO_MODEL.to_string();
-            if let Some(session) = self.sessions.get_mut(self.active_session) {
-                session.model = self.selected_model.clone();
-            }
-            return;
-        }
-
-        // ── Rule 2: If the model is "copilot-auto", derive the agent ──
+        // ── If the model is "copilot-auto", derive the agent ──
+        //   This handles backward-compat when a session was saved with copilot-auto
+        //   from a previous version that forced copilot to auto-mode.
         if self.selected_model == Self::COPILOT_AUTO_MODEL {
             self.selected_agent = "copilot".to_string();
             if let Some(session) = self.sessions.get_mut(self.active_session) {
@@ -716,10 +708,9 @@ impl ChatView {
             // Only clear if no agent is selected at all or the stored agent
             // is no longer known.
             if self.selected_agent.is_empty()
-                || (!self
+                || !self
                     .available_agent_models
                     .contains_key(&self.selected_agent)
-                    && self.selected_agent != "copilot")
             {
                 self.selected_agent.clear();
             }

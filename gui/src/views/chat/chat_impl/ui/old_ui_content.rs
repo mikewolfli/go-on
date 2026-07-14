@@ -1380,15 +1380,15 @@ impl ChatView {
                                 let trunc_hint = i18n.t("chat.largeMessageTruncated").to_string();
                                 let (think_bg, think_border, think_text) = if dark {
                                     (
-                                        egui::Color32::from_rgba_premultiplied(70, 55, 20, 60),
-                                        egui::Color32::from_rgba_premultiplied(160, 130, 60, 60),
-                                        egui::Color32::from_rgb(200, 180, 120),
+                                        egui::Color32::from_rgba_premultiplied(50, 60, 80, 60),
+                                        egui::Color32::from_rgba_premultiplied(80, 120, 180, 50),
+                                        egui::Color32::from_rgb(160, 180, 210),
                                     )
                                 } else {
                                     (
-                                        egui::Color32::from_rgba_premultiplied(255, 245, 225, 150),
-                                        egui::Color32::from_rgba_premultiplied(200, 180, 130, 80),
-                                        egui::Color32::from_rgb(120, 90, 40),
+                                        egui::Color32::from_rgba_premultiplied(235, 242, 255, 180),
+                                        egui::Color32::from_rgba_premultiplied(160, 190, 230, 100),
+                                        egui::Color32::from_rgb(70, 100, 140),
                                     )
                                 };
 

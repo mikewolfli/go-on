@@ -85,8 +85,22 @@ use std::sync::Once;
 use std::sync::OnceLock;
 use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::reload;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+
+/// Local time formatter that displays timestamps in the system's local timezone
+/// instead of the default UTC. Uses chrono::Local for timezone-aware formatting.
+struct LocalTimer;
+impl FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(
+            w,
+            "{}",
+            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f%:z")
+        )
+    }
+}
 
 /// Telemetry configuration
 #[derive(Debug, Clone)]
@@ -174,6 +188,7 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
                 .with_thread_ids(true)
                 .with_thread_names(true)
                 .with_span_events(FmtSpan::CLOSE)
+                .with_timer(LocalTimer)
                 .compact();
 
             let filter = EnvFilter::try_from_default_env()

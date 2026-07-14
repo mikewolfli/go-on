@@ -1070,7 +1070,21 @@ The backend may be misconfigured or overloaded."
                     } else {
                         flat
                     };
-                    self.models_loaded = true;
+                    // Only mark as loaded when models are actually present.
+                    // On startup the backend may not be ready yet — the first
+                    // fetch can return empty because the inner RPC uses a 500ms
+                    // timeout.  Keeping models_loaded = false lets the 3-second
+                    // retry poll in show() re-fetch once the backend is online.
+                    self.models_loaded = !self.available_agent_models.is_empty();
+                    #[cfg(debug_assertions)]
+                    if self.models_loaded {
+                        eprintln!(
+                            "[DEBUG] Models loaded: {} agents, {} models: {:?}",
+                            self.available_agent_models.len(),
+                            self.available_models.len(),
+                            self.available_agent_models.keys().collect::<Vec<_>>()
+                        );
+                    }
                     // Preserve copilot-auto selection even though the backend
                     // does not report it as a model — it is a sentinel that tells
                     // the GUI to defer model selection to the Copilot service.

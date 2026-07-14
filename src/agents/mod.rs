@@ -442,11 +442,17 @@ where
 /// Process a single SSE event through the sender.
 /// Returns `true` when the stream should stop (sender dropped or [DONE]).
 fn sse_event_to_sender(event: &str, sender: &crate::agent::StreamingSender) -> bool {
-    if let Some(token) = fast_extract_token(event) {
-        if sender.send(token).is_err() {
-            return true;
+    // Parse JSON and extract token (handles content, reasoning_content,
+    // tool_calls, text, result, and all other fields via extract_token).
+    if let Ok(json) = serde_json::from_str::<Value>(event) {
+        if let Some(token) = extract_token(&json) {
+            if sender.send(token).is_err() {
+                return true;
+            }
+            return false;
         }
-    } else if event.trim() == "[DONE]" {
+    }
+    if event.trim() == "[DONE]" {
         return true;
     }
     false
@@ -555,217 +561,55 @@ pub async fn stream_sse_to_sender_compressed(
     Ok(())
 }
 
-/// Fast SSE token extraction — avoids full JSON `Value` allocation for the
-/// common case (content tokens from `choices[0].delta.content`).
-///
-/// Falls back to full `serde_json::from_str` + `extract_token` for complex
-/// payloads (tool calls, thinking tokens, content arrays, non-standard fields).
-#[inline]
-fn fast_extract_token(data: &str) -> Option<String> {
-    // ── Fast string-based content extraction (common case) ──────────
-    // Bypasses full JSON Value allocation for the typical SSE token:
-    //   {"choices":[{"delta":{"content":"Hello"}}]}
-    // Uses simple string search — ~5-10x faster than serde_json Value parsing.
-    // Scope the search within a "delta" object to avoid false matches.
-    let delta_scope = data.find(r#""delta""#).map(|i| &data[i..]);
-    if let Some(scope) = delta_scope {
-        if let Some(content) = try_fast_extract_field(scope, r#""content":""#, true) {
-            return Some(content);
-        }
-    }
-
-    // ── Fallback: full JSON parsing for complex cases ───────────────
-    // reasoning_content/thinking tokens are handled by the full JSON path
-    // (extract_token) which properly scopes to the delta object using
-    // structured JSON traversal. The fast string-search path above only
-    // searches from "delta" onward and can falsely match fields outside
-    // the delta object (e.g. top-level reasoning_content), causing the
-    // string "thinking" to be injected into every token.
-    // See: try_fast_extract_field + delta_scope false-match bug.
-    // Tool calls, content arrays (OpenAI text parts), non-standard
-    // fields like `result`, `text`, and final `message.content` all
-    // require proper JSON parsing.
-    if let Ok(json) = serde_json::from_str::<Value>(data) {
-        extract_token(&json)
-    } else {
-        None
-    }
-}
-
-/// Fast string-based extraction of a JSON string field by its key name.
-///
-/// Searches for `"key":"` in `data`, extracts the string value (handling
-/// JSON escape sequences), and returns `Some(value)` on success.
-/// If `unescape` is true, JSON escape sequences (\", \\, \n, \t, \r, \/)
-/// are decoded; otherwise the raw substring is returned.
-fn try_fast_extract_field(data: &str, key: &str, unescape: bool) -> Option<String> {
-    let start = data.find(key)?;
-    let value_start = start + key.len();
-    let bytes = data.as_bytes();
-    let mut end = value_start;
-    while end < data.len() && bytes[end] != b'"' {
-        if bytes[end] == b'\\' {
-            end += 2; // skip escaped char
-        } else {
-            end += 1;
-        }
-    }
-    if end <= value_start || end > data.len() {
-        return None;
-    }
-    let raw = &data[value_start..end];
-    if unescape && raw.contains('\\') {
-        let mut result = String::with_capacity(raw.len());
-        let mut chars = raw.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\' {
-                match chars.next() {
-                    Some('"') => result.push('"'),
-                    Some('n') => result.push('\n'),
-                    Some('\\') => result.push('\\'),
-                    Some('t') => result.push('\t'),
-                    Some('r') => result.push('\r'),
-                    Some('/') => result.push('/'),
-                    _ => {}
-                }
-            } else {
-                result.push(c);
-            }
-        }
-        return Some(result);
-    }
-    Some(raw.to_string())
-}
-
 pub(crate) fn extract_token(value: &Value) -> Option<String> {
-    // ── Tool call detection ──────────────────────────────────────────
-    // When the LLM responds with tool_calls (function calling), encode
-    // them as structured text tokens so the chat handler can detect and
-    // execute the corresponding skills.  The format is:
-    //   __tool_call__:<tool_name>:<json_arguments>
-    //
-    // Check both delta (streaming) and message (non-streaming) locations.
-    if let Some(tool_calls) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("delta"))
-        .and_then(|v| v.get("tool_calls"))
-        .and_then(|v| v.as_array())
-    {
-        for tc in tool_calls {
-            if let (Some(name), Some(args)) = (
-                tc.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|v| v.as_str()),
-                tc.get("function")
-                    .and_then(|f| f.get("arguments"))
-                    .and_then(|v| v.as_str()),
-            ) {
-                let token = build_tool_call_token(name, args);
-                return Some(token);
+    // ── Helper: get a string field from choices[0] delta or message ──
+    let from_choice = |field: &str| -> Option<String> {
+        let choice = value.get("choices")?.get(0)?;
+        // Check delta first (streaming), then message (non-streaming)
+        if let Some(v) = choice
+            .get("delta")
+            .and_then(|d| d.get(field))
+            .or_else(|| choice.get("message").and_then(|m| m.get(field)))
+        {
+            if let Some(s) = v.as_str() {
+                if !s.is_empty() {
+                    return Some(s.to_string());
+                }
+            }
+            // OpenAI content array format: [{ "text": "..." }, ...]
+            if let Some(arr) = v.as_array() {
+                let mut merged = String::new();
+                for part in arr {
+                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                        merged.push_str(text);
+                    }
+                }
+                if !merged.is_empty() {
+                    return Some(merged);
+                }
             }
         }
+        None
+    };
+
+    // 1. Tool calls (function calling) — highest priority
+    //    Format: __tool_call__:<name>:<json_args>
+    if let Some(tc) = extract_tool_call(value) {
+        return Some(tc);
     }
 
-    // Also check the final message (non-streaming) for tool_calls
-    if let Some(tool_calls) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("message"))
-        .and_then(|v| v.get("tool_calls"))
-        .and_then(|v| v.as_array())
-    {
-        for tc in tool_calls {
-            if let (Some(name), Some(args)) = (
-                tc.get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|v| v.as_str()),
-                tc.get("function")
-                    .and_then(|f| f.get("arguments"))
-                    .and_then(|v| v.as_str()),
-            ) {
-                let token = build_tool_call_token(name, args);
-                return Some(token);
-            }
-        }
+    // 2. Reasoning/thinking content — wrap with __thinking__ prefix
+    //    so the agent runtime separates it from the response text.
+    if let Some(thinking) = from_choice("reasoning_content") {
+        return Some(build_thinking_token(&thinking, None));
     }
 
-    // ── Reasoning / thinking content extraction ──────────────────────
-    // DeepSeek and some other OpenAI-compatible APIs return thinking/
-    // reasoning tokens in delta.reasoning_content (streaming) or
-    // message.reasoning_content (non-streaming). We prefix these with
-    // __thinking__ so the chat handler can separate them from the main
-    // response and stream them as "reasoning" SSE events.
-    //
-    // IMPORTANT: When BOTH reasoning_content AND content are present in
-    // the same delta, we return ONLY the thinking token (without content).
-    // The content will be picked up by the standard content extraction
-    // below, ensuring run_agent_collecting correctly separates reasoning
-    // into reasoning_buffer and content into response. DO NOT combine
-    // them with build_thinking_token(thinking, Some(text)) — that would
-    // push the content into reasoning_buffer and lose it from the response.
-    if let Some(thinking) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("delta"))
-        .and_then(|v| v.get("reasoning_content"))
-        .and_then(|v| v.as_str())
-    {
-        if !thinking.is_empty() {
-            return Some(build_thinking_token(thinking, None));
-        }
-    }
-    if let Some(thinking) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("message"))
-        .and_then(|v| v.get("reasoning_content"))
-        .and_then(|v| v.as_str())
-    {
-        if !thinking.is_empty() {
-            return Some(build_thinking_token(thinking, None));
-        }
+    // 3. Regular content — return as-is
+    if let Some(content) = from_choice("content") {
+        return Some(content);
     }
 
-    // ── Standard content extraction ───────────────────────────────────
-    if let Some(token) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("delta"))
-        .and_then(|v| v.get("content"))
-        .and_then(|v| v.as_str())
-    {
-        return Some(token.to_string());
-    }
-
-    if let Some(parts) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("delta"))
-        .and_then(|v| v.get("content"))
-        .and_then(|v| v.as_array())
-    {
-        let mut merged = String::new();
-        for part in parts {
-            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                merged.push_str(text);
-            }
-        }
-        if !merged.is_empty() {
-            return Some(merged);
-        }
-    }
-
-    if let Some(token) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("message"))
-        .and_then(|v| v.get("content"))
-        .and_then(|v| v.as_str())
-    {
-        return Some(token.to_string());
-    }
-
+    // 4. Non-standard: choices[0].text (used by some OpenAI-compatible APIs)
     if let Some(token) = value
         .get("choices")
         .and_then(|v| v.get(0))
@@ -775,10 +619,47 @@ pub(crate) fn extract_token(value: &Value) -> Option<String> {
         return Some(token.to_string());
     }
 
+    // 5. Non-standard: result field (used by some providers)
     value
         .get("result")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+/// Extract tool call token from choices[0].delta.tool_calls or .message.tool_calls.
+fn extract_tool_call(value: &Value) -> Option<String> {
+    let tool_calls = value
+        .get("choices")?
+        .get(0)?
+        .get("delta")?
+        .get("tool_calls")?
+        .as_array()?;
+    for tc in tool_calls {
+        if let (Some(name), Some(args)) = (
+            tc.get("function")?.get("name")?.as_str(),
+            tc.get("function")?.get("arguments")?.as_str(),
+        ) {
+            return Some(build_tool_call_token(name, args));
+        }
+    }
+    // Also check final message (non-streaming)
+    if let Some(tool_calls) = value
+        .get("choices")?
+        .get(0)?
+        .get("message")?
+        .get("tool_calls")?
+        .as_array()
+    {
+        for tc in tool_calls {
+            if let (Some(name), Some(args)) = (
+                tc.get("function")?.get("name")?.as_str(),
+                tc.get("function")?.get("arguments")?.as_str(),
+            ) {
+                return Some(build_tool_call_token(name, args));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

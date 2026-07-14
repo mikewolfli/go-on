@@ -115,11 +115,13 @@ impl BackendClient {
             }
         }
 
-        // Fast gate: timebox the first RPC to 500ms so that an unreachable backend
-        // doesn't block the UI for 5+ seconds. If the backend is slow, we return
-        // stale cache (or empty) and let the next refresh attempt succeed.
+        // Fast gate: timebox the first RPC to ensure the UI remains responsive.
+        // 2000ms gives the backend enough time to start up on fresh launches
+        // while still failing fast for genuinely unreachable backends.
+        // When timed out, we return stale cache (or empty) — the caller (show())
+        // will retry after 3 seconds via models_loaded == false.
         let resp = match tokio::time::timeout(
-            Duration::from_millis(500),
+            Duration::from_millis(2000),
             self.rpc_call("models.list", None),
         )
         .await
@@ -127,7 +129,7 @@ impl BackendClient {
             Ok(result) => result,
             Err(_elapsed) => {
                 tracing::warn!(
-                    "[fetch_models] models.list timed out after 500ms, returning stale cache"
+                    "[fetch_models] models.list timed out after 2000ms, returning stale cache"
                 );
                 self.stale_models_flag.store(true, Ordering::SeqCst);
                 return stale_cached.unwrap_or_default();
@@ -165,13 +167,21 @@ impl BackendClient {
 
         // Prefer provider.list_models for Copilot so GUI uses the same
         // backend-resolved model ordering/candidates as chat execution.
-        if let Ok(copilot_val) = self
-            .rpc_call(
+        // Wrap in a short timeout because the backend may hang while
+        // contacting the Copilot API (e.g., no network/proxy).
+        // If it times out, the static copilot models from models.list above
+        // are already in `result` — no data loss.
+        let copilot_val = tokio::time::timeout(
+            Duration::from_secs(3),
+            self.rpc_call(
                 "provider.list_models",
                 Some(serde_json::json!({ "provider": "copilot" })),
-            )
-            .await
-        {
+            ),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+        if let Some(copilot_val) = copilot_val {
             let ids = copilot_val
                 .get("model_ids")
                 .and_then(|v| v.as_array())
@@ -196,6 +206,20 @@ impl BackendClient {
             if !ids.is_empty() {
                 result.insert("copilot".to_string(), ids);
             }
+        }
+
+        // Debug: log how many models were loaded per provider
+        let total: usize = result.values().map(|v| v.len()).sum();
+        let providers: Vec<String> = result.keys().cloned().collect();
+        if !result.is_empty() {
+            tracing::info!(
+                "[fetch_models] loaded {} models from {:?}: {:?}",
+                total,
+                providers,
+                result
+            );
+        } else {
+            tracing::warn!("[fetch_models] loaded 0 models (result may be empty)");
         }
 
         // Update cache only on successful refresh.
