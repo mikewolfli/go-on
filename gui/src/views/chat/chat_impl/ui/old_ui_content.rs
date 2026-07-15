@@ -1404,6 +1404,16 @@ impl ChatView {
                                             let thinking_visible = self.show_all_thinking
                                                 || self.show_thinking_idx == Some(msg_idx);
                                             if !thinking_visible {
+                                                // Zed-style collapsed thinking indicator
+                                                ui.horizontal(|ui| {
+                                                    let label = ui.selectable_label(
+                                                        false,
+                                                        egui::RichText::new("💭 See thinking").size(10.0).color(weak_text),
+                                                    );
+                                                    if label.clicked() {
+                                                        self.show_thinking_idx = Some(msg_idx);
+                                                    }
+                                                });
                                                 continue;
                                             }
                                             egui::Frame::new()
@@ -1456,64 +1466,68 @@ impl ChatView {
                                 );
                             }
 
-                        // ── Action bar (Zed/Copilot-style) ──
-                        ui.add_space(4.0);
-                        let action_color = if dark_mode {
-                            egui::Color32::from_rgb(130, 135, 145)
-                        } else {
-                            egui::Color32::from_rgb(110, 115, 125)
-                        };
-                        ui.horizontal(|ui| {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::TOP),
-                                |ui| {
-                                    let copy_label = format!("📋 {}", i18n.t("chat.copy"));
-                                    if ui
-                                        .add(egui::Button::new(
-                                            egui::RichText::new(&copy_label)
-                                                .size(11.0)
-                                                .color(action_color),
-                                        )
-                                        .frame(false)
-                                        .fill(egui::Color32::TRANSPARENT))
-                                        .on_hover_text(i18n.t("chat.copyMessage"))
-                                        .clicked()
-                                    {
-                                        ui.ctx().copy_text(content_text.clone());
-                                    }
-                                    let edit_label = format!("✏️ {}", i18n.t("chat.edit"));
-                                    if ui
-                                        .add(egui::Button::new(
-                                            egui::RichText::new(&edit_label)
-                                                .size(11.0)
-                                                .color(action_color),
+                        // ── Action bar (Zed/Copilot-style, hover-only) ──
+                        let bubble_rect = ui.min_rect();
+                        let hovered = ui.rect_contains_pointer(bubble_rect);
+                        if hovered {
+                            ui.add_space(4.0);
+                            let action_color = if dark_mode {
+                                egui::Color32::from_rgb(130, 135, 145)
+                            } else {
+                                egui::Color32::from_rgb(110, 115, 125)
+                            };
+                            ui.horizontal(|ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::TOP),
+                                    |ui| {
+                                        let copy_label = format!("📋 {}", i18n.t("chat.copy"));
+                                        if ui
+                                            .add(egui::Button::new(
+                                                egui::RichText::new(&copy_label)
+                                                    .size(11.0)
+                                                    .color(action_color),
+                                            )
+                                            .frame(false)
+                                            .fill(egui::Color32::TRANSPARENT))
+                                            .on_hover_text(i18n.t("chat.copyMessage"))
+                                            .clicked()
+                                        {
+                                            ui.ctx().copy_text(content_text.clone());
+                                        }
+                                        let edit_label = format!("✏️ {}", i18n.t("chat.edit"));
+                                        if ui
+                                            .add(egui::Button::new(
+                                                egui::RichText::new(&edit_label)
+                                                    .size(11.0)
+                                                    .color(action_color),
                                         )
                                         .frame(false)
                                         .fill(egui::Color32::TRANSPARENT))
                                         .on_hover_text(i18n.t("chat.edit"))
                                         .clicked()
-                                    {
-                                        self.edit_msg_idx = Some(msg_idx);
-                                        self.edit_msg_buf = content_text.clone();
-                                    }
-                                    let del_label = format!("🗑 {}", i18n.t("chat.delete"));
-                                    if ui
-                                        .add(egui::Button::new(
-                                            egui::RichText::new(&del_label)
-                                                .size(11.0)
-                                                .color(action_color),
+                                        {
+                                            self.edit_msg_idx = Some(msg_idx);
+                                            self.edit_msg_buf = content_text.clone();
+                                        }
+                                        let del_label = format!("🗑 {}", i18n.t("chat.delete"));
+                                        if ui
+                                            .add(egui::Button::new(
+                                                egui::RichText::new(&del_label)
+                                                    .size(11.0)
+                                                    .color(action_color),
                                         )
                                         .frame(false)
                                         .fill(egui::Color32::TRANSPARENT))
                                         .on_hover_text(i18n.t("chat.delete"))
                                         .clicked()
-                                    {
-                                        self.remove_message_at(msg_idx);
-                                        self.save_sessions_to_disk();
-                                    }
-                                },
-                            );
-                        });
+                                        {
+                                            self.remove_message_at(msg_idx);
+                                            self.save_sessions_to_disk();
+                                        }
+                                    },
+                                );
+                            });
+                        }
 
                         // ── Sub-agent records panel ──
                         let has_sub_agents = !sub_agent_records.is_empty();

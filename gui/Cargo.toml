@@ -17,6 +17,7 @@ keyring = { workspace = true, features = ["apple-native", "sync-secret-service"]
 chrono = { version = "0.4", features = ["now"] }
 comrak = "0.52"
 base64.workspace = true
+go-on-mermaid-render = { path = "../crates/mermaid-render" }
 webbrowser = "1"
 tokio-stream.workspace = true
 tokio-util.workspace = true

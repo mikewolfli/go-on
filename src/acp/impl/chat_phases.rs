@@ -157,23 +157,65 @@ pub(crate) async fn observe_phase(
 
     evaluate_pre_route_policies(server, params, &tenant_id).await?;
 
-    // ── Prompt injection detection ─────────────────────────────────
+    // ── Prompt injection detection & enforcement ──────────────────
+    //
+    // Security: Injection is detected per-message with escalating action:
+    //   1. Block (HIGH/CRITICAL across ANY message) — reject the request
+    //   2. Sanitize (MEDIUM/LOW) — replace injection spans with inert markers
+    //   3. Log only — contaminations are recorded for audit
     if let Some(ref detector) = server.governance_deps.injection_detector {
-        let user_input: String = params
-            .messages
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect::<Vec<&str>>()
-            .join("\n");
-        let warnings = detector.detect(&user_input);
-        if !warnings.violations.is_empty() {
-            info!(injection_warnings = ?warnings.violations, "prompt injection detected");
+        use crate::security::prompt_injection::InjectionSeverity;
+
+        // Detect and classify severity across ALL messages first.
+        let mut has_high_or_critical = false;
+        let mut all_violations: Vec<crate::security::prompt_injection::SafetyViolation> =
+            Vec::new();
+        let mut max_contamination = 0.0_f64;
+
+        for msg in &params.messages {
+            let result = detector.detect(&msg.content);
+            if result.detected {
+                all_violations.extend(result.violations.clone());
+                max_contamination = max_contamination.max(result.contamination_score);
+                if detector.should_block(&result, InjectionSeverity::High) {
+                    has_high_or_critical = true;
+                }
+            }
+        }
+
+        if !all_violations.is_empty() {
+            info!(
+                injection_warnings = ?all_violations,
+                contamination_score = max_contamination,
+                "prompt injection detected — taking action"
+            );
+
+            // Always record to audit trail.
             if let Some(ref auditor) = server.governance_deps.hash_chain_auditor {
                 if let Ok(mut auditor) = auditor.lock() {
                     let _ = auditor.append(
-                        json!({"event": "prompt_injection", "warnings": &warnings.violations}),
+                        json!({"event": "prompt_injection", "action": "enforced", "warnings": &all_violations, "contamination_score": max_contamination}),
                     );
                 }
+            }
+
+            // ── HIGH/CRITICAL: block the request ───────────────────────
+            if has_high_or_critical {
+                let critical: Vec<String> = all_violations
+                    .iter()
+                    .filter(|v| v.severity >= InjectionSeverity::High)
+                    .map(|v| format!("{:?}: {}", v.category, v.description))
+                    .collect();
+                anyhow::bail!(
+                    "Request blocked: prompt injection detected. Violations: {}",
+                    critical.join("; ")
+                );
+            }
+
+            // ── MEDIUM/LOW: sanitize each message individually ────────
+            for msg in &mut params.messages {
+                let (sanitized, _) = detector.detect_and_sanitize(&msg.content);
+                msg.content = sanitized;
             }
         }
     }

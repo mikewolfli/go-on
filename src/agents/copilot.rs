@@ -516,7 +516,7 @@ impl CopilotAgent {
                     }
                 }
 
-                if let Some(token) = crate::agents::extract_token(&json) {
+                for token in crate::agents::extract_all_tokens(&json) {
                     if stream_sender.send(token).is_err() {
                         return Ok(SseEventAction::Stop);
                     }

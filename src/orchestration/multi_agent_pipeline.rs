@@ -209,7 +209,7 @@ impl MultiAgentPipeline {
 
                 // Execute with timeout
                 let result = timeout(Duration::from_secs(timeout_secs), async {
-                    agent.run_task(envelope)
+                    agent.run_task(envelope).await
                 })
                 .await;
 
@@ -326,7 +326,7 @@ mod tests {
             Ok(())
         }
 
-        fn run_task(
+        async fn run_task(
             &self,
             _envelope: AgentTaskEnvelope,
         ) -> crate::core::error::Result<AgentTaskResult> {

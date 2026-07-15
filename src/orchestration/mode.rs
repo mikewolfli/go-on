@@ -137,16 +137,16 @@ async fn execute_agent_chat_async(
     Ok(full_output)
 }
 
-/// Async helper to execute an agent run_task without blocking.
-/// Safe to call from within any tokio runtime context.
+/// Execute an agent's run_task directly (already async).
+/// No spawn_blocking needed — run_task is async and calls chat() internally.
 async fn execute_agent_run_task_async(
     agent: Arc<dyn Agent>,
     envelope: AgentTaskEnvelope,
 ) -> Result<AgentTaskResult> {
-    let result = tokio::task::spawn_blocking(move || agent.run_task(envelope))
+    agent
+        .run_task(envelope)
         .await
-        .map_err(|e| anyhow::anyhow!("agent run_task join failed: {}", e))?;
-    result.map_err(|e| anyhow::anyhow!("agent run_task failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("agent run_task failed: {}", e))
 }
 
 /// Helper to build a chat message from the task envelope.
@@ -308,6 +308,8 @@ impl BaseModeRuntime {
                             }
                         }
                     } else {
+                        // run_task() now has an async default that calls chat() internally,
+                        // so every mode gets a real AI response. No fallback needed.
                         let result = execute_agent_run_task_async(agent.clone(), task).await;
                         match result {
                             Ok(result) => {

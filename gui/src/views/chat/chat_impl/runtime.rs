@@ -783,16 +783,26 @@ impl ChatView {
                                                 .await;
                                             }
                                             "result" | "done" => {
-                                                final_content = val
+                                                // Only overwrite final_content if the event has a non-empty response.
+                                                // The "done"/"result" event may omit the response field when the
+                                                // content was already streamed via "chunk" events (e.g. FullAuto mode
+                                                // where the autonomy loop streams tokens in real time via progress_tx).
+                                                // Overwriting with None/empty would erase the accumulated content.
+                                                let new_content = val
                                                     .get("response")
                                                     .or_else(|| val.get("content"))
                                                     .and_then(|v| v.as_str())
                                                     .map(ToOwned::to_owned);
+                                                if let Some(ref c) = new_content {
+                                                    if !c.trim().is_empty() {
+                                                        final_content = Some(c.clone());
+                                                    }
+                                                }
                                                 final_thinking = val
                                                     .get("thinking")
                                                     .and_then(|v| v.as_str())
                                                     .map(ToOwned::to_owned);
-                                                final_agent = val
+                                                let new_agent = val
                                                     .get("agent")
                                                     .or_else(|| val.get("selected_agent"))
                                                     .or_else(|| {
@@ -802,6 +812,12 @@ impl ChatView {
                                                     })
                                                     .and_then(|v| v.as_str())
                                                     .map(String::from);
+                                                // Only overwrite agent if the event has a non-empty value.
+                                                if let Some(ref a) = new_agent {
+                                                    if !a.trim().is_empty() {
+                                                        final_agent = Some(a.clone());
+                                                    }
+                                                }
                                                 final_used_model = val
                                                     .get("selected_model")
                                                     .and_then(|v| v.as_str())
@@ -1232,6 +1248,12 @@ The backend may be misconfigured or overloaded."
                                 // (overrides any incremental reasoning accumulated during streaming)
                                 if !thinking.is_empty() {
                                     m.thinking = thinking;
+                                    // Auto-collapse thinking when the response is complete.
+                                    // Only the first chunk of new thinking shows expanded;
+                                    // once ChatCompleted arrives, collapse it (Zed-style).
+                                    if self.show_thinking_idx == Some(idx) {
+                                        self.show_thinking_idx = None;
+                                    }
                                 }
                                 // Update the model used.
                                 //   - Copilot auto → actual model name (e.g. "gemini-2.5-pro")

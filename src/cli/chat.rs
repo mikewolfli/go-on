@@ -80,6 +80,19 @@ static SAVE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 /// Cached ToolRegistry — created once to avoid recreating ~100 tools per call.
 static TOOL_REGISTRY: OnceLock<ToolRegistry> = OnceLock::new();
 
+/// Cached InjectionDetector for terminal chat — created once per session.
+/// Uses default detection config (threshold 0.7, contamination check enabled).
+static INJECTION_DETECTOR: OnceLock<crate::security::prompt_injection::InjectionDetector> =
+    OnceLock::new();
+
+fn injection_detector() -> &'static crate::security::prompt_injection::InjectionDetector {
+    INJECTION_DETECTOR.get_or_init(|| {
+        crate::security::prompt_injection::InjectionDetector::new(
+            crate::security::prompt_injection::DetectionConfig::default(),
+        )
+    })
+}
+
 /// Returns the global ToolRegistry reference.
 fn tool_registry() -> &'static ToolRegistry {
     TOOL_REGISTRY.get_or_init(ToolRegistry::default)
@@ -1077,11 +1090,64 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
             }
         }
 
-        // ── Send user message ──
-        messages.push(Message {
-            role: "user".to_string(),
-            content: line,
-        });
+        // ── Prompt injection detection ──
+        // Check user input for prompt injection before sending to the LLM.
+        // HIGH/CRITICAL patterns are blocked; MEDIUM/LOW are sanitized.
+        {
+            use crate::security::prompt_injection::InjectionSeverity;
+            let detector = injection_detector();
+            let (sanitized, result) = detector.detect_and_sanitize(&line);
+
+            if result.detected {
+                // Log detected patterns
+                for v in &result.violations {
+                    warn!(
+                        target: "cli_injection",
+                        category = ?v.category,
+                        severity = ?v.severity,
+                        pattern_id = ?v.pattern_id,
+                        description = %v.description,
+                        "prompt injection detected in user input"
+                    );
+                }
+
+                // HIGH/CRITICAL: block the message
+                if detector.should_block(&result, InjectionSeverity::High) {
+                    let critical: Vec<String> = result
+                        .violations
+                        .iter()
+                        .filter(|v| v.severity >= InjectionSeverity::High)
+                        .map(|v| format!("{:?}: {}", v.category, v.description))
+                        .collect();
+                    eprintln!(
+                        "{}{} Prompt injection detected and blocked!{} (violations: {})",
+                        ansi!("31"),
+                        ansi!("1"),
+                        ansi!("0"),
+                        critical.join("; ")
+                    );
+                    continue;
+                }
+
+                // MEDIUM/LOW: warn and use sanitized version
+                eprintln!(
+                    "{}⚠️  Warning: Potential prompt injection detected — input has been sanitized.{} (contamination: {:.2})",
+                    ansi!("33"),
+                    ansi!("0"),
+                    result.contamination_score
+                );
+                messages.push(Message {
+                    role: "user".to_string(),
+                    content: sanitized,
+                });
+            } else {
+                // No injection — use original input
+                messages.push(Message {
+                    role: "user".to_string(),
+                    content: line,
+                });
+            }
+        }
 
         eprint!("{}🤖 {}", ansi!("1"), ansi!("0"));
         std::io::Write::flush(&mut std::io::stdout()).ok();

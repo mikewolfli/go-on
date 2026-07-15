@@ -192,11 +192,17 @@ pub async fn run_autonomy_loop(
                 .as_ref()
                 .map(|p| format!("\n\nPUA principles:\n- {}", p.join("\n- ")))
                 .unwrap_or_default();
+            let is_last_round = iteration + 1 >= max_iterations;
+            let instruction = if is_last_round {
+                "Summarize what was accomplished and provide the final result."
+            } else {
+                "Continue with the task."
+            };
             vec![Message {
                 role: "user".to_string(),
                 content: format!(
-                    "Continue with the task. Context so far: {}{}\n\nOriginal objective: {}",
-                    response, principles_context, params.objective
+                    "{}. Context so far: {}{}\n\nOriginal objective: {}",
+                    instruction, response, principles_context, params.objective
                 ),
             }]
         };
@@ -369,12 +375,48 @@ pub async fn run_autonomy_loop(
     let total_duration_ms = start.elapsed().as_millis() as u64;
     let total_tools: usize = rounds.iter().map(|r| r.tools_executed.len()).sum();
 
-    // If the final response is empty but we have reasoning, use reasoning as response
-    let final_response = if response.trim().is_empty() && !reasoning.trim().is_empty() {
-        reasoning.clone()
-    } else {
-        response
-    };
+    // Post-loop summary: if tools were executed in the last round, the
+    // agent may not have produced a final text response. Do one more call
+    // asking for a summary so the user always sees a final answer.
+    let last_round_had_tools = rounds
+        .last()
+        .map_or(false, |r| !r.tools_executed.is_empty());
+    let mut final_response = response;
+    if last_round_had_tools {
+        let summary_msg = Message {
+            role: "user".to_string(),
+            content: format!(
+                "Summarize what was accomplished and provide the final result.\n\nContext: {}\n\nOriginal objective: {}",
+                final_response, params.objective
+            ),
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let summary_sender = StreamingSender::from(tx);
+        if params
+            .agent
+            .chat(
+                vec![summary_msg],
+                params.principles.clone(),
+                params.options.clone(),
+                summary_sender,
+            )
+            .await
+            .is_ok()
+        {
+            let mut summary = String::new();
+            while let Some(token) = rx.recv().await {
+                summary.push_str(&token);
+            }
+            if !summary.trim().is_empty() {
+                final_response = summary;
+            }
+        }
+    }
+
+    // If the final response is empty but we have reasoning, use reasoning
+    if final_response.trim().is_empty() && !reasoning.trim().is_empty() {
+        final_response = reasoning;
+    }
 
     Ok(AutonomyLoopResult {
         response: final_response,

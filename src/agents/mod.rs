@@ -63,6 +63,55 @@ use tracing::{debug, warn};
 
 use crate::orchestration::autonomy_runtime::{build_thinking_token, build_tool_call_token};
 
+/// Accumulated tool call state across SSE chunks (index-keyed).
+/// Zed uses the same approach: `tool_calls_by_index: HashMap<usize, RawToolCall>`
+/// that accumulates `id`, `name`, `arguments` incrementally.
+#[derive(Default)]
+pub(crate) struct ToolCallAcc {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+thread_local! {
+    // Thread-local accumulator for multi-chunk tool calls (index-keyed).
+    // Each tokio worker thread gets its own instance, avoiding cross-stream pollution
+    // when multiple chat streams run concurrently on different threads.
+    static TOOL_CALL_ACC: std::cell::RefCell<HashMap<usize, ToolCallAcc>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Strip trailing incomplete escape sequences from partial JSON tool arguments.
+/// Zed's `strip_trailing_incomplete_escape` does the same transformation.
+pub(crate) fn strip_trailing_incomplete_escape(s: &str) -> String {
+    if s.is_empty() {
+        return s.to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut end = s.len();
+    // Walk backwards from the end, skipping complete escape sequences
+    while end > 0 {
+        if bytes[end - 1] == b'"' || (bytes[end - 1] > 0x1f && bytes[end - 1] != b'\\') {
+            break;
+        }
+        if bytes[end - 1] == b'\\' && end > 1 {
+            // Check if this is a complete escape: \", \\, \n, \t, \r, \/, \b, \f
+            // or an incomplete one (trailing backslash)
+            if matches!(
+                bytes[end - 2],
+                b'\\' | b'"' | b'n' | b't' | b'r' | b'/' | b'b' | b'f'
+            ) {
+                break;
+            }
+            // Trailing incomplete escape: remove the backslash
+            end -= 1;
+            break;
+        }
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
 pub use ai21::Ai21Agent;
 pub use aleph::AlephAgent;
 pub use anthropic::AnthropicAgent;
@@ -441,19 +490,26 @@ where
 
 /// Process a single SSE event through the sender.
 /// Returns `true` when the stream should stop (sender dropped or [DONE]).
+/// Process one SSE event and send token(s) through the sender.
+/// Returns `true` when the stream should stop (`[DONE]` or sender dropped).
+///
+/// Matches Zed's approach: for a single SSE chunk, extracts ALL fields from
+/// choices[0].delta (or .message) and sends them in Zed's order:
+///   1. reasoning (Anthropic-style)     → __thinking__ prefix
+///   2. reasoning_content (DeepSeek)    → __thinking__ prefix
+///   3. content (regular text)          → as-is
+///   4. tool_calls (function calling)   → __tool_call__ prefix
 fn sse_event_to_sender(event: &str, sender: &crate::agent::StreamingSender) -> bool {
-    // Parse JSON and extract token (handles content, reasoning_content,
-    // tool_calls, text, result, and all other fields via extract_token).
-    if let Ok(json) = serde_json::from_str::<Value>(event) {
-        if let Some(token) = extract_token(&json) {
-            if sender.send(token).is_err() {
-                return true;
-            }
-            return false;
-        }
-    }
     if event.trim() == "[DONE]" {
         return true;
+    }
+    let Ok(json) = serde_json::from_str::<Value>(event) else {
+        return false;
+    };
+    for token in extract_all_tokens(&json) {
+        if sender.send(token).is_err() {
+            return true;
+        }
     }
     false
 }
@@ -561,105 +617,148 @@ pub async fn stream_sse_to_sender_compressed(
     Ok(())
 }
 
-pub(crate) fn extract_token(value: &Value) -> Option<String> {
-    // ── Helper: get a string field from choices[0] delta or message ──
-    let from_choice = |field: &str| -> Option<String> {
-        let choice = value.get("choices")?.get(0)?;
-        // Check delta first (streaming), then message (non-streaming)
-        if let Some(v) = choice
-            .get("delta")
-            .and_then(|d| d.get(field))
-            .or_else(|| choice.get("message").and_then(|m| m.get(field)))
-        {
-            if let Some(s) = v.as_str() {
-                if !s.is_empty() {
-                    return Some(s.to_string());
-                }
-            }
-            // OpenAI content array format: [{ "text": "..." }, ...]
-            if let Some(arr) = v.as_array() {
-                let mut merged = String::new();
-                for part in arr {
-                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                        merged.push_str(text);
-                    }
-                }
-                if !merged.is_empty() {
-                    return Some(merged);
-                }
+/// Extract ALL tokens from a single SSE event, preserving the field order:
+///   1. reasoning (Anthropic-style) → __thinking__ prefix
+///   2. reasoning_content (OpenAI-style, DeepSeek) → __thinking__ prefix
+///   3. content (regular text) → as-is
+///   4. tool_calls (function calling) → __tool_call__ prefix
+///
+/// Returns them as a Vec so the caller can send each one through the stream.
+/// Empty vec means no content was found in this event.
+pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
+    let mut tokens = Vec::with_capacity(4);
+
+    let Some(choices) = value.get("choices").and_then(|v| v.as_array()) else {
+        // Non-standard: top-level result field
+        if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
+            if !result.is_empty() {
+                tokens.push(result.to_string());
             }
         }
-        None
+        return tokens;
+    };
+    let Some(choice) = choices.first() else {
+        return tokens;
     };
 
-    // 1. Tool calls (function calling) — highest priority
-    //    Format: __tool_call__:<name>:<json_args>
-    if let Some(tc) = extract_tool_call(value) {
-        return Some(tc);
-    }
+    // Prefer delta (streaming), fall back to message (non-streaming final)
+    let container = choice.get("delta").or_else(|| choice.get("message"));
+    let Some(container) = container else {
+        // Non-standard: choices[0].text
+        if let Some(text) = choice.get("text").and_then(|v| v.as_str()) {
+            if !text.is_empty() {
+                tokens.push(text.to_string());
+            }
+        }
+        return tokens;
+    };
 
-    // 2. Reasoning/thinking content — wrap with __thinking__ prefix
-    //    so the agent runtime separates it from the response text.
-    if let Some(thinking) = from_choice("reasoning_content") {
-        return Some(build_thinking_token(&thinking, None));
-    }
-
-    // 3. Regular content — return as-is
-    if let Some(content) = from_choice("content") {
-        return Some(content);
-    }
-
-    // 4. Non-standard: choices[0].text (used by some OpenAI-compatible APIs)
-    if let Some(token) = value
-        .get("choices")
-        .and_then(|v| v.get(0))
-        .and_then(|v| v.get("text"))
-        .and_then(|v| v.as_str())
-    {
-        return Some(token.to_string());
-    }
-
-    // 5. Non-standard: result field (used by some providers)
-    value
-        .get("result")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-/// Extract tool call token from choices[0].delta.tool_calls or .message.tool_calls.
-fn extract_tool_call(value: &Value) -> Option<String> {
-    let tool_calls = value
-        .get("choices")?
-        .get(0)?
-        .get("delta")?
-        .get("tool_calls")?
-        .as_array()?;
-    for tc in tool_calls {
-        if let (Some(name), Some(args)) = (
-            tc.get("function")?.get("name")?.as_str(),
-            tc.get("function")?.get("arguments")?.as_str(),
-        ) {
-            return Some(build_tool_call_token(name, args));
+    // 1. reasoning (Anthropic-style)
+    if let Some(t) = container.get("reasoning").and_then(|v| v.as_str()) {
+        if !t.is_empty() {
+            tokens.push(build_thinking_token(t));
         }
     }
-    // Also check final message (non-streaming)
-    if let Some(tool_calls) = value
-        .get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("tool_calls")?
-        .as_array()
-    {
-        for tc in tool_calls {
-            if let (Some(name), Some(args)) = (
-                tc.get("function")?.get("name")?.as_str(),
-                tc.get("function")?.get("arguments")?.as_str(),
-            ) {
-                return Some(build_tool_call_token(name, args));
+
+    // 2. reasoning_content (OpenAI-style, DeepSeek)
+    if let Some(t) = container.get("reasoning_content").and_then(|v| v.as_str()) {
+        if !t.is_empty() {
+            tokens.push(build_thinking_token(t));
+        }
+    }
+
+    // 3. content (regular text) — string or array
+    if let Some(content) = container.get("content") {
+        if let Some(text) = content.as_str() {
+            if !text.is_empty() {
+                tokens.push(text.to_string());
+            }
+        } else if let Some(arr) = content.as_array() {
+            let mut merged = String::new();
+            for part in arr {
+                if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                    merged.push_str(text);
+                }
+            }
+            if !merged.is_empty() {
+                tokens.push(merged);
             }
         }
     }
-    None
+
+    // 4. tool_calls (function calling) — accumulate across chunks by index
+    if let Some(tool_calls) = container.get("tool_calls").and_then(|v| v.as_array()) {
+        TOOL_CALL_ACC.with(|cell| {
+            let mut acc = cell.borrow_mut();
+            for tc in tool_calls {
+                let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let entry = acc.entry(index).or_default();
+                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                    if !id.is_empty() {
+                        entry.id = id.to_string();
+                    }
+                }
+                if let Some(func) = tc.get("function") {
+                    if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                        if !name.is_empty() {
+                            entry.name = name.to_string();
+                        }
+                    }
+                    if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                        if !args.is_empty() {
+                            entry.arguments.push_str(args);
+                        }
+                    }
+                }
+                // Emit only when both name and id are known (same heuristic as Zed)
+                if !entry.name.is_empty() && !entry.id.is_empty() {
+                    let fixed = strip_trailing_incomplete_escape(&entry.arguments);
+                    tokens.push(build_tool_call_token(&entry.name, &fixed));
+                    entry.arguments.clear();
+                }
+            }
+        });
+    }
+
+    // 5. finish_reason — forward as __finish_reason__:<reason>
+    //     If the reason signals stream end ("stop", "length", "tool_calls"), drain
+    //     any remaining accumulated tool calls and clear the thread-local accumulator
+    //     so a new stream on the same thread starts fresh.
+    if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+        if !reason.is_empty() && reason != "null" {
+            tokens.push(format!("__finish_reason__:{}", reason));
+            TOOL_CALL_ACC.with(|cell| {
+                let mut acc = cell.borrow_mut();
+                for (_, entry) in acc.drain() {
+                    if !entry.name.is_empty() && !entry.id.is_empty() {
+                        let fixed = strip_trailing_incomplete_escape(&entry.arguments);
+                        tokens.push(build_tool_call_token(&entry.name, &fixed));
+                    }
+                }
+            });
+        }
+    }
+
+    // 6. usage — forward token economy info
+    if let Some(usage) = value.get("usage") {
+        let prompt = usage
+            .get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let completion = usage
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let total = usage
+            .get("total_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if prompt > 0 || completion > 0 || total > 0 {
+            tokens.push(format!("__usage__:{},{},{}", prompt, completion, total));
+        }
+    }
+
+    tokens
 }
 
 #[cfg(test)]
@@ -703,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_token_supports_openai_delta_arrays_and_result_fields() {
+    fn extract_all_tokens_supports_content_arrays_and_result_fields() {
         let delta_array = json!({
             "choices": [{
                 "delta": {
@@ -716,11 +815,41 @@ mod tests {
         });
         let result_field = json!({ "result": "wenxin-token" });
 
-        assert_eq!(extract_token(&delta_array).as_deref(), Some("alphabeta"));
-        assert_eq!(
-            extract_token(&result_field).as_deref(),
-            Some("wenxin-token")
+        assert_eq!(extract_all_tokens(&delta_array), vec!["alphabeta"]);
+        assert_eq!(extract_all_tokens(&result_field), vec!["wenxin-token"]);
+    }
+
+    #[test]
+    fn extract_all_tokens_preserves_zed_order() {
+        // When reasoning_content AND content AND tool_calls are in the same delta,
+        // the output order must be: thinking → thinking → content → tool_calls
+        let event = json!({
+            "choices": [{
+                "delta": {
+                    "reasoning": "anthropic-think",
+                    "reasoning_content": "deepseek-think",
+                    "content": "hello world",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {
+                            "name": "search",
+                            "arguments": "{\"q\":\"test\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let tokens = extract_all_tokens(&event);
+        assert_eq!(tokens.len(), 4, "all 4 fields should produce tokens");
+        assert!(tokens[0].starts_with("__thinking__"), "reasoning first");
+        assert!(
+            tokens[1].starts_with("__thinking__"),
+            "reasoning_content second"
         );
+        assert_eq!(tokens[2], "hello world", "content third");
+        assert!(tokens[3].starts_with("__tool_call__"), "tool_calls last");
+        assert!(tokens[3].contains("search"), "tool name present");
     }
 
     #[test]

@@ -144,20 +144,15 @@ async fn store_copilot_models_cache(models: Vec<String>) {
 }
 
 fn resolve_copilot_github_token() -> Option<String> {
-    for env_name in ["GITHUB_COPILOT_TOKEN", "GITHUB_TOKEN"] {
-        if let Ok(value) = std::env::var(env_name) {
-            if !value.trim().is_empty() {
-                return Some(value);
-            }
-        }
-    }
-
+    // Only check keyring, not environment variables.
+    // The copilot.rs agent handles env vars via resolve_secret() with full secret
+    // pooling and rotation. This function is for the ACP provider.list_models path
+    // where we want consistent behavior: all API keys come from the system keyring.
     for account in ["github_copilot_token", "copilot_api_key"] {
         if let Some(value) = crate::shared::secret_override::get_keyring_cached("go-on", account) {
             return Some(value);
         }
     }
-
     None
 }
 

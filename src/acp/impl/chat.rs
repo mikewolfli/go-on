@@ -539,27 +539,39 @@ pub(crate) async fn process_chat_request(
     // This is necessary because the spawned task only handles errors;
     // the Ok(result) is discarded. The event is sent here, after all
     // phases succeed, so it won't be overwritten by error handlers.
+    //
+    // IMPORTANT: Only send if both response and agent are non-empty,
+    // otherwise this event would overwrite the valid "done" event that
+    // was already sent by run_agent_collecting with empty values,
+    // causing the GUI to show "The model returned an empty response".
     if let Some(ref observer) = stream_observer {
         let response_text = result
             .get("response")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let agent = result.get("agent").and_then(|v| v.as_str()).unwrap_or("");
-        let plan_output_val = result.get("plan_output");
-        let mut payload = serde_json::json!({
-            "response": response_text,
-            "agent": agent,
-            "done": true,
-        });
-        if let Some(po) = plan_output_val {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("plan_output".to_string(), po.clone());
+        if response_text.is_empty() && agent.is_empty() {
+            tracing::debug!(
+                target: "chat_stream",
+                "process_chat_request: skipping empty result event — 'done' event already sent by agent"
+            );
+        } else {
+            let plan_output_val = result.get("plan_output");
+            let mut payload = serde_json::json!({
+                "response": response_text,
+                "agent": agent,
+                "done": true,
+            });
+            if let Some(po) = plan_output_val {
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert("plan_output".to_string(), po.clone());
+                }
             }
+            observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
+                event: "result",
+                payload,
+            });
         }
-        observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
-            event: "result",
-            payload,
-        });
     }
 
     Ok(result)

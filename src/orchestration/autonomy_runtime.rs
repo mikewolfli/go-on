@@ -37,13 +37,10 @@ pub fn build_model_used_token(model_name: &str) -> String {
     token
 }
 
-pub fn build_thinking_token(thinking: &str, content: Option<&str>) -> String {
-    let tail = content.unwrap_or_default();
-    let mut token =
-        String::with_capacity(TOKEN_THINKING_PREFIX.len() + thinking.len() + tail.len());
+pub fn build_thinking_token(thinking: &str) -> String {
+    let mut token = String::with_capacity(TOKEN_THINKING_PREFIX.len() + thinking.len());
     token.push_str(TOKEN_THINKING_PREFIX);
     token.push_str(thinking);
-    token.push_str(tail);
     token
 }
 
@@ -146,10 +143,7 @@ mod tests {
         let model_token = build_model_used_token("gpt-4.1");
         assert_eq!(parse_model_used_token(&model_token), Some("gpt-4.1"));
 
-        let thinking_token = build_thinking_token("reasoning...", Some("final"));
-        assert_eq!(
-            parse_thinking_token(&thinking_token),
-            Some("reasoning...final")
-        );
+        let thinking_token = build_thinking_token("reasoning...");
+        assert_eq!(parse_thinking_token(&thinking_token), Some("reasoning..."));
     }
 }

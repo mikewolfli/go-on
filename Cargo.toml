@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "gui", "sdk/rust", "test_i18n"]
+members = [".", "gui", "sdk/rust", "test_i18n", "crates/mermaid-render"]
 resolver = "2"
 
 [workspace.package]

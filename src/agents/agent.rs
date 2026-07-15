@@ -21,7 +21,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::agents::{
     Ai21Agent, AlephAgent, AnthropicAgent, CohereAgent, CopilotAgent, DeepQuestAgent,
@@ -554,40 +554,57 @@ pub trait Agent: Send + Sync {
         true
     }
 
-    /// (Phase 0/1 discipline) Structured agent task entrypoint
-    fn run_task(&self, envelope: AgentTaskEnvelope) -> AppResult<AgentTaskResult> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs().to_string())
-            .unwrap_or_else(|_| "0".to_string());
+    /// (Phase 0/1 discipline) Structured agent task entrypoint.
+    ///
+    /// Default implementation: builds chat messages from the envelope,
+    /// calls `chat()` with a standalone channel, collects the streamed
+    /// response, and wraps it in an `AgentTaskResult`.  Agents that need
+    /// custom task logic can override this method.
+    async fn run_task(&self, envelope: AgentTaskEnvelope) -> AppResult<AgentTaskResult> {
+        // Build messages from the task envelope (mirrors build_chat_messages).
+        let mut messages = Vec::new();
 
-        let audit = AgentAuditLog {
-            agent: "generic".to_string(),
-            phase: envelope.phase.clone(),
-            task_id: envelope.task_id.clone(),
-            decision: "rejected".to_string(),
-            rationale: Some(tf("error.run_task_not_implemented", &[])),
-            timestamp,
-        };
+        if let Some(evidence) = &envelope.evidence {
+            if !evidence.is_empty() {
+                messages.push(Message {
+                    role: "system".to_string(),
+                    content: format!("Context/Evidence:\n{}", evidence),
+                });
+            }
+        }
 
-        error!(
-            target = "agent",
-            "run_task called on unsupported provider: phase={} task_id={}",
-            envelope.phase,
-            envelope.task_id
-        );
+        let mut user_content = format!("Objective: {}\n", envelope.objective);
+        if let Some(constraints) = &envelope.constraints {
+            user_content.push_str(&format!("Constraints: {}\n", constraints));
+        }
+        user_content.push_str("\nPlease complete this task and provide the result.");
+
+        messages.push(Message {
+            role: "user".to_string(),
+            content: user_content,
+        });
+
+        // Create a standalone channel for collecting the chat response.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let sender = StreamingSender::new(tx);
+
+        // Call chat() — all agents implement this.
+        self.chat(messages, None, None, sender).await?;
+
+        // Collect all streamed tokens.
+        let mut output = String::new();
+        while let Some(token) = rx.recv().await {
+            output.push_str(&token);
+        }
 
         Ok(AgentTaskResult {
-            success: false,
+            success: true,
             output: Some(json!({
-                "task_id": envelope.task_id,
-                "phase": envelope.phase,
-                "role": envelope.role,
-                "objective": envelope.objective,
-                "status": "unsupported_operation"
+                "status": "completed",
+                "answer": output,
             })),
-            error: Some(AgentError::Runtime(tf("error.run_task_unsupported", &[]))),
-            audit_log: Some(serde_json::to_string(&audit).map_err(anyhow::Error::from)?),
+            error: None,
+            audit_log: None,
             pua_report: None,
         })
     }

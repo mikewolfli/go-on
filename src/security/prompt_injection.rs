@@ -248,6 +248,84 @@ impl InjectionDetector {
         &self.contamination
     }
 
+    /// Determine whether any violation has severity >= the given threshold.
+    /// Use this to decide if a request should be blocked entirely.
+    pub fn should_block(&self, result: &InjectionResult, min_severity: InjectionSeverity) -> bool {
+        result.violations.iter().any(|v| v.severity >= min_severity)
+    }
+
+    /// Sanitize text that contains injection: wrap each injection span with
+    /// safety boundary markers so the LLM sees it as data, not instructions.
+    ///
+    /// The strategy is to replace every matched injection phrase with an
+    /// inert equivalent that preserves the semantic content but removes
+    /// the directive structure. This prevents the LLM from acting on
+    /// injected instructions while keeping the user's intended meaning.
+    pub fn sanitize(&self, text: &str, result: &InjectionResult) -> String {
+        if result.violations.is_empty() {
+            return text.to_string();
+        }
+
+        // Collect all violation match ranges, sorted by start position.
+        let mut ranges: Vec<(usize, usize)> = result
+            .violations
+            .iter()
+            .map(|v| (v.start_pos, v.end_pos))
+            .collect();
+        ranges.sort_by_key(|r| r.0);
+
+        // Merge overlapping ranges.
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (start, end) in ranges {
+            if let Some(last) = merged.last_mut() {
+                if start <= last.1 {
+                    last.1 = last.1.max(end);
+                    continue;
+                }
+            }
+            merged.push((start, end));
+        }
+
+        // Build sanitized output: replace each injection span with a safe placeholder.
+        // The placeholder is intentionally different in length to break any syntactic
+        // structure the injection depended on (e.g., markdown code blocks, XML tags).
+        let mut sanitized = String::with_capacity(text.len() + merged.len() * 80);
+        let mut cursor = 0;
+        for &(start, end) in &merged {
+            // Copy text before this injection span.
+            if start > cursor {
+                sanitized.push_str(&text[cursor..start]);
+            }
+            // Replace the injection span with an inert placeholder.
+            sanitized.push_str(
+                &format!(
+                    "[⚠️ Detected potential instruction injection — content redacted for safety: {} chars at position {}]",
+                    end - start,
+                    start
+                )
+            );
+            cursor = end;
+        }
+        // Copy any remaining text after the last injection span.
+        if cursor < text.len() {
+            sanitized.push_str(&text[cursor..]);
+        }
+
+        sanitized
+    }
+
+    /// Convenience: detect + sanitize in one call.
+    /// Returns `(sanitized_text, injection_result)`.
+    pub fn detect_and_sanitize(&self, text: &str) -> (String, InjectionResult) {
+        let result = self.detect(text);
+        let sanitized = if result.detected {
+            self.sanitize(text, &result)
+        } else {
+            text.to_string()
+        };
+        (sanitized, result)
+    }
+
     /// Add a custom detection pattern.
     pub fn add_pattern(&mut self, pattern: InjectionPattern) {
         self.patterns.push(pattern);

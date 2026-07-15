@@ -1193,6 +1193,12 @@ impl CachedAgentWrapper {
 impl Agent for CachedAgentWrapper {
     /// Chat with caching: hash messages, check cache, skip LLM on hit,
     /// otherwise delegate to inner agent and store the result.
+    ///
+    /// **Duplicate user message detection**: When the last user message repeats
+    /// the content of a *previous* user message in the same conversation,
+    /// the cache is bypassed so the AI generates a fresh response. This prevents
+    /// the GUI chat from silently returning stale answers when the user
+    /// intentionally repeats a question.
     async fn chat(
         &self,
         messages: Vec<Message>,
@@ -1200,6 +1206,33 @@ impl Agent for CachedAgentWrapper {
         options: Option<HashMap<String, Value>>,
         sender: StreamingSender,
     ) -> AppResult<()> {
+        // --- Bypass cache when the last user message is a duplicate ---
+        // If the user is asking the same thing they already asked before,
+        // bypass the cache so they get a *fresh* AI response instead of the
+        // cached previous answer.
+        let is_duplicate_user = {
+            let user_contents: Vec<&str> = messages
+                .iter()
+                .filter(|m| m.role == "user")
+                .map(|m| m.content.as_str())
+                .collect();
+            if user_contents.len() >= 2 {
+                let last = user_contents.last().copied().unwrap_or("");
+                user_contents[..user_contents.len() - 1].contains(&last)
+            } else {
+                false
+            }
+        };
+
+        if is_duplicate_user {
+            tracing::debug!(
+                target = "token_cache",
+                "CachedAgentWrapper: last user message is a duplicate — bypassing cache"
+            );
+            // Go directly to inner agent without cache lookup or storage.
+            return self.inner.chat(messages, principles, options, sender).await;
+        }
+
         // Derive a canonical input string for caching purposes.
         let input_text = messages_to_text(&messages);
 

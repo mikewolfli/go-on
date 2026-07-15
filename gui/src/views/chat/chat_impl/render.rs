@@ -2,6 +2,7 @@ use super::ChatView;
 use super::CHAT_DISABLE_MARKDOWN_RENDER;
 
 use crate::views::chat::types::{CachedMarkdownRender, MarkdownSegment, MarkdownStyle};
+use go_on_mermaid_render::{render_to_raster, MermaidTheme, RgbaColor};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
@@ -13,6 +14,18 @@ static MARKDOWN_CACHE: OnceLock<Mutex<HashMap<u64, CachedMarkdownRender>>> = Onc
 
 fn markdown_cache() -> &'static Mutex<HashMap<u64, CachedMarkdownRender>> {
     MARKDOWN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Cached mermaid-rendered texture for reuse across frames.
+struct CachedMermaid {
+    color_image: egui::ColorImage,
+    texture: Option<egui::TextureHandle>,
+}
+
+static MERMAID_CACHE: OnceLock<Mutex<HashMap<u64, CachedMermaid>>> = OnceLock::new();
+
+fn mermaid_cache() -> &'static Mutex<HashMap<u64, CachedMermaid>> {
+    MERMAID_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Compute a hash of the markdown text for cache lookup.
@@ -122,6 +135,13 @@ impl ChatView {
                 ui.add(egui::Label::new(rich).wrap());
             }
             MarkdownSegment::CodeBlock(lang, code) => {
+                // ── Mermaid diagram ────────────────────────────────
+                if lang.eq_ignore_ascii_case("mermaid") && !code.trim().is_empty() {
+                    render_mermaid_diagram(ui, code);
+                    ui.add_space(6.0);
+                    return;
+                }
+
                 // Language badge
                 ui.horizontal(|ui| {
                     if !lang.is_empty() {
@@ -275,6 +295,93 @@ impl ChatView {
                     egui::Label::new(egui::RichText::new(text.as_str()).color(text_color)).wrap(),
                 );
             }
+        }
+    }
+}
+
+/// Render a mermaid diagram code block as an egui image.
+fn render_mermaid_diagram(ui: &mut egui::Ui, code: &str) {
+    let hash = hash_text(code.trim());
+
+    // Check cache for pre-rendered texture
+    if let Ok(cache) = mermaid_cache().lock() {
+        if let Some(entry) = cache.get(&hash) {
+            if let Some(ref tex) = entry.texture {
+                let size = egui::vec2(
+                    entry.color_image.width() as f32,
+                    entry.color_image.height() as f32,
+                );
+                ui.add(egui::Image::from_texture((tex.id(), size)));
+                return;
+            }
+        }
+    }
+
+    // Build theme from egui visuals
+    let dark = ui.visuals().dark_mode;
+    let bg = ui.visuals().panel_fill;
+    let fg = ui.visuals().widgets.noninteractive.fg_stroke.color;
+
+    let theme = if dark {
+        MermaidTheme::dark(
+            RgbaColor::rgba(bg.r(), bg.g(), bg.b(), bg.a()),
+            RgbaColor::rgba(fg.r(), fg.g(), fg.b(), fg.a()),
+            vec![
+                RgbaColor::rgb(70, 130, 220),
+                RgbaColor::rgb(60, 180, 120),
+                RgbaColor::rgb(220, 160, 60),
+                RgbaColor::rgb(200, 100, 120),
+            ],
+        )
+    } else {
+        MermaidTheme::light(
+            RgbaColor::rgba(bg.r(), bg.g(), bg.b(), bg.a()),
+            RgbaColor::rgba(fg.r(), fg.g(), fg.b(), fg.a()),
+            vec![
+                RgbaColor::rgb(50, 110, 200),
+                RgbaColor::rgb(40, 160, 100),
+                RgbaColor::rgb(200, 140, 40),
+                RgbaColor::rgb(180, 80, 100),
+            ],
+        )
+    };
+
+    // Render mermaid to rasterized RGBA pixels
+    let result = render_to_raster(code.trim(), &theme, 2.0);
+    match result {
+        Ok((w, h, rgba)) => {
+            let color_image =
+                egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+            let texture =
+                ui.ctx()
+                    .load_texture("mermaid", color_image.clone(), egui::TextureOptions::LINEAR);
+            let size = egui::vec2(w as f32, h as f32);
+            let tex_id = texture.id();
+
+            // Store in cache (texture moved into cache, use tex_id for display)
+            if let Ok(mut cache) = mermaid_cache().lock() {
+                cache.insert(
+                    hash,
+                    CachedMermaid {
+                        color_image,
+                        texture: Some(texture),
+                    },
+                );
+                // Bound cache to 20 entries
+                if cache.len() > 20 {
+                    if let Some(key) = cache.keys().next().copied() {
+                        cache.remove(&key);
+                    }
+                }
+            }
+
+            ui.add(egui::Image::from_texture((tex_id, size)));
+        }
+        Err(e) => {
+            ui.colored_label(
+                egui::Color32::from_rgb(200, 80, 80),
+                format!("Mermaid render error: {}", e),
+            );
         }
     }
 }
