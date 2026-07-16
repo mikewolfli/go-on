@@ -186,7 +186,7 @@ impl Default for RuntimeConfig {
             entry_rate_limit_rpm: default_runtime_entry_rate_limit_rpm(),
             entry_rate_limit_burst: default_runtime_entry_rate_limit_burst(),
             production_strict: false,
-            otel_enabled: true,
+            otel_enabled: false,
             otel_exporter: default_runtime_otel_exporter(),
             otel_endpoint: Some("http://localhost:4317".to_string()),
             otel_service_name: default_runtime_otel_service_name(),

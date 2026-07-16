@@ -18,6 +18,10 @@ chrono = { version = "0.4", features = ["now"] }
 comrak = "0.52"
 base64.workspace = true
 go-on-mermaid-render = { path = "../crates/mermaid-render" }
+go-on-latex = { path = "../crates/go-on-latex" }
+resvg = "0.47"
+usvg = "0.47"
+tiny-skia = "0.12"
 webbrowser = "1"
 tokio-stream.workspace = true
 tokio-util.workspace = true

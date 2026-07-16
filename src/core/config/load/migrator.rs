@@ -13,10 +13,10 @@ pub(crate) fn migrate_config_schema(cfg: &mut AppConfig, normalized: &str) -> Re
     let schema_version_str = if normalized.contains("schema_version") {
         cfg.schema_version.clone()
     } else {
-        warn!(
-            "Config file does not contain a schema_version field; defaulting to \"0.1.0\" for migration"
+        info!(
+            "Config file does not contain a schema_version field; defaulting to \"1.0.0\" for migration"
         );
-        "0.1.0".to_string()
+        "1.0.0".to_string()
     };
 
     let parsed_version = match schema_version::SchemaVersion::from_str(&schema_version_str) {

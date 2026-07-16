@@ -2608,6 +2608,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "glob",
+ "go-on-web-search",
  "hex",
  "hmac 0.13.0",
  "image",
@@ -2670,20 +2671,33 @@ dependencies = [
  "eframe",
  "egui",
  "fastrand",
+ "go-on-latex",
  "go-on-mermaid-render",
  "keyring",
  "reqwest 0.12.28",
+ "resvg",
  "rfd",
  "serde",
  "serde_json",
  "tempfile",
+ "tiny-skia 0.12.0",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "toml 1.1.2+spec-1.1.0",
  "tracing",
+ "usvg",
  "webbrowser",
  "winres",
+]
+
+[[package]]
+name = "go-on-latex"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2697,6 +2711,16 @@ dependencies = [
  "serde_json",
  "tiny-skia 0.12.0",
  "usvg",
+]
+
+[[package]]
+name = "go-on-web-search"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

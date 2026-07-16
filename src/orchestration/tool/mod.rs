@@ -1175,6 +1175,21 @@ impl ToolRegistry {
             },
         );
 
+        // ── Web search tool ─────────────────────────────────────────--
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::WebSearchTool,
+            ToolCapabilityProfile {
+                capability: "web_search".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         // ── Network tools ─────────────────────────────────────────--
         registry.register_with_profile(
             crate::orchestration::tool_extended::DnsLookupTool,
@@ -1377,6 +1392,21 @@ impl ToolRegistry {
                     retry_on_failure: true,
                 },
                 fallback_chain: vec!["read_file".to_string()],
+            },
+        );
+
+        // ── Spawn sub-agent tool ───────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::SpawnAgentTool,
+            ToolCapabilityProfile {
+                capability: "agent_spawn".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
             },
         );
 

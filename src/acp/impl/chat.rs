@@ -540,10 +540,12 @@ pub(crate) async fn process_chat_request(
     // the Ok(result) is discarded. The event is sent here, after all
     // phases succeed, so it won't be overwritten by error handlers.
     //
-    // IMPORTANT: Only send if both response and agent are non-empty,
-    // otherwise this event would overwrite the valid "done" event that
-    // was already sent by run_agent_collecting with empty values,
-    // causing the GUI to show "The model returned an empty response".
+    // When both response and agent are empty (which can happen when the
+    // Mode Runtime in reflect_phase is the primary execution engine and
+    // the ACP act_phase autonomy round was skipped or returned empty),
+    // send an error event instead of silently skipping — otherwise the
+    // GUI sees a stream that ends without any "result" or "done" event
+    // and displays the misleading "empty response" message.
     if let Some(ref observer) = stream_observer {
         let response_text = result
             .get("response")
@@ -551,10 +553,17 @@ pub(crate) async fn process_chat_request(
             .unwrap_or("");
         let agent = result.get("agent").and_then(|v| v.as_str()).unwrap_or("");
         if response_text.is_empty() && agent.is_empty() {
-            tracing::debug!(
+            tracing::warn!(
                 target: "chat_stream",
-                "process_chat_request: skipping empty result event — 'done' event already sent by agent"
+                "process_chat_request: result has empty response AND empty agent — sending error event"
             );
+            observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
+                event: "error",
+                payload: serde_json::json!({
+                    "error": "The chat completed but produced no response. This can happen if no agents are available, API keys are misconfigured, or the backend is overloaded.",
+                    "message": "error.chat.no_response_from_pipeline",
+                }),
+            });
         } else {
             let plan_output_val = result.get("plan_output");
             let mut payload = serde_json::json!({
@@ -813,17 +822,21 @@ pub(crate) async fn execute_autonomy_round(
 
         let attempt_started = std::time::Instant::now();
 
+        // Build per-agent options — strip model override for fallback agents
+        // (idx > 0) so the user's model selection for the primary agent doesn't
+        // get passed to a different provider that doesn't support it.
+        let mut agent_opts = base_agent_options.clone();
+        if idx > 0 {
+            agent_opts.remove("model");
+        }
         // Some agents (notably Copilot/GitHub) don't support custom tools.
         // For those, strip tools from options so the agent responds naturally
         // without being confused by unfamiliar function definitions.
-        let agent_opts = if agent_name.to_lowercase().contains("copilot") {
-            let mut opts = base_agent_options.clone();
-            opts.remove("tools");
-            opts.remove("tool_choice");
-            Some(opts)
-        } else {
-            Some(base_agent_options.clone())
-        };
+        if agent_name.to_lowercase().contains("copilot") {
+            agent_opts.remove("tools");
+            agent_opts.remove("tool_choice");
+        }
+        let agent_opts = Some(agent_opts);
         let autonomy_tool_registry = if agent_name.to_lowercase().contains("copilot") {
             None // Copilot has its own native tools, no Go-On tool registry needed
         } else {

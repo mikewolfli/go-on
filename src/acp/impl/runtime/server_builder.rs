@@ -411,6 +411,11 @@ pub async fn new_acp_server(
         engine.set_plan(server.governance_deps.pua_enforcement_plan.clone());
     }
 
+    // ── Initialise SpawnAgentTool's global AgentRegistry reference ──
+    // This must happen before any tool invocation; the registry is already
+    // fully constructed at this point.
+    crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_registry(registry.clone());
+
     // B51-26: Shared wiring extracted to wire_server()
     eprintln!("DEBUG: about to call wire_server...");
     wire_server(&mut server, &registry).await;

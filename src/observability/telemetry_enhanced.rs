@@ -307,7 +307,7 @@ fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
     // `telemetry.rs::init_otel_provider` may have already called
     // `global::set_tracer_provider()`. Check before setting again to
     // prevent the second call from silently replacing the first.
-    if TRACER_INITIALIZED.load(Ordering::Relaxed) {
+    if TRACER_INITIALIZED.load(Ordering::Acquire) {
         info!(
             "OpenTelemetry tracer provider already initialized; \
              skipping re-initialization"

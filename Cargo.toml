@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "gui", "sdk/rust", "test_i18n", "crates/mermaid-render"]
+members = [".", "gui", "sdk/rust", "test_i18n", "crates/mermaid-render", "crates/go-on-web-search", "crates/go-on-latex"]
 resolver = "2"
 
 [workspace.package]
@@ -311,6 +311,7 @@ quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 zip = "2"
 tar = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+go-on-web-search = { path = "crates/go-on-web-search" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { version = "8", features = ["macos_kqueue"] }

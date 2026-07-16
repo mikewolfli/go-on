@@ -265,7 +265,30 @@ impl ReloadablePolicy for RedLinePolicy {
     fn reload(&mut self) -> Result<()> {
         // Path validation: ensure the file exists and is readable
         if !self.path.exists() {
-            anyhow::bail!("RedLine policy file not found: {}", self.path.display());
+            // Auto-create with sensible defaults so the system always has
+            // an explicit configuration and users can see/edit the file.
+            let default_toml = r#"# RedLine policy — blocks high-risk operations
+#   action:  "allow" | "deny"
+#   field:   "risk_score" | "file_count"
+#   threshold: trigger value (0.0–1.0 for risk_score)
+action = "deny"
+field = "risk_score"
+threshold = 0.5
+"#;
+            if let Some(parent) = self.path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&self.path, default_toml.as_bytes()) {
+                tracing::warn!(
+                    "failed to create default RedLine policy at {}: {}",
+                    self.path.display(),
+                    e
+                );
+                self.config = None;
+                self.checksum = None;
+                return Ok(());
+            }
+            tracing::info!("Created default RedLine policy at {}", self.path.display());
         }
         if !self.path.is_file() {
             anyhow::bail!("RedLine policy path is not a file: {}", self.path.display());
@@ -366,8 +389,27 @@ impl ReloadablePolicy for QualityCompassPolicy {
     fn reload(&mut self) -> Result<()> {
         // Path validation: ensure the file exists and is readable
         if !self.path.exists() {
-            anyhow::bail!(
-                "QualityCompass policy file not found: {}",
+            let default_toml = r#"# QualityCompass policy — minimum quality gate
+#   minimum_quality: minimum acceptable quality score (0.0–1.0)
+#   require_review:  require human review for multi-file tasks
+minimum_quality = 0.7
+require_review = false
+"#;
+            if let Some(parent) = self.path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&self.path, default_toml.as_bytes()) {
+                tracing::warn!(
+                    "failed to create default QualityCompass policy at {}: {}",
+                    self.path.display(),
+                    e
+                );
+                self.config = None;
+                self.checksum = None;
+                return Ok(());
+            }
+            tracing::info!(
+                "Created default QualityCompass policy at {}",
                 self.path.display()
             );
         }
@@ -471,7 +513,26 @@ impl ReloadablePolicy for SandboxPolicyReloadable {
     fn reload(&mut self) -> Result<()> {
         // Path validation: ensure the file exists and is readable
         if !self.path.exists() {
-            anyhow::bail!("Sandbox policy file not found: {}", self.path.display());
+            let default_toml = r#"# Sandbox policy — execution sandbox restrictions
+#   max_file_writes: maximum file writes before review
+#   block_commands:  block shell commands in high-risk contexts
+max_file_writes = 10
+block_commands = true
+"#;
+            if let Some(parent) = self.path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&self.path, default_toml.as_bytes()) {
+                tracing::warn!(
+                    "failed to create default Sandbox policy at {}: {}",
+                    self.path.display(),
+                    e
+                );
+                self.config = None;
+                self.checksum = None;
+                return Ok(());
+            }
+            tracing::info!("Created default Sandbox policy at {}", self.path.display());
         }
         if !self.path.is_file() {
             anyhow::bail!("Sandbox policy path is not a file: {}", self.path.display());

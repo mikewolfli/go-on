@@ -1,51 +1,18 @@
 //! OpenTelemetry runtime bridge for ACP tracing (Phase 2).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
 
-use anyhow::Result;
 use opentelemetry::global;
 use opentelemetry::trace::{TraceContextExt, Tracer};
-use opentelemetry::{Context, KeyValue};
+use opentelemetry::Context;
+use opentelemetry::KeyValue;
 use sha2::{Digest, Sha256};
 
 use crate::config::RuntimeConfig;
 
-/// OTEL initialization state, wrapped in a `Mutex` instead of `OnceLock`
-/// so it can be reset via `reset_otel()` for re-initialization support
-/// (e.g. after config reload or testing).
-static OTEL_INIT: Mutex<Option<Result<(), String>>> = Mutex::new(None);
-
 /// Guard against double-initialization of the global tracer provider.
-/// Mirrors `telemetry_enhanced::TRACER_INITIALIZED` to prevent this function
-/// from overwriting a provider already set by the enhanced module.
+/// Shared with `telemetry_enhanced` via `use crate::observability::telemetry::TRACER_INITIALIZED`.
 pub(crate) static TRACER_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-/// Reset the OpenTelemetry initialization state and replace the global
-/// tracer provider with a fresh one, allowing `TelemetryRuntime::new()`
-/// to re-initialize on the next call. This is useful for testing and
-/// dynamic config reloads.
-pub fn reset_otel() {
-    let mut guard = match OTEL_INIT.lock() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            // Recover from a poisoned mutex so that subsequent tests
-            // are not blocked by a prior panic.
-            tracing::error!("OTEL_INIT mutex was poisoned; recovering");
-            poisoned.into_inner()
-        }
-    };
-    *guard = None;
-    // Also reset the tracer-initialized guard so re-initialization
-    // is allowed on the next call to `init_otel_provider`.
-    TRACER_INITIALIZED.store(false, Ordering::Release);
-    // Replace the global provider with a fresh instance so that any
-    // previous state is discarded. `global::shutdown_tracer_provider`
-    // is not available in opentelemetry 0.31, so we achieve the same
-    // effect by setting a new empty SDK provider as the global.
-    let fresh_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder().build();
-    global::set_tracer_provider(fresh_provider);
-}
 
 #[derive(Debug, Default)]
 pub struct TelemetryRuntime {
@@ -57,36 +24,13 @@ pub struct TelemetryRuntime {
 
 impl TelemetryRuntime {
     pub fn new(config: &RuntimeConfig) -> Self {
+        // Telemetry initialization is now handled by
+        // `telemetry_enhanced::init_telemetry` / `init_tracing` at the
+        // bootstrap layer.  The legacy `init_otel_provider` has been removed.
+        // When OTel is enabled in config, the bootstrap/CLI layer is
+        // responsible for wiring the enhanced telemetry module.
         if !config.otel_enabled {
             return Self::default();
-        }
-
-        #[expect(deprecated)]
-        {
-            let mut guard = match OTEL_INIT.lock() {
-                Ok(g) => g,
-                Err(poisoned) => {
-                    tracing::error!("OTEL_INIT mutex was poisoned; recovering");
-                    poisoned.into_inner()
-                }
-            };
-            if guard.is_none() {
-                *guard = Some(
-                    init_otel_provider(
-                        config.otel_exporter.as_str(),
-                        config.otel_endpoint.clone(),
-                        config.otel_service_name.as_str(),
-                    )
-                    .map_err(|err| err.to_string()),
-                );
-            }
-            // guard is guaranteed to be Some at this point because we just
-            // set it above if it was None.
-            if let Some(init) = guard.as_ref() {
-                if init.is_err() {
-                    return Self::default();
-                }
-            }
         }
 
         Self {
@@ -208,57 +152,6 @@ impl TelemetryRuntime {
         let ratio = (value as f64) / (u64::MAX as f64);
         ratio <= self.sample_ratio
     }
-}
-
-#[deprecated(
-    note = "Use `telemetry_enhanced::init_telemetry` / `init_tracing` instead. \
-    This legacy OTLP initializer may conflict with the enhanced module's tracer provider."
-)]
-fn init_otel_provider(_exporter: &str, endpoint: Option<String>, service_name: &str) -> Result<()> {
-    use opentelemetry_sdk::trace::SdkTracerProvider;
-    use opentelemetry_sdk::Resource;
-
-    // ── Guard: avoid re-initializing the global tracer provider ───────
-    // `telemetry_enhanced::init_tracing` may have already called
-    // `global::set_tracer_provider()`. Check before setting again to
-    // prevent the second call from silently replacing the first.
-    if TRACER_INITIALIZED.load(Ordering::Relaxed) {
-        tracing::info!(
-            "OpenTelemetry tracer provider already initialized; skipping re-initialization"
-        );
-        return Ok(());
-    }
-
-    let resource = Resource::builder_empty()
-        .with_attribute(KeyValue::new("service.name", service_name.to_string()))
-        .build();
-
-    let provider = if let Some(ep) = endpoint {
-        use opentelemetry_otlp::{SpanExporter, WithExportConfig};
-        let span_exporter = SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(&ep)
-            .build()
-            .map_err(|e| anyhow::anyhow!("OTLP span exporter init error: {}", e))?;
-        SdkTracerProvider::builder()
-            .with_resource(resource)
-            .with_batch_exporter(span_exporter)
-            .build()
-    } else {
-        let span_exporter = opentelemetry_stdout::SpanExporter::default();
-        SdkTracerProvider::builder()
-            .with_resource(resource)
-            .with_simple_exporter(span_exporter)
-            .build()
-    };
-
-    global::set_tracer_provider(provider);
-    TRACER_INITIALIZED.store(true, Ordering::Release);
-    tracing::info!(
-        service = service_name,
-        "OpenTelemetry tracing provider initialized"
-    );
-    Ok(())
 }
 
 #[cfg(test)]
@@ -400,85 +293,26 @@ mod tests {
         rt.end_span(Context::current(), vec![]);
     }
 
-    // ── Integration tests that depend on global OTEL_INIT state ───────
-    //
-    // These tests share `OTEL_INIT`, `TRACER_INITIALIZED`, and the global
-    // tracer provider. They MUST run serially to avoid race conditions.
-    // A dedicated std::sync::Mutex<()> lock ensures mutual exclusion across
-    // all OTel init tests — no two will ever interleave their reset/setup.
-    static OTEL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// Acquire the OTel test lock before running an integration test that
-    /// depends on global OTEL_INIT state. Returns a guard that releases the
-    /// lock when dropped.
-    fn lock_otel_test() -> std::sync::MutexGuard<'static, ()> {
-        OTEL_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("OTEL_TEST_LOCK poisoned, recovering");
-            poisoned.into_inner()
-        })
-    }
-
-    mod otel_integration {
+    mod otel_tests {
         use super::*;
 
         #[test]
-        fn allows_reinit() {
-            let _guard = lock_otel_test();
-            reset_otel();
+        fn disabled_by_default() {
+            let rt = TelemetryRuntime::new(&otel_config(false, 1.0));
+            assert!(
+                !rt.is_enabled(),
+                "should be disabled when otel_enabled=false"
+            );
+        }
+
+        #[test]
+        fn enabled_when_configured() {
             let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-            assert!(rt.is_enabled(), "should be enabled after first init");
-
-            reset_otel();
-            let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
-            assert!(rt2.is_enabled(), "should be re-enabled after reset");
-        }
-
-        #[test]
-        fn clears_init_state() {
-            let _guard = lock_otel_test();
-            reset_otel();
-            let rt1 = TelemetryRuntime::new(&otel_config(true, 1.0));
-            assert!(rt1.is_enabled());
-
-            reset_otel();
-            let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
-            assert!(rt2.is_enabled(), "should be re-initializable after reset");
-        }
-
-        #[test]
-        fn repeat_reset_behavior() {
-            let _guard = lock_otel_test();
-            for i in 0..3 {
-                reset_otel();
-
-                let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-                assert!(
-                    rt.is_enabled(),
-                    "iteration {}: should be enabled after reset+init",
-                    i
-                );
-
-                let guard = OTEL_INIT.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("lock poisoned, recovering");
-                    poisoned.into_inner()
-                });
-                assert!(
-                    guard.is_some(),
-                    "iteration {}: OTEL_INIT should be Some after init",
-                    i
-                );
-                assert!(
-                    guard.as_ref().unwrap().is_ok(),
-                    "iteration {}: OTEL_INIT should be Ok",
-                    i
-                );
-            }
+            assert!(rt.is_enabled(), "should be enabled when otel_enabled=true");
         }
 
         #[test]
         fn sampling_rate_tracking() {
-            let _guard = lock_otel_test();
-            reset_otel();
             let rt = TelemetryRuntime::new(&otel_config(true, 0.25));
             assert!(rt.is_enabled());
 
@@ -507,68 +341,20 @@ mod tests {
         }
 
         #[test]
-        fn start_root_span_sets_attributes() {
-            let _guard = lock_otel_test();
-            reset_otel();
-            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-            let cx = rt
-                .start_root_span(
-                    "test-op",
-                    "test-key",
-                    vec![KeyValue::new("test_attr", "hello")],
-                )
-                .expect("root span should be created at ratio 1.0");
-            let span = cx.span();
-            assert_eq!(span.span_context().trace_id().to_string().len(), 32);
-            rt.end_span(cx, vec![]);
-        }
+        fn sample_count_tracking() {
+            let rt = TelemetryRuntime::new(&otel_config(true, 0.5));
+            assert!(rt.is_enabled());
 
-        #[test]
-        fn tracer_functional_after_reset() {
-            let _guard = lock_otel_test();
-            reset_otel();
-            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-            let cx = rt
-                .start_root_span("first-cycle", "key-a", vec![])
-                .expect("first span after init");
-            assert_eq!(
-                cx.span().span_context().trace_id().to_string().len(),
-                32,
-                "first cycle trace_id must be 32 hex chars"
+            for i in 0..100u64 {
+                let _ = rt.start_root_span("op", &format!("key-{}", i), vec![]);
+            }
+
+            let sampled = rt.sampled_roots.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(
+                sampled > 5,
+                "at ratio 0.5, 100 attempts should produce at least 5 samples, got {}",
+                sampled
             );
-            rt.end_span(cx, vec![]);
-
-            reset_otel();
-            let rt2 = TelemetryRuntime::new(&otel_config(true, 1.0));
-            assert!(rt2.is_enabled(), "runtime should be enabled after reset");
-
-            let cx2 = rt2
-                .start_root_span("second-cycle", "key-b", vec![])
-                .expect("second span after reset+reinit");
-            assert_eq!(
-                cx2.span().span_context().trace_id().to_string().len(),
-                32,
-                "second cycle trace_id must be 32 hex chars"
-            );
-            rt2.end_span(cx2, vec![]);
-        }
-
-        #[test]
-        fn child_span_after_reset() {
-            let _guard = lock_otel_test();
-            reset_otel();
-            let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-
-            let parent = rt
-                .start_root_span("parent", "parent-key", vec![])
-                .expect("parent span");
-
-            let child = rt
-                .start_child_span(&parent, "child", vec![KeyValue::new("child_attr", "yes")])
-                .expect("child span");
-
-            rt.end_span(child, vec![]);
-            rt.end_span(parent, vec![]);
         }
     }
 }

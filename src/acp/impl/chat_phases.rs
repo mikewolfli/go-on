@@ -1788,7 +1788,35 @@ async fn run_mode_runtime_and_multi_agent(
         }
     };
 
-    if !exec_out.cache_hit && !exec_out.response_text.is_empty() {
+    // Determine whether to run the mode runtime:
+    //
+    // ┌────────────┬────────────────────┬──────────────────────────────────┐
+    // │ Mode       │ When to run        │ Output capture behavior         │
+    // ├────────────┼────────────────────┼──────────────────────────────────┤
+    // │ Ask        │ Skipped entirely   │ N/A                             │
+    // ├────────────┼────────────────────┼──────────────────────────────────┤
+    // │ Plan       │ Only as safety net │ Captured (emergency fallback)   │
+    // │ Edit       │ when act_phase     │                                  │
+    // │ SafeGuard  │ output is empty    │                                  │
+    // ├────────────┼────────────────────┼──────────────────────────────────┤
+    // │ FullAuto   │ Always             │ Always captured (primary exec    │
+    // │            │                    │ engine for FullAuto)            │
+    // └────────────┴────────────────────┴──────────────────────────────────┘
+    //
+    // For non-FullAuto modes, the act_phase produced the canonical response
+    // via the ACP autonomy round. The mode runtime was historically an
+    // independent re-execution whose output was discarded — a completely
+    // wasted LLM call (2x cost per request). We now skip it entirely when
+    // act_phase produced output, saving ~50% LLM cost for Plan/Edit/SafeGuard.
+    // It is only kept as an emergency safety net: when act_phase left both
+    // response AND agent empty, the mode runtime can attempt recovery.
+    let is_fullauto = matches!(mode_runtime.kind(), ModeKind::FullAuto);
+    let act_phase_produced_output =
+        !exec_out.response_text.trim().is_empty() || !exec_out.selected_agent.trim().is_empty();
+    let should_run = !exec_out.cache_hit && (is_fullauto || !act_phase_produced_output);
+    let should_capture = is_fullauto || !act_phase_produced_output;
+
+    if should_run {
         let envelope = crate::agent::AgentTaskEnvelope {
             task_id: format!("chat-{}-{}", phase_name, trace.request_id),
             phase: phase_name.to_string(),
@@ -1805,7 +1833,25 @@ async fn run_mode_runtime_and_multi_agent(
             ),
             input: json!({"response_text": exec_out.response_text, "reasoning_text": exec_out.reasoning_text}),
         };
-        if mode_runtime.run(envelope).await.is_ok() {
+        if let Ok(result) = mode_runtime.run(envelope).await {
+            if should_capture {
+                // Capture the mode runtime's output back into exec_out so the
+                // final "result" SSE event carries the actual response.
+                if let Some(ref output) = result.output {
+                    let answer = output.get("answer").and_then(|v| v.as_str());
+                    let agent_from_output = output.get("agent").and_then(|v| v.as_str());
+                    if let Some(text) = answer {
+                        if !text.trim().is_empty() {
+                            exec_out.response_text = text.to_string();
+                        }
+                    }
+                    if let Some(name) = agent_from_output {
+                        if !name.trim().is_empty() {
+                            exec_out.selected_agent = name.to_string();
+                        }
+                    }
+                }
+            }
             if let Some(ref cb) = server.governance_deps.capability_bus {
                 let _ = cb.continuous_learning.lock().map(|cl| {
                     cl.schedule_review(&crate::intelligence::continuous_learning::ConsolidatedMemory {

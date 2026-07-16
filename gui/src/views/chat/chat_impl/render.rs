@@ -5,15 +5,15 @@ use crate::views::chat::types::{CachedMarkdownRender, MarkdownSegment, MarkdownS
 use go_on_mermaid_render::{render_to_raster, MermaidTheme, RgbaColor};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
 /// Global cache for parsed markdown content, keyed by text hash.
 /// Allows large documents to be parsed once and reused across messages and frames
 /// without blocking the UI thread with comrak parsing on subsequent renders.
-static MARKDOWN_CACHE: OnceLock<Mutex<HashMap<u64, CachedMarkdownRender>>> = OnceLock::new();
+static MARKDOWN_CACHE: OnceLock<RwLock<HashMap<u64, CachedMarkdownRender>>> = OnceLock::new();
 
-fn markdown_cache() -> &'static Mutex<HashMap<u64, CachedMarkdownRender>> {
-    MARKDOWN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn markdown_cache() -> &'static RwLock<HashMap<u64, CachedMarkdownRender>> {
+    MARKDOWN_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Cached mermaid-rendered texture for reuse across frames.
@@ -22,10 +22,22 @@ struct CachedMermaid {
     texture: Option<egui::TextureHandle>,
 }
 
-static MERMAID_CACHE: OnceLock<Mutex<HashMap<u64, CachedMermaid>>> = OnceLock::new();
+static MERMAID_CACHE: OnceLock<RwLock<HashMap<u64, CachedMermaid>>> = OnceLock::new();
 
-fn mermaid_cache() -> &'static Mutex<HashMap<u64, CachedMermaid>> {
-    MERMAID_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn mermaid_cache() -> &'static RwLock<HashMap<u64, CachedMermaid>> {
+    MERMAID_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Cached math-rendered texture for reuse across frames.
+struct CachedMath {
+    color_image: egui::ColorImage,
+    texture: Option<egui::TextureHandle>,
+}
+
+static MATH_CACHE: OnceLock<RwLock<HashMap<u64, CachedMath>>> = OnceLock::new();
+
+fn math_cache() -> &'static RwLock<HashMap<u64, CachedMath>> {
+    MATH_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 /// Compute a hash of the markdown text for cache lookup.
@@ -64,7 +76,7 @@ impl ChatView {
 
         // Check global cache first (for all document sizes)
         let hash = hash_text(text);
-        if let Ok(cache) = markdown_cache().lock() {
+        if let Ok(cache) = markdown_cache().read() {
             if let Some(cached) = cache.get(&hash) {
                 return Self::render_markdown_from_cache(ui, cached, copy_code_hint, text_color);
             }
@@ -78,7 +90,7 @@ impl ChatView {
         let ctx = ui.ctx().clone();
         let _ = std::thread::spawn(move || {
             let cached = parse_markdown_to_segments(&text);
-            if let Ok(mut cache) = markdown_cache().lock() {
+            if let Ok(mut cache) = markdown_cache().write() {
                 // Bounded cache: evict oldest entry if at capacity
                 const MAX_CACHE_ENTRIES: usize = 50;
                 if cache.len() >= MAX_CACHE_ENTRIES {
@@ -290,6 +302,12 @@ impl ChatView {
                 }
                 ui.add_space(4.0);
             }
+            MarkdownSegment::MathInline(svg) => {
+                render_latex_diagram(ui, svg, false);
+            }
+            MarkdownSegment::MathDisplay(svg) => {
+                render_latex_diagram(ui, svg, true);
+            }
             MarkdownSegment::Raw(text) => {
                 ui.add(
                     egui::Label::new(egui::RichText::new(text.as_str()).color(text_color)).wrap(),
@@ -304,7 +322,7 @@ fn render_mermaid_diagram(ui: &mut egui::Ui, code: &str) {
     let hash = hash_text(code.trim());
 
     // Check cache for pre-rendered texture
-    if let Ok(cache) = mermaid_cache().lock() {
+    if let Ok(cache) = mermaid_cache().read() {
         if let Some(entry) = cache.get(&hash) {
             if let Some(ref tex) = entry.texture {
                 let size = egui::vec2(
@@ -359,7 +377,7 @@ fn render_mermaid_diagram(ui: &mut egui::Ui, code: &str) {
             let tex_id = texture.id();
 
             // Store in cache (texture moved into cache, use tex_id for display)
-            if let Ok(mut cache) = mermaid_cache().lock() {
+            if let Ok(mut cache) = mermaid_cache().write() {
                 cache.insert(
                     hash,
                     CachedMermaid {
@@ -386,9 +404,167 @@ fn render_mermaid_diagram(ui: &mut egui::Ui, code: &str) {
     }
 }
 
+/// Render a LaTeX math SVG as an egui image (rasterized via resvg).
+fn render_latex_diagram(ui: &mut egui::Ui, svg_code: &str, is_display: bool) {
+    let hash = hash_text(svg_code);
+
+    // Check cache
+    if let Ok(cache) = math_cache().read() {
+        if let Some(entry) = cache.get(&hash) {
+            if let Some(ref tex) = entry.texture {
+                let size = egui::vec2(
+                    entry.color_image.width() as f32,
+                    entry.color_image.height() as f32,
+                );
+                if is_display {
+                    ui.add_space(4.0);
+                }
+                ui.add(egui::Image::from_texture((tex.id(), size)));
+                if is_display {
+                    ui.add_space(4.0);
+                } else {
+                    // Inline: no extra space (inline with text)
+                }
+                return;
+            }
+        }
+    }
+
+    // Rasterize the SVG
+    let result = render_svg_to_raster(svg_code, 2.0);
+    match result {
+        Ok((w, h, rgba)) => {
+            let color_image =
+                egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+            let texture =
+                ui.ctx()
+                    .load_texture("latex", color_image.clone(), egui::TextureOptions::LINEAR);
+            let size = egui::vec2(w as f32, h as f32);
+            let tex_id = texture.id();
+
+            // Store in cache
+            if let Ok(mut cache) = math_cache().write() {
+                cache.insert(
+                    hash,
+                    CachedMath {
+                        color_image,
+                        texture: Some(texture),
+                    },
+                );
+                if cache.len() > 50 {
+                    if let Some(key) = cache.keys().next().copied() {
+                        cache.remove(&key);
+                    }
+                }
+            }
+
+            if is_display {
+                ui.add_space(4.0);
+            }
+            ui.add(egui::Image::from_texture((tex_id, size)));
+            if is_display {
+                ui.add_space(4.0);
+            }
+        }
+        Err(e) => {
+            if is_display {
+                ui.add_space(4.0);
+            }
+            ui.colored_label(
+                egui::Color32::from_rgb(200, 80, 80),
+                format!("Math render error: {}", e),
+            );
+            if is_display {
+                ui.add_space(4.0);
+            }
+        }
+    }
+}
+
+/// Render an SVG string to a rasterized RGBA pixmap using resvg.
+fn render_svg_to_raster(svg: &str, scale: f32) -> anyhow::Result<(u32, u32, Vec<u8>)> {
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_data(svg.as_bytes(), &opt)?;
+
+    let pixmap_size = tree.size();
+    let w = (pixmap_size.width() * scale).ceil() as u32;
+    let h = (pixmap_size.height() * scale).ceil() as u32;
+
+    let mut pixmap = tiny_skia::Pixmap::new(w.max(1), h.max(1))
+        .ok_or_else(|| anyhow::anyhow!("failed to create pixmap {}x{}", w, h))?;
+
+    resvg::render(
+        &tree,
+        usvg::Transform::from_scale(scale, scale),
+        &mut resvg::tiny_skia::PixmapMut::from_bytes(pixmap.data_mut(), w.max(1), h.max(1))
+            .ok_or_else(|| anyhow::anyhow!("failed to create PixmapMut"))?,
+    );
+
+    Ok((w, h, pixmap.data().to_vec()))
+}
+
 /// Parse markdown text to a Vec<MarkdownSegment> on the calling thread.
 /// This is the CPU-bound work that should not run on the UI thread.
+/// Math expressions (`$...$` and `$$...$$`) are preprocessed into Math segments.
 fn parse_markdown_to_segments(text: &str) -> CachedMarkdownRender {
+    // ── Step 1: Extract and replace math expressions with placeholders ──
+    let expressions = go_on_latex::extract_math_expressions(text);
+
+    if expressions.is_empty() {
+        // Fast path: no math — parse normally
+        return CachedMarkdownRender {
+            segments: parse_markdown_to_segments_inner(text),
+        };
+    }
+
+    // Build placeholder-replaced text and collect rendered SVGs
+    let mut processed = String::with_capacity(text.len());
+    let mut last_end = 0;
+
+    let mut math_entries: Vec<MathSvgEntry> = Vec::new();
+
+    for (idx, expr) in expressions.iter().enumerate() {
+        // Append text before this expression
+        processed.push_str(&text[last_end..expr.start]);
+
+        // Render the LaTeX to SVG
+        let svg = match go_on_latex::render_to_svg(&expr.content, expr.display_mode) {
+            Ok(s) => s,
+            Err(_) => {
+                // Fallback: keep the original LaTeX
+                processed.push_str(&text[expr.start..expr.end]);
+                last_end = expr.end;
+                continue;
+            }
+        };
+
+        math_entries.push(MathSvgEntry {
+            svg,
+            display_mode: expr.display_mode,
+        });
+
+        // Replace with placeholder
+        processed.push_str(&format!("\x00MATH_{idx}_\x00"));
+        last_end = expr.end;
+    }
+
+    // ── Step 2: Parse the placeholder text with comrak ──
+    let segments = parse_markdown_to_segments_inner(&processed);
+
+    // ── Step 3: Post-process segments — replace placeholders with Math segments ──
+    let segments = postprocess_math_segments(segments, &math_entries);
+
+    CachedMarkdownRender { segments }
+}
+
+/// An entry for a pre-rendered math expression.
+struct MathSvgEntry {
+    svg: String,
+    display_mode: bool,
+}
+
+/// Inner parsing function — does the actual comrak parsing without math preprocessing.
+fn parse_markdown_to_segments_inner(text: &str) -> Vec<MarkdownSegment> {
     let mut options = comrak::Options::default();
     options.extension.strikethrough = true;
     options.extension.tagfilter = true;
@@ -400,7 +576,136 @@ fn parse_markdown_to_segments(text: &str) -> CachedMarkdownRender {
 
     let mut segments = Vec::new();
     collect_segments(&mut segments, root);
-    CachedMarkdownRender { segments }
+    segments
+}
+
+/// Post-process segments to replace math placeholders with `MathInline`/`MathDisplay` segments.
+/// Returns a new Vec with placeholders replaced.
+fn postprocess_math_segments(
+    segments: Vec<MarkdownSegment>,
+    math_entries: &[MathSvgEntry],
+) -> Vec<MarkdownSegment> {
+    if math_entries.is_empty() {
+        return segments;
+    }
+
+    let mut result = Vec::with_capacity(segments.len());
+
+    for segment in segments {
+        match segment {
+            MarkdownSegment::Raw(ref text) | MarkdownSegment::Text(ref text, _) => {
+                if text.contains("\x00MATH_") {
+                    let (new_segs, contains_math) = split_math_placeholders(text, math_entries);
+                    if contains_math {
+                        result.extend(new_segs);
+                    } else {
+                        result.push(segment);
+                    }
+                } else {
+                    result.push(segment);
+                }
+            }
+            MarkdownSegment::Heading(level, text) => {
+                if text.contains("\x00MATH_") {
+                    let (new_segs, _) = split_math_placeholders(&text, math_entries);
+                    // For headings with math, just emit the segments in order
+                    result.extend(new_segs);
+                } else {
+                    result.push(MarkdownSegment::Heading(level, text));
+                }
+            }
+            MarkdownSegment::ListItem(prefix, children) => {
+                let new_prefix = if prefix.contains("\x00MATH_") {
+                    let (new_prefix_segs, _) = split_math_placeholders(&prefix, math_entries);
+                    new_prefix_segs
+                        .iter()
+                        .map(|s| match s {
+                            MarkdownSegment::Raw(t) => t.clone(),
+                            MarkdownSegment::MathInline(_) | MarkdownSegment::MathDisplay(_) => {
+                                "[math]".to_string()
+                            }
+                            _ => prefix.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("")
+                } else {
+                    prefix
+                };
+                let children = postprocess_math_segments(children, math_entries);
+                result.push(MarkdownSegment::ListItem(new_prefix, children));
+            }
+            MarkdownSegment::BlockQuote(children) => {
+                let children = postprocess_math_segments(children, math_entries);
+                result.push(MarkdownSegment::BlockQuote(children));
+            }
+            other => {
+                result.push(other);
+            }
+        }
+    }
+
+    result
+}
+
+/// Split a text containing math placeholders into a sequence of segments.
+/// Returns `(Vec<MarkdownSegment>, bool)` where the bool indicates whether
+/// any placeholders were found.
+fn split_math_placeholders(
+    text: &str,
+    math_entries: &[MathSvgEntry],
+) -> (Vec<MarkdownSegment>, bool) {
+    let mut result = Vec::new();
+    let mut last_end = 0;
+    let mut found = false;
+
+    let placeholder_pattern = "\x00MATH_";
+    let mut search_start = 0;
+
+    while let Some(pos) = text[search_start..].find(placeholder_pattern) {
+        let abs_pos = search_start + pos;
+
+        // Find the closing marker _\x00
+        if let Some(close_pos) = text[abs_pos..].find("_\x00") {
+            let abs_end = abs_pos + close_pos + 3;
+
+            // Text before the placeholder
+            if abs_pos > last_end {
+                result.push(MarkdownSegment::Raw(text[last_end..abs_pos].to_string()));
+            }
+
+            // Extract the index
+            let num_start = abs_pos + placeholder_pattern.len();
+            let num_str = &text[num_start..abs_pos + close_pos];
+            if let Ok(idx) = num_str.parse::<usize>() {
+                if idx < math_entries.len() {
+                    let entry = &math_entries[idx];
+                    let seg = if entry.display_mode {
+                        MarkdownSegment::MathDisplay(entry.svg.clone())
+                    } else {
+                        MarkdownSegment::MathInline(entry.svg.clone())
+                    };
+                    result.push(seg);
+                    found = true;
+                }
+            }
+
+            last_end = abs_end;
+            search_start = abs_end;
+        } else {
+            break;
+        }
+    }
+
+    // Remaining text after last placeholder
+    if last_end < text.len() {
+        result.push(MarkdownSegment::Raw(text[last_end..].to_string()));
+    }
+
+    if !found {
+        result.push(MarkdownSegment::Raw(text.to_string()));
+    }
+
+    (result, found)
 }
 
 /// Collect markdown segments from a comrak AST node tree.

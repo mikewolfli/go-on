@@ -550,6 +550,8 @@ impl Drop for EvolutionHistory {
         // Must write in NDJSON format (one JSON entry per line) to match
         // load_from_disk which expects NDJSON, not a single JSON object.
         let path = self.history_path.clone();
+        // Best-effort flush using try_lock — tokio::sync::Mutex::lock()
+        // returns a Future which cannot be awaited in Drop.
         if let Ok(entries) = self.entries.try_lock() {
             let data: Vec<EvolutionEntry> = entries.values().cloned().collect();
             drop(entries);

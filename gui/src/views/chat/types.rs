@@ -197,6 +197,10 @@ pub enum MarkdownSegment {
     Image(String, String),
     /// Raw text (no markdown interpretation, plain label)
     Raw(String),
+    /// Inline math rendered as SVG (`$...$`)
+    MathInline(String),
+    /// Display math rendered as SVG (`$$...$$`)
+    MathDisplay(String),
 }
 
 /// Styling attributes for markdown text segments

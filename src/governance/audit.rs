@@ -210,6 +210,12 @@ impl ThreadSafeAuditLog {
 /// If the file exceeds 100 MB, it is automatically compressed into a gzip
 /// archive (`<filename>.1.gz`) and a fresh file is started.
 fn append_ndjson_entry(path: &Path, entry: &AuditLogEntry) -> Result<(), AuditError> {
+    // Ensure parent directory exists — OpenOptions::create(true) only creates
+    // the file, not its parent directory. Without this, the first write after
+    // app startup (before the directory is created) would fail with ENOENT.
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     // File rotation: compress+gzip archive when >100 MB
     if path.exists() && fs::metadata(path)?.len() > 100 * 1024 * 1024 {
         rotate_file(path)?;

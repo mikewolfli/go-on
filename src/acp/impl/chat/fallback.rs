@@ -149,7 +149,12 @@ pub(crate) async fn execute_fallback_agents(
 
         let sem_clone = Arc::clone(&semaphore);
         let agent_name_owned = agent_name.clone();
-        let per_attempt_options = base_agent_options.clone();
+        // Clone base options but remove the model override for fallback agents.
+        // The user's model selection is specific to the primary agent; passing it
+        // to fallback agents causes errors (e.g., "deepseek-v4-pro" sent to copilot).
+        // Each fallback agent should use its own configured default model.
+        let mut per_attempt_options = base_agent_options.clone();
+        per_attempt_options.remove("model");
         let stream_obs = stream_observer.clone();
         let msg_clone = agent_messages.clone();
         let principles = phase.principles.clone();

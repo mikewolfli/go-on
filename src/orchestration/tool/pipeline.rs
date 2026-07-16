@@ -198,7 +198,8 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
         | "game_auto_grind"
         | "game_keyboard_input"
         | "game_mouse_input"
-        | "game_state_modify" => "write",
+        | "game_state_modify"
+        | "spawn_agent" => "write",
 
         // ── Shell operations (command/code execution) ──
         "run_tests"
@@ -213,6 +214,7 @@ fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
 
         // ── Network operations (outbound) ──
         "http_request"
+        | "web_search"
         | "dns_lookup"
         | "ping"
         | "port_scan"

@@ -73,6 +73,7 @@ pub mod read_lines;
 pub mod rss;
 pub mod search;
 pub mod shell;
+pub mod spawn_agent;
 #[cfg(feature = "backend-sqlite")]
 pub mod sqlite;
 #[cfg(feature = "cad-step")]
@@ -86,6 +87,7 @@ pub mod svg;
 pub mod time;
 #[cfg(feature = "document-html")]
 pub mod web;
+pub mod web_search;
 
 pub use archive::{ArchiveExtractTool, ArchiveInspectTool};
 #[cfg(feature = "barcode-tools")]
@@ -151,6 +153,7 @@ pub use read_lines::ReadFileLinesTool;
 pub use rss::RssReadTool;
 pub use search::GrepTool;
 pub use shell::ShellExecTool;
+pub use spawn_agent::SpawnAgentTool;
 #[cfg(feature = "backend-sqlite")]
 pub use sqlite::SqliteQueryTool;
 #[cfg(feature = "cad-step")]
@@ -166,6 +169,7 @@ pub use svg::{SvgExportTool, SvgGenerateTool, SvgReadTool};
 pub use time::DateTimeTool;
 #[cfg(feature = "document-html")]
 pub use web::WebScrapeTool;
+pub use web_search::WebSearchTool;
 
 #[cfg(test)]
 mod tests {

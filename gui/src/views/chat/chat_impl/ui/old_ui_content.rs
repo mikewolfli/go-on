@@ -1183,6 +1183,81 @@ impl ChatView {
                                 weak_text,
                                 dark_mode,
                             );
+                            // ── Hover action bar for collapsed bubbles ──
+                            // Provide copy/edit/delete so cached messages
+                            // aren't stuck without interaction affordances.
+                            let bubble_rect = ui.min_rect();
+                            let hovered = ui.rect_contains_pointer(bubble_rect);
+                            if hovered {
+                                let action_color = if dark_mode {
+                                    egui::Color32::from_rgb(130, 135, 145)
+                                } else {
+                                    egui::Color32::from_rgb(110, 115, 125)
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::TOP),
+                                        |ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(format!(
+                                                            "📋 {}",
+                                                            i18n.t("chat.copy")
+                                                        ))
+                                                        .size(11.0)
+                                                        .color(action_color),
+                                                    )
+                                                    .frame(false)
+                                                    .fill(egui::Color32::TRANSPARENT),
+                                                )
+                                                .on_hover_text(i18n.t("chat.copyMessage"))
+                                                .clicked()
+                                            {
+                                                ui.ctx().copy_text(content.clone());
+                                            }
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(format!(
+                                                            "✏️ {}",
+                                                            i18n.t("chat.edit")
+                                                        ))
+                                                        .size(11.0)
+                                                        .color(action_color),
+                                                    )
+                                                    .frame(false)
+                                                    .fill(egui::Color32::TRANSPARENT),
+                                                )
+                                                .on_hover_text(i18n.t("chat.edit"))
+                                                .clicked()
+                                            {
+                                                self.edit_msg_idx = Some(msg_idx);
+                                                self.edit_msg_buf = content.clone();
+                                            }
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(format!(
+                                                            "🗑 {}",
+                                                            i18n.t("chat.delete")
+                                                        ))
+                                                        .size(11.0)
+                                                        .color(action_color),
+                                                    )
+                                                    .frame(false)
+                                                    .fill(egui::Color32::TRANSPARENT),
+                                                )
+                                                .on_hover_text(i18n.t("chat.delete"))
+                                                .clicked()
+                                            {
+                                                self.remove_message_at(msg_idx);
+                                                self.save_sessions_to_disk();
+                                            }
+                                        },
+                                    );
+                                });
+                            }
                             continue;
                         }
                         self.rendered_content_hashes[msg_idx] = current_hash;

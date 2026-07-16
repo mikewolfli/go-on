@@ -561,6 +561,18 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["path"]
             })),
         },
+        "web_search" => McpTool {
+            name: name.to_string(),
+            description: Some("Search the web for information. Returns a list of results with titles, URLs, and snippets. Uses DuckDuckGo by default (free, no API key needed).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (required)"},
+                    "max_results": {"type": "integer", "description": "Maximum number of results to return (default: 5)", "default": 5, "minimum": 1, "maximum": 20}
+                },
+                "required": ["query"]
+            })),
+        },
         "jsonl_write" => McpTool {
             name: name.to_string(),
             description: Some("Write data as JSONL (JSON Lines) to a file. Each object is written as a separate line.".to_string()),
@@ -571,6 +583,37 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                     "data": {"type": "array", "description": "Array of JSON objects to write as lines"}
                 },
                 "required": ["path", "data"]
+            })),
+        },
+        "spawn_agent" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Spawn a sub-agent with a specific task, wait for it to complete, and return the result. "
+                    .to_string(),
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task for the sub-agent to perform"
+                    },
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Which agent to use (e.g. \"deepseek\", \"copilot\"). Default: \"deepseek\"",
+                        "default": "deepseek"
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model override (e.g. \"deepseek-v4-flash\")"
+                    },
+                    "timeout_seconds": {
+                        "type": "number",
+                        "description": "Timeout in seconds. Default: 120, max: 300",
+                        "default": 120
+                    }
+                },
+                "required": ["task"]
             })),
         },
         other => McpTool {
@@ -783,6 +826,8 @@ mod tests {
         // Round 2 additions
         "diagnostics",
         "environment_info",
+        // Web search
+        "web_search",
     ];
 
     // ── Known tool descriptors ───────────────────────────────────────

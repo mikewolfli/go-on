@@ -970,16 +970,22 @@ impl ChatView {
                         let agent_empty = final_agent.as_ref().is_none_or(|a| a.is_empty());
                         if content_empty && agent_empty {
                             // Response was empty AND no agent was selected.
-                            // This happens when the backend sends a "done" event without
-                            // a "response" field and no agent name. Send an error so the
-                            // user sees feedback.
+                            // The backend should now always send a proper "error" event
+                            // when no content was produced, but this path is kept as a
+                            // safety net for edge cases (e.g. mid-stream disconnection).
                             send_pending(
                                 &tx,
                                 PendingResponse::Error {
                                     generation_id: Some(generation_id),
-                                    message: "The model returned an empty response.
-The backend may be misconfigured or overloaded."
-                                        .to_string(),
+                                    message:
+                                        "The chat stream ended without producing a response.\n\
+Possible causes:\n\
+  • No agents are configured for the current phase\n\
+  • API keys are missing or expired\n\
+  • Backend is overloaded or unreachable\n\
+\
+Check the backend log and agent configuration."
+                                            .to_string(),
                                 },
                             )
                             .await;
@@ -1248,12 +1254,14 @@ The backend may be misconfigured or overloaded."
                                 // (overrides any incremental reasoning accumulated during streaming)
                                 if !thinking.is_empty() {
                                     m.thinking = thinking;
-                                    // Auto-collapse thinking when the response is complete.
-                                    // Only the first chunk of new thinking shows expanded;
-                                    // once ChatCompleted arrives, collapse it (Zed-style).
-                                    if self.show_thinking_idx == Some(idx) {
-                                        self.show_thinking_idx = None;
-                                    }
+                                }
+                                // Auto-collapse thinking when the response is complete.
+                                // Only the first chunk of new thinking shows expanded;
+                                // once ChatCompleted arrives, collapse it (Zed-style).
+                                // This runs regardless of whether thinking came via
+                                // stream chunks or the final ChatCompleted event.
+                                if self.show_thinking_idx == Some(idx) {
+                                    self.show_thinking_idx = None;
                                 }
                                 // Update the model used.
                                 //   - Copilot auto → actual model name (e.g. "gemini-2.5-pro")
