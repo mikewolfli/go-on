@@ -1637,6 +1637,20 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
         payload["command"] = json!(v);
     }
 
+    // ── Validate required tool arguments before execution ──
+    // Catches missing required parameters early and provides a clear error
+    // message, rather than letting the tool implementation produce a generic
+    // error that may confuse the LLM into repeating the same mistake.
+    if let Err(validation_err) =
+        crate::shared::tool_descriptors::validate_required_arguments(canonical_name, &payload)
+    {
+        return Err(anyhow::anyhow!(
+            "{}: {}. Please check the tool schema and retry.",
+            canonical_name,
+            validation_err
+        ));
+    }
+
     // ── Resolve base dir for path traversal protection ──
     let allowed_base_dir = std::env::current_dir().ok();
 
@@ -2028,7 +2042,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("missing") || err.contains("required") || err.contains("missing_path"),
+            err.contains("missing")
+                || err.contains("required")
+                || err.contains("requires")
+                || err.contains("missing_path"),
             "error should mention missing/required field, got: {err}"
         );
 
@@ -2037,7 +2054,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("missing") || err.contains("required") || err.contains("missing_content"),
+            err.contains("missing")
+                || err.contains("required")
+                || err.contains("requires")
+                || err.contains("missing_content"),
             "error should mention missing/required field, got: {err}"
         );
     }

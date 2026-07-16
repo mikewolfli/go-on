@@ -71,5 +71,21 @@ Skills are scored (0.0–1.0) based on:
 To create a new skill, place a valid SKILL.md file in `~/.agents/skills/` or use the `skill-creator` meta-tool which takes a name, description, and prompt template.
 
 ---
+## 4. ZED AGENT SERVER INTEGRATION
+
+go-on is configured as a Zed Agent Server in `.zed/settings.json`. It communicates with Zed
+via the Agent Communication Protocol (ACP) over stdio, providing 60+ tools for autonomous
+code execution, file manipulation, web browsing, and more.
+
+For detailed setup instructions, configuration options, troubleshooting, and protocol details,
+see the **[go-on Zed Integration Guide](../docs/zed-integration.md)**.
+
+### Key points
+- The agent server is registered in `.zed/settings.json` under `agent_servers.go-on`.
+- Use the AI panel (`Ctrl+Enter`) and select "go-on" from the agent dropdown.
+- ACP stdio is the required protocol mode; HTTP (`-b`) is optional for the GUI.
+- Environment variables for API keys are set in the `env` block of the settings.
+
+---
 **Purpose:**
 This document applies to all Rust projects in the ZED editor, ensuring AI-generated code is safe, standardized, and maintainable. The skill system enables AI agents to discover and execute reusable capabilities.

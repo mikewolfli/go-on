@@ -91,6 +91,7 @@ mod health_pack;
 mod learning_pack;
 mod lifecycle_handlers;
 mod lifecycle_pack;
+mod method_router;
 mod metrics_pack;
 mod ops_pack;
 pub mod prompts_pack;
@@ -605,6 +606,24 @@ pub async fn handle_request(
         0,
     );
     let request_id = request.id.clone();
+
+    // Try MethodRouter first (registration-based dispatch)
+    {
+        let router = crate::acp::r#impl::request::method_router::global_router();
+        if let Some(result) = router
+            .dispatch(
+                &request.method,
+                server,
+                request.params.clone().unwrap_or_default(),
+                request_id.clone(),
+                &trace,
+            )
+            .await
+        {
+            return result;
+        }
+    }
+
     // Use the potentially normalized method for dispatch.
     let result = DISPATCH_REQUEST_METHOD
         .scope(method.to_string(), async {
@@ -1165,6 +1184,26 @@ pub async fn handle_request(
                         server,
                         request_id,
                         protocol_pack::skill_remove_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                "tools/list" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::acp_tools_list_payload(server).await,
+                    )
+                    .await
+                }
+                "tools/call" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::acp_tools_call_payload(
                             server,
                             request.params.unwrap_or_default(),
                         )
@@ -2121,10 +2160,12 @@ mod tests {
         // Prompt methods
         assert!(is_acp_request("prompts.list"));
         assert!(is_acp_request("prompts.get"));
+        // Tool methods (registered in MethodRouter and ACP_METHODS list)
+        assert!(is_acp_request("tools/list"));
+        assert!(is_acp_request("tools/call"));
         // Unknown methods return false
         assert!(!is_acp_request("unknown.method"));
         assert!(!is_acp_request(""));
-        assert!(!is_acp_request("tools/list"));
     }
 
     #[test]

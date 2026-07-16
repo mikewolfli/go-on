@@ -1,5 +1,6 @@
 pub mod access_mode;
 pub mod acp_methods;
+pub mod acp_stdio;
 pub mod mcp_server;
 
 pub mod session_sync;

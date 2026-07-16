@@ -89,101 +89,125 @@ impl McpStdioServer {
         let mut reader = BufReader::new(stdin);
         let stdout = Arc::new(Mutex::new(stdout));
 
+        // ── Shutdown coordination ──────────────────────────────────────
+        let shutdown_notify = Arc::new(Notify::new());
+        let sig_notify = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let mut term_signal = signal::unix::signal(signal::unix::SignalKind::terminate()).ok();
+            let mut int_signal = signal::unix::signal(signal::unix::SignalKind::interrupt()).ok();
+            tokio::select! {
+                _ = async { if let Some(ref mut s) = term_signal { s.recv().await; info!("MCP stdio: received SIGTERM"); } } => {}
+                _ = async { if let Some(ref mut s) = int_signal { s.recv().await; info!("MCP stdio: received SIGINT"); } } => {}
+            }
+            sig_notify.notify_one();
+        });
+
         let mut line = String::new();
         loop {
-            line.clear();
-            let n = reader.read_line(&mut line).await?;
-
-            // EOF
-            if n == 0 {
-                break;
-            }
-
-            // Skip empty lines
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            let line = line.trim().to_string();
-
-            // Attempt batch (JSON array) first, then fall back to single request.
-            if line.starts_with('[') {
-                match serde_json::from_str::<Vec<JsonRpcRequest>>(&line) {
-                    Ok(requests) => {
-                        for req in requests {
-                            let req_id = req.id.clone();
-                            match self.mcp_server.handle_request(req).await {
-                                Ok(resp) => {
-                                    // Notifications (id=null) don't produce a response.
-                                    if resp.id.is_none() {
-                                        continue;
-                                    }
-                                    let mut stdout = stdout.lock().await;
-                                    let response_line = serde_json::to_string(&resp)?;
-                                    stdout.write_all(response_line.as_bytes()).await?;
-                                    stdout.write_all(b"\n").await?;
-                                    stdout.flush().await?;
-                                }
-                                Err(e) => {
-                                    let err_msg = format!("{}", e);
-                                    warn!(
-                                        "{}",
-                                        tf("error.handling_request", &[("error", &err_msg)])
-                                    );
-                                    let mut stdout = stdout.lock().await;
-                                    send_handler_error(&mut *stdout, req_id, &err_msg).await?;
-                                }
-                            }
-                        }
-                    }
-                    Err(parse_error) => {
-                        warn!(
-                            "{}",
-                            tf(
-                                "error.parse_error",
-                                &[("error", &format!("{}", parse_error))],
-                            )
-                        );
-                        let mut stdout = stdout.lock().await;
-                        send_parse_error(&mut *stdout).await?;
-                    }
+            tokio::select! {
+                _ = shutdown_notify.notified() => {
+                    info!("MCP stdio: shutting down gracefully");
+                    break;
                 }
-            } else {
-                match serde_json::from_str::<JsonRpcRequest>(&line) {
-                    Ok(request) => {
-                        let request_id = request.id.clone();
-                        let response = self.mcp_server.handle_request(request).await;
-                        match response {
-                            Ok(resp) => {
-                                // MCP notifications (JSON-RPC with id=null) must not produce
-                                // any response per JSON-RPC 2.0 spec (§notifications).
-                                if resp.id.is_none() {
-                                    continue;
-                                }
-                                let mut stdout = stdout.lock().await;
-                                let response_line = serde_json::to_string(&resp)?;
-                                stdout.write_all(response_line.as_bytes()).await?;
-                                stdout.write_all(b"\n").await?;
-                                stdout.flush().await?;
+                result = reader.read_line(&mut line) => {
+                    match result {
+                        Ok(0) => break, // EOF
+                        Ok(_) => {
+                            // Skip empty lines
+                            if line.trim().is_empty() {
+                                line.clear();
+                                continue;
                             }
-                            Err(e) => {
-                                let err_msg = format!("{}", e);
-                                warn!("{}", tf("error.handling_request", &[("error", &err_msg)]));
-                                let mut stdout = stdout.lock().await;
-                                send_handler_error(&mut *stdout, request_id, &err_msg).await?;
+
+                            let line_str = line.trim().to_string();
+                            line.clear();
+
+                            // Attempt batch (JSON array) first, then fall back to single request.
+                            if line_str.starts_with('[') {
+                                match serde_json::from_str::<Vec<JsonRpcRequest>>(&line_str) {
+                                    Ok(requests) => {
+                                        for req in requests {
+                                            let req_id = req.id.clone();
+                                            match self.mcp_server.handle_request(req).await {
+                                                Ok(resp) => {
+                                                    // Notifications (id=null) don't produce a response.
+                                                    if resp.id.is_none() {
+                                                        continue;
+                                                    }
+                                                    let mut stdout = stdout.lock().await;
+                                                    let response_line = serde_json::to_string(&resp)?;
+                                                    stdout.write_all(response_line.as_bytes()).await?;
+                                                    stdout.write_all(b"\n").await?;
+                                                    stdout.flush().await?;
+                                                }
+                                                Err(e) => {
+                                                    let err_msg = format!("{}", e);
+                                                    warn!(
+                                                        "{}",
+                                                        tf("error.handling_request", &[("error", &err_msg)])
+                                                    );
+                                                    let mut stdout = stdout.lock().await;
+                                                    send_handler_error(&mut *stdout, req_id, &err_msg).await?;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(parse_error) => {
+                                        warn!(
+                                            "{}",
+                                            tf(
+                                                "error.parse_error",
+                                                &[("error", &format!("{}", parse_error))],
+                                            )
+                                        );
+                                        let mut stdout = stdout.lock().await;
+                                        send_parse_error(&mut *stdout).await?;
+                                    }
+                                }
+                            } else {
+                                match serde_json::from_str::<JsonRpcRequest>(&line_str) {
+                                    Ok(request) => {
+                                        let request_id = request.id.clone();
+                                        let response = self.mcp_server.handle_request(request).await;
+                                        match response {
+                                            Ok(resp) => {
+                                                // MCP notifications (JSON-RPC with id=null) must not produce
+                                                // any response per JSON-RPC 2.0 spec (§notifications).
+                                                if resp.id.is_none() {
+                                                    continue;
+                                                }
+                                                let mut stdout = stdout.lock().await;
+                                                let response_line = serde_json::to_string(&resp)?;
+                                                stdout.write_all(response_line.as_bytes()).await?;
+                                                stdout.write_all(b"\n").await?;
+                                                stdout.flush().await?;
+                                            }
+                                            Err(e) => {
+                                                let err_msg = format!("{}", e);
+                                                warn!("{}", tf("error.handling_request", &[("error", &err_msg)]));
+                                                let mut stdout = stdout.lock().await;
+                                                send_handler_error(&mut *stdout, request_id, &err_msg).await?;
+                                            }
+                                        }
+                                    }
+                                    Err(parse_error) => {
+                                        warn!(
+                                            "{}",
+                                            tf(
+                                                "error.parse_error",
+                                                &[("error", &format!("{}", parse_error))],
+                                            )
+                                        );
+                                        let mut stdout = stdout.lock().await;
+                                        send_parse_error(&mut *stdout).await?;
+                                    }
+                                }
                             }
                         }
-                    }
-                    Err(parse_error) => {
-                        warn!(
-                            "{}",
-                            tf(
-                                "error.parse_error",
-                                &[("error", &format!("{}", parse_error))],
-                            )
-                        );
-                        let mut stdout = stdout.lock().await;
-                        send_parse_error(&mut *stdout).await?;
+                        Err(e) => {
+                            warn!("MCP stdio: read error: {}", e);
+                            break;
+                        }
                     }
                 }
             }

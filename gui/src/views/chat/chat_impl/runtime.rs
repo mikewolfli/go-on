@@ -644,6 +644,17 @@ impl ChatView {
                                                     total_buffer_bytes +=
                                                         token_bytes + reasoning_bytes;
 
+                                                    // Accumulate token content into final_content as
+                                                    // a safety net: if the "result"/"done" event never
+                                                    // arrives (e.g. due to HTTP chunk boundaries), the
+                                                    // final check can still find non-empty content from
+                                                    // chunk data. If the "result"/"done" event arrives
+                                                    // later with a response field, it overwrites this.
+                                                    if !token.is_empty() {
+                                                        final_content
+                                                            .get_or_insert_with(String::new)
+                                                            .push_str(&token);
+                                                    }
                                                     buffered_token.push_str(&token);
                                                     buffered_reasoning.push_str(&reasoning);
 

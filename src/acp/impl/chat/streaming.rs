@@ -173,6 +173,10 @@ pub(crate) async fn emit_stream_done(
                 obj.insert("selected_model".to_string(), json!(m));
             }
         }
+        // Always include response in the done event when available, so the GUI
+        // frontend can set final_content from either "done" or "result".
+        // This prevents the "chat stream ended without producing a response" error
+        // when the "result" event arrives after the HTTP stream has ended.
         if let Some(response_text) = response {
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert("response".to_string(), json!(response_text));

@@ -195,6 +195,8 @@ pub(super) fn is_acp_request(method: &str) -> bool {
         "terminal/output",
         "terminal/release",
         "terminal/wait_for_exit",
+        "tools/call",
+        "tools/list",
         "trace.get",
         "trace.metrics",
         "vector.clear",

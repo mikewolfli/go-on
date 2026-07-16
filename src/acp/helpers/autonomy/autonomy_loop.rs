@@ -320,6 +320,9 @@ pub async fn run_autonomy_loop(
             break; // Max iterations reached
         }
 
+        let mut consecutive_failures = 0;
+        const MAX_CONSECUTIVE_TOOL_FAILURES: usize = 5;
+
         for (tool_name, tool_args) in &tool_calls {
             // ── Stream tool execution progress as visible chat tokens ──
             // Send SSE progress event before executing tool ────────
@@ -332,6 +335,49 @@ pub async fn run_autonomy_loop(
                 });
             }
 
+            // Validate tool arguments BEFORE execution
+            let parsed_args: serde_json::Value =
+                serde_json::from_str(tool_args).unwrap_or_default();
+            if let Err(validation_err) =
+                crate::shared::tool_descriptors::validate_required_arguments(
+                    tool_name,
+                    &parsed_args,
+                )
+            {
+                consecutive_failures += 1;
+                let err_msg = format!(
+                    "Tool '{}' call rejected: {}. Required parameters were not provided.\n\
+                     Please provide the required parameters in your next tool call.",
+                    tool_name, validation_err
+                );
+                tracing::warn!(
+                    "autonomy_loop: {} (failure {}/{})",
+                    err_msg,
+                    consecutive_failures,
+                    MAX_CONSECUTIVE_TOOL_FAILURES
+                );
+                round_response.push_str(&format!(
+                    "\n[Tool {} validation failed:]\n{}\n",
+                    tool_name, err_msg
+                ));
+                response.push_str(&format!(
+                    "\n[Tool {} validation failed:]\n{}\n",
+                    tool_name, err_msg
+                ));
+
+                // Circuit breaker: break out if too many consecutive failures
+                if consecutive_failures >= MAX_CONSECUTIVE_TOOL_FAILURES {
+                    let breaker_msg = format!(
+                        "\n[Circuit breaker: stopped after {} consecutive tool call failures. \
+                         Please re-examine the tool schemas and retry with valid arguments.]",
+                        consecutive_failures
+                    );
+                    round_response.push_str(&breaker_msg);
+                    break;
+                }
+                continue;
+            }
+
             if let Some(tool) = tool_registry.get_arc(tool_name) {
                 tracing::info!("autonomy_loop: executing tool {}", tool_name);
                 let input = crate::orchestration::tool::ToolInput {
@@ -341,7 +387,7 @@ pub async fn run_autonomy_loop(
                     objective: params.objective.clone(),
                     constraints: None,
                     evidence: None,
-                    payload: serde_json::from_str(tool_args).unwrap_or_default(),
+                    payload: parsed_args,
                     allowed_base_dir: None,
                 };
                 let tool_output = tool.run_async(input).await;
@@ -360,6 +406,7 @@ pub async fn run_autonomy_loop(
                 round_response
                     .push_str(&format!("\n[Tool {} result:]\n{}\n", tool_name, result_str));
                 response.push_str(&format!("\n[Tool {} result:]\n{}\n", tool_name, result_str));
+                consecutive_failures = 0;
             } else {
                 tracing::warn!("autonomy_loop: tool '{}' not found in registry", tool_name);
                 round_response.push_str(&format!("\n[Tool {} not available]\n", tool_name));

@@ -308,6 +308,12 @@ pub(super) async fn initialize_payload(_server: &AcpServer) -> Result<Value> {
             "debug_panel": true,
             "mcp_adapter": true,
             "sse_transport": sse_enabled,
+            "tools_list": true,
+            "tools_call": true,
+            "tools": true,
+            "acp_stdio": true,
+            // Add protocol version info
+            "protocol_version": env!("CARGO_PKG_VERSION"),
         });
         obj.insert("capabilities".to_string(), caps_obj);
     }
@@ -380,6 +386,35 @@ pub(super) async fn session_new_payload(server: &AcpServer, params: Value) -> Re
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
     let additional_directories = extract_additional_directories(&params);
+
+    // Zed's ACP client sends `work_dirs` as an array of project directories.
+    // If `work_dirs` is provided and `cwd` was not, use the first work_dir as cwd.
+    let work_dirs: Vec<String> = params
+        .get("work_dirs")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // If work_dirs provided but no explicit cwd, use first work_dir as cwd
+    let cwd = cwd.or_else(|| work_dirs.first().cloned());
+
+    // Merge work_dirs into additional_directories
+    let additional_directories = {
+        let mut merged = additional_directories;
+        for wd in &work_dirs {
+            // Only add work_dirs entries that aren't already the cwd
+            if cwd.as_ref() != Some(wd) && !merged.contains(wd) {
+                merged.push(wd.clone());
+            }
+        }
+        merged
+    };
 
     // Update current mode on the typed SessionModeState
     let mut modes = modes;
@@ -1050,6 +1085,96 @@ pub(super) async fn mcp_tools_call_payload(server: &AcpServer, params: Value) ->
     content.insert("text".to_string(), Value::String(structured.to_string()));
     let result = McpCallToolResult::new(vec![Value::Object(content)], Some(structured));
     Ok(serde_json::to_value(&result)?)
+}
+
+/// Handle `tools/list` — list available tools for the ACP protocol.
+///
+/// Returns the list of tools available in the go-on tool registry,
+/// formatted as ACP tool descriptions with name, description, and input_schema.
+pub(super) async fn acp_tools_list_payload(server: &AcpServer) -> Result<Value> {
+    use crate::mcp::McpListToolsResult;
+    let tools = build_mcp_tool_descriptors(Some(server));
+    let result = McpListToolsResult::new(tools);
+    let value = serde_json::to_value(&result)?;
+    // Inject platform context for consistency with other handlers.
+    let method = super::DISPATCH_REQUEST_METHOD
+        .try_with(|m| m.clone())
+        .unwrap_or_else(|_| "tools.list".to_string());
+    let value = super::inject_platform_profiles_if_absent(value, &method);
+    Ok(value)
+}
+
+/// Handle `tools/call` — execute a tool by name via the ACP protocol with
+/// streaming progress updates.
+///
+/// Takes `{ name, arguments, sessionId }` from the request params, delegates
+/// to `execute_mcp_tool_call` for the actual tool execution, and returns the
+/// tool result as a JSON-RPC response.
+///
+/// Intermediate progress (started, completed, or failed) is emitted as
+/// `session/update` notifications so Zed can display incremental progress
+/// during tool execution.
+pub(super) async fn acp_tools_call_payload(server: &AcpServer, params: Value) -> Result<Value> {
+    let name = params
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
+    // Extract session_id from params so we can send progress notifications.
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
+
+    // ── Send "started" progress update ──────────────────────────────────
+    if let Some(ref sid) = session_id {
+        let msg = format!("🔧 **{}** — executing...", name);
+        send_chunk(server, sid, "agent_message_chunk", &msg).await;
+    }
+
+    // ── Execute the tool ────────────────────────────────────────────────
+    let structured = match execute_mcp_tool_call(server, name, &arguments).await {
+        Ok(structured) => structured,
+        Err(err) => {
+            record_mcp_tool_audit(name, &arguments, false, &err.to_string());
+            if let Some(ref sid) = session_id {
+                let msg = format!("❌ **{}** failed: {}", name, err);
+                send_chunk(server, sid, "agent_message_chunk", &msg).await;
+            }
+            return Err(anyhow::anyhow!(err.to_string()));
+        }
+    };
+    record_mcp_tool_audit(name, &arguments, true, "tool executed successfully");
+
+    // ── Send "completed" progress update ────────────────────────────────
+    if let Some(ref sid) = session_id {
+        let msg = format!("✅ **{}** — completed", name);
+        send_chunk(server, sid, "agent_message_chunk", &msg).await;
+    }
+
+    let mut content = serde_json::Map::new();
+    content.insert("type".to_string(), Value::String("text".to_string()));
+    content.insert("text".to_string(), Value::String(structured.to_string()));
+
+    Ok(serde_json::json!({
+        "content": [Value::Object(content)],
+        "structured": structured
+    }))
+}
+
+// ── ACP tool handlers ────────────────────────────────────────────────────
+
+pub(super) async fn tools_list_payload(server: &AcpServer) -> Result<Value> {
+    acp_tools_list_payload(server).await
+}
+
+pub(super) async fn tools_call_payload(server: &AcpServer, params: Value) -> Result<Value> {
+    acp_tools_call_payload(server, params).await
 }
 
 fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &str) {

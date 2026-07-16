@@ -44,14 +44,6 @@ enum SvgElement {
         y2: f32,
         stroke_width: f32,
     },
-    #[allow(dead_code)]
-    Rect {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        rx: f32,
-    },
     Group {
         elements: Vec<SvgElement>,
         transform: Option<(f32, f32)>, // translate(x, y)
@@ -62,8 +54,6 @@ enum SvgElement {
 pub enum FontStyle {
     Normal,
     Italic,
-    #[allow(dead_code)]
-    Bold,
 }
 
 /// Estimate the width of a text string in pixels for the given font size.
@@ -560,18 +550,6 @@ fn render_elements(elements: &[SvgElement], offset_x: f32, offset_y: f32) -> Str
                 out.push_str(&format!(
                     r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="currentColor" stroke-width="{:.1}" stroke-linecap="round"/>"#,
                     offset_x + x1, offset_y + y1, offset_x + x2, offset_y + y2, stroke_width,
-                ));
-            }
-            SvgElement::Rect {
-                x,
-                y,
-                width,
-                height,
-                rx,
-            } => {
-                out.push_str(&format!(
-                    r#"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="{:.1}" fill="currentColor" opacity="0.15"/>"#,
-                    offset_x + x, offset_y + y, width, height, rx,
                 ));
             }
             SvgElement::Group {
