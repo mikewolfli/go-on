@@ -24,21 +24,16 @@ pub struct SearchResult {
 // ---------------------------------------------------------------------------
 
 /// Supported web search providers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SearchProvider {
     /// DuckDuckGo Instant Answer API — free, no API key required.
+    #[default]
     DuckDuckGo,
     /// A custom search endpoint (e.g. a self-hosted or commercial API).
     Custom {
         api_endpoint: String,
         api_key: Option<String>,
     },
-}
-
-impl Default for SearchProvider {
-    fn default() -> Self {
-        Self::DuckDuckGo
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -129,11 +124,6 @@ impl WebSearchClient {
             config,
             http_client,
         })
-    }
-
-    /// Create a new `WebSearchClient` with default (DuckDuckGo) provider.
-    pub fn default() -> Result<Self> {
-        Self::new(WebSearchConfig::default())
     }
 
     /// Perform a web search and return up to `max_results` results.

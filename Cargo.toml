@@ -323,6 +323,7 @@ windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win
 # ── Note: Contract tests live in tests/contract_tests/ ──────────────────
 serial_test = "3"
 temp-env = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # ── Optimisation profiles ──────────────────────────────────────────────────
 [profile.release]
@@ -341,3 +342,9 @@ debug = true
 # Tests are relatively short-lived so optimization overhead doesn't pay off.
 opt-level = 0
 lto = "off"
+
+[profile.bench]
+# Benchmarks benefit from full optimization for accurate measurements.
+opt-level = 3
+lto = "fat"
+codegen-units = 1

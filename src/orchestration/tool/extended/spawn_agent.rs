@@ -38,10 +38,10 @@ pub fn init_spawn_agent_registry(registry: std::sync::Arc<AgentRegistry>) {
     SPAWN_AGENT_REGISTRY.set(registry).ok();
 }
 
-fn agent_registry() -> &'static std::sync::Arc<AgentRegistry> {
+fn agent_registry() -> Result<&'static std::sync::Arc<AgentRegistry>> {
     SPAWN_AGENT_REGISTRY
         .get()
-        .expect("SpawnAgentTool: AgentRegistry not initialised — call init_spawn_agent_registry() at startup")
+        .ok_or_else(|| anyhow::anyhow!("SpawnAgentTool: AgentRegistry not initialised"))
 }
 
 // ---------------------------------------------------------------------------
@@ -64,12 +64,13 @@ impl Tool for SpawnAgentTool {
         // This tool is inherently async (agent chat is async). The sync `run()`
         // uses try_current() per principle.md rule 24 — direct
         // Handle::current().block_on() is forbidden in production hot paths.
-        let registry = agent_registry().clone();
-        // Parse parameters before the match to avoid cloning ToolInput in both branches.
+        // Validate parameters FIRST so bad-input tests get a proper error
+        // before attempting to access the global registry.
         let task = input.payload["task"]
             .as_str()
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter 'task' (string)"))?;
+        let registry = agent_registry()?.clone();
         let agent_name = input.payload["agent_name"]
             .as_str()
             .unwrap_or("deepseek")
@@ -106,9 +107,10 @@ impl Tool for SpawnAgentTool {
         self: Arc<Self>,
         input: ToolInput,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send>> {
-        // Fully async variant — parse params inline then await.
         Box::pin(async move {
-            let registry = agent_registry().clone();
+            let registry = agent_registry()
+                .map_err(|e| anyhow::anyhow!("SpawnAgentTool: {}", e))?
+                .clone();
             let task = input.payload["task"]
                 .as_str()
                 .map(|s| s.to_string())
@@ -272,12 +274,11 @@ async fn execute_spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::Message;
+    use crate::agent::{Agent, Message};
     use crate::agents::agent::ModelInfo;
     use crate::core::error::Result as AppResult;
     use async_trait::async_trait;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     /// A mock agent that echoes back the task content.
     struct EchoAgent;
@@ -304,33 +305,6 @@ mod tests {
             vec![ModelInfo {
                 id: "echo".to_string(),
                 name: "echo".to_string(),
-                description: String::new(),
-                is_default: true,
-                capabilities: Vec::new(),
-                context_window: None,
-            }]
-        }
-    }
-
-    /// A mock agent that always fails.
-    struct FailAgent;
-
-    #[async_trait]
-    impl Agent for FailAgent {
-        async fn chat(
-            &self,
-            _messages: Vec<Message>,
-            _principles: Option<Vec<String>>,
-            _options: Option<HashMap<String, serde_json::Value>>,
-            _sender: StreamingSender,
-        ) -> AppResult<()> {
-            Err(anyhow::anyhow!("simulated chat failure").into())
-        }
-
-        fn available_models(&self) -> Vec<ModelInfo> {
-            vec![ModelInfo {
-                id: "fail".to_string(),
-                name: "fail".to_string(),
                 description: String::new(),
                 is_default: true,
                 capabilities: Vec::new(),
@@ -383,7 +357,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(feature = "test-agent-echo")]
     #[test]
     fn spawn_agent_with_echo_agent_succeeds() {
         // Register echo agent in a local registry and set it on the global.

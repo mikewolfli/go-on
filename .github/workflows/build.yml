@@ -11,6 +11,22 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  # ── License Header Check ─────────────────────────────────
+  gate-license:
+    name: License Header Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check license headers in .rs files
+        run: |
+          MISSING=$(find src -name '*.rs' -type f | xargs grep -L "Copyright\|MIT License\|SPDX" 2>/dev/null || true)
+          if [ -n "$MISSING" ]; then
+            echo "::warning::Files missing license header:"
+            echo "$MISSING" | while read -r f; do echo "  - $f"; done
+          else
+            echo "✅ All .rs files have license headers."
+          fi
+
   # ── Backend ──────────────────────────────────────────────
   gate-backend:
     name: Backend (check + clippy)

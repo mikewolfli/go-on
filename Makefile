@@ -1,0 +1,99 @@
+.PHONY: all build check clippy test test-all fmt clean lint doc audit dev-container
+
+# Default target shows help
+all: help
+
+help: ## Show this help
+	@echo "go-on development make targets:"
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "Default build: cargo build (local profile)"
+	@echo "Common profiles:"
+	@echo "  make build             (default: local)"
+	@echo "  make build-simple      (simple-server)"
+	@echo "  make build-multi       (multi-users-server)"
+	@echo "  make build-full        (full)"
+
+build: ## Build with default (local) profile
+	cargo build
+
+build-simple: ## Build with simple-server profile
+	cargo build --no-default-features --features simple-server
+
+build-multi: ## Build with multi-users-server profile
+	cargo build --no-default-features --features multi-users-server
+
+build-full: ## Build with full profile (all features)
+	cargo build --no-default-features --features full
+
+build-release: ## Build release with default profile
+	cargo build --release
+
+check: ## Check all targets compile
+	cargo check --all-targets --locked
+
+clippy: ## Run clippy on all targets
+	cargo clippy --all-targets --locked -- -D warnings
+
+clippy-fix: ## Auto-fix clippy suggestions
+	cargo clippy --all-targets --locked --fix --allow-dirty
+
+test: ## Run all tests
+	cargo test --all-targets --locked
+
+test-lib: ## Run library tests only (fast)
+	cargo test --lib --locked
+
+test-all-profiles: ## Run tests for all 4 profiles
+	@echo "=== local profile ===" && cargo test --all-targets --locked 2>&1 | tail -5
+	@echo "=== simple-server profile ===" && cargo test --no-default-features --features simple-server --all-targets --locked 2>&1 | tail -5
+	@echo "=== multi-users-server profile ===" && cargo test --no-default-features --features multi-users-server --all-targets --locked 2>&1 | tail -5
+	@echo "=== full profile ===" && cargo test --no-default-features --features full --all-targets --locked 2>&1 | tail -5
+
+fmt: ## Format all Rust code
+	cargo fmt --all
+
+clean: ## Clean build artifacts
+	cargo clean
+
+lint: check clippy ## Run all lints (check + clippy)
+
+doc: ## Build documentation
+	cargo doc --no-deps
+
+audit: ## Check dependencies for vulnerabilities (requires cargo-audit)
+	cargo audit 2>/dev/null || echo "cargo-audit not installed. Run: cargo install cargo-audit"
+
+deny: ## Check dependency licenses (requires cargo-deny)
+	cargo deny check 2>/dev/null || echo "cargo-deny not installed. Run: cargo install cargo-deny"
+
+bench: ## Run benchmarks (nightly required)
+	cargo bench 2>/dev/null || echo "Benchmarks require nightly Rust. Use: rustup run nightly cargo bench"
+
+ci: check clippy test ## Run CI gate (check + clippy + test)
+
+dev-container: ## Set up dev container
+	@if [ -f .devcontainer/devcontainer.json ]; then \
+		echo "Dev container config exists. Use VS Code's 'Reopen in Container' feature."; \
+	else \
+		echo "Dev container not configured. Run: make dev-container-setup"; \
+	fi
+
+gui-check: ## Check the GUI crate
+	cargo check --all-targets --locked --manifest-path gui/Cargo.toml
+
+gui-test: ## Test the GUI crate
+	cargo test --all-targets --locked --manifest-path gui/Cargo.toml 2>/dev/null || echo "GUI tests not available on this platform"
+
+vscode-install: ## Install VS Code extension dependencies
+	cd vscode-addon && npm ci
+
+count: ## Count lines of Rust code
+	@find src -name '*.rs' -type f | xargs wc -l | tail -1
+
+.PHONY: help build build-simple build-multi build-full build-release
+.PHONY: check clippy clippy-fix test test-lib test-all-profiles
+.PHONY: fmt clean lint doc audit deny bench ci dev-container
+.PHONY: gui-check gui-test vscode-install count

@@ -378,9 +378,7 @@ pub async fn run_autonomy_loop(
     // Post-loop summary: if tools were executed in the last round, the
     // agent may not have produced a final text response. Do one more call
     // asking for a summary so the user always sees a final answer.
-    let last_round_had_tools = rounds
-        .last()
-        .map_or(false, |r| !r.tools_executed.is_empty());
+    let last_round_had_tools = rounds.last().is_some_and(|r| !r.tools_executed.is_empty());
     let mut final_response = response;
     if last_round_had_tools {
         let summary_msg = Message {

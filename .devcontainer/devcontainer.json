@@ -1,0 +1,38 @@
+{
+    "name": "go-on Development",
+    "image": "mcr.microsoft.com/devcontainers/rust:latest",
+    "features": {
+        "ghcr.io/devcontainers/features/node:1": {
+            "version": "22"
+        },
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "serayuzgur.crates",
+                "vadimcn.vscode-lldb",
+                "eamodio.gitlens",
+                "github.vscode-github-actions"
+            ],
+            "settings": {
+                "rust-analyzer.check.command": "clippy",
+                "rust-analyzer.checkOnSave": true,
+                "rust-analyzer.cargo.features": "all",
+                "editor.formatOnSave": true,
+                "files.exclude": {
+                    "target/**": true
+                }
+            }
+        }
+    },
+    "postCreateCommand": "rustup component add clippy rustfmt && cargo check",
+    "mounts": [
+        "source=go-on-cargo-cache,target=/usr/local/cargo/registry,type=volume",
+        "source=go-on-target-cache,target=/workspaces/go-on/target,type=volume"
+    ],
+    "remoteUser": "vscode",
+    "forwardPorts": [8090]
+}

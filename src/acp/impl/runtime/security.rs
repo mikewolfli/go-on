@@ -12,10 +12,12 @@ use tracing::warn;
 
 use crate::acp::r#impl::session::UserSession;
 use crate::acp::server::AcpServer;
+use crate::core::error::ErrorCode;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 
 use super::http::write_http_json_response;
 use super::protocol::extract_header_value;
+use crate::i18n::runtime::t;
 
 /// Apply entry guards and return `true` if the request was rejected (response already written).
 pub(crate) async fn http_entry_guard(
@@ -62,7 +64,7 @@ pub(crate) async fn check_http_authorization(
             write_http_json_response(
                 socket,
                 401,
-                serde_json::json!({"error": "Authentication required", "code": "AUTH_REQUIRED"}),
+                serde_json::json!({"error": t("error.auth_required"), "code": ErrorCode::Unauthorized}),
                 cors_headers,
             )
             .await?;
@@ -114,8 +116,8 @@ pub(crate) async fn check_http_authorization(
                     socket,
                     403,
                     serde_json::json!({
-                        "error": "Forbidden",
-                        "code": "ACCESS_DENIED",
+                        "error": t("error.auth_forbidden"),
+                        "code": ErrorCode::Forbidden,
                         "reason": reason
                     }),
                     cors_headers,
@@ -128,8 +130,8 @@ pub(crate) async fn check_http_authorization(
                     socket,
                     403,
                     serde_json::json!({
-                        "error": "Insufficient privileges",
-                        "code": "PRIVILEGE_ESCALATION_REQUIRED",
+                        "error": t("error.auth_insufficient_privileges"),
+                        "code": ErrorCode::Forbidden,
                         "required_role": required_role
                     }),
                     cors_headers,
@@ -150,6 +152,8 @@ fn entry_guard_exempt_path(path: &str) -> bool {
 }
 
 /// Write a structured entry rejection response.
+///
+/// Uses i18n-aware messages for user-facing strings.
 #[allow(clippy::too_many_arguments)]
 async fn write_entry_rejection(
     socket: &mut TcpStream,
@@ -255,7 +259,7 @@ async fn apply_entry_guards(
                 401,
                 "ENTRY_AUTH_REQUIRED",
                 "unauthorized",
-                "missing or invalid entry API key".to_string(),
+                t("error.entry_auth_required"),
                 &source,
                 path,
                 "entry_auth",
@@ -286,7 +290,7 @@ async fn apply_entry_guards(
             429,
             "ENTRY_RATE_LIMITED",
             "rate_limited",
-            "entry rate limit exceeded".to_string(),
+            t("error.chat.rate_limited"),
             &source,
             path,
             "entry_rate_limit",

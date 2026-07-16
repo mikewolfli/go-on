@@ -62,16 +62,15 @@ impl Tool for WebSearchTool {
         let max_results = input.payload["max_results"]
             .as_u64()
             .unwrap_or(5)
-            .min(20)
-            .max(1) as usize;
+            .clamp(1, 20) as usize;
 
         // Use tokio runtime to run the async search synchronously
         let result = match tokio::runtime::Handle::try_current() {
             Ok(handle) => handle.block_on(async { self.search_impl(&query, max_results).await })?,
             Err(_) => {
                 let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime: {}", e))?;
-                rt.block_on(async { self.search_impl(&query, max_results).await })?
+                    .map_err(|e| anyhow::anyhow!("failed to create temp runtime: {}", e))?;
+                rt.block_on(self.search_impl(&query, max_results))?
             }
         };
 
@@ -109,8 +108,7 @@ impl Tool for WebSearchTool {
             let max_results = input.payload["max_results"]
                 .as_u64()
                 .unwrap_or(5)
-                .min(20)
-                .max(1) as usize;
+                .clamp(1, 20) as usize;
 
             let result = self.search_impl(&query, max_results).await?;
 

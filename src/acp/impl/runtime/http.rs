@@ -17,6 +17,7 @@ use crate::acp::r#impl::cors::{
 };
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::acp::server::AcpServer;
+use crate::core::error::error_code_from_status;
 use crate::i18n::runtime::{t, tf};
 use crate::rpc_protocol::{chat_trace_context, JsonRpcRequest, RequestTraceContext};
 
@@ -567,7 +568,7 @@ async fn route_http_post(
                             }
                             _ = &mut stream_timeout => {
                                 task.abort();
-                                let payload = serde_json::json!({"error": "chat stream timed out after 120s of inactivity"});
+                                let payload = serde_json::json!({"error": t("error.chat.stream_timeout")});
                                 let _ = write_sse_event(socket, "error", &payload).await;
                                 let _ = flush_sse(socket).await;
                                 return Ok(());
@@ -606,7 +607,7 @@ async fn route_http_post(
                             write_http_json_response_with_context(
                                 socket,
                                 400,
-                                serde_json::json!({"error": format!("invalid RPC request: {}", e)}),
+                                serde_json::json!({"error": format!("{}: {}", t("error.invalid_request"), e)}),
                                 path,
                                 cors_headers,
                             )
@@ -633,7 +634,7 @@ async fn route_http_post(
                         write_http_json_response_with_context(
                             socket,
                             500,
-                            serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
+                            serde_json::json!({"error": format!("{}: {}", t("error.internal_server"), err)}),
                             path,
                             cors_headers,
                         )
@@ -743,7 +744,7 @@ async fn handle_cors_preflight(
             write_http_json_response(
                 socket,
                 405,
-                serde_json::json!({"error": "Method Not Allowed"}),
+                serde_json::json!({"error": t("error.method_not_allowed")}),
                 "",
             )
             .await?;
@@ -796,7 +797,7 @@ pub(crate) async fn write_http_json_response_with_context(
 pub(crate) async fn write_http_json_response(
     socket: &mut TcpStream,
     status: u16,
-    value: serde_json::Value,
+    mut value: serde_json::Value,
     extra_headers: &str,
 ) -> Result<()> {
     let status_text = match status {
@@ -810,6 +811,16 @@ pub(crate) async fn write_http_json_response(
         503 => "Service Unavailable",
         _ => "OK",
     };
+    // Inject machine-readable error code into error responses
+    if status >= 400 {
+        if let Some(obj) = value.as_object_mut() {
+            if obj.contains_key("error") && !obj.contains_key("code") {
+                if let Some(code) = error_code_from_status(status) {
+                    obj.insert("code".to_string(), serde_json::json!(code));
+                }
+            }
+        }
+    }
     let body = serde_json::to_vec(&value)?;
     let headers = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
