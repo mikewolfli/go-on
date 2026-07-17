@@ -1,4 +1,10 @@
 import type {
+  AcpSessionNewRequest,
+  AcpSessionNewResponse,
+  AcpSessionPromptRequest,
+  AcpSessionCloseRequest,
+  AcpSessionListResponse,
+  AcpSessionResumeRequest,
   ApiResponse,
   BreakerStatusResponse,
   ChatRequest,
@@ -13,6 +19,7 @@ import type {
   LearningSummaryResponse,
   MetricsResponse,
   SelectorStatusResponse,
+  SessionModeState,
   TaskPlanResponse,
   Usage,
 } from "./types";
@@ -431,5 +438,57 @@ export class GoOnClient {
   /** harness.status — get harness integration testing status. */
   async harnessStatus(): Promise<HarnessStatusResponse> {
     return this.jsonRpc("harness.status", {});
+  }
+
+  // ── ACP Session Protocol ───────────────────────────────────────────
+
+  /** session/new — create a new ACP session. */
+  async sessionNew(params: AcpSessionNewRequest): Promise<AcpSessionNewResponse> {
+    return this.jsonRpc("session/new", params as Record<string, unknown>);
+  }
+
+  /** session/prompt — send a prompt in an ACP session (returns stopReason). */
+  async sessionPrompt(
+    params: AcpSessionPromptRequest,
+  ): Promise<{ stopReason: string }> {
+    return this.jsonRpc("session/prompt", params as unknown as Record<string, unknown>);
+  }
+
+  /** session/close — close an ACP session. */
+  async sessionClose(params: AcpSessionCloseRequest): Promise<void> {
+    await this.jsonRpc("session/close", params as unknown as Record<string, unknown>);
+  }
+
+  /** session/list — list active ACP sessions. */
+  async sessionList(): Promise<AcpSessionListResponse> {
+    return this.jsonRpc("session/list", {});
+  }
+
+  /** session/resume — resume an existing ACP session. */
+  async sessionResume(
+    params: AcpSessionResumeRequest,
+  ): Promise<SessionModeState> {
+    return this.jsonRpc("session/resume", params as unknown as Record<string, unknown>);
+  }
+
+  /** session/set_mode — change the mode of an ACP session. */
+  async sessionSetMode(
+    sessionId: string,
+    modeId: string,
+  ): Promise<void> {
+    await this.jsonRpc("session/set_mode", { sessionId, modeId });
+  }
+
+  /** session/set_config_option — set a configuration option for an ACP session. */
+  async sessionSetConfigOption(
+    sessionId: string,
+    optionId: string,
+    value: string,
+  ): Promise<void> {
+    await this.jsonRpc("session/set_config_option", {
+      sessionId,
+      optionId,
+      value,
+    });
   }
 }

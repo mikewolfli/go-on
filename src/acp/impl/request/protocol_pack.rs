@@ -241,16 +241,24 @@ fn build_chat_params_from_acp(params: Value, session_state: &AcpSessionState) ->
 
 pub(super) async fn initialize_payload(_server: &AcpServer) -> Result<Value> {
     use crate::schema::{
-        AgentCapabilities, Implementation, InitializeResponse, McpCapabilities, PromptCapabilities,
-        ProtocolVersion, SessionCapabilities, SessionCloseCapabilities, SessionListCapabilities,
-        SessionResumeCapabilities,
+        AgentCapabilities, AuthMethod, AuthMethodAgent, Implementation, InitializeResponse,
+        McpCapabilities, PromptCapabilities, ProtocolVersion, SessionCapabilities,
+        SessionCloseCapabilities, SessionListCapabilities, SessionResumeCapabilities,
     };
 
     let negotiated_version = NEGOTIATED_PROTOCOL_VERSION
         .get()
         .copied()
         .unwrap_or(ProtocolVersion::LATEST);
-    let resp = InitializeResponse::new(negotiated_version)
+    let auth_methods = vec![AuthMethod::Agent(AuthMethodAgent {
+        id: "bearer_token".to_string(),
+        name: "Bearer Token".to_string(),
+        description: Some(
+            "Authenticate using a bearer token from the Authorization header".to_string(),
+        ),
+        meta: None,
+    })];
+    let mut resp = InitializeResponse::new(negotiated_version)
         .agent_info(Implementation::new("go-on", env!("CARGO_PKG_VERSION")))
         .agent_capabilities(AgentCapabilities {
             load_session: true,
@@ -273,6 +281,7 @@ pub(super) async fn initialize_payload(_server: &AcpServer) -> Result<Value> {
             },
             ..Default::default()
         });
+    resp.auth_methods = auth_methods;
 
     let mut value = serde_json::to_value(&resp)?;
 
@@ -420,17 +429,37 @@ pub(super) async fn session_new_payload(server: &AcpServer, params: Value) -> Re
     let mut modes = modes;
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode.clone());
 
+    let now = crate::shared::timestamps::now_ts_ms();
+    let config_options_init = HashMap::new();
     {
         let mut state = acp_session_state().lock().await;
         state.insert(
             session_id.clone(),
             AcpSessionState {
-                cwd,
+                cwd: cwd.clone(),
                 mode: current_mode.clone(),
-                additional_directories,
-                config_options: HashMap::new(),
+                additional_directories: additional_directories.clone(),
+                config_options: config_options_init.clone(),
             },
         );
+    }
+
+    // Persist to SQLite
+    #[cfg(feature = "backend-sqlite")]
+    if let Some(ref store) = server.session_store {
+        use crate::acp::session_persistence::PersistedSession;
+        let persisted = PersistedSession {
+            session_id: session_id.clone(),
+            cwd: cwd.clone(),
+            mode: current_mode.clone(),
+            additional_directories: additional_directories.clone(),
+            config_options: config_options_init.clone(),
+            created_at_ms: now,
+            last_active_ms: now,
+        };
+        if let Err(e) = store.upsert(&persisted).await {
+            tracing::warn!(error = %e, session_id = %session_id, "Failed to persist new session to SQLite");
+        }
     }
 
     let config_options = build_model_config_options(server);
@@ -451,6 +480,28 @@ pub(super) async fn session_load_payload(server: &AcpServer, params: Value) -> R
         .get("sessionId")
         .and_then(Value::as_str)
         .unwrap_or_default();
+
+    // Hydrate from SQLite if not already cached in memory
+    #[cfg(feature = "backend-sqlite")]
+    if !session_id.is_empty() {
+        if let Some(ref store) = server.session_store {
+            let mut state = acp_session_state().lock().await;
+            if !state.contains_key(session_id) {
+                if let Ok(Some(persisted)) = store.load(session_id).await {
+                    state.insert(
+                        session_id.to_string(),
+                        AcpSessionState {
+                            cwd: persisted.cwd.clone(),
+                            mode: persisted.mode.clone(),
+                            additional_directories: persisted.additional_directories.clone(),
+                            config_options: persisted.config_options.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     let stored = {
         let state = acp_session_state().lock().await;
         state.get(session_id).cloned().unwrap_or_default()
@@ -711,10 +762,40 @@ pub(super) async fn session_cancel_payload(_server: &AcpServer, params: Value) -
 ///
 /// Standard ACP: client may send optional `cwd` filter,
 /// agent returns list of known sessions.
-pub(super) async fn session_list_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
+pub(super) async fn session_list_payload(server: &AcpServer, _params: Value) -> Result<Value> {
+    let mut sessions = vec![];
+
+    // Include sessions from the in-memory HashMap
+    {
+        let state = acp_session_state().lock().await;
+        for sid in state.keys() {
+            sessions.push(serde_json::json!({
+                "id": sid,
+            }));
+        }
+    }
+
+    // Include persisted sessions from SQLite
+    #[cfg(feature = "backend-sqlite")]
+    if let Some(ref store) = server.session_store {
+        if let Ok(persisted) = store.list_all().await {
+            let existing: std::collections::HashSet<String> = sessions
+                .iter()
+                .filter_map(|s| s.get("id").and_then(Value::as_str).map(String::from))
+                .collect();
+            for s in &persisted {
+                if !existing.contains(&s.session_id) {
+                    sessions.push(serde_json::json!({
+                        "id": s.session_id,
+                    }));
+                }
+            }
+        }
+    }
+
     Ok(serde_json::to_value(
         &crate::schema::ListSessionsResponse {
-            sessions: vec![],
+            sessions,
             next_cursor: None,
             meta: None,
         },
@@ -735,10 +816,42 @@ pub(super) async fn session_set_mode_payload(server: &AcpServer, params: Value) 
         .unwrap_or_default();
     let mode_id = normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
     if !session_id.is_empty() {
-        {
+        let snapshot = {
             let mut state = acp_session_state().lock().await;
-            state.entry(session_id.to_string()).or_default().mode = mode_id.clone();
+            let entry = state.entry(session_id.to_string()).or_default();
+            entry.mode = mode_id.clone();
+            // Snapshot the full session state for SQLite persistence below
+            #[cfg(feature = "backend-sqlite")]
+            let snapshot = (
+                entry.cwd.clone(),
+                entry.mode.clone(),
+                entry.additional_directories.clone(),
+                entry.config_options.clone(),
+            );
+            #[cfg(not(feature = "backend-sqlite"))]
+            let _snapshot = ();
+            snapshot
+        };
+
+        // Persist mode change to SQLite
+        #[cfg(feature = "backend-sqlite")]
+        if let Some(ref store) = server.session_store {
+            use crate::acp::session_persistence::PersistedSession;
+            let now = crate::shared::timestamps::now_ts_ms();
+            let persisted = PersistedSession {
+                session_id: session_id.to_string(),
+                cwd: snapshot.0,
+                mode: snapshot.1,
+                additional_directories: snapshot.2,
+                config_options: snapshot.3,
+                created_at_ms: now,
+                last_active_ms: now,
+            };
+            if let Err(e) = store.upsert(&persisted).await {
+                tracing::warn!(error = %e, session_id = %session_id, "Failed to persist mode change to SQLite");
+            }
         }
+
         // Send session/update notification with CurrentModeUpdate so the
         // client (e.g. Zed) can reflect the mode change in its UI immediately.
         let notif = SessionNotification::new(
@@ -772,6 +885,27 @@ pub(super) async fn session_resume_payload(server: &AcpServer, params: Value) ->
         .filter(|v| !v.is_empty())
         .map(ToString::to_string);
 
+    // Hydrate from SQLite if session not already cached in memory
+    #[cfg(feature = "backend-sqlite")]
+    if !session_id.is_empty() {
+        if let Some(ref store) = server.session_store {
+            let mut state = acp_session_state().lock().await;
+            if !state.contains_key(session_id) {
+                if let Ok(Some(persisted)) = store.load(session_id).await {
+                    state.insert(
+                        session_id.to_string(),
+                        AcpSessionState {
+                            cwd: persisted.cwd.clone(),
+                            mode: persisted.mode.clone(),
+                            additional_directories: persisted.additional_directories.clone(),
+                            config_options: persisted.config_options.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     let (current_mode, _additional_dirs) = if !session_id.is_empty() {
         let mut state = acp_session_state().lock().await;
         let entry = state.entry(session_id.to_string()).or_default();
@@ -795,18 +929,27 @@ pub(super) async fn session_resume_payload(server: &AcpServer, params: Value) ->
 }
 
 /// Handle `session/close` — closes and cleans up a session.
-pub(super) async fn session_close_payload(_server: &AcpServer, params: Value) -> Result<Value> {
+pub(super) async fn session_close_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if !session_id.is_empty() {
-        let mut state = acp_session_state().lock().await;
-        state.remove(session_id);
+        {
+            let mut state = acp_session_state().lock().await;
+            state.remove(session_id);
+        }
         // B51-36: Evict tenant rate limiter state on session close.
         #[cfg(feature = "multi-users-server")]
-        if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
+        if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
             limiter.evict_tenant(session_id).await;
+        }
+        // Remove from SQLite
+        #[cfg(feature = "backend-sqlite")]
+        if let Some(ref store) = server.session_store {
+            if let Err(e) = store.delete(session_id).await {
+                tracing::warn!(error = %e, session_id = %session_id, "Failed to delete session from SQLite");
+            }
         }
     }
     Ok(serde_json::to_value(
@@ -847,12 +990,66 @@ pub(super) async fn session_request_permission_payload(
     Ok(serde_json::Value::Object(serde_json::Map::new()))
 }
 
+/// Send a `$/requestPermission` notification to the client and wait for the response.
+///
+/// Returns the `PermissionOptionId` that the user selected, or an error if timed out.
+#[allow(dead_code)] // Public API for ACP $/requestPermission flow
+pub(super) async fn request_permission(
+    server: &AcpServer,
+    session_id: &str,
+    message: &str,
+    options: Vec<crate::schema::PermissionOption>,
+    timeout_secs: u64,
+) -> Result<crate::schema::PermissionOptionId> {
+    use crate::schema::{PermissionRequest, SessionNotification, SessionUpdate};
+
+    let permission_request = PermissionRequest {
+        message: message.to_string(),
+        options,
+        timeout_secs: Some(timeout_secs),
+        meta: None,
+    };
+
+    // Send notification via session/update with the permission_request variant
+    let update = SessionUpdate::PermissionRequest(permission_request);
+    let notif = SessionNotification::new(
+        crate::schema::SessionId::new(session_id.to_string()),
+        update,
+    );
+
+    if let Ok(value) = serde_json::to_value(&notif) {
+        crate::acp::r#impl::io::send_notification(server, "session/update", value).await?;
+    }
+
+    // Wait for the client to respond via session/request_permission
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        if std::time::Instant::now() > deadline {
+            anyhow::bail!("permission request timed out after {}s", timeout_secs);
+        }
+
+        // Check if the client has responded
+        {
+            let permissions = acp_permission_state().lock().await;
+            if let Some(option_id) = permissions.get(session_id) {
+                let result = option_id.clone();
+                drop(permissions);
+                // Clean up the stored response
+                acp_permission_state().lock().await.remove(session_id);
+                return Ok(result);
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 /// Handle `session/set_config_option` — sets a configuration option for a session.
 ///
 /// Standard ACP: client sends `sessionId` + `configId` + `value`,
 /// agent applies the option and returns updated config options list.
 pub(super) async fn session_set_config_option_payload(
-    _server: &AcpServer,
+    server: &AcpServer,
     params: Value,
 ) -> Result<Value> {
     let session_id = params
@@ -866,13 +1063,45 @@ pub(super) async fn session_set_config_option_payload(
     let value = params.get("value").cloned().unwrap_or(Value::Null);
 
     if !session_id.is_empty() && !config_id.is_empty() {
-        let mut state = acp_session_state().lock().await;
-        let session = state.entry(session_id.to_string()).or_default();
-        session
-            .config_options
-            .insert(config_id.to_string(), value.clone());
-        if config_id == "mode" {
-            session.mode = normalize_acp_mode(value.as_str());
+        let snapshot = {
+            let mut state = acp_session_state().lock().await;
+            let session = state.entry(session_id.to_string()).or_default();
+            session
+                .config_options
+                .insert(config_id.to_string(), value.clone());
+            if config_id == "mode" {
+                session.mode = normalize_acp_mode(value.as_str());
+            }
+            // Snapshot the full session state for SQLite persistence below
+            #[cfg(feature = "backend-sqlite")]
+            let snapshot = (
+                session.cwd.clone(),
+                session.mode.clone(),
+                session.additional_directories.clone(),
+                session.config_options.clone(),
+            );
+            #[cfg(not(feature = "backend-sqlite"))]
+            let _snapshot = ();
+            snapshot
+        };
+
+        // Persist config option change to SQLite
+        #[cfg(feature = "backend-sqlite")]
+        if let Some(ref store) = server.session_store {
+            use crate::acp::session_persistence::PersistedSession;
+            let now = crate::shared::timestamps::now_ts_ms();
+            let persisted = PersistedSession {
+                session_id: session_id.to_string(),
+                cwd: snapshot.0,
+                mode: snapshot.1,
+                additional_directories: snapshot.2,
+                config_options: snapshot.3,
+                created_at_ms: now,
+                last_active_ms: now,
+            };
+            if let Err(e) = store.upsert(&persisted).await {
+                tracing::warn!(error = %e, session_id = %session_id, "Failed to persist config option change to SQLite");
+            }
         }
     }
 

@@ -50,6 +50,9 @@ pub enum SessionUpdate {
     CurrentModeUpdate(CurrentModeUpdate),
     /// Config options updated.
     ConfigOptionUpdate(ConfigOptionUpdate),
+    /// A permission request that the client must respond to.
+    #[serde(rename = "permission_request")]
+    PermissionRequest(PermissionRequest),
 }
 
 /// A single streamed content chunk — wraps one ContentBlock.
@@ -232,6 +235,39 @@ impl PermissionOptionId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
+}
+
+/// Permission request sent from the agent to the client.
+/// The client must respond with session/request_permission.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequest {
+    /// Human-readable message explaining what permission is needed.
+    pub message: String,
+    /// Available options for the user to choose from.
+    pub options: Vec<PermissionOption>,
+    /// Timeout in seconds before the permission request expires.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// Arbitrary metadata for the client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+/// A single permission option for the user to choose.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionOption {
+    /// Unique ID for this option (sent back in session/request_permission).
+    pub id: PermissionOptionId,
+    /// Human-readable label.
+    pub label: String,
+    /// Optional description of what this option allows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The permission level granted (read, write, destructive, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

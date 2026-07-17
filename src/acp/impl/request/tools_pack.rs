@@ -328,13 +328,25 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
     let mut builtins = registry.names();
     builtins.sort_unstable();
     tools.extend(builtins.into_iter().map(|name| {
-        serde_json::to_value(local_tool_descriptor(name)).unwrap_or_else(|_| {
+        // Prefer the actual Tool trait's description/input_schema over the
+        // shared tool_descriptors.rs match arms. This ensures feature-gated
+        // tools (docx, pdf, excel, cad, image, etc.) also get their proper
+        // schema exposed in tools/list, not just a generic fallback.
+        if let Some(tool) = registry.get(name) {
             json!({
                 "name": name,
-                "description": "Registered MCP tool",
-                "input_schema": {"type": "object"}
+                "description": tool.description(),
+                "input_schema": tool.input_schema(),
             })
-        })
+        } else {
+            serde_json::to_value(local_tool_descriptor(name)).unwrap_or_else(|_| {
+                json!({
+                    "name": name,
+                    "description": "Registered MCP tool",
+                    "input_schema": {"type": "object"}
+                })
+            })
+        }
     }));
 
     if let Some(server) = server {
@@ -912,6 +924,21 @@ mod tests {
     fn build_mcp_tool_descriptors_returns_baseline_tools() {
         let tools = build_mcp_tool_descriptors(None);
         assert!(!tools.is_empty(), "must return at least baseline tools");
+
+        // All registered tools should have proper descriptors, not generic fallback.
+        let generic_count = tools
+            .iter()
+            .filter(|t| {
+                t.get("description")
+                    .and_then(Value::as_str)
+                    .map(|d| d == "Registered MCP tool")
+                    .unwrap_or(false)
+            })
+            .count();
+        assert!(
+            generic_count < 5,
+            "at most 4 tools should have generic description, got {generic_count}"
+        );
 
         // Should include core tools
         let names: Vec<&str> = tools

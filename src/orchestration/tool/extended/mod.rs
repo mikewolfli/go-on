@@ -7,11 +7,18 @@
 pub mod archive;
 #[cfg(feature = "barcode-tools")]
 pub mod barcode;
+pub mod build;
 #[cfg(feature = "cad-utils")]
 pub mod cad;
 pub mod cargo;
 pub mod code_index;
 pub mod compress;
+pub mod container;
+pub mod metrics;
+pub mod query;
+pub mod security;
+pub mod watch;
+
 #[cfg(feature = "data-export")]
 pub mod csv_utils;
 #[cfg(feature = "data-export")]
@@ -26,6 +33,7 @@ pub mod dxf_tool;
 pub mod email;
 pub mod environment_info;
 pub mod filesystem;
+pub mod format;
 #[cfg(any(
     feature = "game-online",
     feature = "game-process",
@@ -53,6 +61,7 @@ pub mod image;
 #[cfg(feature = "document-invoice")]
 pub mod invoice;
 pub mod jsonl;
+pub mod lsp;
 pub mod network;
 #[cfg(feature = "cad-obj")]
 pub mod obj;
@@ -65,6 +74,7 @@ pub mod obj_tool;
     feature = "document-ppt"
 ))]
 pub mod office;
+pub mod packages;
 #[cfg(feature = "document-pdf")]
 pub mod pdf;
 #[cfg(feature = "cad-ply")]
@@ -84,7 +94,9 @@ pub mod stl;
 pub mod stl_tool;
 #[cfg(feature = "drawing-svg")]
 pub mod svg;
+pub mod template;
 pub mod time;
+pub mod utils;
 #[cfg(feature = "document-html")]
 pub mod web;
 pub mod web_search;
@@ -92,11 +104,13 @@ pub mod web_search;
 pub use archive::{ArchiveExtractTool, ArchiveInspectTool};
 #[cfg(feature = "barcode-tools")]
 pub use barcode::QrCodeTool;
+pub use build::{AddDependencyTool, LintCodeTool, RunBuildTool};
 #[cfg(feature = "cad-utils")]
 pub use cad::CadConvertTool;
 pub use cargo::{CargoCheckTool, CargoTestTool};
 pub use code_index::CodeIndexTool;
 pub use compress::{CompressTool, DecompressTool};
+pub use container::{DockerExecTool, DockerLogsTool, DockerPsTool};
 #[cfg(feature = "data-export")]
 pub use csv_utils::{CsvAnalyzeTool, CsvTransformTool};
 #[cfg(feature = "data-export")]
@@ -115,6 +129,7 @@ pub use environment_info::EnvironmentInfoTool;
 pub use filesystem::{
     CopyPathTool, CreateDirectoryTool, FileDeleteTool, FileMoveTool, ListDirectoryTool,
 };
+pub use format::FormatCodeTool;
 #[cfg(feature = "cam-gcode")]
 pub use gcode::GcodeReadTool;
 #[cfg(feature = "cad-geo")]
@@ -132,6 +147,8 @@ pub use image::{ImageAnalyzeTool, ImageConvertTool, ImageGenerateTool, ImageResi
 #[cfg(feature = "document-invoice")]
 pub use invoice::InvoiceParseTool;
 pub use jsonl::{JsonlReadTool, JsonlWriteTool};
+pub use lsp::{ApplyCodeActionTool, FindReferencesTool, GoToDefinitionTool};
+pub use metrics::CodeMetricsTool;
 pub use network::{DnsLookupTool, PingTool, PortScanTool};
 #[cfg(feature = "cad-obj")]
 pub use obj::ObjReadTool;
@@ -145,13 +162,18 @@ pub use office::WriteDocxTool;
 pub use office::WriteExcelTool;
 #[cfg(feature = "document-ppt")]
 pub use office::{ReadPptTool, WritePptTool};
+pub use packages::SearchPackagesTool;
 #[cfg(feature = "document-pdf")]
 pub use pdf::{PdfMergeTool, PdfSplitTool, ReadPdfTool};
 #[cfg(feature = "cad-ply")]
 pub use ply::PlyReadTool;
+pub use query::JsonQueryTool;
+#[cfg(feature = "data-export")]
+pub use query::YamlQueryTool;
 pub use read_lines::ReadFileLinesTool;
 pub use rss::RssReadTool;
 pub use search::GrepTool;
+pub use security::SecurityScanTool;
 pub use shell::ShellExecTool;
 pub use spawn_agent::SpawnAgentTool;
 #[cfg(feature = "backend-sqlite")]
@@ -166,7 +188,10 @@ pub use stl::{StlGenerateTool, StlReadTool};
 pub use stl_tool::StlReadTool;
 #[cfg(feature = "drawing-svg")]
 pub use svg::{SvgExportTool, SvgGenerateTool, SvgReadTool};
+pub use template::TemplateRenderTool;
 pub use time::DateTimeTool;
+pub use utils::{EncodeDecodeTool, HashFileTool, RandomTokenTool, UuidGenTool};
+pub use watch::FileWatchTool;
 #[cfg(feature = "document-html")]
 pub use web::WebScrapeTool;
 pub use web_search::WebSearchTool;

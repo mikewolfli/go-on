@@ -325,6 +325,17 @@ serial_test = "3"
 temp-env = "0.3"
 criterion = { version = "0.5", features = ["html_reports"] }
 
+# Benchmarks use the default test harness, but both criterion benchmarks
+# provide their own main() via the criterion_main! macro. Setting harness = false
+# prevents the libtest harness from overriding criterion's entry point.
+[[bench]]
+name = "error_code_bench"
+harness = false
+
+[[bench]]
+name = "acp_bench"
+harness = false
+
 # ── Optimisation profiles ──────────────────────────────────────────────────
 [profile.release]
 lto = "fat"
@@ -348,3 +359,5 @@ lto = "off"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+# Keep symbols so criterion can list benchmark names.
+strip = "none"

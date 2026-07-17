@@ -501,6 +501,16 @@ pub struct AcpServer {
     pub registries: RegistryContext,
     /// Persistence data stores
     pub persistence: PersistenceContext,
+    /// Optional SQLite-backed session persistence.
+    ///
+    /// When `Some`, session create / close / resume / update operations are
+    /// also written to the database so that state survives server restarts.
+    /// Only available with the `backend-sqlite` feature.
+    #[cfg(feature = "backend-sqlite")]
+    pub session_store: Option<Arc<crate::acp::session_persistence::SessionStore>>,
+    /// Session store placeholder for non-SQLite builds (always `None`).
+    #[cfg(not(feature = "backend-sqlite"))]
+    pub session_store: Option<Arc<()>>,
     /// PromptAssembler — 8-layer prompt assembly (ARCH-03)
     pub prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
     /// Prompt manager for prompt template management
@@ -871,6 +881,12 @@ pub struct ServerBuilder {
     multimodal_processor: Option<crate::multimodal::MultimodalProcessor>,
     /// Runtime config for gating governance, tenant quotas, etc.
     runtime_config: Option<RuntimeConfig>,
+    /// Optional SQLite-backed session persistence.
+    #[cfg(feature = "backend-sqlite")]
+    session_store: Option<Arc<crate::acp::session_persistence::SessionStore>>,
+    /// Session store placeholder for non-SQLite builds.
+    #[cfg(not(feature = "backend-sqlite"))]
+    session_store: Option<Arc<()>>,
 }
 
 impl ServerBuilder {
@@ -906,6 +922,10 @@ impl ServerBuilder {
             policy_reloader: None,
             multimodal_processor: None,
             runtime_config: None,
+            #[cfg(feature = "backend-sqlite")]
+            session_store: None,
+            #[cfg(not(feature = "backend-sqlite"))]
+            session_store: None,
         }
     }
 
@@ -1062,6 +1082,21 @@ impl ServerBuilder {
         reloader: Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>,
     ) -> Self {
         self.policy_reloader = Some(reloader);
+        self
+    }
+
+    /// Attach an SQLite-backed session persistence store.
+    ///
+    /// When provided, session create / close / resume / update operations will
+    /// also be written to the database so that state survives server restarts.
+    /// Only available with the `backend-sqlite` feature.
+    #[cfg(feature = "backend-sqlite")]
+    #[allow(dead_code)] // Builder method — wired by consumer during startup
+    pub fn with_session_store(
+        mut self,
+        store: Arc<crate::acp::session_persistence::SessionStore>,
+    ) -> Self {
+        self.session_store = Some(store);
         self
     }
 
@@ -1431,6 +1466,7 @@ impl ServerBuilder {
                 artifact_ledger,
                 task_graph_store: self.task_graph_store,
             },
+            session_store: self.session_store,
             prompt_assembler: PromptAssembler,
             prompt_manager,
             verbose: self.verbose,

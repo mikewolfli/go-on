@@ -1380,6 +1380,47 @@ impl ToolRegistry {
             },
         );
 
+        // ── LSP-like code intelligence tools ─────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::GoToDefinitionTool,
+            ToolCapabilityProfile {
+                capability: "go_to_definition".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["grep".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::FindReferencesTool,
+            ToolCapabilityProfile {
+                capability: "find_references".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["grep".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ApplyCodeActionTool,
+            ToolCapabilityProfile {
+                capability: "apply_code_action".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         // ── Read file lines tool ────────────────────────────────
         registry.register_with_profile(
             crate::orchestration::tool_extended::ReadFileLinesTool,
@@ -1405,6 +1446,261 @@ impl ToolRegistry {
                 retry_policy: RetryPolicy {
                     max_retries: 0,
                     retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Code format tool ───────────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::FormatCodeTool,
+            ToolCapabilityProfile {
+                capability: "format_code".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Package search tool ─────────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::SearchPackagesTool,
+            ToolCapabilityProfile {
+                capability: "package_search".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Utility tools (uuid, random_token, encode_decode, hash_file) ─
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::UuidGenTool,
+            ToolCapabilityProfile {
+                capability: "uuid_gen".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::RandomTokenTool,
+            ToolCapabilityProfile {
+                capability: "random_token".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::EncodeDecodeTool,
+            ToolCapabilityProfile {
+                capability: "encode_decode".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::HashFileTool,
+            ToolCapabilityProfile {
+                capability: "hash_file".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Build/lint/dependency tools (P1) ───────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::RunBuildTool,
+            ToolCapabilityProfile {
+                capability: "build_run".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::LintCodeTool,
+            ToolCapabilityProfile {
+                capability: "lint_run".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 120_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::AddDependencyTool,
+            ToolCapabilityProfile {
+                capability: "dependency_add".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Structured data query tools (P1) ────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::JsonQueryTool,
+            ToolCapabilityProfile {
+                capability: "json_query".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::YamlQueryTool,
+            ToolCapabilityProfile {
+                capability: "yaml_query".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Template rendering tool (P1) ────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::TemplateRenderTool,
+            ToolCapabilityProfile {
+                capability: "template_render".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Code metrics tool (P2) ──────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CodeMetricsTool,
+            ToolCapabilityProfile {
+                capability: "code_metrics".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Security scan tool (P2) ────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::SecurityScanTool,
+            ToolCapabilityProfile {
+                capability: "security_scan".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 120_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── Docker container tools (P2) ────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DockerPsTool,
+            ToolCapabilityProfile {
+                capability: "docker_ps".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DockerExecTool,
+            ToolCapabilityProfile {
+                capability: "docker_exec".to_string(),
+                risk_level: ToolRiskLevel::High,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DockerLogsTool,
+            ToolCapabilityProfile {
+                capability: "docker_logs".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
+        // ── File watch tool (P2) ────────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::FileWatchTool,
+            ToolCapabilityProfile {
+                capability: "file_watch".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
                 },
                 fallback_chain: Vec::new(),
             },

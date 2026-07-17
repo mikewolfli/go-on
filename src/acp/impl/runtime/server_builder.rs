@@ -580,6 +580,72 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
             ),
         ));
 
+        // ── Register LLM-powered skills ─────────────────────────────────
+        // These skills use the configured AI provider to perform semantic
+        // operations (code review, classification, summarization, etc.).
+        let llm_skills: Vec<crate::orchestration::skill::PromptBasedSkill> = vec![
+            crate::orchestration::skill::PromptBasedSkill {
+                name: "semantic-diff".to_string(),
+                description: "Analyze code changes semantically — understand what changed, why, and potential impacts".to_string(),
+                prompt_template: include_str!("../../../../skills/semantic-diff/SKILL.md").to_string(),
+                input_schema: [("input".to_string(), "string".to_string())].into(),
+                timeout_secs: 120,
+                max_retries: 1,
+            },
+            crate::orchestration::skill::PromptBasedSkill {
+                name: "note-taking".to_string(),
+                description: "Maintain structured working notes across sessions for project context and decisions".to_string(),
+                prompt_template: include_str!("../../../../skills/note-taking/SKILL.md").to_string(),
+                input_schema: [("input".to_string(), "string".to_string())].into(),
+                timeout_secs: 60,
+                max_retries: 1,
+            },
+            crate::orchestration::skill::PromptBasedSkill {
+                name: "classify-text".to_string(),
+                description: "Classify text into predefined categories with confidence scores".to_string(),
+                prompt_template: include_str!("../../../../skills/classify-text/SKILL.md").to_string(),
+                input_schema: [("input".to_string(), "string".to_string())].into(),
+                timeout_secs: 60,
+                max_retries: 1,
+            },
+            crate::orchestration::skill::PromptBasedSkill {
+                name: "summarize-text".to_string(),
+                description: "Summarize long text into concise, structured summaries".to_string(),
+                prompt_template: include_str!("../../../../skills/summarize-text/SKILL.md").to_string(),
+                input_schema: [("input".to_string(), "string".to_string())].into(),
+                timeout_secs: 60,
+                max_retries: 1,
+            },
+            crate::orchestration::skill::PromptBasedSkill {
+                name: "translate-text".to_string(),
+                description: "Translate text between languages with natural-sounding results".to_string(),
+                prompt_template: include_str!("../../../../skills/translate-text/SKILL.md").to_string(),
+                input_schema: [("input".to_string(), "string".to_string())].into(),
+                timeout_secs: 60,
+                max_retries: 1,
+            },
+            crate::orchestration::skill::PromptBasedSkill {
+                name: "review-pr".to_string(),
+                description: "Review a pull request diff and provide comprehensive, actionable feedback".to_string(),
+                prompt_template: include_str!("../../../../skills/review-pr/SKILL.md").to_string(),
+                input_schema: [("input".to_string(), "string".to_string())].into(),
+                timeout_secs: 120,
+                max_retries: 1,
+            },
+            crate::orchestration::skill::PromptBasedSkill {
+                name: "embed-text".to_string(),
+                description: "Generate a semantic embedding/vector representation of text for similarity search".to_string(),
+                prompt_template: include_str!("../../../../skills/embed-text/SKILL.md").to_string(),
+                input_schema: [("input".to_string(), "string".to_string())].into(),
+                timeout_secs: 60,
+                max_retries: 1,
+            },
+        ];
+
+        for skill in llm_skills {
+            server.register_skill(Arc::new(skill));
+        }
+
         // Wire the prompt skill agent so PromptBasedSkill can call a real LLM.
         // Uses the first available agent from the registry (preferring "primary").
         let agent_names = registry.names();

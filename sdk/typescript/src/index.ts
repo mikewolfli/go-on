@@ -1,4 +1,4 @@
-//! go-on Node.js SDK — Public API exports.
+//! go-on TypeScript SDK — Public API exports.
 //!
 //! An async JSON-RPC client for the go-on ACP agent orchestration runtime.
 //! Supports streaming chat, governance, observability, workflow,
@@ -6,7 +6,6 @@
 
 export { GoOnClient } from "./client";
 export type { GoOnClientOptions } from "./client";
-export { GoOnClientError, GoOnJsonRpcError, GoOnHttpError } from "./errors";
 export type {
   AcpSessionCloseRequest,
   AcpSessionInfo,
@@ -16,6 +15,7 @@ export type {
   AcpSessionPromptRequest,
   AcpSessionResumeRequest,
   AgentInfo,
+  ApiResponse,
   BreakerStatusResponse,
   ChatMessage,
   ChatRequest,
@@ -40,4 +40,5 @@ export type {
   StreamChunk,
   TaskPlanResponse,
   ToolCall,
+  Usage,
 } from "./types";

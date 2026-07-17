@@ -562,15 +562,79 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
             })),
         },
         "web_search" => McpTool {
+                    name: name.to_string(),
+                    description: Some("Search the web for information. Returns a list of results with titles, URLs, and snippets. Uses DuckDuckGo by default (free, no API key needed).".to_string()),
+                    input_schema: Some(json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query (required)"},
+                            "max_results": {"type": "integer", "description": "Maximum number of results to return (default: 5)", "default": 5, "minimum": 1, "maximum": 20}
+                        },
+                        "required": ["query"]
+                    })),
+                },
+        "go_to_definition" => McpTool {
             name: name.to_string(),
-            description: Some("Search the web for information. Returns a list of results with titles, URLs, and snippets. Uses DuckDuckGo by default (free, no API key needed).".to_string()),
+            description: Some(
+                "Find the definition of a symbol (fn, struct, enum, trait, impl, type, const) "
+                    .to_string()
+                    + "in the codebase. Searches source files for declaration patterns. "
+                    + "Returns file path, line number, and surrounding context.",
+            ),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query (required)"},
-                    "max_results": {"type": "integer", "description": "Maximum number of results to return (default: 5)", "default": 5, "minimum": 1, "maximum": 20}
+                    "symbol": {"type": "string", "description": "The symbol name to find the definition of"},
+                    "directory": {"type": "string", "description": "Optional directory scope (default: project root)"},
+                    "language": {
+                        "type": "string",
+                        "enum": ["auto", "rust", "python", "typescript", "javascript", "go", "java"],
+                        "description": "Language hint for definition patterns (default: auto-detect from file extension)"
+                    }
                 },
-                "required": ["query"]
+                "required": ["symbol"]
+            })),
+        },
+        "find_references" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Find all references to a symbol across the codebase. "
+                    .to_string()
+                    + "Searches source files for the symbol name and returns matching "
+                    + "file paths, line numbers, and surrounding lines.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "The symbol name to find references for"},
+                    "directory": {"type": "string", "description": "Optional directory scope (default: project root)"},
+                    "include": {"type": "string", "description": "Optional glob pattern to filter files (e.g. '**/*.rs')"}
+                },
+                "required": ["symbol"]
+            })),
+        },
+        "apply_code_action" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Apply code actions at a specific location. "
+                    .to_string()
+                    + "Supported actions: add_import (insert a use/import statement), "
+                    + "fix_lint (add #[allow(...)] attribute), "
+                    + "auto_fix_diagnostic (run cargo clippy --fix).",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to apply the action at"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["add_import", "fix_lint", "auto_fix_diagnostic"],
+                        "description": "Type of code action to apply"
+                    },
+                    "detail": {"type": "string", "description": "Action-specific detail (e.g. 'HashMap' for add_import, or the lint rule name)"},
+                    "line": {"type": "integer", "description": "Line number for the action (1-based, default: 1)"}
+                },
+                "required": ["path", "action"]
             })),
         },
         "jsonl_write" => McpTool {
@@ -583,6 +647,114 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                     "data": {"type": "array", "description": "Array of JSON objects to write as lines"}
                 },
                 "required": ["path", "data"]
+            })),
+        },
+        "format_code" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Auto-format code files using the appropriate formatter. "
+                    .to_string()
+                    + "Detects formatter by file extension: .rs->rustfmt, .js/.ts->prettier, "
+                    + ".py->black, .go->gofmt, .java->google-java-format, .c/.h->clang-format.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File or directory path to format"},
+                    "check": {"type": "boolean", "description": "Check mode: only report if files need formatting"},
+                    "formatter": {"type": "string", "description": "Optional formatter override"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "search_packages" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Search package registries for available libraries. ".to_string()
+                    + "Supports: crates.io (rust), npm (js/ts), pypi (python), go (golang). "
+                    + "Returns package name, description, version, and download counts.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "registry": {
+                        "type": "string",
+                        "enum": ["auto", "crates.io", "npm", "pypi", "go"],
+                        "description": "Package registry to search"
+                    },
+                    "max_results": {"type": "integer", "description": "Maximum results (default: 5, max: 20)"}
+                },
+                "required": ["query"]
+            })),
+        },
+        "uuid_gen" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Generate a UUID v4 (random). Returns a universally unique identifier string."
+                    .to_string(),
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            })),
+        },
+        "random_token" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Generate a cryptographically secure random token. ".to_string()
+                    + "Supports: hex, base64, alphanumeric formats. Default: 32-char hex.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "length": {"type": "integer", "description": "Token length in characters (default: 32)"},
+                    "format": {
+                        "type": "string",
+                        "enum": ["hex", "base64", "alphanumeric"],
+                        "description": "Token format (default: hex)"
+                    }
+                },
+                "required": []
+            })),
+        },
+        "encode_decode" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Encode or decode data using various formats. ".to_string()
+                    + "Supports: base64, hex, url encoding/decoding.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["base64_encode", "base64_decode", "hex_encode", "hex_decode", "url_encode", "url_decode"],
+                        "description": "Encoding/decoding operation"
+                    },
+                    "input": {"type": "string", "description": "Input text to encode or decode"}
+                },
+                "required": ["operation", "input"]
+            })),
+        },
+        "hash_file" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Compute a cryptographic hash of a file. ".to_string()
+                    + "Supports SHA-256 (default) and SHA-512. Returns the hash as a hex string.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to hash"},
+                    "algorithm": {
+                        "type": "string",
+                        "enum": ["sha256", "sha512"],
+                        "description": "Hash algorithm (default: sha256)"
+                    }
+                },
+                "required": ["path"]
             })),
         },
         "spawn_agent" => McpTool {
@@ -614,6 +786,183 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                     }
                 },
                 "required": ["task"]
+            })),
+        },
+        // ── Build/lint/dependency tools (P1) ─────────────────────
+        "build_run" => McpTool {
+            name: name.to_string(),
+            description: Some("Detect and run the project's build system: cargo build, npm run build, python -m build, or make".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Project directory (default: current)"}
+                },
+                "required": []
+            })),
+        },
+        "lint_run" => McpTool {
+            name: name.to_string(),
+            description: Some("Detect and run the project's linter: cargo clippy, npx eslint, ruff, or pylint".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Project directory (default: current)"}
+                },
+                "required": []
+            })),
+        },
+        "dependency_add" => McpTool {
+            name: name.to_string(),
+            description: Some("Add a dependency to the project: cargo add, npm install, pip install, or go get".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "package": {"type": "string", "description": "Package/dependency name to add"},
+                    "directory": {"type": "string", "description": "Project directory (default: current)"}
+                },
+                "required": ["package"]
+            })),
+        },
+        // ── Structured data query tools (P1) ─────────────────────
+        "json_query" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a JSON file and query it using a simple path syntax like 'obj.key[0].nested'".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the JSON file"},
+                    "query": {"type": "string", "description": "Query path like 'obj.key[0].nested' (default: root)"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "yaml_query" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a YAML file and query it using a simple path syntax like 'obj.key[0].nested'".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the YAML file"},
+                    "query": {"type": "string", "description": "Query path like 'obj.key[0].nested' (default: root)"}
+                },
+                "required": ["path"]
+            })),
+        },
+        // ── Template rendering tool (P1) ────────────────────────
+        "template_render" => McpTool {
+            name: name.to_string(),
+            description: Some("Render a template with {{variable}} replacement, {{#each}} loops, and {{#if}} conditionals".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "Template string with {{variable}} placeholders"},
+                    "variables": {"type": "object", "description": "Key-value pairs for template variables"},
+                    "output_path": {"type": "string", "description": "Optional file path to write the rendered output"}
+                },
+                "required": ["template"]
+            })),
+        },
+        // ── Code metrics tool (P2) ────────────────────────────
+        "code_metrics" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Analyze source code files and compute code quality metrics. ".to_string()
+                    + "Returns lines of code, cyclomatic complexity estimate, function/class counts, "
+                    + "and estimated function sizes.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Directory to scan (default: current)"},
+                    "pattern": {"type": "string", "description": "Glob pattern to match files (default: **/*.rs)"}
+                },
+                "required": []
+            })),
+        },
+        // ── Security scan tool (P2) ────────────────────────────
+        "security_scan" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Scan project dependencies for known vulnerabilities. ".to_string()
+                    + "Supports Cargo.lock, package-lock.json, requirements.txt, go.sum, "
+                    + "and other lock files. Queries the OSV API for CVE information.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Project directory to scan (default: current)"}
+                },
+                "required": []
+            })),
+        },
+        // ── Docker container tools (P2) ────────────────────────
+        "docker_ps" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "List Docker containers. Wraps `docker ps`. ".to_string()
+                    + "Returns container IDs, names, images, status, and port mappings.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "all": {"type": "boolean", "description": "List all containers (including stopped)", "default": false},
+                    "format": {"type": "string", "enum": ["json", "text"], "description": "Output format", "default": "json"}
+                },
+                "required": []
+            })),
+        },
+        "docker_exec" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Execute a command inside a running Docker container. ".to_string()
+                    + "Wraps `docker exec`. Returns stdout, stderr, and exit code.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "container": {"type": "string", "description": "Container name or ID"},
+                    "command": {"type": "string", "description": "Command to execute"},
+                    "interactive": {"type": "boolean", "description": "Run interactively (-i)", "default": false},
+                    "workdir": {"type": "string", "description": "Working directory inside container"}
+                },
+                "required": ["container", "command"]
+            })),
+        },
+        "docker_logs" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "View logs from a Docker container. ".to_string()
+                    + "Wraps `docker logs`. Supports tail, since, and timestamps.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "container": {"type": "string", "description": "Container name or ID"},
+                    "tail": {"type": "string", "description": "Number of lines to show from the end (default: 50)", "default": "50"},
+                    "since": {"type": "string", "description": "Show logs since timestamp (e.g. 2024-01-01T00:00:00)"},
+                    "timestamps": {"type": "boolean", "description": "Show timestamps", "default": false}
+                },
+                "required": ["container"]
+            })),
+        },
+        // ── File watch tool (P2) ────────────────────────────────
+        "file_watch" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Watch files or directories for changes. ".to_string()
+                    + "On first call records a baseline of file modification times. "
+                    + "Subsequent calls return files that have been added, modified, or removed "
+                    + "since the last check.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Directory to watch (default: current)"},
+                    "pattern": {"type": "string", "description": "Glob pattern for files to track (default: **/*)"},
+                    "session": {"type": "string", "description": "Watch session identifier for independent tracking (default: default)"},
+                    "reset": {"type": "boolean", "description": "Reset the baseline and start fresh", "default": false}
+                },
+                "required": []
             })),
         },
         other => McpTool {
@@ -778,8 +1127,89 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                     anyhow::anyhow!("skill_create requires arguments.prompt_template")
                 })?;
         }
-        "skill_reload" => {}
+        "go_to_definition" | "find_references" => {
+            tool_input
+                .get("symbol")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("{} requires arguments.symbol", tool_name))?;
+        }
+        "apply_code_action" => {
+            tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("apply_code_action requires arguments.path"))?;
+            tool_input
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("apply_code_action requires arguments.action"))?;
+        }
+        "format_code" => {
+            tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("format_code requires arguments.path"))?;
+        }
+        "search_packages" => {
+            tool_input
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("search_packages requires arguments.query"))?;
+        }
+        "encode_decode" => {
+            tool_input
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("encode_decode requires arguments.operation"))?;
+            tool_input
+                .get("input")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("encode_decode requires arguments.input"))?;
+        }
+        "hash_file" => {
+            tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("hash_file requires arguments.path"))?;
+        }
+        "build_run" | "lint_run" => {}
+        "dependency_add" => {
+            tool_input
+                .get("package")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("dependency_add requires arguments.package"))?;
+        }
+        "json_query" | "yaml_query" => {
+            tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("{} requires arguments.path", tool_name))?;
+        }
+        "template_render" => {
+            tool_input
+                .get("template")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("template_render requires arguments.template"))?;
+        }
+        "uuid_gen" | "random_token" | "skill_reload" => {}
         "workflow_execute" | "workflow_ask" | "workflow_generate" => {}
+        // ── P2 tool validation ─────────────────────────────────
+        "code_metrics" | "security_scan" | "docker_ps" | "file_watch" => {}
+        "docker_exec" => {
+            tool_input
+                .get("container")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("docker_exec requires arguments.container"))?;
+            tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("docker_exec requires arguments.command"))?;
+        }
+        "docker_logs" => {
+            tool_input
+                .get("container")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("docker_logs requires arguments.container"))?;
+        }
         _ => {}
     }
     Ok(())
@@ -828,6 +1258,31 @@ mod tests {
         "environment_info",
         // Web search
         "web_search",
+        // LSP-like code intelligence tools
+        "go_to_definition",
+        "find_references",
+        "apply_code_action",
+        // Format, packages, and utility tools
+        "format_code",
+        "search_packages",
+        "uuid_gen",
+        "random_token",
+        "encode_decode",
+        "hash_file",
+        // P1 extended tools
+        "build_run",
+        "lint_run",
+        "dependency_add",
+        "json_query",
+        "yaml_query",
+        "template_render",
+        // P2 extended tools
+        "code_metrics",
+        "security_scan",
+        "docker_ps",
+        "docker_exec",
+        "docker_logs",
+        "file_watch",
     ];
 
     // ── Known tool descriptors ───────────────────────────────────────

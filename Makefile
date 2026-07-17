@@ -72,6 +72,9 @@ deny: ## Check dependency licenses (requires cargo-deny)
 bench: ## Run benchmarks (nightly required)
 	cargo bench 2>/dev/null || echo "Benchmarks require nightly Rust. Use: rustup run nightly cargo bench"
 
+bench-acp: ## Run ACP protocol benchmarks only
+	cargo bench --bench acp_bench 2>/dev/null || echo "ACP benchmarks require nightly Rust. Use: rustup run nightly cargo bench --bench acp_bench"
+
 ci: check clippy test ## Run CI gate (check + clippy + test)
 
 dev-container: ## Set up dev container

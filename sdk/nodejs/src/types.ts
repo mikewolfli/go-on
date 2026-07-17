@@ -118,6 +118,101 @@ export interface StreamChunk {
   total_chars: number;
 }
 
+// ── ACP Session Protocol Types ────────────────────────────────────────────
+
+/** Request to create a new ACP session. */
+export interface AcpSessionNewRequest {
+  cwd?: string;
+  workDirs?: string[];
+  mode?: string;
+}
+
+/** Response from creating a new ACP session. */
+export interface AcpSessionNewResponse {
+  sessionId: string;
+  modes?: SessionModeState;
+  configOptions?: SessionConfigOption[];
+}
+
+/** Request to send a prompt in an ACP session. */
+export interface AcpSessionPromptRequest {
+  sessionId: string;
+  prompt: PromptContentBlock[];
+  mode?: string;
+  cwd?: string;
+}
+
+/** Request to close an ACP session. */
+export interface AcpSessionCloseRequest {
+  sessionId: string;
+}
+
+/** Response from listing ACP sessions. */
+export interface AcpSessionListResponse {
+  sessions: AcpSessionInfo[];
+}
+
+/** Info about an ACP session. */
+export interface AcpSessionInfo {
+  sessionId: string;
+  mode: string;
+  cwd?: string;
+  createdAt: number;
+  lastActive: number;
+}
+
+/** Request to resume an ACP session. */
+export interface AcpSessionResumeRequest {
+  sessionId: string;
+  cwd?: string;
+}
+
+/** State describing the current session mode and available modes. */
+export interface SessionModeState {
+  currentModeId: string;
+  availableModes: SessionModeDescription[];
+}
+
+/** Description of an available session mode. */
+export interface SessionModeDescription {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+/** Configuration option for a session. */
+export interface SessionConfigOption {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  kind: SessionConfigKind;
+}
+
+/** Kind of a session configuration option (discriminated union). */
+export type SessionConfigKind =
+  | { type: "select"; currentValue: string; options: SessionConfigSelectOptions };
+
+/** Select options for a select-type config option. */
+export type SessionConfigSelectOptions =
+  | { type: "grouped"; groups: SessionConfigGroup[] };
+
+/** A group within select options. */
+export interface SessionConfigGroup {
+  group: string;
+  name: string;
+  options: SessionConfigOption[];
+}
+
+/** A content block in a prompt (text, resource, image, audio, etc.). */
+export interface PromptContentBlock {
+  type: "text" | "resource" | "resource_link" | "image" | "audio";
+  text?: string;
+  uri?: string;
+  name?: string;
+  resource?: { uri: string; text?: string; mimeType?: string };
+}
+
 /** Metadata about an available agent. */
 export interface AgentInfo {
   /** Unique agent name/ID. */
