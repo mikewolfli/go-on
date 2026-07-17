@@ -324,6 +324,375 @@ impl Tool for DockerLogsTool {
     }
 }
 
+// ── DockerBuildTool ────────────────────────────────────────────────────────
+
+pub struct DockerBuildTool;
+
+impl Tool for DockerBuildTool {
+    fn name(&self) -> &'static str {
+        "docker_build"
+    }
+
+    fn description(&self) -> &str {
+        "Build a Docker image from a Dockerfile. Supports build args, tags, and docker compose build."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Build context directory (default: .)"},
+                "tag": {"type": "string", "description": "Image tag (e.g. 'myapp:latest')", "default": "latest"},
+                "dockerfile": {"type": "string", "description": "Path to Dockerfile (default: Dockerfile)"},
+                "build_args": {"type": "object", "description": "Build-time variables as key-value pairs"},
+                "no_cache": {"type": "boolean", "description": "Build without cache (default: false)"},
+            },
+            "required": []
+        })
+    }
+
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let path = input
+            .payload
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+        let tag = input
+            .payload
+            .get("tag")
+            .and_then(|v| v.as_str())
+            .unwrap_or("latest");
+        let dockerfile = input.payload.get("dockerfile").and_then(|v| v.as_str());
+        let no_cache = input
+            .payload
+            .get("no_cache")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let build_args = input.payload.get("build_args").and_then(|v| v.as_object());
+
+        debug!(
+            path = %path,
+            tag = %tag,
+            no_cache = %no_cache,
+            "tool: docker_build"
+        );
+
+        let mut cmd = Command::new("docker");
+        cmd.arg("build");
+
+        if let Some(df) = dockerfile {
+            cmd.args(["-f", df]);
+        }
+
+        if no_cache {
+            cmd.arg("--no-cache");
+        }
+
+        cmd.args(["-t", tag]);
+
+        if let Some(args) = build_args {
+            for (key, val) in args {
+                let build_arg = format!("{}={}", key, val.as_str().unwrap_or(""));
+                cmd.args(["--build-arg", &build_arg]);
+            }
+        }
+
+        cmd.arg(path);
+
+        let output = cmd
+            .output()
+            .context("failed to execute `docker build` — is Docker running?")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let success = output.status.success();
+
+        debug!(
+            success = %success,
+            "tool: docker_build complete"
+        );
+
+        if success {
+            Ok(ToolOutput {
+                success: true,
+                result: Some(json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })),
+                error: None,
+                verification: Some("docker_build_completed".to_string()),
+                audit_log: Some(format!("docker_build: built {} with tag {}", path, tag)),
+                pua_report: Some(tool_execution_report(
+                    "docker_build",
+                    Some("docker_build_completed"),
+                )),
+            })
+        } else {
+            Ok(ToolOutput {
+                success: false,
+                result: Some(json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "error": "docker build failed",
+                })),
+                error: Some(format!("docker build failed: {}", stderr.trim())),
+                verification: Some("docker_build_completed".to_string()),
+                audit_log: Some(format!("docker_build failed: {}", stderr.trim())),
+                pua_report: Some(tool_execution_report(
+                    "docker_build",
+                    Some("docker_build_completed"),
+                )),
+            })
+        }
+    }
+}
+
+// ── DockerPushTool ────────────────────────────────────────────────────────
+
+pub struct DockerPushTool;
+
+impl Tool for DockerPushTool {
+    fn name(&self) -> &'static str {
+        "docker_push"
+    }
+
+    fn description(&self) -> &str {
+        "Push a Docker image to a registry. Wraps `docker push`."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "image": {"type": "string", "description": "Image name with tag (e.g. 'myapp:latest')"},
+                "registry": {"type": "string", "description": "Registry URL (e.g. 'docker.io/user')"},
+            },
+            "required": ["image"]
+        })
+    }
+
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let image = input
+            .payload
+            .get("image")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("docker_push requires arguments.image"))?;
+
+        let registry = input.payload.get("registry").and_then(|v| v.as_str());
+        let full_image = match registry {
+            Some(reg) => format!("{}/{}", reg.trim_end_matches('/'), image),
+            None => image.to_string(),
+        };
+
+        debug!(
+            image = %full_image,
+            "tool: docker_push"
+        );
+
+        let mut cmd = Command::new("docker");
+        cmd.args(["push", &full_image]);
+
+        let output = cmd
+            .output()
+            .context("failed to execute `docker push` — is Docker running?")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let success = output.status.success();
+
+        debug!(
+            image = %full_image,
+            success = %success,
+            "tool: docker_push complete"
+        );
+
+        if success {
+            Ok(ToolOutput {
+                success: true,
+                result: Some(json!({
+                    "image": full_image,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })),
+                error: None,
+                verification: Some("docker_push_completed".to_string()),
+                audit_log: Some(format!("docker_push: pushed {}", full_image)),
+                pua_report: Some(tool_execution_report(
+                    "docker_push",
+                    Some("docker_push_completed"),
+                )),
+            })
+        } else {
+            Ok(ToolOutput {
+                success: false,
+                result: Some(json!({
+                    "image": full_image,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "error": "docker push failed",
+                })),
+                error: Some(format!("docker push failed: {}", stderr.trim())),
+                verification: Some("docker_push_completed".to_string()),
+                audit_log: Some(format!("docker_push failed: {}", stderr.trim())),
+                pua_report: Some(tool_execution_report(
+                    "docker_push",
+                    Some("docker_push_completed"),
+                )),
+            })
+        }
+    }
+}
+
+// ── DockerComposeTool ─────────────────────────────────────────────────────
+
+pub struct DockerComposeTool;
+
+impl Tool for DockerComposeTool {
+    fn name(&self) -> &'static str {
+        "docker_compose"
+    }
+
+    fn description(&self) -> &str {
+        "Run docker-compose commands (up, down, build, logs, ps). Wraps `docker compose`."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "subcommand": {
+                    "type": "string",
+                    "enum": ["up", "down", "build", "logs", "ps", "restart", "stop", "start"],
+                    "description": "Docker compose subcommand"
+                },
+                "file": {"type": "string", "description": "Path to compose file (default: docker-compose.yml)"},
+                "service": {"type": "string", "description": "Target service name (optional)"},
+                "detach": {"type": "boolean", "description": "Run containers in background (default: true for up)"},
+                "build": {"type": "boolean", "description": "Build images before starting (for up)"},
+                "tail": {"type": "string", "description": "Number of log lines to show (for logs)"},
+            },
+            "required": ["subcommand"]
+        })
+    }
+
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let subcommand = input
+            .payload
+            .get("subcommand")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("docker_compose requires arguments.subcommand"))?;
+
+        let file = input.payload.get("file").and_then(|v| v.as_str());
+        let service = input.payload.get("service").and_then(|v| v.as_str());
+        let detach = input
+            .payload
+            .get("detach")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(subcommand == "up");
+        let build = input
+            .payload
+            .get("build")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let tail = input.payload.get("tail").and_then(|v| v.as_str());
+
+        debug!(
+            subcommand = %subcommand,
+            file = ?file,
+            service = ?service,
+            "tool: docker_compose"
+        );
+
+        let mut cmd = Command::new("docker");
+        cmd.arg("compose");
+
+        if let Some(f) = file {
+            cmd.args(["-f", f]);
+        }
+
+        cmd.arg(subcommand);
+
+        match subcommand {
+            "up" => {
+                if detach {
+                    cmd.arg("-d");
+                }
+                if build {
+                    cmd.arg("--build");
+                }
+            }
+            "logs" => {
+                if let Some(t) = tail {
+                    cmd.args(["--tail", t]);
+                }
+            }
+            "build" => {
+                // no extra args needed
+            }
+            _ => {}
+        }
+
+        if let Some(s) = service {
+            cmd.arg(s);
+        }
+
+        let output = cmd
+            .output()
+            .context("failed to execute `docker compose` — is Docker running?")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let success = output.status.success();
+
+        debug!(
+            subcommand = %subcommand,
+            success = %success,
+            "tool: docker_compose complete"
+        );
+
+        if success {
+            Ok(ToolOutput {
+                success: true,
+                result: Some(json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })),
+                error: None,
+                verification: Some("docker_compose_completed".to_string()),
+                audit_log: Some(format!("docker_compose: {} completed", subcommand)),
+                pua_report: Some(tool_execution_report(
+                    "docker_compose",
+                    Some("docker_compose_completed"),
+                )),
+            })
+        } else {
+            Ok(ToolOutput {
+                success: false,
+                result: Some(json!({
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "error": "docker compose failed",
+                })),
+                error: Some(format!(
+                    "docker compose {} failed: {}",
+                    subcommand,
+                    stderr.trim()
+                )),
+                verification: Some("docker_compose_completed".to_string()),
+                audit_log: Some(format!(
+                    "docker_compose {} failed: {}",
+                    subcommand,
+                    stderr.trim()
+                )),
+                pua_report: Some(tool_execution_report(
+                    "docker_compose",
+                    Some("docker_compose_completed"),
+                )),
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

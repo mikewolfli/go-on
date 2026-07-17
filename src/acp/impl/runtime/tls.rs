@@ -214,6 +214,7 @@ async fn handle_tls_http_stream(
                     payload: serde_json::json!({
                         "error": err.to_string(),
                     }),
+                    status: None,
                 });
             }
         });

@@ -3,7 +3,7 @@
 //! Runs external formatters (rustfmt, prettier, black, gofmt, etc.)
 //! to auto-format code files.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -93,7 +93,7 @@ impl Tool for FormatCodeTool {
     }
 }
 
-fn detect_formatter(path: &PathBuf) -> String {
+fn detect_formatter(path: &Path) -> String {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 

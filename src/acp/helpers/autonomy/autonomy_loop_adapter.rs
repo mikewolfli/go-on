@@ -77,6 +77,10 @@ pub(crate) async fn run_acp_autonomy_loop(
         max_tool_concurrency: 4,
         max_tool_retries: 2,
         enable_governance_gate: true,
+        // Enable persistent loop so the autonomy loop doesn't stop after
+        // one text-only round — it continues with a planning prompt to
+        // encourage tool-based autonomous execution (like Zed's agent).
+        persistent_loop: true,
     };
 
     let result = if config.use_brain_loop {

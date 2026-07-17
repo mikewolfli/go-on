@@ -77,8 +77,9 @@ pub(crate) use knowledge::{
 };
 pub use streaming::pre_init_sse_buffer_pool;
 pub(crate) use streaming::{
-    acquire_sse_buffer, emit_stream_chunk, emit_stream_done, emit_stream_token_economy,
-    release_sse_buffer, StreamEventMeta, StreamFrame, StreamNotificationContext, StreamObserver,
+    acquire_sse_buffer, emit_status_event, emit_stream_chunk, emit_stream_done,
+    emit_stream_token_economy, release_sse_buffer, StreamEventMeta, StreamFrame,
+    StreamNotificationContext, StreamObserver,
 };
 pub(crate) use vector_context::{
     build_phase_summary, build_vector_context_message, effective_vector_settings,
@@ -563,6 +564,7 @@ pub(crate) async fn process_chat_request(
                     "error": "The chat completed but produced no response. This can happen if no agents are available, API keys are misconfigured, or the backend is overloaded.",
                     "message": "error.chat.no_response_from_pipeline",
                 }),
+                status: None,
             });
         } else {
             let plan_output_val = result.get("plan_output");
@@ -579,6 +581,7 @@ pub(crate) async fn process_chat_request(
             observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
                 event: "result",
                 payload,
+                status: None,
             });
         }
     }

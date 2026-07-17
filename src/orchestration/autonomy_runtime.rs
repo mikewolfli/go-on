@@ -6,6 +6,8 @@
 pub const TOKEN_TOOL_CALL_PREFIX: &str = "__tool_call__:";
 pub const TOKEN_MODEL_USED_PREFIX: &str = "__model_used__:";
 pub const TOKEN_THINKING_PREFIX: &str = "__thinking__";
+pub const TOKEN_FINISH_REASON_PREFIX: &str = "__finish_reason__:";
+pub const TOKEN_USAGE_PREFIX: &str = "__usage__:";
 
 /// Reasoning/thinking start marker — sent as a single-character token
 /// to mark the beginning of a reasoning block in streaming output.

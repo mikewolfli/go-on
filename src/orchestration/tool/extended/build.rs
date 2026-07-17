@@ -3,7 +3,7 @@
 //! Generic build runner and linter that work across languages.
 //! Detects build system from project files.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 
 /// Detect the build system for a given project directory.
 /// Returns (build_tool, build_command_args) if detected.
-fn detect_build_system(dir: &PathBuf) -> Option<(&'static str, &'static [&'static str])> {
+fn detect_build_system(dir: &Path) -> Option<(&'static str, &'static [&'static str])> {
     if dir.join("Cargo.toml").exists() {
         Some(("cargo", &["build"]))
     } else if dir.join("package.json").exists() {
@@ -32,7 +32,7 @@ fn detect_build_system(dir: &PathBuf) -> Option<(&'static str, &'static [&'stati
 
 /// Detect the linter for a given project directory.
 /// Returns (linter_name, linter_command_args) if detected.
-fn detect_linter(dir: &PathBuf) -> Option<(&'static str, &'static [&'static str])> {
+fn detect_linter(dir: &Path) -> Option<(&'static str, &'static [&'static str])> {
     if dir.join("Cargo.toml").exists() {
         Some(("cargo", &["clippy"]))
     } else if dir.join("package.json").exists() {
@@ -51,7 +51,7 @@ fn detect_linter(dir: &PathBuf) -> Option<(&'static str, &'static [&'static str]
 
 /// Detect the package manager for dependency addition.
 /// Returns (manager_name, add_args_prefix) if detected.
-fn detect_package_manager(dir: &PathBuf) -> Option<(&'static str, &'static [&'static str])> {
+fn detect_package_manager(dir: &Path) -> Option<(&'static str, &'static [&'static str])> {
     if dir.join("Cargo.toml").exists() {
         Some(("cargo", &["add"]))
     } else if dir.join("package.json").exists() {
@@ -357,7 +357,7 @@ edition = "2021"
     fn detect_build_system_rust() {
         let tmp = TempDir::new().expect("temp dir");
         init_rust_project(&tmp);
-        let detected = detect_build_system(&tmp.path().to_path_buf());
+        let detected = detect_build_system(tmp.path());
         assert!(detected.is_some());
         let (tool, args) = detected.unwrap();
         assert_eq!(tool, "cargo");
@@ -368,7 +368,7 @@ edition = "2021"
     fn detect_linter_rust() {
         let tmp = TempDir::new().expect("temp dir");
         init_rust_project(&tmp);
-        let detected = detect_linter(&tmp.path().to_path_buf());
+        let detected = detect_linter(tmp.path());
         assert!(detected.is_some());
         let (linter, args) = detected.unwrap();
         assert_eq!(linter, "cargo");
@@ -379,7 +379,7 @@ edition = "2021"
     fn detect_package_manager_rust() {
         let tmp = TempDir::new().expect("temp dir");
         init_rust_project(&tmp);
-        let detected = detect_package_manager(&tmp.path().to_path_buf());
+        let detected = detect_package_manager(tmp.path());
         assert!(detected.is_some());
         let (manager, args) = detected.unwrap();
         assert_eq!(manager, "cargo");

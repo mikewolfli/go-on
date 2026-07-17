@@ -1,7 +1,11 @@
 //! Template rendering tool.
 //!
 //! Fills template variables using {{placeholder}} syntax.
-//! Simple string replacement - no heavy template engine needed.
+//! When the `template-engine` feature is enabled, uses minijinja for
+//! full Jinja2-style rendering. Otherwise falls back to simple string replacement.
+
+#[cfg(feature = "template-engine")]
+use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -10,17 +14,57 @@ use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{sanitize_path_for_write, Tool, ToolInput, ToolOutput};
 use tracing::debug;
 
+// ── Minijinja rendering (feature-gated) ────────────────────────────────
+
+/// Render a template using minijinja (full Jinja2 syntax).
+/// Only available when `template-engine` feature is enabled.
+#[cfg(feature = "template-engine")]
+fn render_minijinja(template: &str, variables: &Value) -> Result<String> {
+    let mut env = minijinja::Environment::new();
+    env.add_template("tpl", template)
+        .map_err(|e| anyhow::anyhow!("invalid template: {e}"))?;
+    let tpl = env
+        .get_template("tpl")
+        .map_err(|e| anyhow::anyhow!("template not found: {e}"))?;
+    let vars: HashMap<String, serde_json::Value> =
+        serde_json::from_value(variables.clone()).unwrap_or_default();
+    let result = tpl
+        .render(&vars)
+        .map_err(|e| anyhow::anyhow!("template rendering error: {e}"))?;
+    Ok(result)
+}
+
+// ── Tool struct and implementation ───────────────────────────────────────
+
 pub struct TemplateRenderTool;
 
 impl TemplateRenderTool {
     /// Render a template string by replacing {{variable}} placeholders,
     /// {{#each list}}...{{/each}} blocks, and {{#if var}}...{{/if}} blocks.
     ///
-    /// Processing order:
+    /// When the `template-engine` feature is enabled, delegates to minijinja
+    /// for full Jinja2 syntax support. Otherwise uses simple string replacement.
+    ///
+    /// Processing order (simple mode):
     /// 1. `{{#each}}` blocks (recursively renders their content per item)
     /// 2. `{{#if}}` blocks (conditionally includes content)
     /// 3. `{{variable}}` placeholders (simple replacement)
     fn render_template(template: &str, variables: &Value) -> String {
+        #[cfg(feature = "template-engine")]
+        {
+            match render_minijinja(template, variables) {
+                Ok(result) => return result,
+                Err(e) => {
+                    tracing::warn!("minijinja rendering failed, falling back to simple mode: {e}");
+                }
+            }
+        }
+        Self::render_simple(template, variables)
+    }
+
+    /// Simple string-replacement rendering (fallback when `template-engine`
+    /// feature is disabled or minijinja fails).
+    fn render_simple(template: &str, variables: &Value) -> String {
         let result = Self::render_each_blocks(template, variables);
         let result = Self::render_if_blocks(&result, variables);
         Self::render_variables(&result, variables)

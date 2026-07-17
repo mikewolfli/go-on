@@ -488,6 +488,7 @@ async fn route_http_post(
                             payload: serde_json::json!({
                                 "error": err_str,
                             }),
+                            status: None,
                         });
                     }
                     let mut params: crate::acp::r#impl::chat::ChatParams =

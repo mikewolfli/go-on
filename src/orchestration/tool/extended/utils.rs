@@ -83,11 +83,7 @@ impl Tool for RandomTokenTool {
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let length = input.payload["length"]
-            .as_u64()
-            .unwrap_or(32)
-            .max(4)
-            .min(256) as usize;
+        let length = input.payload["length"].as_u64().unwrap_or(32).clamp(4, 256) as usize;
         let format = input.payload["format"].as_str().unwrap_or("hex");
 
         let token = match format {
@@ -199,7 +195,7 @@ impl Tool for EncodeDecodeTool {
                     .chars()
                     .filter(|c| c.is_ascii_hexdigit())
                     .collect();
-                if cleaned.len() % 2 != 0 {
+                if !cleaned.len().is_multiple_of(2) {
                     anyhow::bail!("Hex string must have an even number of hex digits");
                 }
                 let bytes: Vec<u8> = (0..cleaned.len())

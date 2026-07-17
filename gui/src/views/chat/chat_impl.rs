@@ -709,33 +709,34 @@ impl ChatView {
             {
                 self.selected_agent.clear();
             }
-        } else {
-            self.selected_agent.clear();
-            for (agent, models) in &self.available_agent_models {
-                if models.contains(&self.selected_model) {
-                    self.selected_agent = agent.clone();
-                    break;
-                }
+        } else if !self.selected_model.starts_with("copilot/") {
+            // When user explicitly selects a model, find the matching agent.
+            // Don't clear selected_agent if we can't find the match — the model
+            // may still be valid (e.g. backend supports it but not yet in cache).
+            let found = self
+                .selected_agent
+                .is_empty()
+                .then(|| {
+                    // Only search when no agent is currently selected
+                    for (agent, models) in &self.available_agent_models {
+                        if models.contains(&self.selected_model) {
+                            return Some(agent.clone());
+                        }
+                    }
+                    None
+                })
+                .flatten();
+            if let Some(agent) = found {
+                self.selected_agent = agent;
             }
         }
 
-        // Validate current model is in available list or is "auto"
-        let first = if self.selected_model == "auto"
-            || self.selected_model == Self::COPILOT_AUTO_MODEL
-            || self
-                .available_models
-                .iter()
-                .any(|m| m == &self.selected_model)
-        {
-            self.selected_model.clone()
-        } else {
-            self.available_models
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "auto".to_string())
-        };
-        if first != self.selected_model {
-            self.selected_model = first;
+        // Keep the user's selected model — do NOT silently fall back to "auto"
+        // or to the first available model if the selected model is not in the
+        // local cache. The backend can handle models not in the local cache.
+        // Only fall back if the model is explicitly empty.
+        if self.selected_model.is_empty() {
+            self.selected_model = "auto".to_string();
         }
     }
 

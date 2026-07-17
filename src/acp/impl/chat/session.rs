@@ -325,6 +325,7 @@ pub(crate) async fn handle_chat(
             let _ = sender.send(StreamFrame {
                 event: "result",
                 payload: json!(result),
+                status: None,
             });
         } else {
             send_result(server, id, json!(result)).await?;

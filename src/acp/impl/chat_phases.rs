@@ -40,8 +40,8 @@ use crate::acp::helpers::review_gate::run_review_gate;
 use crate::acp::helpers::vote_executor::{execute_high_risk_vote, HighRiskVoteExecutionResult};
 use crate::acp::r#impl::chat::{
     agent_switch_state, apply_review_gate_assemble, auto_create_skills_from_conversation,
-    auto_generate_workflow_from_conversation, clear_task_description_cache, emit_stream_chunk,
-    emit_stream_done, emit_stream_token_economy, estimate_token_economy,
+    auto_generate_workflow_from_conversation, clear_task_description_cache, emit_status_event,
+    emit_stream_chunk, emit_stream_done, emit_stream_token_economy, estimate_token_economy,
     evaluate_pre_route_policies, execute_autonomy_round, execute_fallback_agents,
     extract_task_description, persist_chat_knowledge, persist_session_distillation,
     persist_vector_memory, resolve_request_phase, routing_handles, select_and_score_agents,
@@ -149,6 +149,7 @@ pub(crate) async fn observe_phase(
     server: &AcpServer,
     params: &mut ChatParams,
     ctx: ChatRequestContext,
+    stream_observer: Option<&StreamObserver>,
 ) -> Result<ObserveOutput> {
     clear_task_description_cache();
     let (flow, registry) = routing_handles(server)?;
@@ -156,6 +157,14 @@ pub(crate) async fn observe_phase(
     let user_id = ctx.user_id.clone();
 
     evaluate_pre_route_policies(server, params, &tenant_id).await?;
+
+    // ── Sub-step 1: Security check — prompt injection detection ────
+    emit_status_event(
+        stream_observer,
+        "Checking for prompt injection, safety violations...",
+        "analyzing",
+    )
+    .await?;
 
     // ── Prompt injection detection & enforcement ──────────────────
     //
@@ -220,8 +229,22 @@ pub(crate) async fn observe_phase(
         }
     }
 
-    // ── Multimodal input detection & processing ────────────────────
+    // ── Sub-step 2: Multimodal input detection ───────────────────
+    emit_status_event(
+        stream_observer,
+        "Processing multimodal input (images, files, audio)...",
+        "analyzing",
+    )
+    .await?;
     let multimodal_context = detect_and_process_multimodal(server, params).await;
+
+    // ── Sub-step 3: URL auto-detection & pre-fetching ─────────────
+    emit_status_event(
+        stream_observer,
+        "Pre-fetching URLs and probing API endpoints...",
+        "analyzing",
+    )
+    .await?;
     // ── URL auto-detection & pre-fetching ─────────────────────────
     // When user messages contain HTTP/HTTPS URLs, pre-fetch their content
     // automatically and try API endpoint probes for SPA pages.
@@ -1790,31 +1813,25 @@ async fn run_mode_runtime_and_multi_agent(
 
     // Determine whether to run the mode runtime:
     //
-    // ┌────────────┬────────────────────┬──────────────────────────────────┐
-    // │ Mode       │ When to run        │ Output capture behavior         │
-    // ├────────────┼────────────────────┼──────────────────────────────────┤
-    // │ Ask        │ Skipped entirely   │ N/A                             │
-    // ├────────────┼────────────────────┼──────────────────────────────────┤
-    // │ Plan       │ Only as safety net │ Captured (emergency fallback)   │
-    // │ Edit       │ when act_phase     │                                  │
-    // │ SafeGuard  │ output is empty    │                                  │
-    // ├────────────┼────────────────────┼──────────────────────────────────┤
-    // │ FullAuto   │ Always             │ Always captured (primary exec    │
-    // │            │                    │ engine for FullAuto)            │
-    // └────────────┴────────────────────┴──────────────────────────────────┘
+    // ┌────────────┬─────────────────────────┬──────────────────────────────┐
+    // │ All modes  │ Only as safety net      │ Captured (emergency         │
+    // │            │ when act_phase          │ fallback) when act_phase    │
+    // │            │ output is empty         │ output is empty             │
+    // └────────────┴─────────────────────────┴──────────────────────────────┘
     //
-    // For non-FullAuto modes, the act_phase produced the canonical response
-    // via the ACP autonomy round. The mode runtime was historically an
-    // independent re-execution whose output was discarded — a completely
-    // wasted LLM call (2x cost per request). We now skip it entirely when
-    // act_phase produced output, saving ~50% LLM cost for Plan/Edit/SafeGuard.
-    // It is only kept as an emergency safety net: when act_phase left both
-    // response AND agent empty, the mode runtime can attempt recovery.
-    let is_fullauto = matches!(mode_runtime.kind(), ModeKind::FullAuto);
+    // The act_phase autonomy loop is the primary execution engine for ALL
+    // modes (including FullAuto and SafeGuard). It runs the multi-round
+    // think→act→observe cycle with tool execution, properly passing the
+    // user's selected model via base_agent_options.
+    //
+    // Now all modes skip the mode runtime when act_phase produced output,
+    // making FullAuto / SafeGuard fully autonomous via the autonomy loop.
+    // The mode runtime is only kept as an emergency safety net: when act_phase
+    // left both response AND agent empty, it can attempt recovery.
     let act_phase_produced_output =
         !exec_out.response_text.trim().is_empty() || !exec_out.selected_agent.trim().is_empty();
-    let should_run = !exec_out.cache_hit && (is_fullauto || !act_phase_produced_output);
-    let should_capture = is_fullauto || !act_phase_produced_output;
+    let should_run = !exec_out.cache_hit && !act_phase_produced_output;
+    let should_capture = !act_phase_produced_output;
 
     if should_run {
         let envelope = crate::agent::AgentTaskEnvelope {

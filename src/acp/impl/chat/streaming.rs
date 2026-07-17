@@ -23,6 +23,12 @@ use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 const STREAM_EVENT_CHUNK: &str = "chunk";
 const STREAM_EVENT_DONE: &str = "done";
 const STREAM_EVENT_TELEMETRY: &str = "telemetry";
+#[allow(dead_code)]
+const STREAM_EVENT_PHASE_START: &str = "phase_start";
+#[allow(dead_code)]
+const STREAM_EVENT_PHASE_END: &str = "phase_end";
+#[allow(dead_code)]
+const STREAM_EVENT_STATUS: &str = "status";
 
 // ── SseBufferPool (GAP-46-12 / BLUE48 Step 2) ────────────────────────
 // Global pool of pre-allocated byte buffers for SSE event serialization.
@@ -109,10 +115,16 @@ pub(crate) async fn emit_stream_chunk(
         if !reasoning_token.is_empty() {
             payload["reasoning"] = json!(reasoning_token);
         }
+        let status = if reasoning_token.is_empty() && display_token.is_empty() {
+            Some("thinking")
+        } else {
+            None
+        };
         // Send failure is expected when client disconnects — non-critical.
         let _ = sender.send(StreamFrame {
             event: STREAM_EVENT_CHUNK,
             payload,
+            status,
         });
     }
 
@@ -186,6 +198,7 @@ pub(crate) async fn emit_stream_done(
         let _ = sender.send(StreamFrame {
             event: STREAM_EVENT_DONE,
             payload,
+            status: None,
         });
     }
 
@@ -228,9 +241,66 @@ pub(crate) async fn emit_stream_token_economy(
                 "trace_id": meta.trace_id,
                 "token_economy": token_economy,
             }),
+            status: None,
         });
     }
 
+    Ok(())
+}
+
+/// Emit a phase lifecycle event (phase_start / phase_end) with description and progress.
+///
+/// This enables the client (Zed / GUI / CLI) to show structured progress
+/// indicators like "Scanning project structure... (1/4)" instead of blank waiting.
+pub(crate) async fn emit_phase_event(
+    _server: &AcpServer,
+    observer: Option<&StreamObserver>,
+    event_type: &'static str,
+    phase_name: &str,
+    description: &str,
+    progress: Option<(u32, u32)>,
+) -> Result<()> {
+    let Some(observer) = observer else {
+        return Ok(());
+    };
+
+    let mut payload = json!({
+        "phase": phase_name,
+        "description": description,
+    });
+    if let Some((current, total)) = progress {
+        payload["progress_current"] = json!(current);
+        payload["progress_total"] = json!(total);
+    }
+
+    if let Some(sender) = &observer.sse_sender {
+        let _ = sender.send(StreamFrame {
+            event: event_type,
+            payload,
+            status: Some("idle"),
+        });
+    }
+
+    Ok(())
+}
+
+/// Emit a lightweight status indicator without a full phase transition.
+/// Used for "Thinking...", "Analyzing...", "Scanning..." quick status updates.
+pub(crate) async fn emit_status_event(
+    observer: Option<&StreamObserver>,
+    message: &str,
+    status: &'static str,
+) -> Result<()> {
+    let Some(observer) = observer else {
+        return Ok(());
+    };
+    if let Some(sender) = &observer.sse_sender {
+        let _ = sender.send(StreamFrame {
+            event: STREAM_EVENT_STATUS,
+            payload: json!({"message": message}),
+            status: Some(status),
+        });
+    }
     Ok(())
 }
 
@@ -259,6 +329,10 @@ pub(crate) struct StreamEventMeta<'a> {
 pub(crate) struct StreamFrame {
     pub event: &'static str,
     pub payload: Value,
+    /// Optional status hint: "thinking" | "analyzing" | "scanning" | "generating" | "idle"
+    /// When set, the client may display a status indicator instead of the raw token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'static str>,
 }
 
 /// Observer pattern for streaming responses.

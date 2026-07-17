@@ -387,7 +387,13 @@ fn generate_terminal_id() -> String {
 pub(super) async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = generate_acp_session_id();
     let modes = build_default_modes();
-    let current_mode = normalize_acp_mode(params.get("mode").and_then(|m| m.as_str()));
+    // Only override the default mode ("safeguard") if the client explicitly provides one.
+    // This ensures Zed sessions without a mode param start in SafeGuard.
+    let explicit_mode = params
+        .get("mode")
+        .and_then(|m| m.as_str())
+        .filter(|m| !m.trim().is_empty());
+    let current_mode = normalize_acp_mode(explicit_mode);
     let cwd = params
         .get("cwd")
         .and_then(Value::as_str)
@@ -1169,16 +1175,16 @@ fn build_model_config_options(server: &AcpServer) -> Vec<crate::schema::SessionC
 fn build_default_modes() -> crate::schema::SessionModeState {
     use crate::schema::{SessionMode, SessionModeId, SessionModeState};
     SessionModeState::new(
-        SessionModeId::new("ask"),
+        SessionModeId::new("safeguard"),
         vec![
+            SessionMode::new(SessionModeId::new("safeguard"), "SafeGuard / 安全")
+                .description("Safety-first — escalation on high-risk operations (default)"),
             SessionMode::new(SessionModeId::new("ask"), "Ask / 对话")
                 .description("Q&A assistant — general questions"),
             SessionMode::new(SessionModeId::new("plan"), "Plan / 计划")
                 .description("Planning mode — structured task breakdown"),
             SessionMode::new(SessionModeId::new("edit"), "Edit / 编辑")
                 .description("Edit/review mode — code changes"),
-            SessionMode::new(SessionModeId::new("safeguard"), "Safeguard / 安全")
-                .description("Safety-first — escalation on high-risk operations"),
             SessionMode::new(SessionModeId::new("full_auto"), "Full Auto / 全自动")
                 .description("Fully autonomous — agent runs without user confirmation"),
         ],

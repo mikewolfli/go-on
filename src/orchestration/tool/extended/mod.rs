@@ -110,7 +110,10 @@ pub use cad::CadConvertTool;
 pub use cargo::{CargoCheckTool, CargoTestTool};
 pub use code_index::CodeIndexTool;
 pub use compress::{CompressTool, DecompressTool};
-pub use container::{DockerExecTool, DockerLogsTool, DockerPsTool};
+pub use container::{
+    DockerBuildTool, DockerComposeTool, DockerExecTool, DockerLogsTool, DockerPsTool,
+    DockerPushTool,
+};
 #[cfg(feature = "data-export")]
 pub use csv_utils::{CsvAnalyzeTool, CsvTransformTool};
 #[cfg(feature = "data-export")]

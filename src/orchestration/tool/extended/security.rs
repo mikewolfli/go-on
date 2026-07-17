@@ -3,14 +3,92 @@
 //! Scans project dependencies for known vulnerabilities using
 //! OSV (Open Source Vulnerabilities) API.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::debug;
 
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
+
+// ── OSV Cache ────────────────────────────────────────────────────────────────
+
+/// Cache entry for OSV vulnerability results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OsvCacheEntry {
+    results: Vec<Value>,
+    cached_at: u64, // unix timestamp in seconds
+}
+
+/// Simple JSON file-based cache for OSV queries.
+struct OsvCache {
+    path: PathBuf,
+    ttl_secs: u64,
+    entries: HashMap<String, OsvCacheEntry>,
+}
+
+impl OsvCache {
+    fn load_or_create(ttl_hours: u64) -> Self {
+        let path = osv_cache_path();
+        let entries = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        Self {
+            path,
+            ttl_secs: ttl_hours * 3600,
+            entries,
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<Vec<Value>> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.entries.get(key).and_then(|entry| {
+            if now - entry.cached_at < self.ttl_secs {
+                Some(entry.results.clone())
+            } else {
+                None // expired
+            }
+        })
+    }
+
+    fn set(&mut self, key: String, results: Vec<Value>) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.entries.insert(
+            key,
+            OsvCacheEntry {
+                results,
+                cached_at: now,
+            },
+        );
+        // Persist to disk
+        if let Ok(data) = serde_json::to_string(&self.entries) {
+            if let Some(parent) = self.path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&self.path, data);
+        }
+    }
+}
+
+/// Determine the OSV cache file path (~/.cache/go-on/osv-cache.json).
+fn osv_cache_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home)
+        .join(".cache")
+        .join("go-on")
+        .join("osv-cache.json")
+}
 
 pub struct SecurityScanTool;
 
@@ -32,8 +110,14 @@ impl Tool for SecurityScanTool {
             .and_then(|v| v.as_str())
             .unwrap_or(".");
 
+        let cache_ttl_hours = input
+            .payload
+            .get("cache_ttl_hours")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(24);
+
         let base_dir = sanitize_path(input, directory)?;
-        debug!(directory = %directory, "tool: security_scan");
+        debug!(directory = %directory, cache_ttl_hours = %cache_ttl_hours, "tool: security_scan");
 
         // Discover dependency lock/manifest files.
         let lock_files = discover_lock_files(&base_dir);
@@ -90,12 +174,34 @@ impl Tool for SecurityScanTool {
             });
         }
 
-        // Query OSV API for each package (batched to avoid excessive requests).
+        // Initialize OSV cache.
+        let mut cache = OsvCache::load_or_create(cache_ttl_hours);
+
+        // Query OSV API for each package (batched to avoid excessive requests),
+        // using the local cache to avoid redundant HTTP queries.
         let mut vulnerabilities: Vec<Value> = Vec::new();
         for pkg in &all_packages {
+            let cache_key = format!(
+                "{}:{}@{}",
+                pkg.ecosystem,
+                pkg.name,
+                pkg.version.as_deref().unwrap_or("*")
+            );
+
+            // Check cache first
+            if let Some(cached) = cache.get(&cache_key) {
+                debug!(package = %pkg.name, cached = %cached.len(), "cache hit for OSV query");
+                vulnerabilities.extend(cached);
+                continue;
+            }
+
             debug!(package = %pkg.name, ecosystem = %pkg.ecosystem, "querying OSV");
             match query_osv(pkg) {
-                Ok(mut vulns) => vulnerabilities.append(&mut vulns),
+                Ok(mut vulns) => {
+                    // Store in cache for future lookups
+                    cache.set(cache_key, vulns.clone());
+                    vulnerabilities.append(&mut vulns);
+                }
                 Err(e) => {
                     debug!(package = %pkg.name, error = %e, "OSV query failed");
                 }
@@ -276,11 +382,9 @@ fn extract_requirements_txt(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
             .collect();
         let name = parts.first().unwrap_or(&trimmed).to_string();
         // Try to extract version after == or similar.
-        let version = if let Some(eq_pos) = trimmed.find("==") {
-            Some(trimmed[eq_pos + 2..].trim().to_string())
-        } else {
-            None
-        };
+        let version = trimmed
+            .find("==")
+            .map(|eq_pos| trimmed[eq_pos + 2..].trim().to_string());
         packages.push(OsvPackage {
             name,
             ecosystem: "PyPI".to_string(),
@@ -493,7 +597,10 @@ mod tests {
         let output = tool.run(&input).expect("security_scan should succeed");
         assert!(output.success);
         let result = output.result.unwrap();
-        assert_eq!(result["scanned"].as_bool().unwrap(), false);
+        assert!(
+            !result["scanned"].as_bool().unwrap(),
+            "expected scanned = false for empty project"
+        );
     }
 
     #[test]
@@ -518,7 +625,7 @@ version = "1.35.0"
         assert!(output.success);
         let result = output.result.unwrap();
         assert_eq!(result["packages_found"].as_u64().unwrap(), 2);
-        assert!(result["lock_files"].as_array().unwrap().len() >= 1);
+        assert!(!result["lock_files"].as_array().unwrap().is_empty());
     }
 
     #[test]

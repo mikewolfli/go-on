@@ -25,7 +25,11 @@ pub fn render_model_picker(chat: &mut ChatView, ui: &mut egui::Ui, _i18n: &I18n)
                 .selectable_value(&mut chat.selected_agent, String::new(), "All Agents")
                 .clicked()
             {
-                chat.selected_model = "auto".to_string();
+                // Keep the current model if user already selected one — don't force "auto"
+                // Only fall back to auto if no model is currently selected.
+                if chat.selected_model.is_empty() || chat.selected_model == "auto" {
+                    chat.selected_model = "auto".to_string();
+                }
                 chat.sync_model_selection();
             }
             for agent in &agent_keys {
@@ -33,7 +37,25 @@ pub fn render_model_picker(chat: &mut ChatView, ui: &mut egui::Ui, _i18n: &I18n)
                     .selectable_value(&mut chat.selected_agent, agent.clone(), agent.as_str())
                     .clicked()
                 {
-                    chat.selected_model = "auto".to_string();
+                    // When user selects an agent, keep the current model if it's
+                    // available for this agent. Otherwise pick the first available
+                    // model for this agent, or "auto" as fallback.
+                    let current_model = chat.selected_model.clone();
+                    let agent_models = chat.available_agent_models.get(agent);
+                    let model_ok = agent_models
+                        .map(|models| models.contains(&current_model))
+                        .unwrap_or(false);
+                    if model_ok {
+                        // Keep user's current model selection
+                    } else if let Some(models) = agent_models {
+                        if let Some(first) = models.first() {
+                            chat.selected_model = first.clone();
+                        } else {
+                            chat.selected_model = "auto".to_string();
+                        }
+                    } else {
+                        chat.selected_model = "auto".to_string();
+                    }
                     chat.sync_model_selection();
                 }
             }

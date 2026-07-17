@@ -125,7 +125,7 @@ fn search_crates_io(
     query: &str,
     max_results: usize,
 ) -> Result<Vec<Value>> {
-    let per_page = max_results.min(50).max(1);
+    let per_page = max_results.clamp(1, 50);
     let url = format!(
         "https://crates.io/api/v1/crates?q={}&per_page={}",
         url_encode(query),
@@ -162,7 +162,7 @@ fn search_npm(
     query: &str,
     max_results: usize,
 ) -> Result<Vec<Value>> {
-    let size = max_results.min(20).max(1);
+    let size = max_results.clamp(1, 20);
     let url = format!(
         "https://registry.npmjs.org/-/v1/search?text={}&size={}",
         url_encode(query),

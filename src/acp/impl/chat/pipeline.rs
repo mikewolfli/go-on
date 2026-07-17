@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tracing::info;
 
 use crate::acp::r#impl::chat::params::{ChatParams, ChatRequestContext};
-use crate::acp::r#impl::chat::streaming::StreamObserver;
+use crate::acp::r#impl::chat::streaming::{emit_phase_event, StreamObserver};
 use crate::acp::r#impl::chat_phases::{act_phase, observe_phase, reflect_phase, think_phase};
 use crate::acp::server::AcpServer;
 use crate::rpc_protocol::RequestTraceContext;
@@ -111,11 +111,29 @@ impl ChatPipeline {
 
         // ── Phase 1: Observe ────────────────────────────────────────
         let observe_start = Instant::now();
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_start",
+            "observe",
+            "Scanning project structure, validating inputs...",
+            Some((1, 4)),
+        )
+        .await?;
         let mut resolve_out =
             Self::with_otel_span(server, PipelinePhase::Observe, span, || async {
-                observe_phase(server, params, ctx.clone()).await
+                observe_phase(server, params, ctx.clone(), stream_observer.as_ref()).await
             })
             .await?;
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_end",
+            "observe",
+            "Input validation complete",
+            Some((1, 4)),
+        )
+        .await?;
         timing.record(
             PipelinePhase::Observe,
             observe_start.elapsed().as_millis() as u64,
@@ -123,9 +141,27 @@ impl ChatPipeline {
 
         // ── Phase 2: Think ──────────────────────────────────────────
         let think_start = Instant::now();
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_start",
+            "think",
+            "Analyzing request, selecting agents, assessing risks...",
+            Some((2, 4)),
+        )
+        .await?;
         let routing_out = Self::with_otel_span(server, PipelinePhase::Think, span, || async {
             think_phase(server, params, &mut resolve_out, trace).await
         })
+        .await?;
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_end",
+            "think",
+            "Analysis complete, routing resolved",
+            Some((2, 4)),
+        )
         .await?;
         timing.record(
             PipelinePhase::Think,
@@ -134,6 +170,15 @@ impl ChatPipeline {
 
         // ── Phase 3: Act ────────────────────────────────────────────
         let act_start = Instant::now();
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_start",
+            "act",
+            "Executing plan, running tools...",
+            Some((3, 4)),
+        )
+        .await?;
         let mut exec_out = Self::with_otel_span(server, PipelinePhase::Act, span, || async {
             act_phase(
                 server,
@@ -146,6 +191,15 @@ impl ChatPipeline {
             )
             .await
         })
+        .await?;
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_end",
+            "act",
+            "Execution complete, preparing reflection",
+            Some((3, 4)),
+        )
         .await?;
         timing.record(PipelinePhase::Act, act_start.elapsed().as_millis() as u64);
 
@@ -176,6 +230,15 @@ impl ChatPipeline {
 
         // ── Phase 4: Reflect ───────────────────────────────────────
         let reflect_start = Instant::now();
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_start",
+            "reflect",
+            "Generating final response, persisting knowledge...",
+            Some((4, 4)),
+        )
+        .await?;
         let result = Self::with_otel_span(server, PipelinePhase::Reflect, span, || async {
             reflect_phase(
                 server,
@@ -190,6 +253,15 @@ impl ChatPipeline {
             )
             .await
         })
+        .await?;
+        emit_phase_event(
+            server,
+            stream_observer.as_ref(),
+            "phase_end",
+            "reflect",
+            "Response complete",
+            Some((4, 4)),
+        )
         .await?;
         timing.record(
             PipelinePhase::Reflect,

@@ -165,6 +165,9 @@ multi-users-server = [
     "vault",
 ]
 
+# Template engine (optional, feature-gated)
+template-engine = ["dep:minijinja"]
+
 # Office / Document / Data tools
 # (charting, data-collection, image-extra — reserved for future use, not yet implemented)
 
@@ -307,6 +310,7 @@ comrak = { version = "0.52", optional = true }
 calamine = { version = "0.26", optional = true }
 rust_xlsxwriter = { version = "0.82", optional = true }
 quick-xml = { version = "0.37", features = ["serialize"], optional = true }
+minijinja = { version = "2", optional = true }
 
 zip = "2"
 tar = "0.4"

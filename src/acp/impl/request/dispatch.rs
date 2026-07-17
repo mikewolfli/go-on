@@ -179,6 +179,15 @@ pub async fn dispatch_to_client(
                             .unwrap_or("stream error");
                         send_error(server, Some(id.clone()), -32603, msg.to_string(), None).await?;
                     }
+                    "status" => {
+                        send_notification(server, "chat.stream.status", frame.payload).await?;
+                    }
+                    "progress" => {
+                        send_notification(server, "chat.stream.progress", frame.payload).await?;
+                    }
+                    "phase_start" | "phase_end" => {
+                        send_notification(server, "chat.stream.phase", frame.payload).await?;
+                    }
                     _ => {} // unknown events are ignored
                 }
             }
@@ -327,11 +336,13 @@ mod tests {
             tx.send(StreamFrame {
                 event: "chunk",
                 payload: json!({"token": "Hello"}),
+                status: None,
             })
             .ok();
             tx.send(StreamFrame {
                 event: "done",
                 payload: json!({"response": "Hello world"}),
+                status: None,
             })
             .ok();
         });
@@ -377,6 +388,7 @@ mod tests {
             tx.send(StreamFrame {
                 event: "error",
                 payload: json!({"message": "stream failed"}),
+                status: None,
             })
             .ok();
         });
@@ -412,6 +424,7 @@ mod tests {
             tx.send(StreamFrame {
                 event: "unknown_event_type",
                 payload: json!({}),
+                status: None,
             })
             .ok();
         });

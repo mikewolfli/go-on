@@ -20,9 +20,10 @@ use tokio::sync::mpsc;
 use crate::acp::r#impl::chat::streaming::StreamFrame;
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::autonomy_runtime::{
-    parse_tool_call_token, TOKEN_MODEL_USED_PREFIX, TOKEN_THINKING_PREFIX,
+    parse_tool_call_token, TOKEN_FINISH_REASON_PREFIX, TOKEN_MODEL_USED_PREFIX,
+    TOKEN_THINKING_PREFIX, TOKEN_USAGE_PREFIX,
 };
-use crate::orchestration::tool::ToolRegistry;
+use crate::orchestration::tool::{ToolOutput, ToolRegistry};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -57,6 +58,11 @@ pub struct AutonomyLoopConfig {
     pub max_tool_retries: usize,
     pub use_brain_loop: bool,
     pub enable_governance_gate: bool,
+    /// When true, the loop is more persistent: if the first round produces
+    /// text without tool calls, it continues with a planning prompt to
+    /// encourage tool-based execution. This enables FullAuto to work like
+    /// Zed's agent mode — loop until the task is solved, not just one pass.
+    pub persistent_loop: bool,
     pub max_messages: usize,
     pub replan_complexity_threshold: u8,
     pub enable_early_stop: bool,
@@ -86,6 +92,7 @@ impl Default for AutonomyLoopConfig {
             max_tool_retries: 2,
             use_brain_loop: false,
             enable_governance_gate: true,
+            persistent_loop: false,
             max_messages: 200,
             replan_complexity_threshold: 5,
             enable_early_stop: true,
@@ -179,6 +186,20 @@ pub async fn run_autonomy_loop(
         let round_start = Instant::now();
         let mut tool_calls: Vec<(String, String)> = Vec::new();
 
+        // ── Emit round iteration progress status ─────────────────────
+        if let Some(ref tx) = config.progress_tx {
+            let _ = tx.send(StreamFrame {
+                event: "status",
+                payload: serde_json::json!({
+                    "message": format!("Round {}/{}: planning next steps...",
+                        iteration + 1, max_iterations),
+                    "round_current": iteration + 1,
+                    "round_total": max_iterations,
+                }),
+                status: Some("analyzing"),
+            });
+        }
+
         // ── Call agent with streaming ────────────────────────────────
         let (sender_inner, mut receiver) = mpsc::unbounded_channel::<String>();
         let sender = StreamingSender::from(sender_inner);
@@ -193,7 +214,11 @@ pub async fn run_autonomy_loop(
                 .map(|p| format!("\n\nPUA principles:\n- {}", p.join("\n- ")))
                 .unwrap_or_default();
             let is_last_round = iteration + 1 >= max_iterations;
-            let instruction = if is_last_round {
+            // Persistent mode (FullAuto): use a more explicit planning prompt
+            // on the second round to encourage tool-based execution.
+            let instruction = if config.persistent_loop && iteration == 1 && !is_last_round {
+                "Plan the steps needed and use available tools (read_file, search_files, shell_exec, etc.) to accomplish the task. Execute each step one by one. Do NOT just describe what to do — actually use the tools to do it."
+            } else if is_last_round {
                 "Summarize what was accomplished and provide the final result."
             } else {
                 "Continue with the task."
@@ -206,6 +231,20 @@ pub async fn run_autonomy_loop(
                 ),
             }]
         };
+
+        // ── Send thinking indicator before agent starts ─────────────
+        // This eliminates the blank-wait period: the client sees
+        // "Thinking..." immediately, before the first token arrives.
+        if let Some(ref tx) = config.progress_tx {
+            let _ = tx.send(StreamFrame {
+                event: "chunk",
+                payload: serde_json::json!({
+                    "token": "",
+                    "thinking": true,
+                }),
+                status: Some("thinking"),
+            });
+        }
 
         let agent_clone = Arc::clone(&params.agent);
         let principles_clone = params.principles.clone();
@@ -237,6 +276,14 @@ pub async fn run_autonomy_loop(
                             if t.strip_prefix(TOKEN_MODEL_USED_PREFIX).is_some() {
                                 continue;
                             }
+                            // Finish reason — metadata, not displayed content
+                            if t.starts_with(TOKEN_FINISH_REASON_PREFIX) {
+                                continue;
+                            }
+                            // Token usage — metadata, not displayed content
+                            if t.starts_with(TOKEN_USAGE_PREFIX) {
+                                continue;
+                            }
                             // Tool call detection
                             if let Some((tool_name, tool_args)) = parse_tool_call_token(&t) {
                                 tool_calls.push((tool_name.to_string(), tool_args.to_string()));
@@ -253,6 +300,7 @@ pub async fn run_autonomy_loop(
                                             "token": "",
                                             "reasoning": rt,
                                         }),
+                                        status: None,
                                     }).is_err() {
                                         tracing::warn!(
                                             "autonomy_loop: progress_tx send failed: receiver dropped"
@@ -271,6 +319,7 @@ pub async fn run_autonomy_loop(
                                     payload: serde_json::json!({
                                         "token": t,
                                     }),
+                                    status: None,
                                 });
                             }
                         }
@@ -313,7 +362,17 @@ pub async fn run_autonomy_loop(
 
         // ── Execute tool calls ───────────────────────────────────────
         if tool_calls.is_empty() {
-            break; // No tools to execute — final response ready
+            // No tools to execute in this round.
+            //
+            // Normal mode: break immediately — the AI is done.
+            // Persistent mode (FullAuto): if this is the first round, do
+            // one more round with an explicit planning prompt to encourage
+            // tool-based execution. After the second round, break normally.
+            if config.persistent_loop && iteration == 0 {
+                // Fall through to next iteration with planning prompt below
+            } else {
+                break; // No tools to execute — final response ready
+            }
         }
 
         if iteration + 1 >= max_iterations {
@@ -332,6 +391,7 @@ pub async fn run_autonomy_loop(
                     payload: serde_json::json!({
                         "message": format!("executing tool {}...", tool_name),
                     }),
+                    status: Some("analyzing"),
                 });
             }
 
@@ -390,22 +450,40 @@ pub async fn run_autonomy_loop(
                     payload: parsed_args,
                     allowed_base_dir: None,
                 };
-                let tool_output = tool.run_async(input).await;
+                let tool_output = match tool.run_async(input).await {
+                    Ok(out) => out,
+                    Err(e) => {
+                        consecutive_failures += 1;
+                        let err_msg = format!("Tool '{}' execution failed: {}", tool_name, e);
+                        tracing::warn!("autonomy_loop: {}", err_msg);
+                        round_response.push_str(&format!("\n❌ **{}** failed: {}\n", tool_name, e));
+                        response.push_str(&format!("\n❌ **{}** failed: {}\n", tool_name, e));
+                        if consecutive_failures >= MAX_CONSECUTIVE_TOOL_FAILURES {
+                            let breaker = format!(
+                                "\n[Circuit breaker: stopped after {} consecutive tool failures]\n",
+                                consecutive_failures
+                            );
+                            round_response.push_str(&breaker);
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                let (tool_summary, tool_body) = format_tool_output(tool_name, &tool_output);
 
                 // ── Send completion notification as visible chunk token ──
                 if let Some(ref tx) = config.progress_tx {
                     let _ = tx.send(StreamFrame {
                         event: "chunk",
                         payload: serde_json::json!({
-                            "token": format!("✅ **{}** completed
-                        ", tool_name),
+                            "token": tool_summary,
+                            "tool_status": "completed",
                         }),
+                        status: Some("generating"),
                     });
                 }
-                let result_str = format!("{:?}", tool_output);
-                round_response
-                    .push_str(&format!("\n[Tool {} result:]\n{}\n", tool_name, result_str));
-                response.push_str(&format!("\n[Tool {} result:]\n{}\n", tool_name, result_str));
+                round_response.push_str(&tool_body);
+                response.push_str(&tool_body);
                 consecutive_failures = 0;
             } else {
                 tracing::warn!("autonomy_loop: tool '{}' not found in registry", tool_name);
@@ -421,6 +499,17 @@ pub async fn run_autonomy_loop(
 
     let total_duration_ms = start.elapsed().as_millis() as u64;
     let total_tools: usize = rounds.iter().map(|r| r.tools_executed.len()).sum();
+
+    // ── Emit final summary phase status ─────────────────────────────
+    if let Some(ref tx) = config.progress_tx {
+        let _ = tx.send(StreamFrame {
+            event: "status",
+            payload: serde_json::json!({
+                "message": "Generating final summary...",
+            }),
+            status: Some("generating"),
+        });
+    }
 
     // Post-loop summary: if tools were executed in the last round, the
     // agent may not have produced a final text response. Do one more call
@@ -483,6 +572,55 @@ pub async fn run_autonomy_loop(
             },
         },
     })
+}
+
+/// Format a tool's output into a clean, human-readable markdown block.
+///
+/// Replaces raw `{:?}` debug formatting with structured Markdown that
+/// can be rendered inline by Zed / GUI / CLI chat clients.
+fn format_tool_output(tool_name: &str, output: &ToolOutput) -> (String, String) {
+    let success = output.error.is_none();
+    let status_icon = if success { "✅" } else { "❌" };
+
+    // Summary line (streamed as chunk token)
+    let summary = if success {
+        format!("{} **{}** ", status_icon, tool_name)
+    } else {
+        format!("{} **{}** failed ", status_icon, tool_name)
+    };
+
+    // Body (appended to response text)
+    // Use the structured result field when available, fall back to debug fmt
+    let body_content = if success {
+        output
+            .result
+            .as_ref()
+            .and_then(|r| {
+                if let Some(s) = r.as_str() {
+                    if !s.is_empty() {
+                        return Some(s.to_string());
+                    }
+                }
+                None
+            })
+            .unwrap_or_else(|| format!("{:?}", output))
+    } else {
+        output
+            .error
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| format!("{:?}", output))
+    };
+
+    let body = format!(
+        "\n<details>\
+         \n<summary>{} {}</summary>\
+         \n```\n{}\n```\
+         \n</details>\n",
+        status_icon, tool_name, body_content
+    );
+
+    (summary, body)
 }
 
 /// Compute and return a predictive reroute score.

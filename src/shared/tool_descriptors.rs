@@ -590,7 +590,11 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                         "type": "string",
                         "enum": ["auto", "rust", "python", "typescript", "javascript", "go", "java"],
                         "description": "Language hint for definition patterns (default: auto-detect from file extension)"
-                    }
+                    },
+                    "lsp_address": {"type": "string", "description": "Optional LSP TCP address (e.g. '127.0.0.1:9258'). Uses LSP protocol for accurate results. Requires path, line, and column."},
+                    "path": {"type": "string", "description": "File path for the symbol usage position (required with lsp_address)"},
+                    "line": {"type": "integer", "description": "Line number (1-based) for the symbol usage (required with lsp_address)"},
+                    "column": {"type": "integer", "description": "Column number (1-based) for the symbol usage (required with lsp_address)"}
                 },
                 "required": ["symbol"]
             })),
@@ -608,7 +612,11 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "properties": {
                     "symbol": {"type": "string", "description": "The symbol name to find references for"},
                     "directory": {"type": "string", "description": "Optional directory scope (default: project root)"},
-                    "include": {"type": "string", "description": "Optional glob pattern to filter files (e.g. '**/*.rs')"}
+                    "include": {"type": "string", "description": "Optional glob pattern to filter files (e.g. '**/*.rs')"},
+                    "lsp_address": {"type": "string", "description": "Optional LSP TCP address (e.g. '127.0.0.1:9258'). Uses LSP protocol for accurate results. Requires path, line, and column."},
+                    "path": {"type": "string", "description": "File path for the symbol usage position (required with lsp_address)"},
+                    "line": {"type": "integer", "description": "Line number (1-based) for the symbol usage (required with lsp_address)"},
+                    "column": {"type": "integer", "description": "Column number (1-based) for the symbol usage (required with lsp_address)"}
                 },
                 "required": ["symbol"]
             })),
@@ -632,7 +640,9 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                         "description": "Type of code action to apply"
                     },
                     "detail": {"type": "string", "description": "Action-specific detail (e.g. 'HashMap' for add_import, or the lint rule name)"},
-                    "line": {"type": "integer", "description": "Line number for the action (1-based, default: 1)"}
+                    "line": {"type": "integer", "description": "Line number for the action (1-based, default: 1)"},
+                    "lsp_address": {"type": "string", "description": "Optional LSP TCP address (e.g. '127.0.0.1:9258'). Uses LSP protocol for code actions."},
+                    "column": {"type": "integer", "description": "Column number for the action (1-based, used with lsp_address, default: 1)"}
                 },
                 "required": ["path", "action"]
             })),
@@ -885,12 +895,14 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
             description: Some(
                 "Scan project dependencies for known vulnerabilities. ".to_string()
                     + "Supports Cargo.lock, package-lock.json, requirements.txt, go.sum, "
-                    + "and other lock files. Queries the OSV API for CVE information.",
+                    + "and other lock files. Queries the OSV API for CVE information. "
+                    + "Results are cached locally for 24 hours by default.",
             ),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "directory": {"type": "string", "description": "Project directory to scan (default: current)"}
+                    "directory": {"type": "string", "description": "Project directory to scan (default: current)"},
+                    "cache_ttl_hours": {"type": "integer", "description": "Cache TTL in hours for OSV query results (default: 24)", "default": 24}
                 },
                 "required": []
             })),
@@ -943,6 +955,63 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                     "timestamps": {"type": "boolean", "description": "Show timestamps", "default": false}
                 },
                 "required": ["container"]
+            })),
+        },
+        // ── Docker build, push, and compose tools (P2) ────────────
+        "docker_build" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Build a Docker image from a Dockerfile. ".to_string()
+                    + "Supports build args, tags, and docker compose build.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Build context directory (default: .)"},
+                    "tag": {"type": "string", "description": "Image tag (e.g. 'myapp:latest')", "default": "latest"},
+                    "dockerfile": {"type": "string", "description": "Path to Dockerfile (default: Dockerfile)"},
+                    "build_args": {"type": "object", "description": "Build-time variables as key-value pairs"},
+                    "no_cache": {"type": "boolean", "description": "Build without cache (default: false)"},
+                },
+                "required": []
+            })),
+        },
+        "docker_push" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Push a Docker image to a registry. ".to_string()
+                    + "Wraps `docker push`.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "image": {"type": "string", "description": "Image name with tag (e.g. 'myapp:latest')"},
+                    "registry": {"type": "string", "description": "Registry URL (e.g. 'docker.io/user')"},
+                },
+                "required": ["image"]
+            })),
+        },
+        "docker_compose" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Run docker-compose commands (up, down, build, logs, ps). ".to_string()
+                    + "Wraps `docker compose`.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "subcommand": {
+                        "type": "string",
+                        "enum": ["up", "down", "build", "logs", "ps", "restart", "stop", "start"],
+                        "description": "Docker compose subcommand"
+                    },
+                    "file": {"type": "string", "description": "Path to compose file (default: docker-compose.yml)"},
+                    "service": {"type": "string", "description": "Target service name (optional)"},
+                    "detach": {"type": "boolean", "description": "Run containers in background (default: true for up)"},
+                    "build": {"type": "boolean", "description": "Build images before starting (for up)"},
+                    "tail": {"type": "string", "description": "Number of log lines to show (for logs)"},
+                },
+                "required": ["subcommand"]
             })),
         },
         // ── File watch tool (P2) ────────────────────────────────
@@ -1210,6 +1279,18 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("docker_logs requires arguments.container"))?;
         }
+        "docker_push" => {
+            tool_input
+                .get("image")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("docker_push requires arguments.image"))?;
+        }
+        "docker_compose" => {
+            tool_input
+                .get("subcommand")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("docker_compose requires arguments.subcommand"))?;
+        }
         _ => {}
     }
     Ok(())
@@ -1282,6 +1363,9 @@ mod tests {
         "docker_ps",
         "docker_exec",
         "docker_logs",
+        "docker_build",
+        "docker_push",
+        "docker_compose",
         "file_watch",
     ];
 

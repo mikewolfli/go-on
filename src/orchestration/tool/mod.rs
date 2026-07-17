@@ -1690,6 +1690,45 @@ impl ToolRegistry {
                 fallback_chain: Vec::new(),
             },
         );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DockerBuildTool,
+            ToolCapabilityProfile {
+                capability: "docker_build".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DockerPushTool,
+            ToolCapabilityProfile {
+                capability: "docker_push".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::DockerComposeTool,
+            ToolCapabilityProfile {
+                capability: "docker_compose".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
 
         // ── File watch tool (P2) ────────────────────────────────
         registry.register_with_profile(
