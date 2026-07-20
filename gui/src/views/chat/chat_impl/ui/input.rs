@@ -4,6 +4,7 @@
 //! and the mode selection row.
 
 use super::super::*;
+use crate::views::chat::types::ModePolicy;
 
 use super::model_picker;
 
@@ -40,7 +41,10 @@ pub fn render_mode_row(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
                             );
                         }
                     });
-                let _ = &prev_mode; // placeholder for future mode-change hooks
+                // Sync frontend mode policy when mode changes
+                if chat.selected_mode != prev_mode {
+                    chat.mode_policy = ModePolicy::new(&chat.selected_mode);
+                }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new(i18n.t("chat.model")).color(fg));
                 ui.add_space(6.0);
@@ -53,6 +57,17 @@ pub fn render_mode_row(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
                     &mut chat.show_token_details,
                     i18n.t("chat.showTokenDetails"),
                 );
+                // ── Settings gear with dropdown for mode row toggles ──
+                ui.add_space(4.0);
+                let gear_btn = ui.button("⚙");
+                egui::containers::Popup::menu(&gear_btn).show(|ui| {
+                    ui.set_min_width(180.0);
+                    ui.checkbox(&mut chat.show_mode_row, i18n.t("chat.showModeRow"));
+                    ui.checkbox(
+                        &mut chat.show_extra_buttons,
+                        i18n.t("chat.showExtraButtons"),
+                    );
+                });
             });
         });
     ui.separator();
@@ -95,15 +110,26 @@ pub fn render_send_button(
             AiStatus::Thinking => ("...".to_string(), egui::Color32::from_rgb(200, 160, 60)),
             AiStatus::Error => (i18n.t("chat.retry").to_string(), egui::Color32::RED),
         };
-        if ui
-            .add_enabled(
-                !chat.sending,
-                egui::Button::new(format!("▶ {}", icon))
-                    .fill(col)
-                    .min_size(egui::vec2(80.0, 28.0)),
-            )
-            .clicked()
-        {
+        let btn = ui.add_enabled(
+            !chat.sending,
+            egui::Button::new(format!("▶ {}", icon))
+                .fill(col)
+                .min_size(egui::vec2(80.0, 28.0)),
+        );
+        if btn.clicked() {
+            // On retry (Error state), restore the last user message's text
+            // into the input so the user can edit and re-send with the same
+            // mode context (mode, phase, model) preserved.
+            if chat.ai_status == AiStatus::Error && chat.input.trim().is_empty() {
+                if let Some(last_user) = chat
+                    .session_state
+                    .sessions
+                    .get(chat.session_state.active_session)
+                    .and_then(|s| s.messages.iter().rfind(|m| m.role == "user"))
+                {
+                    chat.input = last_user.content.clone();
+                }
+            }
             chat.send_message(backend, ctx, autotune_chain_enabled);
         }
     }
@@ -119,23 +145,19 @@ pub fn handle_input_shortcuts(
     ctx: &egui::Context,
     autotune_chain_enabled: bool,
 ) {
-    #[cfg(target_os = "linux")]
+    // Enter (without Shift) sends the message. Shift+Enter inserts a newline.
+    // Ctrl+Enter also works as a fallback on all platforms.
     {
         let mut do_send = false;
         ui.input_mut(|i| {
-            if input_focus && i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter) {
+            if input_focus
+                && (i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter))
+            {
                 do_send = true;
             }
         });
         if do_send {
-            chat.send_message(backend, ctx, autotune_chain_enabled);
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        if ui.input(|i| !input_focus || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift) {
-            // Don't send
-        } else {
             chat.send_message(backend, ctx, autotune_chain_enabled);
         }
     }

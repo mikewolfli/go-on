@@ -18,7 +18,7 @@ use crate::memory::vector_index::VectorIndex;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // ===========================================================================
 // MemoryLink
@@ -85,10 +85,14 @@ impl MemoryLink {
 /// - A reference to the `MemoryPersistence` instance for tier access.
 /// - An in-memory link graph for fast traversal.
 /// - Session-to-memory mapping.
+///
+/// S5 optimization: persistence is stored as `Arc<MemoryPersistence>` to allow
+/// sharing the same SQLite warm store connection with the main persistence
+/// instance, avoiding a second SQLite connection + DDL overhead (~30-50ms).
 #[derive(Debug)]
 pub struct MemoryRetrievalEngine {
-    /// Reference to the persistence manager.
-    persistence: MemoryPersistence,
+    /// Shared reference to the persistence manager.
+    persistence: Arc<MemoryPersistence>,
     /// Link graph: (m1, m2) → MemoryLink. Also indexed by each direction.
     links: Mutex<LinkGraph>,
     /// Session index: session_id → set of memory IDs.
@@ -152,7 +156,11 @@ impl LinkGraph {
 
 impl MemoryRetrievalEngine {
     /// Create a new retrieval engine backed by the given persistence manager.
-    pub fn new(persistence: MemoryPersistence) -> Self {
+    ///
+    /// S5 optimization: takes `Arc<MemoryPersistence>` so the same SQLite
+    /// connection can be shared with the server's main persistence instance,
+    /// eliminating a redundant second connection (+DDL overhead).
+    pub fn new(persistence: Arc<MemoryPersistence>) -> Self {
         Self {
             persistence,
             links: Mutex::new(LinkGraph::default()),
@@ -167,7 +175,10 @@ impl MemoryRetrievalEngine {
     /// The index is used as an additional signal in `retrieve_relevant_memories`:
     /// entries with high cosine similarity to the query are boosted in the
     /// final ranking even when the token-overlap heuristic is weak.
-    pub fn with_vector_index(persistence: MemoryPersistence, vector_index: VectorIndex) -> Self {
+    pub fn with_vector_index(
+        persistence: Arc<MemoryPersistence>,
+        vector_index: VectorIndex,
+    ) -> Self {
         Self {
             persistence,
             links: Mutex::new(LinkGraph::default()),
@@ -532,7 +543,7 @@ mod tests {
         let cold_path = dir.path().join("cold");
         let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
             .expect("persistence should initialize");
-        let engine = MemoryRetrievalEngine::new(persistence);
+        let engine = MemoryRetrievalEngine::new(Arc::new(persistence));
         (dir, engine)
     }
 

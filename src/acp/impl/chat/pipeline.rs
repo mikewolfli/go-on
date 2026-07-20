@@ -75,11 +75,8 @@ impl PhaseTiming {
 /// observability wiring. The struct itself is pub(crate) via the run() method.
 pub struct PipelineOutcome {
     pub result: Value,
-    #[allow(dead_code, reason = "reserved for observability pipeline")]
     pub timing: PhaseTiming,
-    #[allow(dead_code, reason = "reserved for observability pipeline")]
     pub phase_name: String,
-    #[allow(dead_code, reason = "reserved for observability pipeline")]
     pub mode: String,
 }
 
@@ -217,8 +214,14 @@ impl ChatPipeline {
             timing.total_ms = started.elapsed().as_millis() as u64;
             info!(
                 target: "chat_pipeline",
-                "skipped reflect phase — cache hit ({} ms)",
+                mode = params.mode,
+                phase = resolve_out.phase_name,
+                timing.observe_ms,
+                timing.think_ms,
+                timing.act_ms,
+                timing.reflect_ms,
                 timing.total_ms,
+                "skipped reflect phase — cache hit",
             );
             return Ok(PipelineOutcome {
                 result,

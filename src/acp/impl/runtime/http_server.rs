@@ -10,7 +10,7 @@ use anyhow::Result;
 use tokio::net::{TcpListener, TcpSocket};
 use tokio::signal;
 use tokio::sync::Semaphore;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::acp::background::start_background_tasks;
 use crate::acp::server::AcpServer;
@@ -30,9 +30,16 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
 
-    if let Err(err) = start_background_tasks(server.as_ref(), Arc::clone(&shutdown_notify)).await {
-        error!("Failed to start background tasks: {}", err);
-        return Err(err);
+    // Start background tasks in background — HTTP listener must bind IMMEDIATELY
+    // (BOTTLENECK-01). Same optimization as run_acp_server.
+    {
+        let bg_server = Arc::clone(&server);
+        let bg_shutdown = shutdown_notify.clone();
+        tokio::spawn(async move {
+            if let Err(e) = start_background_tasks(&bg_server, bg_shutdown).await {
+                tracing::error!("Background tasks failed: {e}");
+            }
+        });
     }
 
     // Create socket with SO_REUSEADDR to avoid "Address already in use" after restart

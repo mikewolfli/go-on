@@ -356,7 +356,8 @@ mod tests {
         // Verify all modes return valid runtimes with correct kinds
         assert_eq!(ask.kind(), ModeKind::Ask);
         assert_eq!(edit.kind(), ModeKind::Edit);
-        assert_eq!(agent.kind(), ModeKind::Edit);
+        // "agent" resolves to FullAuto (autonomous loop)
+        assert_eq!(agent.kind(), ModeKind::FullAuto);
         assert_eq!(full_auto.kind(), ModeKind::FullAuto);
         // unknown should default to ask
         assert_eq!(unknown.kind(), ModeKind::Ask);
@@ -467,7 +468,7 @@ mod tests {
         // Edit inherits Agent's risk detection for operations like delete.
         assert!(!ask.is_high_risk_operation("delete"));
         assert!(edit.is_high_risk_operation("delete")); // Edit has Agent's risk detection
-        assert!(edit.is_high_risk_operation("delete")); // "agent" resolves to Edit
+        assert!(edit.is_high_risk_operation("delete"));
         assert!(!full_auto.is_high_risk_operation("delete"));
     }
 

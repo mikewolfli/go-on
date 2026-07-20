@@ -523,6 +523,49 @@ pub(crate) async fn handle_openai_chat_completions(
             task.abort();
             return Ok(());
         }
+        // Forward "done" event: if it carries a response, send the final chunk
+        // with finish_reason="stop" and the SSE [DONE] signal, then return.
+        if frame.event == "done" {
+            let response_text = frame
+                .payload
+                .get("response")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !response_text.is_empty() {
+                let payload =
+                    build_openai_chunk(&request_id, &model, response_text, Some("stop"));
+                let _ = write_openai_sse_data(socket, &payload).await;
+                write_openai_sse_done(socket).await?;
+                record_outcome(true);
+                task.abort();
+                return Ok(());
+            }
+            continue;
+        }
+
+        // Forward "result" event: the final pipeline result carries the complete
+        // response text extracted from the agent output. Send it as the final
+        // chunk with finish_reason="stop", then the SSE [DONE] signal.
+        if frame.event == "result" {
+            let response_text = frame
+                .payload
+                .get("response")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let payload = build_openai_chunk(&request_id, &model, response_text, Some("stop"));
+            let _ = write_openai_sse_data(socket, &payload).await;
+            write_openai_sse_done(socket).await?;
+            record_outcome(true);
+            task.abort();
+            return Ok(());
+        }
+
+        // "telemetry" events are informational — ignore them.
+        if frame.event == "telemetry" {
+            continue;
+        }
+
+        // Only "chunk" events should proceed past this point.
         if frame.event != "chunk" {
             continue;
         }

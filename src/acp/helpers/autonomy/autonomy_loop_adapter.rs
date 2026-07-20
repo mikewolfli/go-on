@@ -34,6 +34,8 @@ pub(crate) struct AcpAutonomyLoopParams {
     pub timeout_duration: Option<std::time::Duration>,
     pub stream_tx: Option<mpsc::UnboundedSender<String>>,
     pub progress_sse_tx: Option<mpsc::UnboundedSender<StreamFrame>>,
+    /// Operation mode for tool approval events (edit, safeguard, full_auto, etc.)
+    pub operation_mode: String,
 }
 
 /// Run the multi-round autonomy loop in an ACP-compatible way.
@@ -81,6 +83,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         // one text-only round — it continues with a planning prompt to
         // encourage tool-based autonomous execution (like Zed's agent).
         persistent_loop: true,
+        operation_mode: params.operation_mode.clone(),
     };
 
     let result = if config.use_brain_loop {

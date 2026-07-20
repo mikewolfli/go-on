@@ -250,6 +250,8 @@ pub async fn start_background_tasks(
     // triggering a graceful TLS acceptor reload on change.
 
     // ── Security scanning background tasks (GAP-B52-24, GAP-B52-30) ─────
+    // S6 startup optimization: delay security scans by 500ms so the server
+    // can start accepting requests first. These run every 24h/1h anyway.
 
     // Schedule dependency vulnerability scan every 24 hours
     if let Some(ref scanner) = server.governance_deps.dependency_vulnerability_scanner {
@@ -258,9 +260,12 @@ pub async fn start_background_tasks(
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
+                // S6: delay 500ms to let the server start accepting requests first
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
                 let mut ticker = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
                 ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                // First tick fires immediately
+                // First tick fires immediately (after the 500ms sleep)
                 ticker.tick().await;
 
                 loop {
@@ -293,6 +298,9 @@ pub async fn start_background_tasks(
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
+                // S6: delay 500ms to let the server start accepting requests first
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
                 let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
                 ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
                 // Skip first tick, start after one interval
@@ -378,10 +386,14 @@ pub async fn start_background_tasks(
     }
 
     // ── Code quality scan every 5 minutes (GAP-B53-57) ─────────────────
+    // S6 startup optimization: delay 500ms to let server accept requests first.
     {
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
+                // S6: delay 500ms to let the server start accepting requests first
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
                 let mut interval = tokio::time::interval(Duration::from_secs(300));
                 interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
                 // Skip first tick, start after one interval
@@ -418,10 +430,14 @@ pub async fn start_background_tasks(
     }
 
     // ── Metacognitive auto-reflexion every 30 seconds (BLUE56-B10) ───────
+    // S6 startup optimization: delay 500ms to let server accept requests first.
     {
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
+                // S6: delay 500ms to let the server start accepting requests first
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
                 let mut interval = tokio::time::interval(Duration::from_millis(30_000));
                 interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
                 loop {
@@ -446,6 +462,7 @@ pub async fn start_background_tasks(
     }
 
     // ── SelfEvolutionAgent + EvolutionLoop (BLUE56-B03) ───────────────
+    // S6 startup optimization: delay 500ms to let server accept requests first.
     {
         let shutdown = shutdown_notify.clone();
         // Clone the real AlertManager reference so the evolution loop can
@@ -453,6 +470,9 @@ pub async fn start_background_tasks(
         let alert_manager = Arc::clone(&server.observability.alert_manager);
         spawn_background_task(
             async move {
+                // S6: delay 500ms to let the server start accepting requests first
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
                 // The evolution_agent binding lives for the entire async block scope,
                 // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
                 let evolution_agent = Arc::new(
@@ -571,10 +591,10 @@ pub async fn start_background_tasks(
     }
 
     // ── Memory bridge: auto-migrate every 5 minutes (PERF-FIX: moved from new_acp_server) ──
-    // Uses the server's existing MemoryPersistence instead of creating a redundant
-    // third SQLite connection during the critical startup path.
-    if let Some(ref mp) = server.governance_deps.memory_persistence {
-        let mp = Arc::clone(mp);
+    // Uses the server's lazy MemoryPersistence (S1 startup optimization) instead of
+    // creating a redundant third SQLite connection during the critical startup path.
+    if let Some(mp) = server.get_or_init_memory_persistence() {
+        let mp = Arc::clone(&mp);
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
@@ -625,21 +645,27 @@ pub async fn start_background_tasks(
     // GAP-B58-B13: Wire memory bridge — run initial promotion on startup.
     // This was previously only called in run_acp_server (stdio mode).
     // Now it runs for ALL protocol modes (HTTP, WebSocket, etc.).
-    if let Some(mp) = server.governance_deps.memory_persistence.as_ref() {
-        let memory_store = &server.persistence.memory_store;
-        match crate::memory::memory_bridge::bridge_promote(memory_store, mp) {
-            Ok(report) => {
-                if report.promoted_count > 0 {
-                    tracing::info!(
-                        "memory bridge: initial promote moved {} entries",
-                        report.promoted_count
-                    );
+    // S6 startup optimization: delay 500ms so the server can accept requests first.
+    if let Some(mp) = server.get_or_init_memory_persistence() {
+        let memory_store = Arc::clone(&server.persistence.memory_store);
+        let mp = Arc::clone(&mp);
+        tokio::spawn(async move {
+            // S6: defer initial promote by 500ms to let server accept requests first
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            match crate::memory::memory_bridge::bridge_promote(&memory_store, &mp) {
+                Ok(report) => {
+                    if report.promoted_count > 0 {
+                        tracing::info!(
+                            "memory bridge: initial promote moved {} entries",
+                            report.promoted_count
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("memory bridge: initial bridge_promote failed: {e}");
                 }
             }
-            Err(e) => {
-                tracing::warn!("memory bridge: initial bridge_promote failed: {e}");
-            }
-        }
+        });
     }
 
     // ── Metrics bridge (P5-6): periodically sync OTLP MetricsRecorder → RuntimeMetrics ──

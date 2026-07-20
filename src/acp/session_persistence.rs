@@ -34,8 +34,7 @@ pub struct PersistedSession {
 /// all database operations are serialised through `tokio::task::spawn_blocking`,
 /// keeping the async runtime free of blocking I/O.
 pub struct SessionStore {
-    #[allow(dead_code)]
-    db_path: PathBuf,
+    _db_path: PathBuf,
     /// Synchronous connection locked inside `spawn_blocking` closures.
     conn: Arc<Mutex<rusqlite::Connection>>,
 }
@@ -48,7 +47,7 @@ impl SessionStore {
         let path = db_path.to_path_buf();
         let conn = Self::open_sync(&path).await?;
         Ok(Self {
-            db_path: path,
+            _db_path: path,
             conn: Arc::new(Mutex::new(conn)),
         })
     }

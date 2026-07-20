@@ -351,6 +351,8 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
         ("chat.deleteSession", "Delete session"),
         ("chat.exportSession", "Export session"),
         ("chat.openConfigDir", "Open config folder"),
+        ("chat.showModeRow", "Show mode row"),
+        ("chat.showExtraButtons", "Show extra buttons"),
         ("chat.sendShortcutHint", "Enter to send · Shift+Enter for newline"),
         ("chat.sendShortcutHintLinux", "Ctrl+Enter to send · Enter for newline"),
         ("chat.stopShortcut", "Stop generation"),

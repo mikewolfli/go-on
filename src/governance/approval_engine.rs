@@ -621,7 +621,7 @@ impl ApprovalEngine {
     /// Process timeouts for all pending requests.
     /// Should be called periodically (e.g., every 30 seconds via a tokio interval).
     /// Returns a list of request IDs whose status changed.
-    pub fn process_timeouts(&mut self) -> Vec<String> {
+    pub async fn process_timeouts(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
         let now = current_timestamp_ms();
 
@@ -713,25 +713,27 @@ impl ApprovalEngine {
         // tokio task internally; for persistence we spawn per-request
         // threads to achieve parallel SQLite writes.
         let snapshots: Vec<ApprovalRequest> = actions.iter().map(|(_, r)| r.clone()).collect();
-        {
-            let db_path = self.db_path.clone();
-            std::thread::scope(|scope| {
-                for _req in &snapshots {
-                    // Persist to SQLite concurrently per request.
-                    if let Some(ref _db_path) = db_path {
-                        scope.spawn(|| {
-                            #[cfg(feature = "backend-sqlite")]
-                            if let Err(e) = Self::update_status_sqlite(_db_path, _req) {
-                                tracing::warn!(
-                                    error = %e,
-                                    id = %_req.id,
-                                    "Failed to persist timeout status to SQLite"
-                                );
-                            }
-                        });
+        let db_path = self.db_path.clone();
+        // Persist to SQLite via spawn_blocking to avoid blocking the tokio runtime.
+        if let Some(db_path) = db_path {
+            let mut handles = Vec::with_capacity(snapshots.len());
+            for req in &snapshots {
+                let db_path = db_path.clone();
+                let req = req.clone();
+                handles.push(tokio::task::spawn_blocking(move || {
+                    #[cfg(feature = "backend-sqlite")]
+                    if let Err(e) = Self::update_status_sqlite(&db_path, &req) {
+                        tracing::warn!(
+                            error = %e,
+                            id = %req.id,
+                            "Failed to persist timeout status to SQLite"
+                        );
                     }
-                }
-            });
+                }));
+            }
+            for handle in handles {
+                let _ = handle.await;
+            }
         }
         // Serial feedback calls — each `feedback_to_pua()` internally spawns
         // a tokio task, so they are effectively fire-and-forget.
@@ -983,7 +985,7 @@ mod tests {
 
         // Wait for auto-deny timeout
         tokio::time::sleep(Duration::from_millis(150)).await;
-        let changed = engine.process_timeouts();
+        let changed = engine.process_timeouts().await;
         assert!(!changed.is_empty(), "Expected auto-deny action");
 
         let status = &engine

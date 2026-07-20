@@ -110,23 +110,29 @@ pub async fn new_acp_server(
             vec![Permission::Read, Permission::Write, Permission::Execute],
         );
         enforcer.register_role("viewer", vec![Permission::Read]);
-        // Register tenants from environment-backed sources (activated, formerly F-GAP-15 / MCP-5):
-        // - GO_ON_TENANTS (inline IDs)
-        // - GO_ON_TENANTS_FILE (file-backed tenant registry)
-        let tenant_count = enforcer.register_tenants_from_sources();
-        if tenant_count > 0 {
-            tracing::info!(
-                "registered {} tenant(s) from {} and/or {}",
-                tenant_count,
-                crate::governance::rbac::GO_ON_TENANTS_ENV,
-                crate::governance::rbac::GO_ON_TENANTS_FILE_ENV,
-            );
-        }
         // Wrap enforcer in a shared Arc<RwLock> so that both the harness bus
         // and the HTTP-level enforcer reference the same instance (GAP-B58-D05).
         let shared = Arc::new(std::sync::RwLock::new(enforcer));
         // Inject a clone of the Arc into the harness bus policy evaluator.
         harness_bus.set_rbac_enforcer(Arc::clone(&shared));
+        // S2 startup optimization: defer tenant registration from env/file sources
+        // to a background tokio task. This avoids blocking fs read + env var access
+        // during the critical startup path (saves ~5-20ms).
+        // Tenants will be registered shortly after the server starts.
+        let rbac_for_lazy = Arc::clone(&shared);
+        tokio::spawn(async move {
+            if let Ok(mut guard) = rbac_for_lazy.write() {
+                let count = guard.register_tenants_from_sources();
+                if count > 0 {
+                    tracing::info!(
+                        "registered {} tenant(s) from {} and/or {} (lazy, S2)",
+                        count,
+                        crate::governance::rbac::GO_ON_TENANTS_ENV,
+                        crate::governance::rbac::GO_ON_TENANTS_FILE_ENV,
+                    );
+                }
+            }
+        });
         shared
     };
 
@@ -262,46 +268,38 @@ pub async fn new_acp_server(
         builder = builder.with_secret_manager(manager);
     }
 
-    // Wire memory persistence and memory retrieval engine (GAP-B58-D03)
+    // Wire memory persistence and memory retrieval engine (GAP-B58-D03) — LAZY INIT
+    //
+    // **Startup optimization (S1)**: Instead of creating two `MemoryPersistence`
+    // instances (each opening a SQLite connection + running DDL) synchronously
+    // during `new_acp_server()`, we store the paths and defer the actual SQLite
+    // connection to `get_or_init_memory_persistence()` / `get_or_init_memory_retrieval_engine()`.
+    // This saves ~100-300ms of startup latency.
     {
         use crate::memory::memory_bridge::memory_base_path;
-        use crate::memory::memory_persistence::MemoryPersistence;
-        use crate::memory::summarization::{MemorySummarizer, SummarizationConfig};
-        use crate::memory::wire_memory_retrieval;
         let base = memory_base_path();
         let db_path = base.join("warm.db");
         let cold_path = base.join("cold");
-        if let Ok(mp) = MemoryPersistence::new(&db_path, &cold_path, None) {
-            // Create a separate MemoryPersistence for the retrieval engine.
-            // Both instances share the same underlying SQLite database store.
-            let retrieval_engine = MemoryPersistence::new(&db_path, &cold_path, None)
-                .ok()
-                .map(|retrieval_mp| Arc::new(wire_memory_retrieval(retrieval_mp)));
-            // Attach a MemorySummarizer with an LLM agent from the registry if available.
-            let summarizer = {
-                let llm_agent = registry
-                    .get("summarizer")
-                    .or_else(|| registry.get("assistant"))
-                    .or_else(|| {
-                        let names = registry.names();
-                        names.first().and_then(|n| registry.get(n))
-                    });
-                let mut s = MemorySummarizer::new(SummarizationConfig::default());
-                if let Some(agent) = llm_agent {
-                    s = s.with_llm_agent(agent);
-                }
-                s
-            };
-            let mp = Arc::new(mp.with_summarizer(summarizer));
-            builder = builder.with_memory_persistence(mp);
-            if let Some(engine) = retrieval_engine {
-                builder = builder.with_memory_retrieval_engine(engine);
-            } else {
-                tracing::warn!("Memory retrieval engine not wired (secondary persistence failed)");
+        // The summarizer is still created eagerly (it's cheap — no IO),
+        // and will be attached to the MemoryPersistence when it's lazily created.
+        let summarizer = {
+            use crate::memory::summarization::{MemorySummarizer, SummarizationConfig};
+            let llm_agent = registry
+                .get("summarizer")
+                .or_else(|| registry.get("assistant"))
+                .or_else(|| {
+                    let names = registry.names();
+                    names.first().and_then(|n| registry.get(n))
+                });
+            let mut s = MemorySummarizer::new(SummarizationConfig::default());
+            if let Some(agent) = llm_agent {
+                s = s.with_llm_agent(agent);
             }
-        } else {
-            tracing::warn!("Failed to create MemoryPersistence");
-        }
+            s
+        };
+        // Store the paths on the builder via the new method; the builder will
+        // transfer them into the AcpServer's lazy_memory_persistence_params during build().
+        builder = builder.with_lazy_memory_persistence_params(db_path, cold_path, Some(summarizer));
     }
 
     // Wire evolution loop
@@ -523,7 +521,7 @@ pub async fn new_acp_server(
                 interval.tick().await;
                 // tokio::sync::RwLock does not use lock poisoning.
                 let mut guard = engine.write().await;
-                let changed = guard.process_timeouts();
+                let changed = guard.process_timeouts().await;
                 if !changed.is_empty() {
                     tracing::info!("approval engine timed out {} request(s)", changed.len());
                 }

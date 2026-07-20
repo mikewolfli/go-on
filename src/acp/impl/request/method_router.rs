@@ -154,6 +154,21 @@ make_handler!(
     protocol_pack::session_request_permission_payload,
     params
 );
+make_handler!(
+    SessionDeleteHandler,
+    protocol_pack::session_delete_payload,
+    params
+);
+make_handler!(
+    SessionConfigSetHandler,
+    protocol_pack::session_config_set_payload,
+    params
+);
+make_handler!(
+    SessionConfigGetHandler,
+    protocol_pack::session_config_get_payload,
+    params
+);
 
 // ── Protocol handlers ──────────────────────────────────────────────────
 make_handler!(InitializeHandler, protocol_pack::initialize_payload);
@@ -343,6 +358,9 @@ pub fn global_router() -> &'static MethodRouter {
             "session/set_config_option",
             Box::new(SessionSetConfigOptionHandler),
         );
+        router.register("session/delete", Box::new(SessionDeleteHandler));
+        router.register("session/config/set", Box::new(SessionConfigSetHandler));
+        router.register("session/config/get", Box::new(SessionConfigGetHandler));
         router.register("session/resume", Box::new(SessionResumeHandler));
         router.register("session/close", Box::new(SessionCloseHandler));
         router.register(

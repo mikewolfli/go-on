@@ -128,6 +128,7 @@ pub(crate) struct ActOutput {
     pub used_multi_model_vote: bool,
     pub used_multi_agent_vote: bool,
     pub review_required: bool,
+    pub review_blocked: bool,
     pub checkpoint: crate::acp::ConversationCheckpoint,
     pub knowledge: Value,
     pub metacognitive_loop: Value,
@@ -855,6 +856,7 @@ pub(crate) async fn act_phase(
     }
 
     // ── Pre-execution review gate (SafeGuard mode) ────────────────────
+    let mut review_blocked = false;
     let review_passed = match ModeKind::from(params.mode.as_str()) {
         ModeKind::SafeGuard => {
             let outcome = run_review_gate(
@@ -866,7 +868,19 @@ pub(crate) async fn act_phase(
             )
             .await;
             if !outcome.passed {
-                tracing::info!("safeguard review gate blocked execution");
+                let reason = if outcome.comments.is_empty() {
+                    "SafeGuard review blocked the requested operation due to risk detection."
+                        .to_string()
+                } else {
+                    format!(
+                        "SafeGuard review blocked the requested operation: {}",
+                        outcome.comments.join("; ")
+                    )
+                };
+                tracing::info!("safeguard review gate blocked execution: {reason}");
+                emit_status_event(stream_observer.as_ref(), &reason, "warning").await?;
+                response_text = reason;
+                review_blocked = true;
             }
             outcome.passed
         }
@@ -1083,15 +1097,7 @@ pub(crate) async fn act_phase(
             role: "assistant".to_string(),
             content: response_text.clone(),
         });
-        let (new_checkpoint_from_join, kn) = tokio::join!(
-            request::create_checkpoint_record(
-                server,
-                &routing_out.conversation_id,
-                &routing_out.branch_id,
-                msgs,
-                None,
-                None
-            ),
+        let (kn, (new_checkpoint_from_join, ml), dst) = tokio::join!(
             persist_chat_knowledge(
                 server,
                 &routing_out.conversation_id,
@@ -1101,19 +1107,29 @@ pub(crate) async fn act_phase(
                 params,
                 &response_text
             ),
-        );
-        let (ml, dst) = tokio::join!(
-            request::persist_checkpoint_metacognitive_loop(
-                server,
-                &routing_out.conversation_id,
-                &routing_out.branch_id,
-                &new_checkpoint_from_join.checkpoint_id,
-                json!({
-                    "active": true, "schema_version": "blue25-metacognitive-loop-v1", "cycle_count": 1,
-                    "checkpoint_id": new_checkpoint_from_join.checkpoint_id, "last_reflection": format!("{}:{}", resolve_out.phase_name, selected_agent),
-                    "reflection_trigger": "response_completed", "last_selected_agent": selected_agent, "response_chars": response_text.chars().count(),
-                })
-            ),
+            async {
+                let cp = request::create_checkpoint_record(
+                    server,
+                    &routing_out.conversation_id,
+                    &routing_out.branch_id,
+                    msgs,
+                    None,
+                    None,
+                )
+                .await;
+                let ml = request::persist_checkpoint_metacognitive_loop(
+                    server,
+                    &routing_out.conversation_id,
+                    &routing_out.branch_id,
+                    &cp.checkpoint_id,
+                    json!({
+                        "active": true, "schema_version": "blue25-metacognitive-loop-v1", "cycle_count": 1,
+                        "checkpoint_id": cp.checkpoint_id, "last_reflection": format!("{}:{}", resolve_out.phase_name, selected_agent),
+                        "reflection_trigger": "response_completed", "last_selected_agent": selected_agent, "response_chars": response_text.chars().count(),
+                    })
+                ).await;
+                (cp, ml)
+            },
             persist_session_distillation(
                 server,
                 &routing_out.conversation_id,
@@ -1197,6 +1213,7 @@ pub(crate) async fn act_phase(
         used_multi_model_vote: false,
         used_multi_agent_vote: false,
         review_required: false,
+        review_blocked,
         checkpoint,
         knowledge,
         metacognitive_loop,
@@ -1754,7 +1771,8 @@ pub(crate) async fn reflect_phase(
     }
 
     // ── Memory bridge: persist reflection outcome (GAP-B54-011) ────────
-    if let Some(ref mp) = server.governance_deps.memory_persistence {
+    // Uses lazy initialization (S1 startup optimization).
+    if let Some(mp) = server.get_or_init_memory_persistence() {
         use crate::memory::memory::{MemoryClass, MemoryEntry};
         let entry = MemoryEntry {
             id: format!("reflect-{}", trace.request_id),
@@ -1781,8 +1799,18 @@ pub(crate) async fn reflect_phase(
     }
 
     // ── MemoryRetrievalEngine: index session memory (GAP-B52-13) ───────
-    if let Some(ref engine) = server.governance_deps.memory_retrieval_engine {
+    // Uses lazy initialization (S1 startup optimization).
+    if let Some(engine) = server.get_or_init_memory_retrieval_engine() {
         let _ = engine.index_session_memory(&routing_out.conversation_id, &trace.request_id);
+    }
+
+    // Include review_blocked flag in the response when SafeGuard blocked execution
+    if exec_out.review_blocked {
+        if let Some(obj) = result.as_object() {
+            let mut enriched = obj.clone();
+            enriched.insert("review_blocked".to_string(), serde_json::Value::Bool(true));
+            return Ok(serde_json::Value::Object(enriched));
+        }
     }
 
     Ok(result)

@@ -161,6 +161,7 @@ pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
         "run_tests"
         | "bash"
         | "execute_command"
+        | "shell_exec"
         | "goon_provider_test_connection"
         | "goon_provider_test_completion" => ToolRiskClass::HighRiskExecute,
 
@@ -172,8 +173,49 @@ pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
             ToolRiskClass::Admin
         }
 
-        // Unknown tools default to LowRiskWrite (conservative)
-        _ => ToolRiskClass::LowRiskWrite,
+        // Keyword-based fallback: match tool names by substring against risk keyword lists.
+        // This ensures consistency with the frontend ModePolicy compute_risk_score classification
+        // and catches tools whose names follow standard naming conventions.
+        _ => {
+            let lower = tool_name.to_lowercase();
+
+            // High-risk keywords (destructive / execution operations)
+            let high_risk_keywords = [
+                "delete", "remove", "drop",
+                "rm", "shutdown", "rollback", "revert",
+                "reset", "force", "truncate", "uninstall",
+            ];
+            for kw in &high_risk_keywords {
+                if lower.contains(kw) {
+                    return ToolRiskClass::HighRiskExecute;
+                }
+            }
+
+            // Medium-risk keywords (write / edit / update operations)
+            let medium_risk_keywords = [
+                "write", "edit", "modify", "update", "create",
+                "patch", "rename", "move", "copy",
+            ];
+            for kw in &medium_risk_keywords {
+                if lower.contains(kw) {
+                    return ToolRiskClass::LowRiskWrite;
+                }
+            }
+
+            // Low-risk keywords (read / search / query operations)
+            let low_risk_keywords = [
+                "read", "list", "search", "grep", "find",
+                "view", "show", "get", "check", "test",
+            ];
+            for kw in &low_risk_keywords {
+                if lower.contains(kw) {
+                    return ToolRiskClass::ReadOnly;
+                }
+            }
+
+            // Unknown tools default to LowRiskWrite (conservative, requires policy)
+            ToolRiskClass::LowRiskWrite
+        }
     }
 }
 

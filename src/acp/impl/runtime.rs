@@ -21,7 +21,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::signal;
 use tracing::{error, info};
 
-use crate::acp::background::start_background_tasks;
 use crate::acp::r#impl::io::send_error;
 use crate::acp::r#impl::request::handle_request;
 use crate::acp::server::AcpServer;
@@ -75,36 +74,45 @@ pub(crate) async fn tcp_write_timeout(
 // ---------------------------------------------------------------------------
 
 /// Run the ACP server (stdio-based JSON-RPC mode).
-pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
+///
+/// # Startup Latency Optimization (BOTTLENECK-01, BOTTLENECK-03)
+///
+/// All background initialization (memory bridge promote, background tasks,
+/// evolution loop) is spawned as tokio tasks so the stdin JSON-RPC loop
+/// starts IMMEDIATELY. This aligns with ZED's expectation that an ACP stdio
+/// server responds to `initialize`/`session/new`/`tools/list` without any
+/// startup delay.
+///
+/// The synchronous work before entering the stdin loop is minimal:
+/// build AcpServer + initialize_cache (~30-100ms spawned_blocking).
+pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     info!("ACP server starting");
-
-    // GAP-B58-B13: Wire memory bridge — run initial promotion on startup
-    if let Some(mp) = server.governance_deps.memory_persistence.as_ref() {
-        let memory_store = &server.persistence.memory_store;
-        match crate::memory::memory_bridge::bridge_promote(memory_store, mp) {
-            Ok(report) => {
-                if report.promoted_count > 0 {
-                    tracing::info!(
-                        "memory bridge: initial promote moved {} entries",
-                        report.promoted_count
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!("memory bridge: initial bridge_promote failed: {e}");
-            }
-        }
-    }
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
 
-    // Start background tasks
-    if let Err(e) = start_background_tasks(server, Arc::clone(&shutdown_notify)).await {
-        error!("Failed to start background tasks: {}", e);
-        return Err(e);
-    }
+    // ── All background init runs concurrently with stdin loop ──
+    let bg_server = Arc::clone(&server);
+    let bg_shutdown = shutdown_notify.clone();
+    tokio::spawn(async move {
+        // Spawn memory bridge promote (BOTTLENECK-03) — small delay lets stdin loop start first
+        // Uses lazy initialization (S1 startup optimization) to defer SQLite connection creation.
+        if let Some(mp) = bg_server.get_or_init_memory_persistence() {
+            let memory_store = bg_server.persistence.memory_store.clone();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Err(e) = crate::memory::memory_bridge::bridge_promote(&memory_store, &mp) {
+                tracing::warn!("memory bridge: initial promote failed (background): {e}");
+            }
+        }
 
-    // ── Spawn EvolutionLoop (BLUE56-B03) ─────────────────────────────
+        // Start background tasks (BOTTLENECK-01) — GC, maintenance, security scans, etc.
+        if let Err(e) =
+            crate::acp::background::start_background_tasks(&bg_server, bg_shutdown.clone()).await
+        {
+            tracing::error!("Background tasks ultimately failed: {e}");
+        }
+    });
+
+    // ── Spawn EvolutionLoop (BLUE56-B03) — never blocks stdin ──
     if let Some(ref evo) = server.governance_deps.evolution_loop {
         let evo_clone = Arc::clone(evo);
         tokio::spawn(async move {
@@ -179,7 +187,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
             Ok(request) => request,
             Err(err) => {
                 send_error(
-                    server,
+                    &server,
                     None,
                     -32700,
                     crate::i18n::runtime::tf("error.parse_error", &[("error", &err.to_string())]),
@@ -192,7 +200,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
 
         if request.jsonrpc != "2.0" {
             send_error(
-                server,
+                &server,
                 request.id,
                 -32600,
                 crate::i18n::runtime::t("error.jsonrpc_must_be_2_0").to_string(),
@@ -202,7 +210,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
             continue;
         }
 
-        if let Err(err) = handle_request(server, request, None).await {
+        if let Err(err) = handle_request(&server, request, None).await {
             error!("request failed: {err:#}");
         }
     }

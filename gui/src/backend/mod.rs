@@ -252,10 +252,6 @@ impl BackendClient {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
-
-    // get_chat_endpoint was removed — it was #[allow(dead_code)] dead code
-    // with no external consumers. If needed in the future, add it back with
-    // a cargo feature flag.
 }
 
 // ── Health & Status ─────────────────────────────────────────────────────────

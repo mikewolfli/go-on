@@ -570,7 +570,7 @@ pub fn spawn_timeout_loop(
                         // tokio::sync::RwLock does not use lock poisoning,
                         // so .write().await returns the guard directly.
                         let mut guard = engine.write().await;
-                        let changed = guard.process_timeouts();
+                        let changed = guard.process_timeouts().await;
                         if !changed.is_empty() {
                             tracing::info!(
                                 target: "runtime_controls",

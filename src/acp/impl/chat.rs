@@ -514,6 +514,20 @@ pub(crate) async fn process_chat_request(
 
     let outcome =
         ChatPipeline::run(server, params, stream_observer.clone(), trace, span, ctx).await?;
+
+    // Log pipeline phase timing for observability
+    info!(
+        target: "chat_pipeline",
+        mode = outcome.mode,
+        phase = outcome.phase_name,
+        outcome.timing.observe_ms,
+        outcome.timing.think_ms,
+        outcome.timing.act_ms,
+        outcome.timing.reflect_ms,
+        outcome.timing.total_ms,
+        "chat pipeline completed",
+    );
+
     let mut result = outcome.result;
 
     // ── Plan output extraction ──────────────────────────────────────
@@ -848,6 +862,11 @@ pub(crate) async fn execute_autonomy_round(
             ))
         };
 
+        let effective_mode = if _params.mode.is_empty() {
+            "edit"
+        } else {
+            &_params.mode
+        };
         let acp_params = crate::acp::helpers::autonomy_loop_adapter::AcpAutonomyLoopParams {
             agent,
             tool_registry: autonomy_tool_registry,
@@ -857,6 +876,7 @@ pub(crate) async fn execute_autonomy_round(
             timeout_duration: request_timeout(phase.options.as_ref()),
             stream_tx: None,
             progress_sse_tx: progress_sse_tx.clone(),
+            operation_mode: effective_mode.to_string(),
         };
         let result =
             crate::acp::helpers::autonomy_loop_adapter::run_acp_autonomy_loop(acp_params).await;

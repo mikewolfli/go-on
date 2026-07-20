@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use tracing::warn;
 
@@ -94,7 +94,7 @@ fn normalize_acp_mode(value: Option<&str>) -> String {
         Some("safe") | Some("safeguard") => "safeguard".to_string(),
         Some("full-auto") | Some("full_auto") | Some("fullauto") => "full_auto".to_string(),
         Some(other) => other.to_string(),
-        None => "ask".to_string(),
+        None => "safeguard".to_string(),
     }
 }
 
@@ -994,60 +994,6 @@ pub(super) async fn session_request_permission_payload(
 
     // Return empty success — the client just needs acknowledgement.
     Ok(serde_json::Value::Object(serde_json::Map::new()))
-}
-
-/// Send a `$/requestPermission` notification to the client and wait for the response.
-///
-/// Returns the `PermissionOptionId` that the user selected, or an error if timed out.
-#[allow(dead_code)] // Public API for ACP $/requestPermission flow
-pub(super) async fn request_permission(
-    server: &AcpServer,
-    session_id: &str,
-    message: &str,
-    options: Vec<crate::schema::PermissionOption>,
-    timeout_secs: u64,
-) -> Result<crate::schema::PermissionOptionId> {
-    use crate::schema::{PermissionRequest, SessionNotification, SessionUpdate};
-
-    let permission_request = PermissionRequest {
-        message: message.to_string(),
-        options,
-        timeout_secs: Some(timeout_secs),
-        meta: None,
-    };
-
-    // Send notification via session/update with the permission_request variant
-    let update = SessionUpdate::PermissionRequest(permission_request);
-    let notif = SessionNotification::new(
-        crate::schema::SessionId::new(session_id.to_string()),
-        update,
-    );
-
-    if let Ok(value) = serde_json::to_value(&notif) {
-        crate::acp::r#impl::io::send_notification(server, "session/update", value).await?;
-    }
-
-    // Wait for the client to respond via session/request_permission
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        if std::time::Instant::now() > deadline {
-            anyhow::bail!("permission request timed out after {}s", timeout_secs);
-        }
-
-        // Check if the client has responded
-        {
-            let permissions = acp_permission_state().lock().await;
-            if let Some(option_id) = permissions.get(session_id) {
-                let result = option_id.clone();
-                drop(permissions);
-                // Clean up the stored response
-                acp_permission_state().lock().await.remove(session_id);
-                return Ok(result);
-            }
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
 }
 
 /// Handle `session/set_config_option` — sets a configuration option for a session.
@@ -2677,6 +2623,105 @@ pub(super) async fn terminal_wait_for_exit_payload(
     )?)
 }
 
+pub(super) async fn session_delete_payload(_server: &AcpServer, params: Value) -> Result<Value> {
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let mut deleted = false;
+
+    if !session_id.is_empty() {
+        let removed = {
+            let mut state = acp_session_state().lock().await;
+            state.remove(session_id)
+        };
+        if removed.is_some() {
+            deleted = true;
+            tracing::info!(
+                target: "acp::protocol_pack",
+                session_id = %session_id,
+                "session/delete: session deleted"
+            );
+
+            // Evict tenant rate limiter state on session delete
+            #[cfg(feature = "multi-users-server")]
+            if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
+                limiter.evict_tenant(session_id).await;
+            }
+
+            // Also delete from SQLite if available
+            #[cfg(feature = "backend-sqlite")]
+            if let Some(ref store) = _server.session_store {
+                if let Err(e) = store.delete(session_id).await {
+                    tracing::warn!(error = %e, session_id = %session_id, "Failed to delete session from SQLite");
+                }
+            }
+        } else {
+            tracing::warn!(
+                target: "acp::protocol_pack",
+                session_id = %session_id,
+                "session/delete: session not found"
+            );
+        }
+    }
+
+    Ok(serde_json::json!({
+        "deleted": deleted,
+        "sessionId": session_id
+    }))
+}
+
+pub(super) async fn session_config_set_payload(
+    _server: &AcpServer,
+    params: Value,
+) -> Result<Value> {
+    // session/config/set is an alias for session/set_config_option
+    // We call the existing implementation but need the server reference for SQLite persistence
+    session_set_config_option_payload(_server, params).await
+}
+
+pub(super) async fn session_config_get_payload(
+    _server: &AcpServer,
+    params: Value,
+) -> Result<Value> {
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let config_options = if !session_id.is_empty() {
+        let state = acp_session_state().lock().await;
+        state
+            .get(session_id)
+            .map(|s| s.config_options.clone())
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    // Also include the current mode as a config option
+    let mode = if !session_id.is_empty() {
+        let state = acp_session_state().lock().await;
+        state
+            .get(session_id)
+            .map(|s| s.mode.clone())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let mut all_options = config_options;
+    if !mode.is_empty() && !all_options.contains_key("mode") {
+        all_options.insert("mode".to_string(), Value::String(mode));
+    }
+
+    Ok(serde_json::json!({
+        "configOptions": all_options,
+        "sessionId": session_id
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2832,5 +2877,100 @@ mod tests {
         let id1 = generate_acp_session_id();
         let id2 = generate_acp_session_id();
         assert_ne!(id1, id2);
+    }
+
+    // ── session/delete ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_delete_payload_removes_session() {
+        // First create a session
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let new_params = json!({"mode": "edit"});
+        let new_result = session_new_payload(&server, new_params).await.unwrap();
+        let session_id = new_result["sessionId"].as_str().unwrap().to_string();
+
+        // Verify session exists
+        {
+            let state = acp_session_state().lock().await;
+            assert!(state.contains_key(&session_id));
+        }
+
+        // Delete the session
+        let delete_params = json!({"sessionId": session_id});
+        let delete_result = session_delete_payload(&server, delete_params)
+            .await
+            .unwrap();
+        assert_eq!(delete_result["deleted"], true);
+
+        // Verify session is gone
+        {
+            let state = acp_session_state().lock().await;
+            assert!(!state.contains_key(&session_id));
+        }
+    }
+
+    #[tokio::test]
+    async fn session_delete_payload_nonexistent_returns_deleted_false() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let delete_params = json!({"sessionId": "nonexistent-session"});
+        let result = session_delete_payload(&server, delete_params)
+            .await
+            .unwrap();
+        assert_eq!(result["deleted"], false);
+    }
+
+    // ── session/config/set ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_config_set_payload_stores_option() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let new_params = json!({"mode": "edit"});
+        let new_result = session_new_payload(&server, new_params).await.unwrap();
+        let session_id = new_result["sessionId"].as_str().unwrap().to_string();
+
+        // Set a config option
+        let set_params = json!({
+            "sessionId": session_id,
+            "configId": "temperature",
+            "value": 0.7
+        });
+        let set_result = session_config_set_payload(&server, set_params)
+            .await
+            .unwrap();
+        assert!(set_result.is_object());
+
+        // Verify via get
+        let get_params = json!({"sessionId": session_id});
+        let get_result = session_config_get_payload(&server, get_params)
+            .await
+            .unwrap();
+        assert_eq!(get_result["configOptions"]["temperature"], 0.7);
+    }
+
+    // ── session/config/get ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_config_get_payload_returns_options() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let new_params = json!({"mode": "safeguard"});
+        let new_result = session_new_payload(&server, new_params).await.unwrap();
+        let session_id = new_result["sessionId"].as_str().unwrap().to_string();
+
+        // Verify mode is included in config options
+        let get_params = json!({"sessionId": session_id});
+        let get_result = session_config_get_payload(&server, get_params)
+            .await
+            .unwrap();
+        assert_eq!(get_result["configOptions"]["mode"], "safeguard");
+    }
+
+    #[tokio::test]
+    async fn session_config_get_payload_nonexistent_returns_empty() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let get_params = json!({"sessionId": "nonexistent"});
+        let get_result = session_config_get_payload(&server, get_params)
+            .await
+            .unwrap();
+        assert!(get_result["configOptions"].as_object().unwrap().is_empty());
     }
 }

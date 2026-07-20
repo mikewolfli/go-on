@@ -1131,7 +1131,6 @@ async fn collect_votes(
 
             let response = tokio::time::timeout(deadline, async {
                 let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-                let (tx, mut rx) = mpsc::unbounded_channel::<String>();
                 let sender = StreamingSender::new(tx);
 
                 let messages = vec![Message {
@@ -1234,6 +1233,17 @@ mod tests {
             }
             let _ = sender.send(self.response.clone());
             Ok(())
+        }
+
+        fn available_models(&self) -> Vec<crate::agents::agent::ModelInfo> {
+            vec![crate::agents::agent::ModelInfo {
+                id: format!("stub-model-{}", self.idx),
+                name: self.model_name.clone(),
+                description: "stub agent for testing".to_string(),
+                is_default: true,
+                capabilities: vec!["chat".to_string()],
+                context_window: None,
+            }]
         }
 
         fn default_model(&self) -> Option<crate::agents::agent::ModelInfo> {

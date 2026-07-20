@@ -130,9 +130,12 @@ impl eframe::App for GoOnApp {
 
         if self.last_prompts_command_version != self.views.prompts_view.command_version {
             self.last_prompts_command_version = self.views.prompts_view.command_version;
-            self.views.chat_view.prompts_command_templates =
-                self.views.prompts_view.command_templates.clone();
-            self.views.chat_view.prompt_collection = self.views.prompts_view.collection.clone();
+            self.views
+                .chat_view
+                .template_state
+                .prompts_command_templates = self.views.prompts_view.command_templates.clone();
+            self.views.chat_view.template_state.prompt_collection =
+                self.views.prompts_view.collection.clone();
         }
 
         if self.last_applied_theme != self.config_store.shared().theme {

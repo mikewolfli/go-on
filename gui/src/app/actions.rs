@@ -166,16 +166,18 @@ impl GoOnApp {
                 self.views.chat_view.show_prompts = self.ui_state.show_prompts;
                 if let Some(json) = &self.ui_state.model_stats_json {
                     if let Ok(stats) = serde_json::from_str(json) {
-                        self.views.chat_view.model_stats = stats;
+                        self.views.chat_view.model_state.model_stats = stats;
                     }
                 }
-                if self.ui_state.active_session < self.views.chat_view.sessions.len() {
-                    self.views.chat_view.active_session = self.ui_state.active_session;
+                if self.ui_state.active_session < self.views.chat_view.session_state.sessions.len()
+                {
+                    self.views.chat_view.session_state.active_session =
+                        self.ui_state.active_session;
                 }
                 self.views.chat_view.input = self.ui_state.input_draft.clone();
-                self.views.chat_view.session_search_query =
+                self.views.chat_view.session_state.session_search_query =
                     self.ui_state.session_search_query.clone();
-                self.views.chat_view.template_search_query =
+                self.views.chat_view.template_state.template_search_query =
                     self.ui_state.template_search_query.clone();
             }
             "monitor" => {

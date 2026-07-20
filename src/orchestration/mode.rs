@@ -35,7 +35,10 @@ impl From<&str> for ModeKind {
             "ask" => ModeKind::Ask,
             "plan" => ModeKind::Plan,
             "edit" => ModeKind::Edit,
-            "agent" => ModeKind::Edit,
+            // "agent" maps to FullAuto: "agent" mode in Zed is a
+            // fully autonomous loop (plan -> act -> observe -> replan),
+            // much closer to FullAuto semantics than Edit.
+            "agent" => ModeKind::FullAuto,
             "full_auto" | "fullauto" => ModeKind::FullAuto,
             "safeguard" | "safe_guard" => ModeKind::SafeGuard,
             _ => ModeKind::Ask,
@@ -95,7 +98,8 @@ pub fn resolve_mode_runtime(
         "ask" => ModeKind::Ask,
         "plan" => ModeKind::Plan,
         "edit" => ModeKind::Edit,
-        "agent" => ModeKind::Edit,
+        // "agent" maps to FullAuto
+        "agent" => ModeKind::FullAuto,
         "full_auto" => ModeKind::FullAuto,
         "safeguard" => ModeKind::SafeGuard,
         _ => {
@@ -424,6 +428,7 @@ impl GenericModeRuntime {
         let lower = objective.to_lowercase();
         let mut score: f64 = 0.0;
 
+        // Extreme-risk keywords (additive 0.30 each)
         let extreme_keywords = ["drop database", "drop table", "truncate", "uninstall"];
         for kw in &extreme_keywords {
             if lower.contains(kw) {
@@ -431,17 +436,20 @@ impl GenericModeRuntime {
             }
         }
 
+        // High-risk keywords (additive 0.20 each)
         let high_risk_keywords = [
             "delete",
             "remove",
             "drop",
+            "bash",
+            "execute_command",
+            "shell_exec",
+            "rm",
+            "shutdown",
             "rollback",
             "revert",
-            "force",
             "reset",
-            "downgrade",
-            "format",
-            "purge",
+            "force",
         ];
         for kw in &high_risk_keywords {
             if lower.contains(kw) {
@@ -449,14 +457,9 @@ impl GenericModeRuntime {
             }
         }
 
+        // Medium-risk keywords (additive 0.10 each)
         let medium_risk_keywords = [
-            "modify",
-            "change",
-            "update",
-            "rename",
-            "move",
-            "overwrite",
-            "replace",
+            "write", "edit", "modify", "update", "create", "patch", "rename", "move", "copy",
         ];
         for kw in &medium_risk_keywords {
             if lower.contains(kw) {
@@ -467,15 +470,24 @@ impl GenericModeRuntime {
         score.min(1.0)
     }
 
+    /// Check if `text` contains `word` as a complete word (word-boundary matching).
+    /// Splits on non-alphanumeric characters to avoid false positives like
+    /// `"undelete"` matching `delete` or `"dropdown"` matching `drop`.
+    pub fn word_boundary_match(text: &str, word: &str) -> bool {
+        text.split(|c: char| !c.is_alphanumeric())
+            .any(|w| w.eq_ignore_ascii_case(word))
+    }
+
     /// Evaluate risk and return the appropriate degradation policy.
     pub fn evaluate_degradation(&self, risk_score: f64) -> AutoDegradePolicy {
         if risk_score > 0.95 {
             AutoDegradePolicy::Block
         } else if risk_score > 0.70 {
-            AutoDegradePolicy::AllowWithAudit
+            AutoDegradePolicy::ConfirmRequired
         } else if risk_score > 0.40 {
             AutoDegradePolicy::ReadOnly
         } else {
+            // Low risk: allow with audit logging
             AutoDegradePolicy::AllowWithAudit
         }
     }
@@ -495,7 +507,13 @@ impl ModeStrategy for GenericModeRuntime {
     }
 
     fn use_chat(&self) -> bool {
-        matches!(self.kind, ModeKind::Ask | ModeKind::Plan)
+        // FullAuto and SafeGuard also use chat() for tool-supported execution.
+        // Ask and Plan use chat() for pure conversation without execution.
+        // Only Edit uses run_task() via the autonomy loop.
+        matches!(
+            self.kind,
+            ModeKind::Ask | ModeKind::Plan | ModeKind::FullAuto | ModeKind::SafeGuard
+        )
     }
 
     fn pua_mode(&self) -> &str {
@@ -790,16 +808,160 @@ impl ModeRuntime for GenericModeRuntime {
     }
 
     fn allowed_tools(&self) -> Vec<String> {
+        /// All non-destructive / read-only tools for Plan mode.
+        fn plan_tools() -> Vec<String> {
+            vec![
+                "read_file".to_string(),
+                "read_file_lines".to_string(),
+                "search_files".to_string(),
+                "grep".to_string(),
+                "list_directory".to_string(),
+                "inspect_git_diff".to_string(),
+                "code_index_search".to_string(),
+                "go_to_definition".to_string(),
+                "find_references".to_string(),
+                "date_time".to_string(),
+                "environment_info".to_string(),
+                "json_query".to_string(),
+                "diff".to_string(),
+                "archive_inspect".to_string(),
+                "code_metrics".to_string(),
+                "dns_lookup".to_string(),
+                "ping".to_string(),
+                "docker_ps".to_string(),
+                "docker_logs".to_string(),
+                "http_request".to_string(),
+                "skill_list".to_string(),
+                "rss_read".to_string(),
+                "jsonl_read".to_string(),
+            ]
+        }
+
+        /// All available tools for full execution modes (Edit, SafeGuard, FullAuto).
+        /// This includes every unconditional tool + skill tools.
+        /// Feature-gated tools are compiled conditionally; the registry handles availability.
+        /// The governance/sandbox layer provides runtime safety, not mode-level tool filtering.
+        fn all_execution_tools() -> Vec<String> {
+            vec![
+                // ── File tools ──
+                "read_file".to_string(),
+                "read_file_lines".to_string(),
+                "write_file".to_string(),
+                "apply_patch".to_string(),
+                "file_move".to_string(),
+                "file_delete".to_string(),
+                "copy_path".to_string(),
+                "create_directory".to_string(),
+                "format_code".to_string(),
+                "hash_file".to_string(),
+                "file_watch".to_string(),
+                // ── Search tools ──
+                "search_files".to_string(),
+                "grep".to_string(),
+                "code_index_search".to_string(),
+                "go_to_definition".to_string(),
+                "find_references".to_string(),
+                // ── Git / Diff ──
+                "inspect_git_diff".to_string(),
+                "diff".to_string(),
+                "git".to_string(),
+                // ── Build / Test / Lint ──
+                "cargo_check".to_string(),
+                "cargo_test".to_string(),
+                "run_tests".to_string(),
+                "run_build".to_string(),
+                "lint_code".to_string(),
+                "diagnostics".to_string(),
+                // ── Shell / Execution ──
+                "shell_exec".to_string(),
+                // ── Directory ──
+                "list_directory".to_string(),
+                // ── Archive ──
+                "archive_inspect".to_string(),
+                "archive_extract".to_string(),
+                "compress".to_string(),
+                "decompress".to_string(),
+                // ── Network ──
+                "http_request".to_string(),
+                "web_search".to_string(),
+                "dns_lookup".to_string(),
+                "ping".to_string(),
+                "port_scan".to_string(),
+                // ── Data ──
+                "jsonl_read".to_string(),
+                "jsonl_write".to_string(),
+                "json_query".to_string(),
+                "rss_read".to_string(),
+                // ── Docker ──
+                "docker_ps".to_string(),
+                "docker_logs".to_string(),
+                "docker_exec".to_string(),
+                "docker_build".to_string(),
+                "docker_push".to_string(),
+                "docker_compose".to_string(),
+                // ── Utility ──
+                "date_time".to_string(),
+                "environment_info".to_string(),
+                "uuid_gen".to_string(),
+                "random_token".to_string(),
+                "encode_decode".to_string(),
+                "template_render".to_string(),
+                "code_metrics".to_string(),
+                "security_scan".to_string(),
+                "search_packages".to_string(),
+                "add_dependency".to_string(),
+                // ── Agent tools ──
+                "spawn_agent".to_string(),
+                "apply_code_action".to_string(),
+                // ── Skill tools (always available) ──
+                "skill_list".to_string(),
+                "skill_execute".to_string(),
+                "skill_create".to_string(),
+                "skill_reload".to_string(),
+            ]
+        }
+
+        /// Read-only subset of tools for SafeGuard ReadOnly degradation.
+        fn read_only_tools() -> Vec<String> {
+            vec![
+                "read_file".to_string(),
+                "read_file_lines".to_string(),
+                "search_files".to_string(),
+                "grep".to_string(),
+                "list_directory".to_string(),
+                "inspect_git_diff".to_string(),
+                "code_index_search".to_string(),
+                "go_to_definition".to_string(),
+                "find_references".to_string(),
+                "diff".to_string(),
+                "date_time".to_string(),
+                "environment_info".to_string(),
+                "json_query".to_string(),
+                "archive_inspect".to_string(),
+                "dns_lookup".to_string(),
+                "ping".to_string(),
+                "docker_ps".to_string(),
+                "docker_logs".to_string(),
+                "rss_read".to_string(),
+                "jsonl_read".to_string(),
+                "code_metrics".to_string(),
+                "security_scan".to_string(),
+                "skill_list".to_string(),
+                "web_search".to_string(),
+            ]
+        }
+
         match self.kind {
             ModeKind::Ask => vec![],
-            ModeKind::Plan => vec!["read_file".to_string(), "search_files".to_string()],
-            ModeKind::Edit | ModeKind::FullAuto | ModeKind::SafeGuard => vec![
-                "read_file".to_string(),
-                "search_files".to_string(),
-                "apply_patch".to_string(),
-                "run_tests".to_string(),
-                "inspect_git_diff".to_string(),
-            ],
+            ModeKind::Plan => plan_tools(),
+            ModeKind::Edit | ModeKind::FullAuto => all_execution_tools(),
+            ModeKind::SafeGuard => {
+                if matches!(self.degrade_policy, AutoDegradePolicy::ReadOnly) {
+                    read_only_tools()
+                } else {
+                    all_execution_tools()
+                }
+            }
         }
     }
 
@@ -814,17 +976,19 @@ impl ModeRuntime for GenericModeRuntime {
     }
 
     fn user_approval_required(&self) -> bool {
-        matches!(self.kind, ModeKind::Edit)
+        // Frontend controls approval display, not the runtime.
+        // Edit mode delegates approval to the frontend's pending_tool_approval mechanism.
+        // SafeGuard uses its own risk-based degradation policy.
+        false
     }
 
     fn is_high_risk_operation(&self, objective: &str) -> bool {
         match self.kind {
             ModeKind::Edit => {
-                let lower = objective.to_lowercase();
-                lower.contains("delete")
-                    || lower.contains("remove")
-                    || lower.contains("drop")
-                    || lower.contains("truncate")
+                Self::word_boundary_match(objective, "delete")
+                    || Self::word_boundary_match(objective, "remove")
+                    || Self::word_boundary_match(objective, "drop")
+                    || Self::word_boundary_match(objective, "truncate")
             }
             ModeKind::SafeGuard => self.compute_risk_score(objective) > 0.15,
             _ => false,

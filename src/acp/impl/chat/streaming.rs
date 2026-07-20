@@ -23,12 +23,8 @@ use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 const STREAM_EVENT_CHUNK: &str = "chunk";
 const STREAM_EVENT_DONE: &str = "done";
 const STREAM_EVENT_TELEMETRY: &str = "telemetry";
-#[allow(dead_code)]
-const STREAM_EVENT_PHASE_START: &str = "phase_start";
-#[allow(dead_code)]
-const STREAM_EVENT_PHASE_END: &str = "phase_end";
-#[allow(dead_code)]
 const STREAM_EVENT_STATUS: &str = "status";
+const STREAM_EVENT_TOOL_APPROVAL: &str = "tool_approval";
 
 // ── SseBufferPool (GAP-46-12 / BLUE48 Step 2) ────────────────────────
 // Global pool of pre-allocated byte buffers for SSE event serialization.
@@ -301,6 +297,32 @@ pub(crate) async fn emit_status_event(
             status: Some(status),
         });
     }
+    Ok(())
+}
+
+/// Emit a tool approval request event, requesting user confirmation
+/// before executing a tool in Edit or SafeGuard mode.
+pub(crate) async fn emit_tool_approval_event(
+    progress_tx: &Option<mpsc::UnboundedSender<StreamFrame>>,
+    tool_name: &str,
+    tool_args: &Value,
+    mode: &str,
+    risk_score: f64,
+) -> Result<()> {
+    let Some(tx) = progress_tx else {
+        return Ok(());
+    };
+    let _ = tx.send(StreamFrame {
+        event: STREAM_EVENT_TOOL_APPROVAL,
+        payload: json!({
+            "tool_name": tool_name,
+            "tool_args": tool_args,
+            "mode": mode,
+            "risk_score": risk_score,
+            "message": format!("Tool '{}' requires approval (mode: {}, risk: {:.2})", tool_name, mode, risk_score),
+        }),
+        status: None,
+    });
     Ok(())
 }
 

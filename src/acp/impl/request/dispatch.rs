@@ -185,6 +185,10 @@ pub async fn dispatch_to_client(
                     "progress" => {
                         send_notification(server, "chat.stream.progress", frame.payload).await?;
                     }
+                    "tool_approval" => {
+                        send_notification(server, "chat.stream.tool_approval", frame.payload)
+                            .await?;
+                    }
                     "phase_start" | "phase_end" => {
                         send_notification(server, "chat.stream.phase", frame.payload).await?;
                     }

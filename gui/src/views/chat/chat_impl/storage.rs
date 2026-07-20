@@ -98,10 +98,10 @@ impl ChatView {
     }
 
     pub(super) fn save_templates_to_disk(&self) {
-        let in_flight = self.template_save_in_flight.clone();
-        let epoch = self.template_save_epoch.clone();
+        let in_flight = self.template_state.template_save_in_flight.clone();
+        let epoch = self.template_state.template_save_epoch.clone();
         let this_epoch = epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
-        let templates = self.prompt_templates.clone();
+        let templates = self.template_state.prompt_templates.clone();
         let path = Self::templates_path();
         let json_payload = match serde_json::to_string_pretty(&templates) {
             Ok(s) => s,
@@ -117,7 +117,7 @@ impl ChatView {
             path,
             "chat templates",
             json_payload,
-            self.pending_tx.clone(),
+            self.stream_state.pending_tx.clone(),
         );
     }
 
@@ -142,10 +142,10 @@ impl ChatView {
     }
 
     pub(super) fn save_sessions_to_disk(&self) {
-        let in_flight = self.session_save_in_flight.clone();
-        let epoch = self.session_save_epoch.clone();
+        let in_flight = self.session_state.session_save_in_flight.clone();
+        let epoch = self.session_state.session_save_epoch.clone();
         let this_epoch = epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
-        let sessions = self.sessions.clone();
+        let sessions = self.session_state.sessions.clone();
         let path = Self::sessions_path();
         let json_payload = match serde_json::to_string_pretty(&sessions) {
             Ok(s) => s,
@@ -161,7 +161,7 @@ impl ChatView {
             path,
             "chat sessions",
             json_payload,
-            self.pending_tx.clone(),
+            self.stream_state.pending_tx.clone(),
         );
     }
 }

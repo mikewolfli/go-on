@@ -90,6 +90,702 @@ impl ActiveGenerationGuard {
     }
 }
 
+// ── Helper types for stream processing ──
+
+/// Accumulated result from processing a streaming SSE response.
+struct StreamResult {
+    content: Option<String>,
+    thinking: Option<String>,
+    agent: Option<String>,
+    used_model: Option<String>,
+    conv_id: Option<String>,
+    branch_id: Option<String>,
+    sse_errors: u32,
+}
+
+impl StreamResult {
+    fn new() -> Self {
+        Self {
+            content: None,
+            thinking: None,
+            agent: None,
+            used_model: None,
+            conv_id: None,
+            branch_id: None,
+            sse_errors: 0,
+        }
+    }
+}
+
+// ── Stream-processing free functions ──
+
+/// Parameters for building a chat request body.
+struct ChatRequestBodyParams<'a> {
+    use_workflow_rpc: bool,
+    mode: &'a str,
+    model: &'a str,
+    history_messages: &'a [serde_json::Value],
+    outbound_msg: &'a str,
+    request_options: Option<Value>,
+    conv_id: Option<String>,
+    branch_id: Option<String>,
+    selected_agent: &'a str,
+}
+
+/// Build the JSON request body for the chat stream endpoint.
+/// Supports both standard chat mode and workflow RPC mode.
+async fn build_chat_request_body(p: ChatRequestBodyParams<'_>) -> serde_json::Value {
+    let ChatRequestBodyParams {
+        use_workflow_rpc,
+        mode,
+        model,
+        history_messages,
+        outbound_msg,
+        request_options,
+        conv_id,
+        branch_id,
+        selected_agent,
+    } = p;
+    let mut body = if use_workflow_rpc {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "workflow.ask",
+            "params": {
+                "task": outbound_msg,
+                "auto_create_skills": true,
+                "auto_create_workflow": true,
+            }
+        })
+    } else {
+        serde_json::json!({
+            "messages": history_messages,
+            "mode": mode,
+        })
+    };
+
+    if !use_workflow_rpc {
+        // Model selection logic
+        if !model.trim().is_empty() && model != "auto" {
+            body["options"] = serde_json::json!({"model": model});
+        }
+
+        if let Some(extra) = request_options.clone() {
+            if body.get("options").is_none() {
+                body["options"] = serde_json::json!({});
+            }
+            if let Some(obj) = extra.as_object() {
+                for (k, v) in obj {
+                    body["options"][k] = v.clone();
+                }
+            }
+        }
+
+        if let Some(cid) = conv_id {
+            body["conversation_id"] = serde_json::json!(cid);
+        }
+        if let Some(bid) = branch_id {
+            body["branch_id"] = serde_json::json!(bid);
+        }
+
+        // Always send preferred_agent when explicitly selected
+        if !selected_agent.is_empty() {
+            if let Some(serde_json::Value::Object(ref mut options_map)) = body.get_mut("options") {
+                options_map.insert(
+                    "preferred_agent".to_string(),
+                    serde_json::Value::String(selected_agent.to_string()),
+                );
+            } else {
+                body["options"] = serde_json::json!({"preferred_agent": selected_agent});
+            }
+        }
+    }
+
+    body
+}
+
+/// Handle the workflow RPC path (non-streaming). Returns `true` if the request
+/// was handled as a workflow (caller should return early), `false` otherwise.
+async fn handle_workflow_rpc(
+    base_url: &str,
+    body: &serde_json::Value,
+    generation_id: u64,
+    tx: &mpsc::SyncSender<PendingResponse>,
+) -> bool {
+    let workflow_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .build()
+        .unwrap_or_else(|_| {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .read_timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        });
+    match workflow_client
+        .post(format!("{}/rpc", base_url.trim_end_matches('/')))
+        .json(body)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if let Ok(value) = resp.json::<serde_json::Value>().await {
+                if value.get("error").is_some() {
+                    let error_msg = value["error"]
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown workflow error");
+                    tracing::warn!(
+                        "[Gen] Workflow generation {} returned error: {}",
+                        generation_id,
+                        error_msg
+                    );
+                    send_pending(
+                        tx,
+                        PendingResponse::Error {
+                            generation_id: Some(generation_id),
+                            message: format!("workflow.ask failed: {error_msg}"),
+                        },
+                    )
+                    .await;
+                } else {
+                    let result_text =
+                        serde_json::to_string_pretty(value.get("result").unwrap_or(&value))
+                            .unwrap_or_default();
+                    #[cfg(debug_assertions)]
+                    eprintln!("[Gen] Workflow generation {} completed", generation_id);
+                    send_pending(
+                        tx,
+                        PendingResponse::ChatCompleted {
+                            generation_id,
+                            content: result_text,
+                            thinking: String::new(),
+                            agent: "workflow".to_string(),
+                            model: None,
+                            conversation_id: None,
+                            branch_id: None,
+                        },
+                    )
+                    .await;
+                }
+            } else {
+                tracing::warn!(
+                    "[Gen] Workflow generation {} - JSON parse failed",
+                    generation_id
+                );
+                send_pending(
+                    tx,
+                    PendingResponse::Error {
+                        generation_id: Some(generation_id),
+                        message: "workflow response parse error".to_string(),
+                    },
+                )
+                .await;
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[Gen] Workflow generation {} failed: {}", generation_id, e);
+            send_pending(
+                tx,
+                PendingResponse::Error {
+                    generation_id: Some(generation_id),
+                    message: format!("workflow.ask error: {e}"),
+                },
+            )
+            .await;
+        }
+    }
+    true
+}
+
+/// Attempt a fallback non-streaming chat request when the stream request fails
+/// or returns a non-success HTTP status.
+#[allow(clippy::too_many_arguments)]
+async fn fallback_chat_request(
+    backend: &BackendClient,
+    outbound_msg: &str,
+    mode: &str,
+    phase: &str,
+    model: &str,
+    request_options: Option<Value>,
+    abort_ctrl: &AbortController,
+    generation_id: u64,
+    tx: &mpsc::SyncSender<PendingResponse>,
+    error_context: &str,
+) {
+    let fallback = backend
+        .chat_with_options(
+            outbound_msg,
+            mode,
+            phase,
+            Some(model),
+            request_options,
+            None,
+            Some(abort_ctrl.clone()),
+        )
+        .await
+        .map(
+            |(content, thinking, agent, selected_model)| PendingResponse::ChatCompleted {
+                generation_id,
+                content,
+                thinking,
+                agent,
+                model: selected_model,
+                conversation_id: None,
+                branch_id: None,
+            },
+        )
+        .unwrap_or_else(|e| PendingResponse::Error {
+            generation_id: Some(generation_id),
+            message: format!("{error_context}; fallback: {e}"),
+        });
+    send_pending(tx, fallback).await;
+}
+
+/// Process the SSE stream response: read chunks, parse events, buffer tokens,
+/// and forward them as PendingResponse messages. Returns the accumulated result
+/// (final content, thinking, agent info, etc.) after the stream ends.
+async fn process_stream_events(
+    mut resp: reqwest::Response,
+    generation_id: u64,
+    tx: &mpsc::SyncSender<PendingResponse>,
+    stream_chunk_flush_interval: std::time::Duration,
+    abort_ctrl: &AbortController,
+) -> StreamResult {
+    let mut result = StreamResult::new();
+    let mut buffered_token = String::with_capacity(4096);
+    let mut buffered_reasoning = String::with_capacity(2048);
+    let mut last_stream_flush = std::time::Instant::now();
+    let mut total_buffer_bytes = 0usize;
+
+    // Use StreamProcessor as the single SSE parser for all GUI stream parsing.
+    let mut processor = StreamProcessor::new();
+
+    loop {
+        let chunk = match resp.chunk().await {
+            Ok(Some(c)) => c,
+            Ok(None) => break,
+            Err(e) => {
+                send_pending(
+                    tx,
+                    PendingResponse::Error {
+                        generation_id: Some(generation_id),
+                        message: format!("read error: {e}"),
+                    },
+                )
+                .await;
+                return result;
+            }
+        };
+
+        // Check for abort before processing the chunk
+        if abort_ctrl.is_cancelled() {
+            return result;
+        }
+
+        // Delegate SSE parsing to StreamProcessor
+        let events = processor.push_chunk(&chunk);
+        for event_result in events {
+            match event_result {
+                Ok(val) => {
+                    // Handle [DONE] sentinel
+                    if val.is_string() && val.as_str() == Some("[DONE]") {
+                        break;
+                    }
+                    if val.get("data").and_then(|v| v.as_str()) == Some("[DONE]") {
+                        break;
+                    }
+
+                    let event_type = val
+                        .get("_event_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    match event_type {
+                        "chunk" | "" => {
+                            let token = val
+                                .get("token")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            let reasoning = val
+                                .get("reasoning")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+
+                            if !token.is_empty() || !reasoning.is_empty() {
+                                let token_bytes = token.len();
+                                let reasoning_bytes = reasoning.len();
+                                total_buffer_bytes += token_bytes + reasoning_bytes;
+
+                                // Accumulate into final_content as a safety net
+                                if !token.is_empty() {
+                                    result
+                                        .content
+                                        .get_or_insert_with(String::new)
+                                        .push_str(&token);
+                                }
+                                buffered_token.push_str(&token);
+                                buffered_reasoning.push_str(&reasoning);
+
+                                // Force flush if buffer exceeds max accumulated size
+                                if total_buffer_bytes > MAX_BUFFERED_TOKENS_BYTES {
+                                    send_pending(
+                                        tx,
+                                        PendingResponse::StreamChunk {
+                                            generation_id,
+                                            token: std::mem::take(&mut buffered_token),
+                                            reasoning: std::mem::take(&mut buffered_reasoning),
+                                        },
+                                    )
+                                    .await;
+                                    total_buffer_bytes = 0;
+                                    last_stream_flush = std::time::Instant::now();
+                                }
+                            }
+                        }
+                        "telemetry" => {
+                            if let Some(te) = val.get("token_economy") {
+                                let input_tokens =
+                                    te.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                                        as usize;
+                                let output_tokens =
+                                    te.get("output_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as usize;
+                                let total_tokens =
+                                    te.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                                        as usize;
+                                send_pending(
+                                    tx,
+                                    PendingResponse::TokenEconomy {
+                                        generation_id,
+                                        input_tokens,
+                                        output_tokens,
+                                        total_tokens,
+                                    },
+                                )
+                                .await;
+                            }
+                        }
+                        "sub_agent" => {
+                            let agent = val
+                                .get("agent")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let action = val
+                                .get("action")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let status = val
+                                .get("status")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("running")
+                                .to_string();
+                            let input = val
+                                .get("input")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let output = val
+                                .get("output")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            send_pending(
+                                tx,
+                                PendingResponse::SubAgentEvent {
+                                    generation_id,
+                                    agent,
+                                    action,
+                                    status,
+                                    input,
+                                    output,
+                                },
+                            )
+                            .await;
+                        }
+                        "tool_approval" => {
+                            let tool_name = val
+                                .get("tool_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let tool_args = val
+                                .get("tool_args")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            let mode = val
+                                .get("mode")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let risk_score = val
+                                .get("risk_score")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            let message = val
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            send_pending(
+                                tx,
+                                PendingResponse::ToolApprovalRequest {
+                                    generation_id,
+                                    tool_name,
+                                    tool_args,
+                                    mode,
+                                    risk_score,
+                                    message,
+                                },
+                            )
+                            .await;
+                        }
+                        "command" => {
+                            let command_str = val
+                                .get("command")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let working_dir = val
+                                .get("working_dir")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let exit_code =
+                                val.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
+                            let stdout = val
+                                .get("stdout")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let stderr = val
+                                .get("stderr")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let duration_ms =
+                                val.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                            send_pending(
+                                tx,
+                                PendingResponse::CommandOutput {
+                                    generation_id,
+                                    command: command_str,
+                                    working_dir,
+                                    exit_code,
+                                    stdout,
+                                    stderr,
+                                    duration_ms,
+                                },
+                            )
+                            .await;
+                        }
+                        "result" | "done" => {
+                            let new_content = val
+                                .get("response")
+                                .or_else(|| val.get("content"))
+                                .and_then(|v| v.as_str())
+                                .map(ToOwned::to_owned);
+                            if let Some(ref c) = new_content {
+                                if !c.trim().is_empty() {
+                                    result.content = Some(c.clone());
+                                }
+                            }
+                            result.thinking = val
+                                .get("thinking")
+                                .and_then(|v| v.as_str())
+                                .map(ToOwned::to_owned);
+                            let new_agent = val
+                                .get("agent")
+                                .or_else(|| val.get("selected_agent"))
+                                .or_else(|| val.pointer("/capability_routing/selected_agent"))
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            if let Some(ref a) = new_agent {
+                                if !a.trim().is_empty() {
+                                    result.agent = Some(a.clone());
+                                }
+                            }
+                            result.used_model = val
+                                .get("selected_model")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            result.conv_id = val
+                                .get("conversation_id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            result.branch_id = val
+                                .get("branch_id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            if val.get("plan_output").is_some() {
+                                #[cfg(debug_assertions)]
+                                eprintln!("[Plan] Captured plan_output");
+                            }
+                        }
+                        "error" => {
+                            if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {
+                                send_pending(
+                                    tx,
+                                    PendingResponse::StreamChunk {
+                                        generation_id,
+                                        token: std::mem::take(&mut buffered_token),
+                                        reasoning: std::mem::take(&mut buffered_reasoning),
+                                    },
+                                )
+                                .await;
+                            }
+                            let message = val
+                                .get("message")
+                                .or_else(|| val.get("error"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "stream error: {}",
+                                        serde_json::to_string(&val).unwrap_or_default()
+                                    )
+                                });
+
+                            tracing::warn!(
+                                "[Gen] SSE error event for generation {}: {}",
+                                generation_id,
+                                message
+                            );
+
+                            send_pending(
+                                tx,
+                                PendingResponse::Error {
+                                    generation_id: Some(generation_id),
+                                    message,
+                                },
+                            )
+                            .await;
+                            return result;
+                        }
+                        _ => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("[SSE] Unknown event type: {}", event_type);
+                            result.sse_errors = result.sse_errors.saturating_add(1);
+                        }
+                    }
+
+                    // Time-based flush to maintain responsive UI
+                    if (!buffered_token.is_empty() || !buffered_reasoning.is_empty())
+                        && last_stream_flush.elapsed() >= stream_chunk_flush_interval
+                    {
+                        send_pending(
+                            tx,
+                            PendingResponse::StreamChunk {
+                                generation_id,
+                                token: std::mem::take(&mut buffered_token),
+                                reasoning: std::mem::take(&mut buffered_reasoning),
+                            },
+                        )
+                        .await;
+                        last_stream_flush = std::time::Instant::now();
+                        total_buffer_bytes = 0;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("[SSE] Parse error: {}", e);
+                    result.sse_errors = result.sse_errors.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    // Flush any remaining buffered content
+    if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {
+        send_pending(
+            tx,
+            PendingResponse::StreamChunk {
+                generation_id,
+                token: buffered_token,
+                reasoning: buffered_reasoning,
+            },
+        )
+        .await;
+    }
+
+    result
+}
+
+/// Finalize the chat response after stream processing: emit SSE parse error
+/// warnings, and send either ChatCompleted or an empty-response Error.
+async fn finalize_stream_result(
+    result: StreamResult,
+    generation_id: u64,
+    tx: &mpsc::SyncSender<PendingResponse>,
+) {
+    #[cfg(debug_assertions)]
+    {
+        let _status_log = format!(
+            "tokens:{}, thinking:{}, agent:{}",
+            result.content.as_ref().map(|c| c.len()).unwrap_or(0),
+            !result
+                .thinking
+                .as_ref()
+                .map(|t| t.is_empty())
+                .unwrap_or(true),
+            result.agent.as_deref().unwrap_or("unknown")
+        );
+        eprintln!(
+            "[Gen] Generation {} completed ({})",
+            generation_id, _status_log
+        );
+    }
+
+    // Emit SSE parse error summary warning if any errors occurred
+    if result.sse_errors > 0 {
+        let warn_msg = format!(
+            "[SSE] {} JSON parse error(s) occurred during streaming",
+            result.sse_errors
+        );
+        tracing::warn!("{}", warn_msg);
+        send_pending(tx, PendingResponse::UiMessage(warn_msg)).await;
+    }
+
+    let content_empty = result.content.as_ref().is_none_or(|c| c.is_empty());
+    let agent_empty = result.agent.as_ref().is_none_or(|a| a.is_empty());
+    if content_empty && agent_empty {
+        send_pending(
+            tx,
+            PendingResponse::Error {
+                generation_id: Some(generation_id),
+                message: "The chat stream ended without producing a response.\n\
+Possible causes:\n\
+  • No agents are configured for the current phase\n\
+  • API keys are missing or expired\n\
+  • Backend is overloaded or unreachable\n\
+\
+Check the backend log and agent configuration."
+                    .to_string(),
+            },
+        )
+        .await;
+    } else {
+        send_pending(
+            tx,
+            PendingResponse::ChatCompleted {
+                generation_id,
+                content: result.content.unwrap_or_default(),
+                thinking: result.thinking.unwrap_or_default(),
+                agent: result.agent.unwrap_or_default(),
+                model: result.used_model,
+                conversation_id: result.conv_id,
+                branch_id: result.branch_id,
+            },
+        )
+        .await;
+    }
+}
+
 impl ChatView {
     /// Zed-style: append a segment to the segments list, merging with the last
     /// segment of the same type to keep contiguous content together.
@@ -168,22 +864,20 @@ impl ChatView {
         }
     }
 
-    /// Send a message asynchronously via the backend.
-    pub fn send_message(
+    /// ── Sub-function 1: Prepare request parameters ──
+    /// Validates input, expands prompt commands, validates phase against
+    /// known backend phases, and runs SafeGuard risk checks.
+    /// Returns (expanded_msg, mode, phase, base_url, autotune_extra).
+    fn prepare_chat_request(
         &mut self,
-        backend: &BackendClient,
-        ctx: &egui::Context,
+        msg: &str,
         autotune_chain_enabled: bool,
-    ) {
-        let msg = self.input.trim().to_string();
-        if msg.is_empty() || self.sending {
-            return;
-        }
-
-        // Concurrent generation limit is enforced atomically below via fetch_add.
-        // Do NOT check before fetch_add — that would be a TOCTOU race.
-        let expanded_msg =
-            self.expand_prompt_command_with_fallback(&msg, Some(&self.prompts_command_templates));
+        backend: &BackendClient,
+    ) -> (String, String, String, String, Option<Value>) {
+        let expanded_msg = self.expand_prompt_command_with_fallback(
+            msg,
+            Some(&self.template_state.prompts_command_templates),
+        );
         let mode = self.selected_mode.clone();
         // Validate phase before sending — if the phase is not in the known list
         // fetched from backend, default to empty (backend will use its default phase).
@@ -207,6 +901,39 @@ impl ChatView {
             None
         };
 
+        // ── Mode-aware pre-send check ──
+        // For SafeGuard mode, pre-compute risk score
+        if self.mode_policy.mode == "safeguard" {
+            let risk = self.mode_policy.compute_risk_score(&expanded_msg);
+            if risk > 0.7 {
+                self.risk_is_high = true;
+                self.risk_review_required = true;
+                self.risk_strategy = "safeguard_review".to_string();
+                self.risk_reasons = format!(
+                    "Risk score: {:.2} — high-risk operation detected. SafeGuard mode requires confirmation.",
+                    risk
+                );
+            } else {
+                self.risk_is_high = false;
+                self.risk_review_required = false;
+                self.risk_strategy.clear();
+                self.risk_reasons.clear();
+            }
+        }
+
+        (expanded_msg, mode, phase, base_url, autotune_extra)
+    }
+
+    /// ── Sub-function 2 (pre-spawn part): Update UI panels before sending ──
+    /// Clears the input, takes attachments, builds the outbound message,
+    /// pushes the user message to the session, and sets AI status to Thinking.
+    /// Returns (comparison_id, outbound_msg).
+    fn update_ui_panels_before_spawn(
+        &mut self,
+        expanded_msg: &str,
+        phase: &str,
+        _backend: &BackendClient,
+    ) -> (u64, String) {
         self.input.clear();
         let now = crate::fs_util::epoch_secs();
         let atts = std::mem::take(&mut self.attachments);
@@ -218,19 +945,27 @@ impl ChatView {
         // attachment data should be injected as image_url parts:
         //   "content": [{ "type": "text", "text": "..." },
         //                { "type": "image_url", "image_url": { "url": "data:{mime};base64,{data}" }}]
-
         let attachment_summary = Self::build_attachment_summary(&atts);
         let outbound_msg = format!("{expanded_msg}{attachment_summary}");
+
+        // Sync the current UI mode into the session before saving
+        if let Some(session) = self
+            .session_state
+            .sessions
+            .get_mut(self.session_state.active_session)
+        {
+            session.mode = self.selected_mode.clone();
+        }
 
         // Add user message immediately
         self.session().push_message(Message {
             role: "user".to_string(),
-            content: expanded_msg.clone(),
+            content: expanded_msg.to_string(),
             timestamp: now,
             attachments: atts,
             model: String::new(),
             comparison_id: 0,
-            input_tokens: Self::estimate_tokens_improved(&expanded_msg),
+            input_tokens: Self::estimate_tokens_improved(expanded_msg),
             output_tokens: 0,
             total_tokens: 0,
             thinking: String::new(),
@@ -241,12 +976,12 @@ impl ChatView {
         self.save_sessions_to_disk();
 
         self.last_token_estimate = 0;
-        self.input_token_estimate = Self::estimate_tokens_improved(&expanded_msg);
+        self.input_token_estimate = Self::estimate_tokens_improved(expanded_msg);
         self.output_token_estimate = 0;
 
         // Add a "running" phase record
         let now_ts = crate::fs_util::epoch_secs();
-        let running_phase = if phase.is_empty() { "think" } else { &phase };
+        let running_phase = if phase.is_empty() { "think" } else { phase };
         self.session().phase_records.push(PhaseRecord {
             phase: running_phase.to_string(),
             agent: String::new(),
@@ -259,15 +994,52 @@ impl ChatView {
         self.error.clear();
         self.stop_requested = false;
 
+        (now, outbound_msg)
+    }
+
+    /// ── Sub-function 5 (post-spawn part): Check post-spawn state ──
+    /// If no generation was started, reverts the sending and ai_status.
+    fn check_post_spawn_state(&mut self, existing_generations: usize) {
+        if self.generation_states.len() == existing_generations {
+            // Nothing started.
+            self.sending = false;
+            self.ai_status = AiStatus::Error;
+            self.set_phase_record_status("error");
+        }
+    }
+
+    /// Send a message asynchronously via the backend.
+    pub fn send_message(
+        &mut self,
+        backend: &BackendClient,
+        ctx: &egui::Context,
+        autotune_chain_enabled: bool,
+    ) {
+        let msg = self.input.trim().to_string();
+        if msg.is_empty() || self.sending {
+            return;
+        }
+
+        // Reset per-turn tool call counter for max_tool_calls enforcement
+        self.turn_tool_calls = 0;
+
+        // ── 1. Prepare request parameters ──
+        let (expanded_msg, mode, phase, base_url, autotune_extra) =
+            self.prepare_chat_request(&msg, autotune_chain_enabled, backend);
+
+        // ── 2. Update UI panels before spawning ──
+        let (comparison_id, outbound_msg) =
+            self.update_ui_panels_before_spawn(&expanded_msg, &phase, backend);
+
+        // ── 3. Set up generation slots and spawn the async task ──
         self.sync_model_selection();
 
-        let comparison_id = now;
-        let stream_chunk_flush_interval = self.stream_chunk_flush_interval;
-        let stream_client = self.stream_client.clone();
+        let stream_chunk_flush_interval = self.stream_state.stream_chunk_flush_interval;
+        let stream_client = self.stream_state.stream_client.clone();
         let active_gen_count = self.active_generations.clone();
         let existing_generations = self.generation_states.len();
 
-        let model_name = self.selected_model.clone();
+        let model_name = self.model_state.selected_model.clone();
         {
             // Reserve one generation slot atomically for this model.
             let previous = active_gen_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -289,7 +1061,7 @@ impl ChatView {
             self.session().push_message(Message {
                 role: "assistant".to_string(),
                 content: String::new(),
-                timestamp: now,
+                timestamp: comparison_id,
                 attachments: Vec::new(),
                 model: model_name.clone(),
                 comparison_id,
@@ -303,25 +1075,30 @@ impl ChatView {
             });
             let msg_idx = self.session().messages.len().saturating_sub(1);
 
-            let tx = self.pending_tx.clone();
+            let tx = self.stream_state.pending_tx.clone();
             let backend_clone = backend.clone();
             let mode_clone = mode.clone();
             let phase_clone = phase.clone();
-            let outbound_clone = outbound_msg.clone();
             let model_clone = model_name.clone();
             let base_url_clone = base_url.clone();
             // Build full conversation history (excluding empty assistant placeholders)
-            let history_messages: Vec<serde_json::Value> = self.sessions[self.active_session]
+            let history_messages: Vec<serde_json::Value> = self.session_state.sessions
+                [self.session_state.active_session]
                 .messages
                 .iter()
                 .filter(|m| !m.content.is_empty() || m.role != "assistant")
                 .take(50)
                 .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
                 .collect();
-            let conv_id_clone = self.sessions[self.active_session].conversation_id.clone();
-            let branch_id_clone = self.sessions[self.active_session].branch_id.clone();
-            let selected_agent_clone = self.selected_agent.trim().to_string();
-            let mut request_options = Self::merge_options_with_tracking(
+            let conv_id_clone = self.session_state.sessions[self.session_state.active_session]
+                .conversation_id
+                .clone();
+            let branch_id_clone = self.session_state.sessions[self.session_state.active_session]
+                .branch_id
+                .clone();
+            let selected_agent_clone = self.model_state.selected_agent.trim().to_string();
+            let outbound_clone = outbound_msg;
+            let request_options = Self::merge_options_with_tracking(
                 autotune_extra.clone(),
                 conv_id_clone.as_deref(),
                 branch_id_clone.as_deref(),
@@ -330,23 +1107,26 @@ impl ChatView {
             // regardless of model selection (auto vs specific). The model and agent
             // are independent concerns — a user may want auto model selection but a
             // specific provider/agent.
-            if !selected_agent_clone.is_empty() {
-                if let Some(serde_json::Value::Object(ref mut options_map)) = request_options {
+            let request_options = if !selected_agent_clone.is_empty() {
+                if let Some(serde_json::Value::Object(mut options_map)) = request_options {
                     options_map.insert(
                         "preferred_agent".to_string(),
                         serde_json::Value::String(selected_agent_clone.clone()),
                     );
+                    Some(serde_json::Value::Object(options_map))
                 } else {
-                    request_options = Some(serde_json::json!({
-                        "preferred_agent": selected_agent_clone,
-                    }));
+                    Some(serde_json::json!({
+                        "preferred_agent": selected_agent_clone.clone(),
+                    }))
                 }
-            }
+            } else {
+                request_options
+            };
             // Create and store an abort controller for this generation
             let abort_ctrl = AbortController::new();
-            self.abort_controller = Some(abort_ctrl.clone());
-            self.stream_processor = Some(StreamProcessor::new());
-            self.stream_progress = TokenProgress::default();
+            self.stream_state.abort_controller = Some(abort_ctrl.clone());
+            self.stream_state.stream_processor = Some(StreamProcessor::new());
+            self.stream_state.stream_progress = TokenProgress::default();
             let active_gen_guard = ActiveGenerationGuard::new(active_gen_count.clone());
             let sc = stream_client.clone();
             let abort_ctrl_task = abort_ctrl.clone();
@@ -356,166 +1136,35 @@ impl ChatView {
 
                 let use_workflow_rpc = mode_clone == "workflow";
 
-                let mut body = if use_workflow_rpc {
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "workflow.ask",
-                        "params": {
-                            "task": outbound_clone.clone(),
-                            "auto_create_skills": true,
-                            "auto_create_workflow": true,
-                        }
-                    })
-                } else {
-                    serde_json::json!({
-                        "messages": history_messages,
-                        "mode": mode_clone,
-                    })
-                };
-
-                if !use_workflow_rpc {
-                    // ── Model selection ──
-                    //   * "auto"         → backend picks the default phase model.
-                    //   * "copilot-auto" → backend routes to copilot agent only,
-                    //                      Copilot service auto-selects model.
-                    //   * any other ID   → explicit model override sent to backend.
-                    if !model_clone.trim().is_empty() && model_clone != "auto" {
-                        body["options"] = serde_json::json!({
-                            "model": model_clone,
-                        });
-                    }
-
-                    if let Some(extra) = request_options.clone() {
-                        if body.get("options").is_none() {
-                            body["options"] = serde_json::json!({});
-                        }
-                        // Flatten extra values into options, NOT under "extra" key
-                        if let Some(obj) = extra.as_object() {
-                            for (k, v) in obj {
-                                body["options"][k] = v.clone();
-                            }
-                        }
-                    }
-
-                    if let Some(conv_id) = conv_id_clone.clone() {
-                        body["conversation_id"] = serde_json::json!(conv_id);
-                    }
-                    if let Some(b_id) = branch_id_clone.clone() {
-                        body["branch_id"] = serde_json::json!(b_id);
-                    }
-                }
+                // Build request body using the extracted helper
+                let body = build_chat_request_body(ChatRequestBodyParams {
+                    use_workflow_rpc,
+                    mode: &mode_clone,
+                    model: &model_clone,
+                    history_messages: &history_messages,
+                    outbound_msg: &outbound_clone,
+                    request_options: request_options.clone(),
+                    conv_id: conv_id_clone.clone(),
+                    branch_id: branch_id_clone.clone(),
+                    selected_agent: &selected_agent_clone,
+                })
+                .await;
 
                 // Handle workflow mode via RPC (non-streaming) — return early
                 if use_workflow_rpc {
-                    let workflow_client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(300))
-                        .read_timeout(std::time::Duration::from_secs(60))
-                        .build()
-                        .unwrap_or_else(|_| {
-                            reqwest::Client::builder()
-                                .timeout(std::time::Duration::from_secs(300))
-                                .read_timeout(std::time::Duration::from_secs(60))
-                                .build()
-                                .unwrap_or_else(|_| reqwest::Client::new())
-                        });
-                    match workflow_client
-                        .post(format!("{}/rpc", base_url_clone.trim_end_matches('/')))
-                        .json(&body)
-                        .send()
-                        .await
-                    {
-                        Ok(resp) => {
-                            if let Ok(value) = resp.json::<serde_json::Value>().await {
-                                // Check for JSON-RPC error response
-                                if value.get("error").is_some() {
-                                    let error_msg = value["error"]
-                                        .get("message")
-                                        .and_then(|m| m.as_str())
-                                        .unwrap_or("unknown workflow error");
-                                    tracing::warn!(
-                                        "[Gen] Workflow generation {} returned error: {}",
-                                        generation_id,
-                                        error_msg
-                                    );
-                                    send_pending(
-                                        &tx,
-                                        PendingResponse::Error {
-                                            generation_id: Some(generation_id),
-                                            message: format!("workflow.ask failed: {error_msg}"),
-                                        },
-                                    )
-                                    .await;
-                                } else {
-                                    let result_text = serde_json::to_string_pretty(
-                                        value.get("result").unwrap_or(&value),
-                                    )
-                                    .unwrap_or_default();
-                                    #[cfg(debug_assertions)]
-                                    eprintln!(
-                                        "[Gen] Workflow generation {} completed",
-                                        generation_id
-                                    );
-                                    send_pending(
-                                        &tx,
-                                        PendingResponse::ChatCompleted {
-                                            generation_id,
-                                            content: result_text,
-                                            thinking: String::new(),
-                                            agent: "workflow".to_string(),
-                                            model: None,
-                                            conversation_id: None,
-                                            branch_id: None,
-                                        },
-                                    )
-                                    .await;
-                                }
-                            } else {
-                                tracing::warn!(
-                                    "[Gen] Workflow generation {} - JSON parse failed",
-                                    generation_id
-                                );
-                                send_pending(
-                                    &tx,
-                                    PendingResponse::Error {
-                                        generation_id: Some(generation_id),
-                                        message: "workflow response parse error".to_string(),
-                                    },
-                                )
-                                .await;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "[Gen] Workflow generation {} failed: {}",
-                                generation_id,
-                                e
-                            );
-                            send_pending(
-                                &tx,
-                                PendingResponse::Error {
-                                    generation_id: Some(generation_id),
-                                    message: format!("workflow.ask error: {e}"),
-                                },
-                            )
-                            .await;
-                        }
-                    }
-                    return; // Skip the normal chat/stream flow
+                    handle_workflow_rpc(&base_url_clone, &body, generation_id, &tx).await;
+                    return;
                 }
 
-                // Always use /chat/stream (native Go-On endpoint) which directly accepts
-                // ChatParams format (mode, phase, options, preferred_agent, etc.).
-                // /v1/chat/completions (OpenAI compat) only works with OpenAI-format bodies
-                // and will crash on GUI-specific fields.
+                // Send stream request to /chat/stream endpoint
                 let endpoint = format!("{}/chat/stream", base_url_clone.trim_end_matches('/'));
                 let stream_resp = sc.post(&endpoint).json(&body).send().await;
 
                 match stream_resp {
                     Ok(resp) => {
                         let status = resp.status();
-                        let mut resp = if !status.is_success() {
-                            // Capture the response body for better diagnostics
+                        if !status.is_success() {
+                            // Non-success HTTP status — try fallback non-streaming request
                             let err_body = resp.text().await.unwrap_or_default();
                             let err_msg = if err_body.is_empty() {
                                 format!(
@@ -524,7 +1173,6 @@ impl ChatView {
                                     status.canonical_reason().unwrap_or("Unknown")
                                 )
                             } else {
-                                // Truncate long error bodies
                                 let truncated = if err_body.len() > 500 {
                                     format!("{}...", &err_body[..500])
                                 } else {
@@ -532,525 +1180,54 @@ impl ChatView {
                                 };
                                 format!("HTTP {}: {}", status.as_u16(), truncated)
                             };
-                            let fallback = backend_clone
-                                .chat_with_options(
-                                    &outbound_clone,
-                                    &mode_clone,
-                                    &phase_clone,
-                                    Some(&model_clone),
-                                    request_options.clone(),
-                                    None, // history not available in this scope
-                                    Some(abort_ctrl_task.clone()),
-                                )
-                                .await
-                                .map(|(content, thinking, agent, selected_model)| {
-                                    PendingResponse::ChatCompleted {
-                                        generation_id,
-                                        content,
-                                        thinking,
-                                        agent,
-                                        model: selected_model,
-                                        conversation_id: None,
-                                        branch_id: None,
-                                    }
-                                })
-                                .unwrap_or_else(|e| PendingResponse::Error {
-                                    generation_id: Some(generation_id),
-                                    message: format!("stream error: {err_msg}; fallback: {e}"),
-                                });
-                            send_pending(&tx, fallback).await;
+                            fallback_chat_request(
+                                &backend_clone,
+                                &outbound_clone,
+                                &mode_clone,
+                                &phase_clone,
+                                &model_clone,
+                                request_options.clone(),
+                                &abort_ctrl_task,
+                                generation_id,
+                                &tx,
+                                &format!("stream error: {err_msg}"),
+                            )
+                            .await;
                             return;
-                        } else {
-                            resp
-                        };
-
-                        let mut final_content: Option<String> = None;
-                        let mut final_thinking: Option<String> = None;
-                        let mut final_agent: Option<String> = None;
-                        let mut final_used_model: Option<String> = None;
-                        let mut final_conv_id: Option<String> = None;
-                        let mut final_branch_id: Option<String> = None;
-                        let mut buffered_token = String::with_capacity(4096);
-                        let mut buffered_reasoning = String::with_capacity(2048);
-                        let mut last_stream_flush = std::time::Instant::now();
-                        let mut total_buffer_bytes = 0usize;
-                        let mut sse_parse_error_count = 0u32;
-
-                        // Use StreamProcessor as the single SSE parser for all GUI stream parsing.
-                        // This replaces the previous inline frame splitting and JSON parsing.
-                        let mut processor = StreamProcessor::new();
-
-                        loop {
-                            let chunk = match resp.chunk().await {
-                                Ok(Some(c)) => c,
-                                Ok(None) => break,
-                                Err(e) => {
-                                    send_pending(
-                                        &tx,
-                                        PendingResponse::Error {
-                                            generation_id: Some(generation_id),
-                                            message: format!("read error: {e}"),
-                                        },
-                                    )
-                                    .await;
-                                    return;
-                                }
-                            };
-
-                            // Check for abort before processing the chunk
-                            if abort_ctrl_task.is_cancelled() {
-                                return;
-                            }
-
-                            // Delegate SSE parsing to StreamProcessor, which handles
-                            // frame splitting, CRLF normalization, JSON parsing, and
-                            // event type injection via the "_event_type" field.
-                            let events = processor.push_chunk(&chunk);
-                            for event_result in events {
-                                match event_result {
-                                    Ok(val) => {
-                                        // Handle [DONE] sentinel (used by non-streaming fallback)
-                                        if val.is_string() && val.as_str() == Some("[DONE]") {
-                                            break;
-                                        }
-                                        if val.get("data").and_then(|v| v.as_str())
-                                            == Some("[DONE]")
-                                        {
-                                            break;
-                                        }
-
-                                        let event_type = val
-                                            .get("_event_type")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-
-                                        match event_type {
-                                            "chunk" | "" => {
-                                                let token = val
-                                                    .get("token")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or_default()
-                                                    .to_string();
-                                                let reasoning = val
-                                                    .get("reasoning")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or_default()
-                                                    .to_string();
-
-                                                if !token.is_empty() || !reasoning.is_empty() {
-                                                    // Track buffer usage and flush if needed
-                                                    let token_bytes = token.len();
-                                                    let reasoning_bytes = reasoning.len();
-                                                    total_buffer_bytes +=
-                                                        token_bytes + reasoning_bytes;
-
-                                                    // Accumulate token content into final_content as
-                                                    // a safety net: if the "result"/"done" event never
-                                                    // arrives (e.g. due to HTTP chunk boundaries), the
-                                                    // final check can still find non-empty content from
-                                                    // chunk data. If the "result"/"done" event arrives
-                                                    // later with a response field, it overwrites this.
-                                                    if !token.is_empty() {
-                                                        final_content
-                                                            .get_or_insert_with(String::new)
-                                                            .push_str(&token);
-                                                    }
-                                                    buffered_token.push_str(&token);
-                                                    buffered_reasoning.push_str(&reasoning);
-
-                                                    // Force flush if buffer exceeds max accumulated size
-                                                    if total_buffer_bytes
-                                                        > MAX_BUFFERED_TOKENS_BYTES
-                                                    {
-                                                        send_pending(
-                                                            &tx,
-                                                            PendingResponse::StreamChunk {
-                                                                generation_id,
-                                                                token: std::mem::take(
-                                                                    &mut buffered_token,
-                                                                ),
-                                                                reasoning: std::mem::take(
-                                                                    &mut buffered_reasoning,
-                                                                ),
-                                                            },
-                                                        )
-                                                        .await;
-                                                        total_buffer_bytes = 0;
-                                                        last_stream_flush =
-                                                            std::time::Instant::now();
-                                                    }
-                                                }
-                                            }
-                                            "telemetry" => {
-                                                if let Some(te) = val.get("token_economy") {
-                                                    let input_tokens = te
-                                                        .get("input_tokens")
-                                                        .and_then(|v| v.as_u64())
-                                                        .unwrap_or(0)
-                                                        as usize;
-                                                    let output_tokens = te
-                                                        .get("output_tokens")
-                                                        .and_then(|v| v.as_u64())
-                                                        .unwrap_or(0)
-                                                        as usize;
-                                                    let total_tokens = te
-                                                        .get("total_tokens")
-                                                        .and_then(|v| v.as_u64())
-                                                        .unwrap_or(0)
-                                                        as usize;
-                                                    send_pending(
-                                                        &tx,
-                                                        PendingResponse::TokenEconomy {
-                                                            generation_id,
-                                                            input_tokens,
-                                                            output_tokens,
-                                                            total_tokens,
-                                                        },
-                                                    )
-                                                    .await;
-                                                }
-                                            }
-                                            "sub_agent" => {
-                                                let agent = val
-                                                    .get("agent")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let action = val
-                                                    .get("action")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let status = val
-                                                    .get("status")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("running")
-                                                    .to_string();
-                                                let input = val
-                                                    .get("input")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let output = val
-                                                    .get("output")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                send_pending(
-                                                    &tx,
-                                                    PendingResponse::SubAgentEvent {
-                                                        generation_id,
-                                                        agent,
-                                                        action,
-                                                        status,
-                                                        input,
-                                                        output,
-                                                    },
-                                                )
-                                                .await;
-                                            }
-                                            "command" => {
-                                                let command_str = val
-                                                    .get("command")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let working_dir = val
-                                                    .get("working_dir")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let exit_code = val
-                                                    .get("exit_code")
-                                                    .and_then(|v| v.as_i64())
-                                                    .unwrap_or(-1)
-                                                    as i32;
-                                                let stdout = val
-                                                    .get("stdout")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let stderr = val
-                                                    .get("stderr")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                let duration_ms = val
-                                                    .get("duration_ms")
-                                                    .and_then(|v| v.as_u64())
-                                                    .unwrap_or(0);
-                                                send_pending(
-                                                    &tx,
-                                                    PendingResponse::CommandOutput {
-                                                        generation_id,
-                                                        command: command_str,
-                                                        working_dir,
-                                                        exit_code,
-                                                        stdout,
-                                                        stderr,
-                                                        duration_ms,
-                                                    },
-                                                )
-                                                .await;
-                                            }
-                                            "result" | "done" => {
-                                                // Only overwrite final_content if the event has a non-empty response.
-                                                // The "done"/"result" event may omit the response field when the
-                                                // content was already streamed via "chunk" events (e.g. FullAuto mode
-                                                // where the autonomy loop streams tokens in real time via progress_tx).
-                                                // Overwriting with None/empty would erase the accumulated content.
-                                                let new_content = val
-                                                    .get("response")
-                                                    .or_else(|| val.get("content"))
-                                                    .and_then(|v| v.as_str())
-                                                    .map(ToOwned::to_owned);
-                                                if let Some(ref c) = new_content {
-                                                    if !c.trim().is_empty() {
-                                                        final_content = Some(c.clone());
-                                                    }
-                                                }
-                                                final_thinking = val
-                                                    .get("thinking")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(ToOwned::to_owned);
-                                                let new_agent = val
-                                                    .get("agent")
-                                                    .or_else(|| val.get("selected_agent"))
-                                                    .or_else(|| {
-                                                        val.pointer(
-                                                            "/capability_routing/selected_agent",
-                                                        )
-                                                    })
-                                                    .and_then(|v| v.as_str())
-                                                    .map(String::from);
-                                                // Only overwrite agent if the event has a non-empty value.
-                                                if let Some(ref a) = new_agent {
-                                                    if !a.trim().is_empty() {
-                                                        final_agent = Some(a.clone());
-                                                    }
-                                                }
-                                                final_used_model = val
-                                                    .get("selected_model")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(String::from);
-                                                final_conv_id = val
-                                                    .get("conversation_id")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(String::from);
-                                                final_branch_id = val
-                                                    .get("branch_id")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(String::from);
-                                                // Capture plan_output from Plan mode responses (reserved for future UI display)
-                                                if val.get("plan_output").is_some() {
-                                                    #[cfg(debug_assertions)]
-                                                    eprintln!("[Plan] Captured plan_output");
-                                                }
-                                            }
-                                            "error" => {
-                                                if !buffered_token.is_empty()
-                                                    || !buffered_reasoning.is_empty()
-                                                {
-                                                    send_pending(
-                                                        &tx,
-                                                        PendingResponse::StreamChunk {
-                                                            generation_id,
-                                                            token: std::mem::take(
-                                                                &mut buffered_token,
-                                                            ),
-                                                            reasoning: std::mem::take(
-                                                                &mut buffered_reasoning,
-                                                            ),
-                                                        },
-                                                    )
-                                                    .await;
-                                                }
-                                                let message = val
-                                                    .get("message")
-                                                    .or_else(|| val.get("error"))
-                                                    .and_then(|v| v.as_str())
-                                                    .map(|s| s.to_string())
-                                                    .unwrap_or_else(|| {
-                                                        // Fallback: serialize the whole payload for debugging
-                                                        format!(
-                                                            "stream error: {}",
-                                                            serde_json::to_string(&val)
-                                                                .unwrap_or_default()
-                                                        )
-                                                    });
-
-                                                // Log the error details for diagnostics.
-                                                tracing::warn!(
-                                                    "[Gen] SSE error event for generation {}: {}",
-                                                    generation_id,
-                                                    message
-                                                );
-
-                                                send_pending(
-                                                    &tx,
-                                                    PendingResponse::Error {
-                                                        generation_id: Some(generation_id),
-                                                        message,
-                                                    },
-                                                )
-                                                .await;
-                                                return;
-                                            }
-                                            _ => {
-                                                #[cfg(debug_assertions)]
-                                                eprintln!(
-                                                    "[SSE] Unknown event type: {}",
-                                                    event_type
-                                                );
-                                                sse_parse_error_count =
-                                                    sse_parse_error_count.saturating_add(1);
-                                            }
-                                        }
-
-                                        // Time-based flush to maintain responsive UI
-                                        if (!buffered_token.is_empty()
-                                            || !buffered_reasoning.is_empty())
-                                            && last_stream_flush.elapsed()
-                                                >= stream_chunk_flush_interval
-                                        {
-                                            send_pending(
-                                                &tx,
-                                                PendingResponse::StreamChunk {
-                                                    generation_id,
-                                                    token: std::mem::take(&mut buffered_token),
-                                                    reasoning: std::mem::take(
-                                                        &mut buffered_reasoning,
-                                                    ),
-                                                },
-                                            )
-                                            .await;
-                                            last_stream_flush = std::time::Instant::now();
-                                            total_buffer_bytes = 0;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("[SSE] Parse error: {}", e);
-                                        sse_parse_error_count =
-                                            sse_parse_error_count.saturating_add(1);
-                                    }
-                                }
-                            }
                         }
 
-                        // Flush any remaining buffered content
-                        if !buffered_token.is_empty() || !buffered_reasoning.is_empty() {
-                            send_pending(
-                                &tx,
-                                PendingResponse::StreamChunk {
-                                    generation_id,
-                                    token: buffered_token,
-                                    reasoning: buffered_reasoning,
-                                },
-                            )
-                            .await;
-                        }
+                        // Process the SSE stream events
+                        let result = process_stream_events(
+                            resp,
+                            generation_id,
+                            &tx,
+                            stream_chunk_flush_interval,
+                            &abort_ctrl_task,
+                        )
+                        .await;
 
-                        #[cfg(debug_assertions)]
-                        {
-                            let _status_log = format!(
-                                "tokens:{}, thinking:{}, agent:{}",
-                                final_content.as_ref().map(|c| c.len()).unwrap_or(0),
-                                !final_thinking
-                                    .as_ref()
-                                    .map(|t| t.is_empty())
-                                    .unwrap_or(true),
-                                final_agent.as_deref().unwrap_or("unknown")
-                            );
-                            eprintln!(
-                                "[Gen] Generation {} completed ({})",
-                                generation_id, _status_log
-                            );
-                        }
-
-                        // Emit SSE parse error summary warning if any errors occurred
-                        if sse_parse_error_count > 0 {
-                            let warn_msg = format!(
-                                "[SSE] {} JSON parse error(s) occurred during streaming",
-                                sse_parse_error_count
-                            );
-                            tracing::warn!("{}", warn_msg);
-                            send_pending(&tx, PendingResponse::UiMessage(warn_msg)).await;
-                        }
-
-                        let content_empty = final_content.as_ref().is_none_or(|c| c.is_empty());
-                        let agent_empty = final_agent.as_ref().is_none_or(|a| a.is_empty());
-                        if content_empty && agent_empty {
-                            // Response was empty AND no agent was selected.
-                            // The backend should now always send a proper "error" event
-                            // when no content was produced, but this path is kept as a
-                            // safety net for edge cases (e.g. mid-stream disconnection).
-                            send_pending(
-                                &tx,
-                                PendingResponse::Error {
-                                    generation_id: Some(generation_id),
-                                    message:
-                                        "The chat stream ended without producing a response.\n\
-Possible causes:\n\
-  • No agents are configured for the current phase\n\
-  • API keys are missing or expired\n\
-  • Backend is overloaded or unreachable\n\
-\
-Check the backend log and agent configuration."
-                                            .to_string(),
-                                },
-                            )
-                            .await;
-                        } else {
-                            send_pending(
-                                &tx,
-                                PendingResponse::ChatCompleted {
-                                    generation_id,
-                                    content: final_content.unwrap_or_default(),
-                                    thinking: final_thinking.unwrap_or_default(),
-                                    agent: final_agent.unwrap_or_default(),
-                                    model: final_used_model,
-                                    conversation_id: final_conv_id,
-                                    branch_id: final_branch_id,
-                                },
-                            )
-                            .await;
-                        }
+                        // Finalize and send completion/error
+                        finalize_stream_result(result, generation_id, &tx).await;
                     }
                     Err(err) => {
-                        // Log full error details for diagnosing reqwest/hyper transport errors
-                        // (e.g. HTTP/2 stream errors, connection resets, TLS handshake failures).
                         tracing::warn!(
                             "[Gen] Generation {} stream request failed (attempting fallback): {:?}",
                             generation_id,
                             err
                         );
-                        let fallback = backend_clone
-                            .chat_with_options(
-                                &outbound_clone,
-                                &mode_clone,
-                                &phase_clone,
-                                Some(&model_clone),
-                                request_options.clone(),
-                                None, // history not available in this scope
-                                Some(abort_ctrl_task.clone()),
-                            )
-                            .await
-                            .map(|(content, thinking, agent, selected_model)| {
-                                PendingResponse::ChatCompleted {
-                                    generation_id,
-                                    content,
-                                    thinking,
-                                    agent,
-                                    model: selected_model,
-                                    conversation_id: None,
-                                    branch_id: None,
-                                }
-                            })
-                            .unwrap_or_else(|e| PendingResponse::Error {
-                                generation_id: Some(generation_id),
-                                message: format!("request error: {err}; fallback: {e}"),
-                            });
-                        send_pending(&tx, fallback).await;
+                        fallback_chat_request(
+                            &backend_clone,
+                            &outbound_clone,
+                            &mode_clone,
+                            &phase_clone,
+                            &model_clone,
+                            request_options.clone(),
+                            &abort_ctrl_task,
+                            generation_id,
+                            &tx,
+                            &format!("request error: {err}"),
+                        )
+                        .await;
                     }
                 }
             });
@@ -1063,12 +1240,7 @@ Check the backend log and agent configuration."
             });
         }
 
-        if self.generation_states.len() == existing_generations {
-            // Nothing started.
-            self.sending = false;
-            self.ai_status = AiStatus::Error;
-            self.set_phase_record_status("error");
-        }
+        self.check_post_spawn_state(existing_generations);
 
         self.save_sessions_to_disk();
         // Trigger immediate repaint to show the placeholder message.
@@ -1078,8 +1250,8 @@ Check the backend log and agent configuration."
     /// Drain any pending async responses and update the session / `ai_status`.
     pub(super) fn process_pending(&mut self, i18n: &I18n, ctx: &egui::Context) {
         let mut had_events = false;
-        for _ in 0..self.max_pending_events_per_frame {
-            let Ok(pending) = self.pending_rx.try_recv() else {
+        for _ in 0..self.stream_state.max_pending_events_per_frame {
+            let Ok(pending) = self.stream_state.pending_rx.try_recv() else {
                 break;
             };
             had_events = true;
@@ -1090,44 +1262,50 @@ Check the backend log and agent configuration."
                 }
                 PendingResponse::Models(agent_models) => {
                     // Keep structured map for two-level picker
-                    self.available_agent_models = agent_models;
+                    self.model_state.available_agent_models = agent_models;
                     // Build flattened list for backward compat
                     let mut flat = Vec::new();
-                    for ids in self.available_agent_models.values() {
+                    for ids in self.model_state.available_agent_models.values() {
                         flat.extend(ids.iter().cloned());
                     }
                     flat.sort();
                     flat.dedup();
-                    self.available_models = if self.available_agent_models.is_empty() {
-                        vec!["auto".to_string()]
-                    } else {
-                        flat
-                    };
+                    self.model_state.available_models =
+                        if self.model_state.available_agent_models.is_empty() {
+                            vec!["auto".to_string()]
+                        } else {
+                            flat
+                        };
                     // Only mark as loaded when models are actually present.
                     // On startup the backend may not be ready yet — the first
                     // fetch can return empty because the inner RPC uses a 500ms
                     // timeout.  Keeping models_loaded = false lets the 3-second
                     // retry poll in show() re-fetch once the backend is online.
-                    self.models_loaded = !self.available_agent_models.is_empty();
+                    self.model_state.models_loaded =
+                        !self.model_state.available_agent_models.is_empty();
                     #[cfg(debug_assertions)]
-                    if self.models_loaded {
+                    if self.model_state.models_loaded {
                         eprintln!(
                             "[DEBUG] Models loaded: {} agents, {} models: {:?}",
-                            self.available_agent_models.len(),
-                            self.available_models.len(),
-                            self.available_agent_models.keys().collect::<Vec<_>>()
+                            self.model_state.available_agent_models.len(),
+                            self.model_state.available_models.len(),
+                            self.model_state
+                                .available_agent_models
+                                .keys()
+                                .collect::<Vec<_>>()
                         );
                     }
                     // Preserve copilot-auto selection even though the backend
                     // does not report it as a model — it is a sentinel that tells
                     // the GUI to defer model selection to the Copilot service.
-                    if self.selected_model != ChatView::COPILOT_AUTO_MODEL
+                    if self.model_state.selected_model != ChatView::COPILOT_AUTO_MODEL
                         && !self
+                            .model_state
                             .available_models
                             .iter()
-                            .any(|m| m == &self.selected_model)
+                            .any(|m| m == &self.model_state.selected_model)
                     {
-                        self.selected_model = "auto".to_string();
+                        self.model_state.selected_model = "auto".to_string();
                     }
                 }
                 PendingResponse::StreamChunk {
@@ -1137,12 +1315,16 @@ Check the backend log and agent configuration."
                 } => {
                     // Update streaming progress counters
                     if !token.is_empty() {
-                        self.stream_progress.tokens_received += 1;
-                        self.stream_progress.bytes_processed += token.len();
+                        self.stream_state.stream_progress.tokens_received += 1;
+                        self.stream_state.stream_progress.bytes_processed += token.len();
                     }
 
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
-                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 if !token.is_empty() {
                                     // Strip __thinking__ markers from stream tokens
@@ -1195,7 +1377,11 @@ Check the backend log and agent configuration."
                     total_tokens,
                 } => {
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
-                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 m.input_tokens = input_tokens;
                                 m.output_tokens = output_tokens;
@@ -1207,8 +1393,8 @@ Check the backend log and agent configuration."
                     self.output_token_estimate = output_tokens;
                     self.last_token_estimate = total_tokens;
                     // Sync stream progress with telemetry data
-                    self.stream_progress.output_tokens = output_tokens;
-                    self.stream_progress.total_tokens = total_tokens;
+                    self.stream_state.stream_progress.output_tokens = output_tokens;
+                    self.stream_state.stream_progress.total_tokens = total_tokens;
                 }
                 PendingResponse::ChatCompleted {
                     generation_id,
@@ -1221,18 +1407,26 @@ Check the backend log and agent configuration."
                 } => {
                     // Store conversation tracking IDs on the session
                     if let Some(conv_id) = conversation_id {
-                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
                             session.conversation_id = Some(conv_id);
                         }
                     }
                     if let Some(b_id) = branch_id {
-                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
                             session.branch_id = Some(b_id);
                         }
                     }
 
                     if !agent.is_empty() {
-                        self.last_selected_agent = agent.clone();
+                        self.model_state.last_selected_agent = agent.clone();
                     }
 
                     let generation_meta = self.generation_meta(generation_id);
@@ -1240,7 +1434,11 @@ Check the backend log and agent configuration."
                     let mut output_tokens_to_record = self.output_token_estimate;
                     let mut is_sandbox_denial = false;
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
-                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 if !content.is_empty() {
                                     // Strip any remaining __thinking__ markers from the final content
@@ -1304,26 +1502,54 @@ Check the backend log and agent configuration."
                     if is_sandbox_denial {
                         if let Some(idx) = self.generation_msg_idx(generation_id) {
                             let msg_content = self
+                                .session_state
                                 .sessions
-                                .get(self.active_session)
+                                .get(self.session_state.active_session)
                                 .and_then(|s| s.messages.get(idx))
                                 .map(|m| m.content.clone())
                                 .unwrap_or_default();
                             let tool_name =
                                 msg_content.split('\'').nth(1).unwrap_or("").to_string();
                             if !tool_name.is_empty() {
-                                let last_user_idx = self
-                                    .sessions
-                                    .get(self.active_session)
-                                    .and_then(|s| s.messages.iter().rposition(|m| m.role == "user"))
-                                    .unwrap_or(0);
-                                self.pending_tool_approval =
-                                    Some((tool_name.clone(), last_user_idx));
-                                self.error = format!(
-                                    "💡 Tool '{}' requires your approval. Click Approve above or Deny to block it.",
-                                    tool_name
-                                );
-                                self.ai_status = AiStatus::Error;
+                                // Wire: filter by allowed_tools
+                                if !self.mode_policy.allowed_tools.is_empty()
+                                    && !self.mode_policy.allowed_tools.contains(&tool_name)
+                                {
+                                    self.error = format!(
+                                        "🚫 Tool '{}' is not allowed in '{}' mode.",
+                                        tool_name, self.mode_policy.mode
+                                    );
+                                    self.ai_status = AiStatus::Error;
+                                }
+                                // Wire: enforce max_tool_calls per turn
+                                else {
+                                    self.turn_tool_calls += 1;
+                                    if self.turn_tool_calls > self.mode_policy.max_tool_calls {
+                                        self.error = format!(
+                                            "🛑 Tool call limit reached ({}/{}). Cannot execute '{}'.",
+                                            self.turn_tool_calls,
+                                            self.mode_policy.max_tool_calls,
+                                            tool_name
+                                        );
+                                        self.ai_status = AiStatus::Error;
+                                    } else {
+                                        let last_user_idx = self
+                                            .session_state
+                                            .sessions
+                                            .get(self.session_state.active_session)
+                                            .and_then(|s| {
+                                                s.messages.iter().rposition(|m| m.role == "user")
+                                            })
+                                            .unwrap_or(0);
+                                        self.pending_tool_approval =
+                                            Some((tool_name.clone(), 0.5, last_user_idx));
+                                        self.error = format!(
+                                            "💡 Tool '{}' requires your approval. Click Approve above or Deny to block it.",
+                                            tool_name
+                                        );
+                                        self.ai_status = AiStatus::Error;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1357,9 +1583,9 @@ Check the backend log and agent configuration."
                     self.stop_requested = false;
                     self.save_sessions_to_disk();
                     // Reset streaming progress on completion
-                    self.stream_progress = TokenProgress::default();
-                    self.stream_processor = None;
-                    self.abort_controller = None;
+                    self.stream_state.stream_progress = TokenProgress::default();
+                    self.stream_state.stream_processor = None;
+                    self.stream_state.abort_controller = None;
                 }
                 PendingResponse::Error {
                     generation_id,
@@ -1408,22 +1634,50 @@ Check the backend log and agent configuration."
                             // Format: "tool 'agent-world-connector' is not in sandbox whitelist..."
                             let tool_name = message.split('\'').nth(1).unwrap_or("").to_string();
                             if !tool_name.is_empty() {
-                                // Find the last user message index
-                                let last_user_idx = self
-                                    .sessions
-                                    .get(self.active_session)
-                                    .and_then(|session| {
-                                        session.messages.iter().rposition(|m| m.role == "user")
-                                    })
-                                    .unwrap_or(0);
-                                self.pending_tool_approval =
-                                    Some((tool_name.clone(), last_user_idx));
+                                // Wire: filter by allowed_tools
+                                if !self.mode_policy.allowed_tools.is_empty()
+                                    && !self.mode_policy.allowed_tools.contains(&tool_name)
+                                {
+                                    format!(
+                                        "{} \n\n🚫 Tool '{}' is not allowed in '{}' mode.",
+                                        message, tool_name, self.mode_policy.mode
+                                    )
+                                // Wire: enforce max_tool_calls per turn
+                                } else {
+                                    self.turn_tool_calls += 1;
+                                    if self.turn_tool_calls > self.mode_policy.max_tool_calls {
+                                        format!(
+                                            "{} \n\n🛑 Tool call limit reached ({}/{}). Cannot execute '{}'.",
+                                            message,
+                                            self.turn_tool_calls,
+                                            self.mode_policy.max_tool_calls,
+                                            tool_name
+                                        )
+                                    } else {
+                                        // Find the last user message index
+                                        let last_user_idx = self
+                                            .session_state
+                                            .sessions
+                                            .get(self.session_state.active_session)
+                                            .and_then(|session| {
+                                                session
+                                                    .messages
+                                                    .iter()
+                                                    .rposition(|m| m.role == "user")
+                                            })
+                                            .unwrap_or(0);
+                                        self.pending_tool_approval =
+                                            Some((tool_name.clone(), 0.5, last_user_idx));
+                                        format!(
+                                            "{} \n\n💡 The tool '{}' requires your approval to proceed. \
+                                                     Click 'Approve' to allow it, or 'Deny' to block it.",
+                                            message, tool_name
+                                        )
+                                    }
+                                }
+                            } else {
+                                message
                             }
-                            format!(
-                                "{} \n\n💡 The tool '{}' requires your approval to proceed. \
-                                         Click 'Approve' to allow it, or 'Deny' to block it.",
-                                message, tool_name
-                            )
                         } else {
                             message
                         }
@@ -1433,7 +1687,7 @@ Check the backend log and agent configuration."
                         .replace("{message}", &enhanced_message);
                     if let Some(id) = generation_id {
                         if let Some((_, model, _)) = self.generation_meta(id) {
-                            let stats = self.model_stats.entry(model).or_default();
+                            let stats = self.model_state.model_stats.entry(model).or_default();
                             stats.error_count = stats.error_count.saturating_add(1);
                         }
                     }
@@ -1442,8 +1696,9 @@ Check the backend log and agent configuration."
                     // Drop empty placeholder assistant message on failure.
                     if let Some(idx) = generation_id.and_then(|id| self.generation_msg_idx(id)) {
                         let should_remove = self
+                            .session_state
                             .sessions
-                            .get(self.active_session)
+                            .get(self.session_state.active_session)
                             .map(|session| {
                                 idx < session.messages.len()
                                     && session.messages[idx].content.is_empty()
@@ -1461,9 +1716,9 @@ Check the backend log and agent configuration."
                     self.ai_status = AiStatus::Error;
                     self.stop_requested = false;
                     // Reset streaming progress on error
-                    self.stream_progress = TokenProgress::default();
-                    self.stream_processor = None;
-                    self.abort_controller = None;
+                    self.stream_state.stream_progress = TokenProgress::default();
+                    self.stream_state.stream_processor = None;
+                    self.stream_state.abort_controller = None;
                 }
                 PendingResponse::SubAgentEvent {
                     generation_id,
@@ -1474,7 +1729,11 @@ Check the backend log and agent configuration."
                     output,
                 } => {
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
-                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 // Push a new sub-agent record to the message
                                 m.sub_agent_records.push(SubAgentRecord {
@@ -1504,7 +1763,11 @@ Check the backend log and agent configuration."
                     duration_ms,
                 } => {
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
-                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
                             if let Some(m) = session.messages.get_mut(idx) {
                                 m.command_records.push(CommandRecord {
                                     command,
@@ -1515,6 +1778,52 @@ Check the backend log and agent configuration."
                                     duration_ms,
                                 });
                             }
+                        }
+                    }
+                }
+                PendingResponse::ToolApprovalRequest {
+                    generation_id,
+                    tool_name,
+                    tool_args,
+                    mode,
+                    risk_score,
+                    message,
+                } => {
+                    // Wire: filter by allowed_tools
+                    if !self.mode_policy.allowed_tools.is_empty()
+                        && !self.mode_policy.allowed_tools.contains(&tool_name)
+                    {
+                        self.error = format!(
+                            "🚫 Tool '{}' is not allowed in '{}' mode.",
+                            tool_name, self.mode_policy.mode
+                        );
+                        self.ai_status = AiStatus::Error;
+                    } else {
+                        self.turn_tool_calls += 1;
+                        if self.turn_tool_calls > self.mode_policy.max_tool_calls {
+                            self.error = format!(
+                                "🛑 Tool call limit reached ({}/{}). Cannot execute '{}'.",
+                                self.turn_tool_calls, self.mode_policy.max_tool_calls, tool_name
+                            );
+                            self.ai_status = AiStatus::Error;
+                        } else {
+                            let last_user_idx = self
+                                .session_state
+                                .sessions
+                                .get(self.session_state.active_session)
+                                .and_then(|session| {
+                                    session.messages.iter().rposition(|m| m.role == "user")
+                                })
+                                .unwrap_or(0);
+                            // Wire: display risk score in the tool approval UI
+                            let _ = (generation_id, tool_args, mode);
+                            self.pending_tool_approval =
+                                Some((tool_name.clone(), risk_score, last_user_idx));
+                            self.error = format!(
+                                "💡 Tool '{}' requires your approval. {}",
+                                tool_name, message
+                            );
+                            self.ai_status = AiStatus::Error;
                         }
                     }
                 }

@@ -63,7 +63,7 @@ pub fn handle_external_editor(chat: &mut ChatView, _ui: &mut egui::Ui) {
     for e in editors {
         if let Ok(mut child) = std::process::Command::new(e).arg(&p).spawn() {
             let p_clone = p.clone();
-            let tx = chat.pending_tx.clone();
+            let tx = chat.stream_state.pending_tx.clone();
             std::thread::spawn(move || {
                 let _ = child.wait();
                 if let Ok(edited) = std::fs::read_to_string(&p_clone) {

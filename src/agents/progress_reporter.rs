@@ -8,9 +8,7 @@
 //! - `StreamingSender` (string channel, used by BrainLoop / CLI chat)
 //! - `StreamFrame` sender (SSE frame channel, used by ACP autonomy loop)
 
-use crate::acp::r#impl::chat::streaming::StreamFrame;
 use crate::agent::StreamingSender;
-use tokio::sync::mpsc;
 use tracing::warn;
 
 /// Phase-based progress tokens emitted into SSE streams.
@@ -22,16 +20,10 @@ pub const TOKEN_PHASE_COMPLETE: &str = "__phase__:complete";
 /// Prefix for numeric progress tokens: `__progress__:3/10` means step 3 of 10.
 pub const TOKEN_PROGRESS_PREFIX: &str = "__progress__:";
 
-/// Dual-transport progress sender.
-///
-/// Supports both string-based streaming (used by BrainLoop / CLI chat)
-/// and SSE-frame-based streaming (used by ACP autonomy loop).
-#[allow(dead_code)]
+/// String-based progress sender.
 pub(crate) enum ProgressSender {
     /// String channel — tokens are raw strings consumed by BrainLoop.
     Streaming(StreamingSender),
-    /// SSE frame channel — tokens are wrapped in status StreamFrames.
-    StreamFrame(mpsc::UnboundedSender<StreamFrame>),
 }
 
 /// Reports phase transitions and step progress over a streaming sender.
@@ -68,24 +60,6 @@ impl ProgressReporter {
             total_steps,
             current_step: 0,
             sender: sender.map(ProgressSender::Streaming),
-        }
-    }
-
-    /// Create a new progress reporter with an SSE-frame-based sender.
-    ///
-    /// When this variant is used, progress tokens are wrapped as
-    /// `StreamFrame { event: "status", payload: { "message": token } }`
-    /// so they can be forwarded directly through the ACP SSE pipeline.
-    #[allow(dead_code)]
-    pub(crate) fn with_stream_frame(
-        sender: Option<mpsc::UnboundedSender<StreamFrame>>,
-        total_steps: u32,
-    ) -> Self {
-        Self {
-            current_phase: String::new(),
-            total_steps,
-            current_step: 0,
-            sender: sender.map(ProgressSender::StreamFrame),
         }
     }
 
@@ -154,18 +128,7 @@ impl ProgressReporter {
                     warn!("ProgressReporter: failed to send token '{}': {}", token, e);
                 }
             }
-            Some(ProgressSender::StreamFrame(sender)) => {
-                if let Err(e) = sender.send(StreamFrame {
-                    event: "status",
-                    payload: serde_json::json!({"message": token}),
-                    status: None,
-                }) {
-                    warn!(
-                        "ProgressReporter: failed to send StreamFrame '{}': {}",
-                        token, e
-                    );
-                }
-            }
+
             None => {}
         }
     }
@@ -256,35 +219,6 @@ mod tests {
         reporter.report_progress(5, 10);
         reporter.report_complete();
         // No panics, nothing to assert beyond the call succeeding.
-        assert!(!reporter.is_active());
-    }
-
-    #[test]
-    fn stream_frame_sender_emits_status_events() {
-        let (tx, mut rx) = mpsc::unbounded_channel::<StreamFrame>();
-        let mut reporter = ProgressReporter::with_stream_frame(Some(tx), 5);
-
-        reporter.report_phase(TOKEN_PHASE_PLANNING);
-        reporter.report_progress(1, 5);
-
-        // Drain receiver
-        let mut frames = Vec::new();
-        while let Ok(f) = rx.try_recv() {
-            frames.push(f);
-        }
-        // Should have 2 frames: one for phase, one for progress
-        assert_eq!(frames.len(), 2);
-        // First frame should be a status event
-        assert_eq!(frames[0].event, "status");
-        assert_eq!(frames[0].payload["message"], TOKEN_PHASE_PLANNING);
-    }
-
-    #[test]
-    fn stream_frame_noop_when_none() {
-        let mut reporter = ProgressReporter::with_stream_frame(None, 5);
-        reporter.report_phase(TOKEN_PHASE_PLANNING);
-        reporter.report_progress(1, 5);
-        reporter.report_complete();
         assert!(!reporter.is_active());
     }
 }

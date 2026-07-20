@@ -302,10 +302,6 @@ struct SymbolMatch {
 }
 
 /// Context built for retrieval-augmented code question answering.
-#[allow(
-    dead_code,
-    reason = "Intent fields reserved for future LLM integration"
-)]
 struct RagContext {
     found_symbols: Vec<SymbolMatch>,
     file_count: usize,
@@ -689,14 +685,29 @@ impl RepoAnalyzer {
             )
         };
 
-        // Build confidence based on reference count and context match quality
-        let confidence = if context.found_symbols.is_empty() {
+        // Build confidence based on reference count and context match quality;
+        // boost confidence when intent fields match what was found.
+        let mut confidence = if context.found_symbols.is_empty() {
             0.3
         } else if context.found_symbols.len() <= 3 {
             0.85
         } else {
             (context.found_symbols.len() as f64 / 15.0 + 0.5).min(0.95)
         };
+        // Wire: use intent flags to adjust confidence
+        if context.has_file_intent && context.file_count > 0 {
+            confidence = (confidence + 0.1).min(0.99);
+        }
+        if context.has_symbol_intent && !context.found_symbols.is_empty() {
+            confidence = (confidence + 0.1).min(0.99);
+        }
+        if context.has_lang_intent {
+            confidence = (confidence + 0.05).min(0.99);
+        }
+        if context.has_loc_intent {
+            // Size/location questions benefit from more context
+            confidence = (confidence + 0.03).min(0.99);
+        }
 
         Ok(Answer {
             text,

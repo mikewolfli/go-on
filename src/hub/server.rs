@@ -292,52 +292,7 @@ fn json_rpc_error(id: Option<Value>, code: i64, msg: impl ToString) -> Value {
     })
 }
 
-/// Simple ISO-8601 timestamp without chrono dependency.
+/// Returns the current UTC time as an RFC 3339 / ISO-8601 string.
 fn iso_now() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    // Format as UTC ISO-8601: 2026-07-09T12:34:56Z
-    let days = secs / 86400;
-    let time_secs = secs % 86400;
-    let hours = time_secs / 3600;
-    let minutes = (time_secs % 3600) / 60;
-    let seconds = time_secs % 60;
-
-    // Simple day count from Unix epoch (1970-01-01).
-    let mut y = 1970i64;
-    let mut d = days as i64;
-    loop {
-        let days_in_year = if is_leap(y) { 366 } else { 365 };
-        if d < days_in_year {
-            break;
-        }
-        d -= days_in_year;
-        y += 1;
-    }
-    let months_days = if is_leap(y) { LEAP_MONTHS } else { NORM_MONTHS };
-    let mut m = 0;
-    for (i, md) in months_days.iter().enumerate() {
-        if d < *md {
-            m = i + 1;
-            break;
-        }
-        d -= md;
-    }
-    if m == 0 {
-        m = 12;
-    }
-    let day = d + 1;
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        y, m, day, hours, minutes, seconds
-    )
-}
-
-const NORM_MONTHS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-const LEAP_MONTHS: [i64; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-fn is_leap(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    chrono::Utc::now().to_rfc3339()
 }

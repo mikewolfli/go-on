@@ -17,6 +17,8 @@ use crate::rpc_protocol::RequestTraceContext;
 #[derive(Debug, Clone)]
 pub struct ReviewGateOutcome {
     pub passed: bool,
+    /// Review comments / reasons provided by the reviewer(s)
+    pub comments: Vec<String>,
 }
 
 /// Run the dual review gate for full_auto mode.
@@ -40,9 +42,14 @@ pub async fn run_review_gate(
     )
     .await;
 
-    ReviewGateOutcome {
-        passed: review_outcome.map(|o| o.passed).unwrap_or(false),
-    }
+    let (passed, comments) = match review_outcome {
+        Ok(o) => (o.passed, o.comments),
+        Err(_) => (
+            false,
+            vec!["review gate error: unable to complete review".to_string()],
+        ),
+    };
+    ReviewGateOutcome { passed, comments }
 }
 
 /// Run enhanced verification (syntax, test, lint, adversarial checks) on response text.

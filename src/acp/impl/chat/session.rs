@@ -188,15 +188,17 @@ pub(crate) async fn handle_chat(
                 let compressor = SessionCompressor::default();
                 let compressed = session_mgr.compress_messages(&msg_tuples, &compressor);
                 if !compressed.summary.is_empty() {
+                    let original_count = compressed.original_count;
+                    let compressed_count = compressed.compressed_count;
+                    let compression_ratio = compressed.compression_ratio;
+                    let kept_count = compressed.kept_messages.len();
+                    let summary_text = compressed.summary.clone();
+
                     warn!(
                         "SessionContextManager: compression reduced {}→{} messages (ratio: {:.2})",
-                        compressed.original_count,
-                        compressed.compressed_count,
-                        compressed.compression_ratio,
+                        original_count, compressed_count, compression_ratio,
                     );
-                    let kept_count = compressed.kept_messages.len();
-                    let orig_count = compressed.original_count;
-                    let summary_text = compressed.summary.clone();
+
                     // Convert compressor messages back to agent messages.
                     let mut compressed_msgs: Vec<Message> = compressed
                         .kept_messages
@@ -213,7 +215,7 @@ pub(crate) async fn handle_chat(
                             role: "system".to_string(),
                             content: format!(
                                 "[Session compressed: {} messages summarized]\n{}",
-                                orig_count - kept_count,
+                                original_count - kept_count,
                                 summary_text,
                             ),
                         },
@@ -298,10 +300,20 @@ pub(crate) async fn handle_chat(
         if should_escalate {
             info!(
                 trace_id = %pipeline_trace.trace_id,
-                "approval strategy escalated due to policy"
+                "approval strategy escalated due to policy — rejecting request"
             );
-            // Handle escalation logic here
-            // This will be implemented when we migrate the escalation logic
+            send_error(
+                server,
+                id,
+                -32040,
+                t("error.chat.escalation_required"),
+                Some(serde_json::json!({
+                    "reason": "Request requires human approval per governance policy",
+                    "mode": chat_params.mode,
+                })),
+            )
+            .await?;
+            return Ok(());
         }
 
         // Determine which observer to use — external (SSE) or internal (JSON-RPC).
@@ -404,6 +416,8 @@ pub(crate) async fn handle_chat(
 // ---------------------------------------------------------------------------
 
 /// Infer the optimal chat mode from the message content.
+///
+/// Returns one of: `"ask"`, `"plan"`, `"edit"`, `"agent"`, `"safeguard"`, `"full_auto"`.
 fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
     // Collect all user message text
     let corpus: String = messages
@@ -413,24 +427,163 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     let lower = corpus.to_lowercase();
-    let word_count = lower.split_whitespace().count().max(1);
+    let trimmed = lower.trim();
+    let word_count = trimmed.split_whitespace().count();
+    let char_count = trimmed.chars().count();
 
-    // Quick mode steering based on conversation structure
-    let has_multiple_turns = messages.len() > 4;
+    // ----------------------------------------------------------------
+    // Edge cases
+    // ----------------------------------------------------------------
+
+    // Empty or whitespace-only → ask
+    if trimmed.is_empty() || word_count == 0 {
+        return "ask".to_string();
+    }
+
+    // Pure symbols / no alphabetic characters → ask
+    if !trimmed.chars().any(|c| c.is_alphabetic()) {
+        return "ask".to_string();
+    }
+
+    // Very short messages (1-2 words, ≤12 chars) → ask
+    if word_count <= 2 && char_count <= 12 {
+        return "ask".to_string();
+    }
+
+    // ----------------------------------------------------------------
+    // Single-turn / question detection
+    // ----------------------------------------------------------------
+
     let last_user = messages
         .iter()
         .rfind(|m| m.role.eq_ignore_ascii_case("user"));
-    let last_user_len = last_user.map(|m| m.content.len()).unwrap_or(0);
+    let last_user_text = last_user.map(|m| m.content.as_str()).unwrap_or("");
+    let ends_with_question = last_user_text.trim().ends_with('?');
 
-    // ── Vote early: short / ambiguous user inputs → "edit" ──────────────
-    if last_user_len > 0 && last_user_len < 15 {
-        return "edit".to_string();
+    // Question / conversational words
+    let question_words = [
+        "what", "why", "how", "when", "where", "who", "which", "is", "are", "can", "could",
+        "would", "should", "do", "does", "did",
+    ];
+    let question_word_count = question_words.iter().filter(|w| lower.contains(*w)).count();
+
+    // Analytical / explanatory keywords
+    let analytical_indicators = [
+        "analyze",
+        "explain",
+        "debug",
+        "investigate",
+        "review",
+        "check",
+        "verify",
+        "test",
+        "describe",
+        "define",
+        "meaning",
+        "difference",
+        "tell me",
+        "clarify",
+        "summarize",
+        "understand",
+    ];
+    let analytical_count = analytical_indicators
+        .iter()
+        .filter(|t| lower.contains(*t))
+        .count();
+
+    let is_single_turn = messages.len() <= 2;
+
+    // Ends with ? and is short → ask
+    if ends_with_question && word_count <= 15 {
+        return "ask".to_string();
     }
 
-    // ── Density-based routing ──────────────────────────────────────────
-    // Break the corpus into words so we can measure the ratio of
-    // imperative / analytical tokens, which is a strong signal for
-    // the intended mode.
+    // Multiple analytical + question words, short message → ask
+    if analytical_count >= 2 && question_word_count >= 2 && word_count <= 50 {
+        return "ask".to_string();
+    }
+
+    // Single turn, analytical, short → ask
+    if is_single_turn && analytical_count >= 1 && word_count <= 30 {
+        return "ask".to_string();
+    }
+
+    // Single turn with mostly question words, even if longer → ask
+    if is_single_turn && question_word_count >= 3 && analytical_count == 0 && word_count <= 40 {
+        return "ask".to_string();
+    }
+
+    // ----------------------------------------------------------------
+    // SafeGuard detection — dangerous operations needing human review
+    // ----------------------------------------------------------------
+
+    let has_destructive = [
+        "delete prod",
+        "drop table",
+        "rm -rf",
+        "shutdown",
+        "destroy",
+        "terminate instance",
+        "remove all",
+        "delete all",
+        "truncate",
+        "format disk",
+        "wipe",
+    ]
+    .iter()
+    .any(|t| lower.contains(t));
+
+    let has_safety_marker = [
+        "careful",
+        "safely",
+        "backup",
+        "back up",
+        "caution",
+        "confirm first",
+        "ask before",
+        "approve",
+        "review before",
+        "safe",
+        "safeguard",
+    ]
+    .iter()
+    .any(|t| lower.contains(t));
+
+    if has_destructive || has_safety_marker {
+        return "safeguard".to_string();
+    }
+
+    // ----------------------------------------------------------------
+    // FullAuto detection — multi-step automation
+    // ----------------------------------------------------------------
+
+    let auto_triggers = [
+        "automate",
+        "automated",
+        "automation",
+        "pipeline",
+        "batch",
+        "multiple steps",
+        "full auto",
+        "fully automatic",
+        "run all",
+        "ci/cd",
+        "deploy",
+        "release process",
+        "unattended",
+    ];
+    let auto_count = auto_triggers.iter().filter(|t| lower.contains(*t)).count();
+    let has_multi_step =
+        lower.contains("first") && lower.contains("then") && lower.contains("finally");
+
+    if auto_count >= 2 || (auto_count >= 1 && word_count > 30) || has_multi_step {
+        return "full_auto".to_string();
+    }
+
+    // ----------------------------------------------------------------
+    // Density-based routing (imperative / planning / analytical)
+    // ----------------------------------------------------------------
+
     let imperative_triggers = [
         "create",
         "build",
@@ -445,6 +598,8 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
         "modify",
         "remove",
         "delete",
+        "replace",
+        "rename",
     ];
     let planning_triggers = [
         "plan",
@@ -456,19 +611,9 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
         "consider",
         "evaluate",
         "compare",
-    ];
-    let analytical_indicators = [
-        "analyze",
-        "explain",
-        "debug",
-        "investigate",
-        "review",
-        "check",
-        "verify",
-        "test",
-        "why",
-        "how",
-        "what",
+        "propose",
+        "outline",
+        "structure",
     ];
 
     let imperative_count = imperative_triggers
@@ -479,49 +624,75 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
         .iter()
         .filter(|t| lower.contains(*t))
         .count();
-    let analytical_count = analytical_indicators
-        .iter()
-        .filter(|t| lower.contains(*t))
-        .count();
+
+    // Combined trigger pool for the entry threshold check
+    let total_triggers = imperative_count + planning_count + analytical_count;
 
     // Weighted heuristic (imperative > planning > analytical)
     let imperative_score = (imperative_count as f64) * 2.0;
     let planning_score = (planning_count as f64) * 1.5;
     let analytical_score = analytical_count as f64;
 
-    // ── Adjust for conversation length ─────────────────────────────────
+    // Adjust for conversation length
     let length_factor = (word_count as f64 / 100.0).min(3.0);
     let imperative_score = imperative_score * length_factor;
     let planning_score = planning_score * length_factor;
     let analytical_score = analytical_score * length_factor;
 
-    // ── Score entry threshold ──────────────────────────────────────────
-    // Require at least one trigger match to override the default.
-    let total_triggers = imperative_count + planning_count + analytical_count;
+    let has_multiple_turns = messages.len() > 4;
+    let has_strong_imperative = imperative_triggers
+        .iter()
+        .any(|t| lower.starts_with(t) || lower.contains(&format!(" {} ", t)));
 
+    // No trigger matches at all — fall back on heuristics
     if total_triggers == 0 {
-        // Fallback: if conversation has multiple turns, edit is the default
+        if is_single_turn && word_count <= 10 {
+            return "ask".to_string();
+        }
         if has_multiple_turns || word_count > 30 {
             return "edit".to_string();
         }
-        return "edit".to_string();
+        return "ask".to_string();
     }
 
-    // ── Multi-turn conversations with planning → "edit" ────────────────
-    // If the user has sent multiple messages and any of them mention
-    // planning or imperative keywords, route to edit for granular
-    // multi-file workflows.
+    // ----------------------------------------------------------------
+    // Multi-turn conversations with planning → edit
+    // ----------------------------------------------------------------
     if has_multiple_turns && (planning_score > 0.0 || imperative_score > 0.0) {
         return "edit".to_string();
     }
 
-    // ── Route by highest score ─────────────────────────────────────────
-    if planning_score >= imperative_score && planning_score >= analytical_score {
+    // ----------------------------------------------------------------
+    // Route by highest score
+    // ----------------------------------------------------------------
+
+    // Plan mode: planning clearly dominates, no strong imperative
+    if planning_score > imperative_score
+        && planning_score > analytical_score
+        && !has_strong_imperative
+    {
+        return "plan".to_string();
+    }
+
+    // Edit or agent: strong imperative present
+    if has_strong_imperative {
+        return "edit".to_string();
+    }
+
+    // Agent mode: imperative score highest
+    if imperative_score >= planning_score && imperative_score >= analytical_score {
+        return "agent".to_string();
+    }
+
+    // ----------------------------------------------------------------
+    // Final fallback (rarely reached)
+    // ----------------------------------------------------------------
+    if analytical_score > 0.0 {
+        "ask"
+    } else if word_count > 10 {
         "edit"
-    } else if imperative_score >= analytical_score {
-        "agent"
     } else {
-        "edit"
+        "ask"
     }
     .to_string()
 }
@@ -543,6 +714,10 @@ async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Re
 }
 
 /// Record a trace event with metrics counter.
+///
+/// `_server`, `_trace`, `_inputs`, `_outputs`, `_duration_ms` are kept
+/// unused with `_` prefixes to maintain signature consistency with the
+/// sibling `record_trace_event` in `trace_pack.rs`.
 #[allow(clippy::too_many_arguments)]
 fn record_trace_event(
     _server: &AcpServer,

@@ -11,6 +11,8 @@ pub struct GlobalUiState {
     pub enable_markdown: bool,
     pub show_model_picker: bool,
     pub show_prompts: bool,
+    pub show_mode_row: bool,
+    pub show_extra_buttons: bool,
     pub model_stats_json: Option<String>,
     /// Active session index
     pub active_session: usize,

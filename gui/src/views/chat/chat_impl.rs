@@ -10,10 +10,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 // Compile-time feature flags — not configurable at runtime.
-// Change these and rebuild to toggle the corresponding feature.
+/// Disable markdown rendering entirely (compile-time flag).
 const CHAT_DISABLE_MARKDOWN_RENDER: bool = false;
-const CHAT_STAGE6_ENABLE_MODE_ROW: bool = true;
-const CHAT_STAGE6_ENABLE_EXTRA_BUTTONS: bool = true;
 const MAX_CONCURRENT_GENERATIONS: usize = 4;
 
 #[derive(Clone, Copy)]
@@ -27,9 +25,62 @@ pub struct ChatUiRuntimeConfig {
 }
 
 use super::types::{
-    AiStatus, Attachment, GenerationState, Message, ModelPerfStats, PendingResponse, PhaseRecord,
-    PromptTemplate, Session,
+    AiStatus, Attachment, GenerationState, Message, ModePolicy, ModelPerfStats, PendingResponse,
+    PhaseRecord, PromptTemplate, Session,
 };
+/// Session list, active session, rename, and session search state.
+pub struct SessionState {
+    pub sessions: Vec<Session>,
+    pub active_session: usize,
+    rename_session_idx: Option<usize>,
+    rename_session_buf: String,
+    pub session_search_query: String,
+    session_save_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    session_save_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// Streaming state: pending channel, processor, abort controller, progress.
+pub struct StreamState {
+    pending_rx: mpsc::Receiver<PendingResponse>,
+    pending_tx: mpsc::SyncSender<PendingResponse>,
+    stream_chunk_flush_interval: std::time::Duration,
+    stream_repaint_interval: std::time::Duration,
+    max_pending_events_per_frame: usize,
+    stream_client: reqwest::Client,
+    abort_controller: Option<AbortController>,
+    pub stream_progress: TokenProgress,
+    stream_processor: Option<StreamProcessor>,
+}
+
+/// Model and agent selection state.
+pub struct ModelState {
+    selected_agent: String,
+    selected_model: String,
+    available_models: Vec<String>,
+    available_agent_models: std::collections::HashMap<String, Vec<String>>,
+    models_loaded: bool,
+    last_models_fetch: std::time::Instant,
+    last_selected_agent: String,
+    pub model_stats: std::collections::HashMap<String, ModelPerfStats>,
+}
+
+/// Prompt template editing and browsing state.
+pub struct TemplateState {
+    prompt_templates: Vec<PromptTemplate>,
+    next_template_id: u64,
+    selected_template_idx: Option<usize>,
+    template_name_buf: String,
+    template_command_buf: String,
+    template_content_buf: String,
+    pub template_search_query: String,
+    templates_bootstrapped: bool,
+    pub prompts_command_templates: Vec<crate::views::prompts::CommandTemplate>,
+    pub prompt_collection: Vec<crate::views::prompts::PromptCategory>,
+    prompt_selected_category: Option<String>,
+    template_save_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    template_save_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
 mod render;
 mod runtime;
 mod storage;
@@ -37,8 +88,10 @@ mod ui;
 use crate::views::ui_state::GlobalUiState;
 
 pub struct ChatView {
-    pub sessions: Vec<Session>,
-    pub active_session: usize,
+    pub session_state: SessionState,
+    pub stream_state: StreamState,
+    pub model_state: ModelState,
+    pub template_state: TemplateState,
     pub input: String,
     pub sending: bool,
     pub last_sending: bool,
@@ -51,16 +104,11 @@ pub struct ChatView {
     /// Available phases fetched from backend
     phases: Vec<String>,
     /// Whether phases have been fetched
-    phases_loaded: bool,
+    pub(super) phases_loaded: bool,
     /// Whether phases loading has been scheduled
-    phases_load_scheduled: bool,
-    pending_rx: mpsc::Receiver<PendingResponse>,
-    pending_tx: mpsc::SyncSender<PendingResponse>,
-    // Session rename (double-click on session name)
-    rename_session_idx: Option<usize>,
-    rename_session_buf: String,
+    pub(super) phases_load_scheduled: bool,
     // Track which message's thinking content is expanded
-    show_thinking_idx: Option<usize>,
+    pub show_thinking_idx: Option<usize>,
     // Global "Show/Hide All Thinking" toggle
     pub show_all_thinking: bool,
     // Sub-agent panels
@@ -70,8 +118,8 @@ pub struct ChatView {
     pub show_all_commands: bool,
     pub show_command_idx: Option<usize>,
     // Message edit
-    edit_msg_idx: Option<usize>,
-    edit_msg_buf: String,
+    pub edit_msg_idx: Option<usize>,
+    pub edit_msg_buf: String,
     // Feature 4: stop button
     stop_requested: bool,
     generation_states: Vec<GenerationState>,
@@ -79,75 +127,38 @@ pub struct ChatView {
     /// Track concurrent generations to prevent resource exhaustion
     active_generations: Arc<AtomicU64>,
     // Feature 5: token display with improved accuracy
-    last_token_estimate: usize,
-    input_token_estimate: usize,
-    output_token_estimate: usize,
+    pub last_token_estimate: usize,
+    pub input_token_estimate: usize,
+    pub output_token_estimate: usize,
     /// Enable markdown rendering (default: true)
     pub enable_markdown: bool,
     /// Show token details (default: true)
     pub show_token_details: bool,
-    /// Model performance stats cache
-    pub model_stats: std::collections::HashMap<String, ModelPerfStats>,
+    /// Show the mode row (mode selector + model picker + token details checkbox)
+    pub show_mode_row: bool,
+    /// Show extra buttons (attach, external editor, prompts, risk decision)
+    pub show_extra_buttons: bool,
     // Feature 7: quick prompts
     pub show_prompts: bool,
     pub show_model_picker: bool,
-    prompt_templates: Vec<PromptTemplate>,
-    next_template_id: u64,
-    selected_template_idx: Option<usize>,
-    template_name_buf: String,
-    template_command_buf: String,
-    template_content_buf: String,
-    pub template_search_query: String,
-    templates_bootstrapped: bool,
-    /// Command templates from the PromptsView, used as fallback for `/` commands.
-    pub prompts_command_templates: Vec<crate::views::prompts::CommandTemplate>,
-    /// Full prompt category collection for the category browser.
-    pub prompt_collection: Vec<crate::views::prompts::PromptCategory>,
-    /// Currently selected category ID in the prompt browser.
-    prompt_selected_category: Option<String>,
     /// Risk decision helper panel visibility and fields.
-    show_risk_decision: bool,
-    risk_is_high: bool,
-    risk_review_required: bool,
-    risk_strategy: String,
-    risk_reasons: String,
-    // Feature 9: search (sessions + messages)
-    pub session_search_query: String,
-    // Save serialization guards (AtomicBool ensures no concurrent file writes)
-    session_save_in_flight: Arc<AtomicBool>,
-    template_save_in_flight: Arc<AtomicBool>,
-    // Monotonic save epochs for coalescing frequent save requests.
-    session_save_epoch: Arc<AtomicU64>,
-    template_save_epoch: Arc<AtomicU64>,
-    // Feature 6: model selection
-    selected_agent: String,
-    selected_model: String,
-    available_models: Vec<String>,
-    /// Agent → [model_id, …] for the two-level picker
-    available_agent_models: std::collections::HashMap<String, Vec<String>>,
-    models_loaded: bool,
-    /// Timestamp of last models fetch attempt (for retry throttle)
-    last_models_fetch: std::time::Instant,
-    last_selected_agent: String,
-    stream_chunk_flush_interval: std::time::Duration,
-    stream_repaint_interval: std::time::Duration,
-    max_pending_events_per_frame: usize,
-    stream_client: reqwest::Client,
+    pub(super) show_risk_decision: bool,
+    pub(super) risk_is_high: bool,
+    pub(super) risk_review_required: bool,
+    pub(super) risk_strategy: String,
+    pub(super) risk_reasons: String,
     /// Per-message content hash cache: skips re-parsing unchanged messages.
     /// Key = message index, value = hash of content last rendered.
-    rendered_content_hashes: Vec<u64>,
-
-    /// Shared abort controller for cancelling in-progress streaming generations.
-    abort_controller: Option<AbortController>,
-    /// Token-level progress tracking for the active generation.
-    pub stream_progress: TokenProgress,
-    /// SSE processor for the current streaming generation.
-    stream_processor: Option<StreamProcessor>,
-
+    pub rendered_content_hashes: Vec<u64>,
     /// Pending tool approval request from a sandbox denial.
     /// When set, the UI shows Approve/Deny buttons instead of a plain error.
-    /// Tuple: (tool_name, last_user_message_index)
-    pending_tool_approval: Option<(String, usize)>,
+    /// Tuple: (tool_name, risk_score, last_user_message_index)
+    pub(super) pending_tool_approval: Option<(String, f64, usize)>,
+    /// Frontend mode policy for the current mode selection.
+    /// Mirrors backend ModeRuntime constraints for UI-level enforcement.
+    pub mode_policy: ModePolicy,
+    /// Counter of tool calls in the current turn, used to enforce max_tool_calls.
+    turn_tool_calls: usize,
 }
 
 impl ChatView {
@@ -231,7 +242,11 @@ impl ChatView {
 
     /// Update model performance stats after message generation
     fn update_model_stats(&mut self, model: &str, tokens: usize, duration_ms: u64) {
-        let stats = self.model_stats.entry(model.to_string()).or_default();
+        let stats = self
+            .model_state
+            .model_stats
+            .entry(model.to_string())
+            .or_default();
         stats.response_time_ms = duration_ms;
         stats.token_count = tokens;
         stats.success_count = stats.success_count.saturating_add(1);
@@ -264,8 +279,8 @@ impl ChatView {
                 || name.starts_with("New session ")
     }
 
-    fn refresh_default_session_names(&mut self, i18n: &I18n) {
-        for (idx, session) in self.sessions.iter_mut().enumerate() {
+    pub(super) fn refresh_default_session_names(&mut self, i18n: &I18n) {
+        for (idx, session) in self.session_state.sessions.iter_mut().enumerate() {
             if session.messages.is_empty() && Self::is_default_session_name(&session.name, i18n) {
                 session.name = Self::localized_default_session_name(idx, i18n);
             }
@@ -276,7 +291,7 @@ impl ChatView {
     /// Detects pasted file paths (common on Linux with Ctrl+Shift+V), data:image/ URLs,
     /// and dropped files (drag-and-drop from file manager).
     /// Returns any attachments that were created from paste/drop events.
-    fn handle_paste_events(&mut self, ui: &mut egui::Ui) -> Vec<Attachment> {
+    pub(super) fn handle_paste_events(&mut self, ui: &mut egui::Ui) -> Vec<Attachment> {
         // ── Handle file drop (drag-and-drop) via egui 0.31 raw input ──
         let dropped = ui.input(|i| i.raw.dropped_files.clone());
         for f in &dropped {
@@ -441,9 +456,67 @@ impl ChatView {
             String::new()
         };
 
-        Self {
+        let session_state = SessionState {
             sessions,
             active_session: 0,
+            rename_session_idx: None,
+            rename_session_buf: String::new(),
+            session_search_query: String::new(),
+            session_save_in_flight: Arc::new(AtomicBool::new(false)),
+            session_save_epoch: Arc::new(AtomicU64::new(0)),
+        };
+        let stream_state = StreamState {
+            pending_rx,
+            pending_tx,
+            stream_chunk_flush_interval: std::time::Duration::from_millis(33),
+            stream_repaint_interval: std::time::Duration::from_millis(33),
+            max_pending_events_per_frame: 256,
+            stream_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .read_timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| {
+                    reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(300))
+                        .read_timeout(std::time::Duration::from_secs(60))
+                        .build()
+                        .unwrap_or_else(|_| reqwest::Client::new())
+                }),
+            abort_controller: None,
+            stream_progress: TokenProgress::default(),
+            stream_processor: None,
+        };
+        let model_state = ModelState {
+            selected_agent: String::new(),
+            selected_model: initial_model,
+            available_models: vec!["auto".to_string()],
+            available_agent_models: std::collections::HashMap::new(),
+            models_loaded: false,
+            last_models_fetch: std::time::Instant::now(),
+            last_selected_agent: String::new(),
+            model_stats,
+        };
+        let template_state = TemplateState {
+            prompt_templates: templates,
+            next_template_id,
+            selected_template_idx: None,
+            template_name_buf: String::new(),
+            template_command_buf: String::new(),
+            template_content_buf: String::new(),
+            template_search_query: String::new(),
+            templates_bootstrapped: false,
+            prompts_command_templates: Vec::new(),
+            prompt_collection: Vec::new(),
+            prompt_selected_category: None,
+            template_save_in_flight: Arc::new(AtomicBool::new(false)),
+            template_save_epoch: Arc::new(AtomicU64::new(0)),
+        };
+
+        Self {
+            session_state,
+            stream_state,
+            model_state,
+            template_state,
             input: default_input,
             sending: false,
             last_sending: false,
@@ -456,10 +529,6 @@ impl ChatView {
             phases: Vec::new(),
             phases_loaded: false,
             phases_load_scheduled: false,
-            pending_rx,
-            pending_tx,
-            rename_session_idx: None,
-            rename_session_buf: String::new(),
             show_thinking_idx: None,
             show_all_thinking: false,
             show_all_sub_agents: false,
@@ -480,60 +549,19 @@ impl ChatView {
             // Feature 7
             show_prompts: ui_state.show_prompts,
             show_model_picker: ui_state.show_model_picker,
-            prompt_templates: templates,
-            next_template_id,
-            selected_template_idx: None,
-            template_name_buf: String::new(),
-            template_command_buf: String::new(),
-            template_content_buf: String::new(),
-            template_search_query: String::new(),
-            templates_bootstrapped: false,
-            prompts_command_templates: Vec::new(),
-            prompt_collection: Vec::new(),
-            prompt_selected_category: None,
             show_risk_decision: false,
             risk_is_high: false,
             risk_review_required: false,
             risk_strategy: String::new(),
             risk_reasons: String::new(),
-            // Feature 9
-            session_search_query: String::new(),
-            // Save guards
-            session_save_in_flight: Arc::new(AtomicBool::new(false)),
-            template_save_in_flight: Arc::new(AtomicBool::new(false)),
-            session_save_epoch: Arc::new(AtomicU64::new(0)),
-            template_save_epoch: Arc::new(AtomicU64::new(0)),
-            // Feature 6
-            selected_agent: String::new(),
-            selected_model: initial_model,
-            available_models: vec!["auto".to_string()],
-            available_agent_models: std::collections::HashMap::new(),
-            models_loaded: false,
-            last_models_fetch: std::time::Instant::now(),
-            last_selected_agent: String::new(),
-            stream_chunk_flush_interval: std::time::Duration::from_millis(33),
-            stream_repaint_interval: std::time::Duration::from_millis(33),
-            max_pending_events_per_frame: 256,
-            // Enhanced features (Phase 2)
             enable_markdown: ui_state.enable_markdown,
             show_token_details: ui_state.show_token_details,
-            model_stats,
-            stream_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
-                .read_timeout(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| {
-                    reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(300))
-                        .read_timeout(std::time::Duration::from_secs(60))
-                        .build()
-                        .unwrap_or_else(|_| reqwest::Client::new())
-                }),
+            show_mode_row: ui_state.show_mode_row,
+            show_extra_buttons: ui_state.show_extra_buttons,
             rendered_content_hashes: Vec::new(),
-            abort_controller: None,
-            stream_progress: TokenProgress::default(),
-            stream_processor: None,
             pending_tool_approval: None,
+            mode_policy: ModePolicy::new("edit"),
+            turn_tool_calls: 0,
         }
     }
 
@@ -544,15 +572,18 @@ impl ChatView {
         max_pending_events_per_frame: usize,
         token_flush_ms: u64,
     ) {
-        self.stream_repaint_interval = std::time::Duration::from_millis(repaint_ms.clamp(16, 200));
-        self.stream_chunk_flush_interval =
+        self.stream_state.stream_repaint_interval =
+            std::time::Duration::from_millis(repaint_ms.clamp(16, 200));
+        self.stream_state.stream_chunk_flush_interval =
             std::time::Duration::from_millis(flush_ms.clamp(16, 200));
-        self.max_pending_events_per_frame = max_pending_events_per_frame.clamp(16, 4096);
+        self.stream_state.max_pending_events_per_frame =
+            max_pending_events_per_frame.clamp(16, 4096);
         // Token flush rate controls how frequently buffered tokens are
         // flushed to the UI for frame-rate-smooth rendering.
         // 16ms = ~60fps; clamped to [8, 200].
-        self.stream_chunk_flush_interval = std::time::Duration::from_millis(
-            self.stream_chunk_flush_interval
+        self.stream_state.stream_chunk_flush_interval = std::time::Duration::from_millis(
+            self.stream_state
+                .stream_chunk_flush_interval
                 .as_millis()
                 .min(token_flush_ms.clamp(8, 200) as u128) as u64,
         );
@@ -560,41 +591,41 @@ impl ChatView {
 
     fn session(&mut self) -> &mut Session {
         // Bounds check: if active_session is out of range, create a fallback session
-        let idx = if self.active_session < self.sessions.len() {
-            self.active_session
+        let idx = if self.session_state.active_session < self.session_state.sessions.len() {
+            self.session_state.active_session
         } else {
             // Fallback to last session or create one
-            if self.sessions.is_empty() {
-                self.sessions.push(Self::default_session(
+            if self.session_state.sessions.is_empty() {
+                self.session_state.sessions.push(Self::default_session(
                     0,
                     "think".to_string(),
                     "edit".to_string(),
                 ));
             }
-            self.active_session = self.sessions.len() - 1;
-            self.active_session
+            self.session_state.active_session = self.session_state.sessions.len() - 1;
+            self.session_state.active_session
         };
-        &mut self.sessions[idx]
+        &mut self.session_state.sessions[idx]
     }
 
     pub fn messages(&self) -> &[Message] {
-        if self.active_session < self.sessions.len() {
-            &self.sessions[self.active_session].messages
-        } else if !self.sessions.is_empty() {
-            &self.sessions[self.sessions.len() - 1].messages
+        if self.session_state.active_session < self.session_state.sessions.len() {
+            &self.session_state.sessions[self.session_state.active_session].messages
+        } else if !self.session_state.sessions.is_empty() {
+            &self.session_state.sessions[self.session_state.sessions.len() - 1].messages
         } else {
             &[]
         }
     }
 
-    fn bootstrap_default_templates(&mut self, i18n: &I18n) {
-        if self.templates_bootstrapped {
+    pub(super) fn bootstrap_default_templates(&mut self, i18n: &I18n) {
+        if self.template_state.templates_bootstrapped {
             return;
         }
-        self.templates_bootstrapped = true;
-        if !self.prompt_templates.is_empty() {
+        self.template_state.templates_bootstrapped = true;
+        if !self.template_state.prompt_templates.is_empty() {
             // Templates exist on disk — just update display names in case language changed.
-            for tpl in &mut self.prompt_templates {
+            for tpl in &mut self.template_state.prompt_templates {
                 match tpl.id.as_str() {
                     "explain" => {
                         tpl.name = i18n.t("chat.template.explain").to_string();
@@ -626,7 +657,7 @@ impl ChatView {
             return;
         }
 
-        self.prompt_templates = vec![
+        self.template_state.prompt_templates = vec![
             PromptTemplate {
                 id: "explain".to_string(),
                 name: i18n.t("chat.template.explain").to_string(),
@@ -673,53 +704,63 @@ impl ChatView {
     /// any specific model ID.
     const COPILOT_AUTO_MODEL: &'static str = "copilot/auto";
 
-    fn sync_model_selection(&mut self) {
+    pub(super) fn sync_model_selection(&mut self) {
         // Ensure model name is trimmed
-        self.selected_model = self.selected_model.trim().to_string();
-        if self.selected_model.is_empty() {
-            self.selected_model = "auto".to_string();
+        self.model_state.selected_model = self.model_state.selected_model.trim().to_string();
+        if self.model_state.selected_model.is_empty() {
+            self.model_state.selected_model = "auto".to_string();
         }
 
         // ── If the model is "copilot-auto", derive the agent ──
         //   This handles backward-compat when a session was saved with copilot-auto
         //   from a previous version that forced copilot to auto-mode.
-        if self.selected_model == Self::COPILOT_AUTO_MODEL {
-            self.selected_agent = "copilot".to_string();
-            if let Some(session) = self.sessions.get_mut(self.active_session) {
-                session.model = self.selected_model.clone();
+        if self.model_state.selected_model == Self::COPILOT_AUTO_MODEL {
+            self.model_state.selected_agent = "copilot".to_string();
+            if let Some(session) = self
+                .session_state
+                .sessions
+                .get_mut(self.session_state.active_session)
+            {
+                session.model = self.model_state.selected_model.clone();
             }
             return;
         }
 
         // Sync to active session
-        if let Some(session) = self.sessions.get_mut(self.active_session) {
-            session.model = self.selected_model.clone();
+        if let Some(session) = self
+            .session_state
+            .sessions
+            .get_mut(self.session_state.active_session)
+        {
+            session.model = self.model_state.selected_model.clone();
         }
 
         // Derive selected_agent from available_agent_models
-        if self.selected_model == "auto" {
+        if self.model_state.selected_model == "auto" {
             // Keep the current agent selection when model is auto — the user
             // may have explicitly picked an agent and expects it to stick.
             // Only clear if no agent is selected at all or the stored agent
             // is no longer known.
-            if self.selected_agent.is_empty()
+            if self.model_state.selected_agent.is_empty()
                 || !self
+                    .model_state
                     .available_agent_models
-                    .contains_key(&self.selected_agent)
+                    .contains_key(&self.model_state.selected_agent)
             {
-                self.selected_agent.clear();
+                self.model_state.selected_agent.clear();
             }
-        } else if !self.selected_model.starts_with("copilot/") {
+        } else if !self.model_state.selected_model.starts_with("copilot/") {
             // When user explicitly selects a model, find the matching agent.
             // Don't clear selected_agent if we can't find the match — the model
             // may still be valid (e.g. backend supports it but not yet in cache).
             let found = self
+                .model_state
                 .selected_agent
                 .is_empty()
                 .then(|| {
                     // Only search when no agent is currently selected
-                    for (agent, models) in &self.available_agent_models {
-                        if models.contains(&self.selected_model) {
+                    for (agent, models) in &self.model_state.available_agent_models {
+                        if models.contains(&self.model_state.selected_model) {
                             return Some(agent.clone());
                         }
                     }
@@ -727,7 +768,7 @@ impl ChatView {
                 })
                 .flatten();
             if let Some(agent) = found {
-                self.selected_agent = agent;
+                self.model_state.selected_agent = agent;
             }
         }
 
@@ -735,8 +776,8 @@ impl ChatView {
         // or to the first available model if the selected model is not in the
         // local cache. The backend can handle models not in the local cache.
         // Only fall back if the model is explicitly empty.
-        if self.selected_model.is_empty() {
-            self.selected_model = "auto".to_string();
+        if self.model_state.selected_model.is_empty() {
+            self.model_state.selected_model = "auto".to_string();
         }
     }
 
@@ -782,8 +823,12 @@ impl ChatView {
         };
     }
 
-    fn remove_message_at(&mut self, idx: usize) {
-        if let Some(session) = self.sessions.get_mut(self.active_session) {
+    pub(super) fn remove_message_at(&mut self, idx: usize) {
+        if let Some(session) = self
+            .session_state
+            .sessions
+            .get_mut(self.session_state.active_session)
+        {
             if idx < session.messages.len() {
                 session.messages.remove(idx);
                 for state in &mut self.generation_states {
@@ -847,6 +892,7 @@ impl ChatView {
 
         // Check chat-local templates first
         if let Some(template) = self
+            .template_state
             .prompt_templates
             .iter()
             .find(|template| template.command == command)
@@ -877,34 +923,34 @@ impl ChatView {
     }
 
     fn load_template_into_editor(&mut self, idx: usize) {
-        if let Some(template) = self.prompt_templates.get(idx) {
-            self.selected_template_idx = Some(idx);
-            self.template_name_buf = template.name.clone();
-            self.template_command_buf = template.command.clone();
-            self.template_content_buf = template.content.clone();
+        if let Some(template) = self.template_state.prompt_templates.get(idx) {
+            self.template_state.selected_template_idx = Some(idx);
+            self.template_state.template_name_buf = template.name.clone();
+            self.template_state.template_command_buf = template.command.clone();
+            self.template_state.template_content_buf = template.content.clone();
         }
     }
 
-    fn new_session(&mut self) {
+    pub(super) fn new_session(&mut self) {
         self.stop_sending();
-        let count = self.sessions.len() + 1;
-        self.sessions.push(Self::default_session(
+        let count = self.session_state.sessions.len() + 1;
+        self.session_state.sessions.push(Self::default_session(
             count - 1,
             self.selected_phase.clone(),
             self.selected_mode.clone(),
         ));
-        if let Some(session) = self.sessions.last_mut() {
-            session.model = self.selected_model.clone();
+        if let Some(session) = self.session_state.sessions.last_mut() {
+            session.model = self.model_state.selected_model.clone();
         }
-        self.active_session = self.sessions.len() - 1;
+        self.session_state.active_session = self.session_state.sessions.len() - 1;
         self.ai_status = AiStatus::Idle;
         self.attachments.clear();
         self.edit_msg_idx = None;
         self.edit_msg_buf.clear();
         self.show_thinking_idx = None;
-        self.rename_session_idx = None;
-        self.rename_session_buf.clear();
-        self.last_selected_agent.clear();
+        self.session_state.rename_session_idx = None;
+        self.session_state.rename_session_buf.clear();
+        self.model_state.last_selected_agent.clear();
         self.save_sessions_to_disk();
     }
 
@@ -914,7 +960,7 @@ impl ChatView {
     pub fn reset_loaded_state(&mut self) {
         self.phases_loaded = false;
         self.phases_load_scheduled = false;
-        self.models_loaded = false;
+        self.model_state.models_loaded = false;
         self.last_sending = false;
     }
 
@@ -925,13 +971,15 @@ impl ChatView {
         ui_state.enable_markdown = self.enable_markdown;
         ui_state.show_model_picker = self.show_model_picker;
         ui_state.show_prompts = self.show_prompts;
-        if let Ok(stats_json) = serde_json::to_string(&self.model_stats) {
+        ui_state.show_mode_row = self.show_mode_row;
+        ui_state.show_extra_buttons = self.show_extra_buttons;
+        if let Ok(stats_json) = serde_json::to_string(&self.model_state.model_stats) {
             ui_state.model_stats_json = Some(stats_json);
         }
-        ui_state.active_session = self.active_session;
+        ui_state.active_session = self.session_state.active_session;
         ui_state.input_draft = self.input.clone();
-        ui_state.session_search_query = self.session_search_query.clone();
-        ui_state.template_search_query = self.template_search_query.clone();
+        ui_state.session_search_query = self.session_state.session_search_query.clone();
+        ui_state.template_search_query = self.template_state.template_search_query.clone();
     }
 
     pub fn risk_decision_draft(&self) -> RiskDecisionDraft {
@@ -965,7 +1013,7 @@ impl ChatView {
     pub fn stop_sending(&mut self) {
         self.stop_requested = true;
         // Signal abort to any in-progress stream via the abort controller
-        if let Some(ref ctrl) = self.abort_controller {
+        if let Some(ref ctrl) = self.stream_state.abort_controller {
             ctrl.abort();
         }
         // Abort all generation task handles
@@ -975,8 +1023,8 @@ impl ChatView {
         self.sending = false;
         self.ai_status = AiStatus::Idle;
         self.set_phase_record_status("stopped");
-        self.stream_progress = TokenProgress::default();
-        self.stream_processor = None;
+        self.stream_state.stream_progress = TokenProgress::default();
+        self.stream_state.stream_processor = None;
     }
 }
 
@@ -1017,7 +1065,7 @@ fn strip_html_tags(input: &str) -> String {
 }
 
 /// Format timestamp as absolute date+time in local timezone (e.g. "2025-05-07 14:30")
-fn format_absolute_time(ts: u64) -> String {
+pub(super) fn format_absolute_time(ts: u64) -> String {
     use chrono::{DateTime, Local, Utc};
     // Convert UTC seconds to localized time, with safe fallback
     match DateTime::<Utc>::from_timestamp(ts as i64, 0) {
@@ -1037,20 +1085,63 @@ mod tests {
     fn test_chat_view() -> ChatView {
         let (pending_tx, pending_rx) = mpsc::sync_channel(256);
         ChatView {
-            sessions: vec![Session {
-                id: "session_1".to_string(),
-                name: "New Chat".to_string(),
-                messages: Vec::new(),
-                created_at: 0,
-                workflow_type: "chat".to_string(),
-                phase: String::new(),
-                mode: "edit".to_string(),
-                model: "auto".to_string(),
-                phase_records: Vec::new(),
-                conversation_id: None,
-                branch_id: None,
-            }],
-            active_session: 0,
+            session_state: SessionState {
+                sessions: vec![Session {
+                    id: "session_1".to_string(),
+                    name: "New Chat".to_string(),
+                    messages: Vec::new(),
+                    created_at: 0,
+                    workflow_type: "chat".to_string(),
+                    phase: String::new(),
+                    mode: "edit".to_string(),
+                    model: "auto".to_string(),
+                    phase_records: Vec::new(),
+                    conversation_id: None,
+                    branch_id: None,
+                }],
+                active_session: 0,
+                rename_session_idx: None,
+                rename_session_buf: String::new(),
+                session_search_query: String::new(),
+                session_save_in_flight: Arc::new(AtomicBool::new(false)),
+                session_save_epoch: Arc::new(AtomicU64::new(0)),
+            },
+            stream_state: StreamState {
+                pending_rx,
+                pending_tx,
+                stream_chunk_flush_interval: std::time::Duration::from_millis(33),
+                stream_repaint_interval: std::time::Duration::from_millis(33),
+                max_pending_events_per_frame: 256,
+                stream_client: reqwest::Client::new(),
+                abort_controller: None,
+                stream_progress: TokenProgress::default(),
+                stream_processor: None,
+            },
+            model_state: ModelState {
+                selected_agent: String::new(),
+                selected_model: "auto".to_string(),
+                available_models: vec!["auto".to_string()],
+                available_agent_models: std::collections::HashMap::new(),
+                models_loaded: false,
+                last_models_fetch: std::time::Instant::now(),
+                last_selected_agent: String::new(),
+                model_stats: std::collections::HashMap::new(),
+            },
+            template_state: TemplateState {
+                prompt_templates: Vec::new(),
+                next_template_id: 1,
+                selected_template_idx: None,
+                template_name_buf: String::new(),
+                template_command_buf: String::new(),
+                template_content_buf: String::new(),
+                template_search_query: String::new(),
+                templates_bootstrapped: false,
+                prompts_command_templates: Vec::new(),
+                prompt_collection: Vec::new(),
+                prompt_selected_category: None,
+                template_save_in_flight: Arc::new(AtomicBool::new(false)),
+                template_save_epoch: Arc::new(AtomicU64::new(0)),
+            },
             input: String::new(),
             sending: false,
             last_sending: false,
@@ -1063,10 +1154,6 @@ mod tests {
             phases: Vec::new(),
             phases_loaded: false,
             phases_load_scheduled: false,
-            pending_rx,
-            pending_tx,
-            rename_session_idx: None,
-            rename_session_buf: String::new(),
             show_thinking_idx: None,
             show_all_thinking: false,
             show_all_sub_agents: false,
@@ -1084,53 +1171,24 @@ mod tests {
             output_token_estimate: 0,
             show_prompts: false,
             show_model_picker: false,
-            prompt_templates: Vec::new(),
-            next_template_id: 1,
-            selected_template_idx: None,
-            template_name_buf: String::new(),
-            template_command_buf: String::new(),
-            template_content_buf: String::new(),
-            template_search_query: String::new(),
-            templates_bootstrapped: false,
-            prompts_command_templates: Vec::new(),
-            prompt_collection: Vec::new(),
-            prompt_selected_category: None,
             show_risk_decision: false,
             risk_is_high: false,
             risk_review_required: false,
             risk_strategy: String::new(),
             risk_reasons: String::new(),
-            session_search_query: String::new(),
-            session_save_in_flight: Arc::new(AtomicBool::new(false)),
-            template_save_in_flight: Arc::new(AtomicBool::new(false)),
-            session_save_epoch: Arc::new(AtomicU64::new(0)),
-            template_save_epoch: Arc::new(AtomicU64::new(0)),
-            selected_agent: String::new(),
-            selected_model: "auto".to_string(),
-            available_models: vec!["auto".to_string()],
-            available_agent_models: std::collections::HashMap::new(),
-            models_loaded: false,
-            last_models_fetch: std::time::Instant::now(),
-            last_selected_agent: String::new(),
-            stream_chunk_flush_interval: std::time::Duration::from_millis(33),
-            stream_repaint_interval: std::time::Duration::from_millis(33),
-            max_pending_events_per_frame: 256,
             enable_markdown: true,
             show_token_details: true,
-            model_stats: std::collections::HashMap::new(),
-            stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
-            abort_controller: None,
-            stream_progress: TokenProgress::default(),
-            stream_processor: None,
             pending_tool_approval: None,
+            mode_policy: ModePolicy::new("edit"),
+            turn_tool_calls: 0,
         }
     }
 
     #[test]
     fn expand_prompt_command_replaces_input_placeholder() {
         let mut view = test_chat_view();
-        view.prompt_templates.push(PromptTemplate {
+        view.template_state.prompt_templates.push(PromptTemplate {
             id: "explain".to_string(),
             name: "Explain".to_string(),
             command: "/explain".to_string(),
@@ -1146,7 +1204,7 @@ mod tests {
     #[test]
     fn expand_prompt_command_appends_arguments_when_template_has_no_placeholder() {
         let mut view = test_chat_view();
-        view.prompt_templates.push(PromptTemplate {
+        view.template_state.prompt_templates.push(PromptTemplate {
             id: "sum".to_string(),
             name: "Summary".to_string(),
             command: "/summary".to_string(),
@@ -1162,7 +1220,7 @@ mod tests {
     #[test]
     fn refresh_default_session_names_localizes_empty_sessions() {
         let mut view = test_chat_view();
-        view.sessions.push(Session {
+        view.session_state.sessions.push(Session {
             id: "session_2".to_string(),
             name: "Chat 2".to_string(),
             messages: Vec::new(),
@@ -1179,9 +1237,12 @@ mod tests {
 
         view.refresh_default_session_names(&i18n);
 
-        assert_eq!(view.sessions[0].name, i18n.t("chat.newSession"));
         assert_eq!(
-            view.sessions[1].name,
+            view.session_state.sessions[0].name,
+            i18n.t("chat.newSession")
+        );
+        assert_eq!(
+            view.session_state.sessions[1].name,
             format!("{} 2", i18n.t("chat.newSession"))
         );
     }
@@ -1189,11 +1250,11 @@ mod tests {
     #[test]
     fn refresh_default_session_names_preserves_named_sessions() {
         let mut view = test_chat_view();
-        view.sessions[0].name = "Release review".to_string();
+        view.session_state.sessions[0].name = "Release review".to_string();
         let i18n = I18n::new(Lang::ZhCn);
 
         view.refresh_default_session_names(&i18n);
 
-        assert_eq!(view.sessions[0].name, "Release review");
+        assert_eq!(view.session_state.sessions[0].name, "Release review");
     }
 }

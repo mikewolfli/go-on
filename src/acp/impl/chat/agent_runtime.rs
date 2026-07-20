@@ -1,9 +1,7 @@
 //! Agent runtime loop — collecting streamed responses from an agent
 //!
-//! Contains `run_agent_collecting`, which calls an agent, collects its
-//! streamed response while handling tool calls, skill dedup, and follow-up
-//! tool observation.  Extracted from the parent `chat.rs` to reduce the
-//! monolithic file size.
+//! Contains `collect_agent_responses` (shared core for stream collection)
+//! and `run_agent_collecting` (ACP-specific tool execution + followup).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,10 +25,70 @@ use super::streaming::{
     emit_stream_chunk, emit_stream_done, StreamEventMeta, StreamNotificationContext,
 };
 
-/// Calls an agent and collects its streamed response.
+/// Collected result from streaming agent responses.
+pub(crate) struct CollectedResponse {
+    pub response: String,
+    pub reasoning: String,
+    pub tool_calls: Vec<(String, String)>,
+}
+
+/// Core streaming collection: reads tokens from the receiver, classifies them
+/// (tool calls, reasoning markers, thinking tokens, model-used announcements),
+/// and returns the collected response, reasoning text, tool calls, and optional
+/// model info.
+///
+/// Callers handle their own progressive rendering before/after calling this
+/// function. For example, the CLI caller can run a pre-loop that displays
+/// tokens progressively, then re-collects the stream into this function.
+pub(crate) async fn collect_agent_responses(
+    mut receiver: mpsc::UnboundedReceiver<String>,
+) -> Result<CollectedResponse> {
+    let mut response = String::new();
+    let mut reasoning_buffer = String::new();
+    let mut tool_calls = Vec::new();
+
+    while let Some(token) = receiver.recv().await {
+        // Check for model-used token (prefixed with __model_used__)
+        if token.strip_prefix("__model_used__:").is_some() {
+            continue;
+        }
+
+        // Check for tool call tokens using shared parser
+        if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
+            tool_calls.push((tool_name.to_string(), tool_args.to_string()));
+            continue;
+        }
+
+        // Check for structured reasoning markers (control chars)
+        if token == REASONING_START || token == REASONING_END {
+            continue;
+        }
+
+        // Check for reasoning tokens (prefixed with __thinking__)
+        if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
+            reasoning_buffer.push_str(reasoning_token);
+        } else {
+            response.push_str(&token);
+        }
+    }
+
+    // If the agent produced only reasoning (no content), use the
+    // reasoning as the response text.
+    if response.trim().is_empty() && !reasoning_buffer.trim().is_empty() {
+        response = std::mem::take(&mut reasoning_buffer);
+    }
+
+    Ok(CollectedResponse {
+        response,
+        reasoning: reasoning_buffer,
+        tool_calls,
+    })
+}
+
+/// Calls an agent, collects its streamed response with ACP-specific
+/// progressive SSE emission, then handles tool execution and followup.
+///
 /// Returns `(response_text, reasoning_text, selected_model)`.
-/// The third element is `Some(model_id)` when the agent
-/// explicitly reports which model it used (e.g. Copilot auto-select).
 pub(crate) async fn run_agent_collecting(
     server: &AcpServer,
     stream_ctx: StreamNotificationContext<'_>,
@@ -78,7 +136,7 @@ pub(crate) async fn run_agent_collecting(
             let chunk_timeout = recv_timeout.min(remaining);
             let token = match tokio::time::timeout(chunk_timeout, receiver.recv()).await {
                 Ok(Some(t)) => t,
-                Ok(None) => break, // channel closed cleanly
+                Ok(None) => break,
                 Err(_) => {
                     tracing::warn!(
                         "agent streaming recv() timed out after {}s — aborting collect",
@@ -87,19 +145,18 @@ pub(crate) async fn run_agent_collecting(
                     break;
                 }
             };
-            // Check for model-used token (prefixed with __model_used__)
-            // This is sent by CopilotAgent after a successful auto-select.
+            // ── Token classification ──
+            // Model-used token
             if let Some(model_id) = token.strip_prefix("__model_used__:") {
                 selected_model = Some(model_id.trim().to_string());
                 continue;
             }
-
-            // Check for tool call tokens using shared parser
+            // Tool call token
             if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
                 tool_calls.push((tool_name.to_string(), tool_args.to_string()));
                 continue;
             }
-
+            // Stream limits check
             let next_chars = token.chars().count();
             if crate::acp::helpers::conversation::stream_would_exceed_limits(
                 chunk_index,
@@ -108,13 +165,11 @@ pub(crate) async fn run_agent_collecting(
             ) {
                 anyhow::bail!(t("error.chat.stream_output_limits"));
             }
-
-            // Check for structured reasoning markers (control chars)
+            // Reasoning markers
             if token == REASONING_START || token == REASONING_END {
                 continue;
             }
-
-            // Check for reasoning tokens (prefixed with __thinking__)
+            // Thinking tokens (prefixed with __thinking__)
             if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                 reasoning_buffer.push_str(reasoning_token);
             } else {
@@ -124,6 +179,7 @@ pub(crate) async fn run_agent_collecting(
             chunk_index += 1;
             total_chars += next_chars;
 
+            // ACP-specific: emit SSE stream chunk progressively
             emit_stream_chunk(
                 server,
                 stream_ctx.stream_observer.as_ref(),
@@ -157,17 +213,9 @@ pub(crate) async fn run_agent_collecting(
                 )
                 .await?;
                 // ── Execute tool calls ────────────────────────────────
-                // If the LLM responded with tool calls, execute each
-                // registered skill and append the results to the response.
                 const MAX_TOOL_CALLS_PER_AGENT: usize = 100;
-                // ── Skill dedup: prevent AI from calling multiple skills at once ──
-                // When the LLM tries to invoke several skills for the same request,
-                // pick the single best one automatically. This stops indecisive AI
-                // behavior where multiple nearly-identical skills are invoked together.
+                // ── Skill dedup ──
                 let tool_calls = {
-                    // Identify which tool calls are skills vs. built-in tools.
-                    // Built-in tools (skill-finder, goon_*, etc.) are excluded
-                    // from the multi-call dedup check.
                     let is_builtin = |name: &str| -> bool {
                         name == "skill-finder"
                             || name == "skill-creator"
@@ -181,7 +229,6 @@ pub(crate) async fn run_agent_collecting(
                         .map(|(name, _)| name.as_str())
                         .collect();
                     if skill_names.len() > 1 {
-                        // Multiple skills called at once — pick the best one by score.
                         let best = {
                             let reg = server
                                 .orchestration_deps
@@ -273,16 +320,13 @@ pub(crate) async fn run_agent_collecting(
                     crate::acp::helpers::autonomy_metrics::record_tool_followup_attempt();
 
                     match followup {
-                        Ok((followup_response, followup_reasoning, followup_model))
+                        Ok((followup_response, followup_reasoning, _followup_model))
                             if !followup_response.trim().is_empty() =>
                         {
                             crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
                             response = followup_response;
                             if !followup_reasoning.is_empty() {
                                 reasoning_buffer.push_str(&followup_reasoning);
-                            }
-                            if selected_model.is_none() {
-                                selected_model = followup_model;
                             }
                         }
                         _ => {
@@ -311,9 +355,7 @@ pub(crate) async fn run_agent_collecting(
                     }
                 }
                 // If the agent produced only reasoning (no content), use the
-                // reasoning as the response text. This prevents models that
-                // exclusively emit reasoning_content (e.g., DeepSeek in
-                // thinking-only mode) from triggering empty_response errors.
+                // reasoning as the response text.
                 if response.trim().is_empty() && !reasoning_buffer.trim().is_empty() {
                     response = std::mem::take(&mut reasoning_buffer);
                 }

@@ -94,8 +94,6 @@ pub struct HarnessBus {
     pub omnipotent_mode: Arc<OmnipotentMode>,
     pub promotion_registry: Arc<Mutex<PromotionRegistry>>,
     pub token_chain: Arc<Mutex<TokenLayerChain>>,
-    /// Second brain loop instance for runner profile snapshots (consolidated with flat version).
-    pub brain_runner: Arc<BrainLoop>,
     /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
@@ -143,7 +141,7 @@ impl HarnessBus {
             omnipotent_mode: Arc::new(OmnipotentMode::new()),
             promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
             token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
-            brain_runner: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
+
             resilience_engine: external_resilience_engine.unwrap_or_else(|| {
                 Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
             }),
@@ -635,7 +633,7 @@ impl HarnessBus {
 
     /// Brain loop runner profile snapshot (consolidated flat version).
     pub async fn brain_runner_profile(&self) -> BrainLoopProfile {
-        self.brain_runner.profile().await
+        self.brain_loop.profile().await
     }
 
     /// Hyper-resilience profile snapshot (F-GAP-27)

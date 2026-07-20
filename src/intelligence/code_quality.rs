@@ -20,7 +20,7 @@ pub enum CodeQualityIssue {
 }
 
 /// Result of a code quality scan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CodeQualityReport {
     /// Issues found during the scan.
     pub issues: Vec<CodeQualityIssue>,

@@ -24,11 +24,14 @@ impl AcpMethodNames {
     pub const SESSION_LOAD: &'static str = "session/load";
     pub const SESSION_PROMPT: &'static str = "session/prompt";
     pub const SESSION_CANCEL: &'static str = "session/cancel";
+    pub const SESSION_DELETE: &'static str = "session/delete";
     pub const SESSION_LIST: &'static str = "session/list";
     pub const SESSION_RESUME: &'static str = "session/resume";
     pub const SESSION_CLOSE: &'static str = "session/close";
     pub const SESSION_SET_MODE: &'static str = "session/set_mode";
     pub const SESSION_SET_CONFIG_OPTION: &'static str = "session/set_config_option";
+    pub const SESSION_CONFIG_SET: &'static str = "session/config/set";
+    pub const SESSION_CONFIG_GET: &'static str = "session/config/get";
     pub const SESSION_UPDATE: &'static str = "session/update";
     pub const SESSION_REQUEST_PERMISSION: &'static str = "session/request_permission";
     pub const TERMINAL_CREATE: &'static str = "terminal/create";
@@ -46,11 +49,14 @@ impl AcpMethodNames {
         Self::SESSION_LOAD,
         Self::SESSION_PROMPT,
         Self::SESSION_CANCEL,
+        Self::SESSION_DELETE,
         Self::SESSION_LIST,
         Self::SESSION_RESUME,
         Self::SESSION_CLOSE,
         Self::SESSION_SET_MODE,
         Self::SESSION_SET_CONFIG_OPTION,
+        Self::SESSION_CONFIG_SET,
+        Self::SESSION_CONFIG_GET,
         Self::SESSION_UPDATE,
         Self::SESSION_REQUEST_PERMISSION,
         Self::TERMINAL_CREATE,
@@ -81,6 +87,7 @@ mod tests {
     #[test]
     fn test_is_known() {
         assert!(AcpMethodNames::is_known("session/new"));
+        assert!(AcpMethodNames::is_known("session/delete"));
         assert!(AcpMethodNames::is_known("terminal/create"));
         assert!(!AcpMethodNames::is_known("unknown/method"));
     }

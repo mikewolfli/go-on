@@ -30,9 +30,11 @@ use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 use crate::acp::helpers::autonomy::terminal_chat_contract_snapshot;
+use crate::acp::r#impl::chat::agent_runtime::{collect_agent_responses, CollectedResponse};
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::cli::markdown_renderer::StreamMarkdownRenderer;
 use crate::config::AppConfig;
+use crate::orchestration::mode::{resolve_mode_runtime, GenericModeRuntime, ModeKind, ModeRuntime};
 
 use crate::governance::status::quick_check_tool as governance_gate;
 use crate::intelligence::capability_graph::CapabilityGraph;
@@ -92,6 +94,9 @@ fn injection_detector() -> &'static crate::security::prompt_injection::Injection
         )
     })
 }
+
+/// Type alias for the safeguard approval return type to satisfy clippy::type_complexity.
+type SafeguardApprovalResult<'a> = Result<(&'a [(String, String)], Option<usize>)>;
 
 /// Returns the global ToolRegistry reference.
 fn tool_registry() -> &'static ToolRegistry {
@@ -170,6 +175,8 @@ macro_rules! ansi {
 struct ChatSession {
     messages: Vec<Message>,
     agent_name: String,
+    #[serde(default)]
+    mode: String,
 }
 
 /// Estimate token count from text using a hybrid approach:
@@ -234,6 +241,90 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         return Ok(());
     }
 
+    // ── Delegate to sub-functions for each phase ──
+    let session = setup_chat_environment(config).await?;
+    let ChatEnvironment {
+        registry,
+        mut current_agent,
+        mut current_agent_name,
+        mut current_mode,
+        mut messages,
+        mut token_tracker,
+        mut stdin_rx,
+        session_path,
+    } = session;
+
+    // ── Main chat loop ──
+    loop {
+        eprint!("🟢 {} > ", current_agent_name);
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+
+        // Read user input
+        let line = match read_user_input(&mut stdin_rx).await {
+            Some(l) => l,
+            None => break,
+        };
+
+        if line.is_empty() {
+            continue;
+        }
+
+        // Built-in commands
+        if let Some(cmd) = line.strip_prefix('/') {
+            let should_exit = dispatch_builtin_command(
+                cmd,
+                &mut messages,
+                &mut current_agent,
+                &mut current_agent_name,
+                &mut current_mode,
+                &registry,
+                &mut token_tracker,
+                &session_path,
+                &mut stdin_rx,
+            )
+            .await;
+            if should_exit {
+                break;
+            }
+            continue;
+        }
+
+        // Process user message through agent
+        process_user_message_and_run_agent(
+            &line,
+            &mut messages,
+            &current_agent,
+            &current_agent_name,
+            &mut token_tracker,
+            &mut current_mode,
+            &session_path,
+        )
+        .await;
+    }
+
+    // ── Save session on clean exit ──
+    save_session_on_exit(&messages, &current_agent_name, &current_mode, &session_path).await;
+
+    eprintln!("Goodbye!");
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-functions for run_terminal_chat
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct ChatEnvironment {
+    registry: Arc<AgentRegistry>,
+    current_agent: Arc<dyn Agent>,
+    current_agent_name: String,
+    current_mode: Box<dyn ModeRuntime>,
+    messages: Vec<Message>,
+    token_tracker: TokenTracker,
+    stdin_rx: mpsc::UnboundedReceiver<String>,
+    session_path: std::path::PathBuf,
+}
+
+async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironment> {
     // ── Initialize runtime components ──
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
@@ -264,25 +355,30 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     agent_names.sort();
     let primary = agent_names[0].clone();
 
-    let mut current_agent_name = primary.clone();
-    let mut current_agent = registry
+    let current_agent_name = primary.clone();
+    let current_agent = registry
         .get(&current_agent_name)
         .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found in registry", current_agent_name))?;
 
-    // ── Print banner ──
-    let version = env!("CARGO_PKG_VERSION");
-    eprintln!("╔════════════════════════════════════════════════════════════════╗");
-    eprintln!("║            go-on terminal chat v{:<46} ║", version);
-    eprintln!("╠════════════════════════════════════════════════════════════════╣");
-    eprintln!("║  Agent: {:<60} ║", current_agent_name);
-    eprintln!("║  Commands: /help /quit /clear /save /load /cost /compact    ║");
-    eprintln!("║   /diff /commit /plan /model /models /retry /context /tools /skills   ║");
-    eprintln!("║   /stats /find_path  ║");
-    eprintln!("╚════════════════════════════════════════════════════════════════╝");
-    eprintln!();
+    // ── Resolve current mode runtime ──
+    let current_mode = resolve_mode_runtime(
+        "edit",
+        Some(registry.clone()),
+        Some(current_agent_name.clone()),
+    )
+    .unwrap_or_else(|_| {
+        Box::new(GenericModeRuntime::new(
+            ModeKind::Edit,
+            registry.clone(),
+            Some(current_agent_name.clone()),
+        ))
+    });
 
-    let mut messages: Vec<Message> = Vec::new();
-    // ── Inject initial system message (built once per session) ──
+    // ── Print banner ──
+    print_chat_banner(&current_agent_name);
+
+    // ── Build initial system message ──
+    let mut messages = Vec::new();
     let all_tool_names = tool_registry().all_names();
     let tool_list_str = all_tool_names.join(", ");
     let agent_list_str = agent_names.join(", ");
@@ -314,10 +410,10 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         ),
     });
 
-    let mut token_tracker = TokenTracker::default();
+    let token_tracker = TokenTracker::default();
 
-    // ── Dedicated stdin channel — spawn once, reuse to avoid per-iteration spawn_blocking ──
-    let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+    // ── Dedicated stdin channel — spawn once ──
+    let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<String>();
     tokio::task::spawn_blocking(move || {
         let stdin = std::io::stdin();
         let mut line = String::new();
@@ -335,908 +431,1220 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
         }
     });
 
-    // ── Session persistence in .goon/ directory ──
+    // ── Session persistence path ──
     let session_path = std::path::PathBuf::from(SESSION_FILE);
     if let Some(parent) = session_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    // ── Main chat loop with interrupt handling ──
-    loop {
-        eprint!("🟢 {} > ", current_agent_name);
-        std::io::Write::flush(&mut std::io::stdout()).ok();
+    Ok(ChatEnvironment {
+        registry,
+        current_agent,
+        current_agent_name,
+        current_mode,
+        messages,
+        token_tracker,
+        stdin_rx,
+        session_path,
+    })
+}
 
-        // ── Read user input with Ctrl+C handling ──
-        let line = tokio::select! {
-            line = stdin_rx.recv() => {
-                match line {
-                    Some(l) => l,
-                    None => break,
-                }
-            }
-            _ = signal::ctrl_c() => {
-                eprintln!("\n{}Interrupted. Type /quit to exit, or continue typing.{}", ansi!("33"), ansi!("0"));
-                continue;
-            }
-        };
+/// Print the startup banner for the terminal chat session.
+fn print_chat_banner(current_agent_name: &str) {
+    let version = env!("CARGO_PKG_VERSION");
+    eprintln!("╔════════════════════════════════════════════════════════════════╗");
+    eprintln!("║            go-on terminal chat v{:<46} ║", version);
+    eprintln!("╠════════════════════════════════════════════════════════════════╣");
+    eprintln!("║  Agent: {:<60} ║", current_agent_name);
+    eprintln!("║  Mode:  {:<60} ║", "edit");
+    eprintln!("║  Commands: /help /quit /clear /save /load /cost /compact    ║");
+    eprintln!("║   /diff /commit /plan /model /models /retry /context /tools /skills   ║");
+    eprintln!("║   /mode /stats /find_path  ║");
+    eprintln!("╚════════════════════════════════════════════════════════════════╝");
+    eprintln!();
+}
 
-        if line.is_empty() {
-            continue;
+/// Read a line from stdin with Ctrl+C handling. Returns None on EOF.
+async fn read_user_input(stdin_rx: &mut mpsc::UnboundedReceiver<String>) -> Option<String> {
+    tokio::select! {
+        line = stdin_rx.recv() => {
+            line
         }
-
-        // ── Built-in commands ──
-        if let Some(cmd) = line.strip_prefix('/') {
-            match cmd {
-                "quit" | "exit" | "q" => break,
-                "help" | "h" => {
-                    eprint!("{}", HELP_TEXT);
-                    continue;
-                }
-                "clear" => {
-                    messages.clear();
-                    eprintln!("{}Conversation cleared.{}", ansi!("32"), ansi!("0"));
-                    continue;
-                }
-                "save" => {
-                    let session = ChatSession {
-                        messages: messages.clone(),
-                        agent_name: current_agent_name.clone(),
-                    };
-                    let json = serde_json::to_string_pretty(&session);
-                    match json {
-                        Ok(json) => {
-                            if let Err(e) = tokio::fs::write(&session_path, &json).await {
-                                eprintln!(
-                                    "{}Failed to write session: {}{}",
-                                    ansi!("31"),
-                                    e,
-                                    ansi!("0")
-                                );
-                            } else {
-                                eprintln!(
-                                    "{}Session saved to {}{}",
-                                    ansi!("32"),
-                                    session_path.display(),
-                                    ansi!("0")
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "{}Failed to serialize session: {}{}",
-                                ansi!("31"),
-                                e,
-                                ansi!("0")
-                            );
-                        }
-                    }
-                    continue;
-                }
-                "load" => {
-                    match tokio::fs::read_to_string(&session_path).await {
-                        Ok(json) => match serde_json::from_str::<ChatSession>(&json) {
-                            Ok(session) => {
-                                // Validate the saved agent name is still in the registry
-                                let agent_valid = registry.get(&session.agent_name).is_some();
-                                if !agent_valid {
-                                    eprintln!(
-                                        "{}Warning: agent '{}' from session no longer available. Using current agent '{}'.{}",
-                                        ansi!("33"),
-                                        session.agent_name,
-                                        current_agent_name,
-                                        ansi!("0")
-                                    );
-                                }
-                                messages = session.messages;
-                                if agent_valid && session.agent_name != current_agent_name {
-                                    if let Some(new_agent) = registry.get(&session.agent_name) {
-                                        current_agent = new_agent;
-                                        current_agent_name = session.agent_name.clone();
-                                    }
-                                }
-                                eprintln!(
-                                    "{}Session loaded: {} messages from '{}'{}",
-                                    ansi!("32"),
-                                    messages.len(),
-                                    current_agent_name,
-                                    ansi!("0")
-                                );
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "{}Failed to parse session: {}{}",
-                                    ansi!("31"),
-                                    e,
-                                    ansi!("0")
-                                );
-                            }
-                        },
-                        Err(_) => {
-                            eprintln!(
-                                "{}No saved session found at {}{}",
-                                ansi!("33"),
-                                session_path.display(),
-                                ansi!("0")
-                            );
-                        }
-                    }
-                    continue;
-                }
-                "agents" => {
-                    for name in &agent_names {
-                        eprintln!("  {name}");
-                    }
-                    eprintln!(
-                        "Current: {}, use /model <name> to switch",
-                        current_agent_name
-                    );
-                    continue;
-                }
-                "tools" => {
-                    let registry = tool_registry();
-                    let names = registry.all_names();
-                    eprintln!("Available tools ({}):", names.len());
-                    for name in names {
-                        if let Some(profile) = registry.profile(name) {
-                            eprintln!("  {:<25} [{}]", name, profile.capability);
-                        } else {
-                            eprintln!("  {name}");
-                        }
-                    }
-                    continue;
-                }
-                "skills" => {
-                    // List skills from the global skill registry if available
-                    let descriptor_list = crate::orchestration::tool::skill_registry()
-                        .and_then(|r| r.read().ok())
-                        .map(|guard| guard.list())
-                        .unwrap_or_default();
-                    if descriptor_list.is_empty() {
-                        eprintln!("No skills registered.");
-                    } else {
-                        eprintln!("Registered skills ({}):", descriptor_list.len());
-                        for s in &descriptor_list {
-                            eprintln!("  {:<25} score: {:.2}", s.name, s.score);
-                        }
-                    }
-                    continue;
-                }
-                "stats" => {
-                    let agent_msgs = messages.iter().filter(|m| m.role == "assistant").count();
-                    let user_msgs = messages.iter().filter(|m| m.role == "user").count();
-                    let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-                    eprintln!("Conversation stats:");
-                    eprintln!(
-                        "  Messages: {} total ({} user, {} assistant)",
-                        messages.len(),
-                        user_msgs,
-                        agent_msgs
-                    );
-                    eprintln!("  Total characters: {}", total_chars);
-                    eprintln!(
-                        "  Avg length: {} chars",
-                        if !messages.is_empty() {
-                            total_chars / messages.len()
-                        } else {
-                            0
-                        }
-                    );
-                    eprint!("{}", token_tracker.display());
-                    continue;
-                }
-                "cost" => {
-                    eprint!("{}", token_tracker.display());
-                    continue;
-                }
-                "context" => {
-                    let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-                    let est_tokens: usize =
-                        messages.iter().map(|m| estimate_tokens(&m.content)).sum();
-                    let system_msgs = messages.iter().filter(|m| m.role == "system").count();
-                    eprintln!("Context window:");
-                    eprintln!(
-                        "  Messages: {} ({} system, {} user, {} assistant)",
-                        messages.len(),
-                        system_msgs,
-                        messages.iter().filter(|m| m.role == "user").count(),
-                        messages.iter().filter(|m| m.role == "assistant").count()
-                    );
-                    eprintln!(
-                        "  Characters: {} (est. ~{} tokens, CJK-aware)",
-                        total_chars, est_tokens
-                    );
-                    eprintln!(
-                        "  Est. context used: {:.1}% of 128K window",
-                        (est_tokens as f64 / 128_000.0 * 100.0).min(100.0)
-                    );
-                    if messages.len() >= COMPACT_PROMPT_THRESHOLD {
-                        eprintln!(
-                            "  {}Tip: Use /compact to reduce context usage.{}  ({}/{} msgs)",
-                            ansi!("33"),
-                            ansi!("0"),
-                            messages.len(),
-                            COMPACT_PROMPT_THRESHOLD
-                        );
-                    }
-                    continue;
-                }
-                "compact" => {
-                    if messages.len() < 4 {
-                        eprintln!(
-                            "{}Conversation too short to compact.{}",
-                            ansi!("33"),
-                            ansi!("0")
-                        );
-                        continue;
-                    }
-                    // Keep the first message (system context) and last 2 exchanges,
-                    // summarize everything in between.
-                    let keep_front = 1.min(messages.len());
-                    let keep_back = 2.min(messages.len().saturating_sub(keep_front));
-                    let compact_range = keep_front..(messages.len() - keep_back);
-                    let compact_count = compact_range.len();
-                    if compact_count == 0 {
-                        eprintln!("{}No messages to compact.{}", ansi!("33"), ansi!("0"));
-                        continue;
-                    }
-
-                    eprintln!(
-                        "{}Summarizing {} messages with LLM...{}",
-                        ansi!("33"),
-                        compact_count,
-                        ansi!("0")
-                    );
-
-                    // Collect the messages to summarize
-                    let to_compact: Vec<Message> = messages[compact_range.clone()].to_vec();
-
-                    // Build a summarization prompt
-                    let summarize_prompt = Message {
-                        role: "user".to_string(),
-                        content: format!(
-                            "Please provide a concise summary of the above conversation. \
-                             Focus on: what has been accomplished, what decisions were made, \
-                             what the current state of the project/task is, and what remains to be done. \
-                             This summary replaces {} conversation turns, so include enough detail \
-                             (file paths, important findings, key decisions) that the conversation \
-                             can continue seamlessly without losing context.",
-                            compact_count
-                        ),
-                    };
-
-                    // Build messages for the summarization call
-                    let mut summarize_msgs = to_compact;
-                    summarize_msgs.push(summarize_prompt);
-
-                    // Call agent to generate summary via streaming
-                    let (summary_tx, mut summary_rx) =
-                        tokio::sync::mpsc::unbounded_channel::<String>();
-                    let summary_sender = crate::agents::agent::StreamingSender::from(summary_tx);
-                    let agent_for_summary = Arc::clone(&current_agent);
-                    let summarize_task = tokio::spawn(async move {
-                        agent_for_summary
-                            .chat(summarize_msgs, None, None, summary_sender)
-                            .await
-                    });
-
-                    let mut summary_text = String::new();
-                    while let Some(token) = summary_rx.recv().await {
-                        summary_text.push_str(&token);
-                    }
-
-                    if let Err(e) = summarize_task.await {
-                        eprintln!("{}Summarization failed: {}{}", ansi!("31"), e, ansi!("0"));
-                        continue;
-                    }
-
-                    // Drain the compacted range and insert the summary
-                    messages.drain(compact_range);
-                    messages.insert(
-                        1,
-                        Message {
-                            role: "user".to_string(),
-                            content: format!(
-                                "[Conversation compacted: summary of previous {} messages]\n{}",
-                                compact_count,
-                                summary_text.trim()
-                            ),
-                        },
-                    );
-                    eprintln!(
-                        "{}Compacted {} messages. {} messages remaining.{}",
-                        ansi!("32"),
-                        compact_count,
-                        messages.len(),
-                        ansi!("0")
-                    );
-                    continue;
-                }
-                cmd if cmd == "diff" || cmd.starts_with("diff ") => {
-                    let path_filter = cmd
-                        .strip_prefix("diff ")
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty());
-                    let mut git_cmd = tokio::process::Command::new("git");
-                    git_cmd.arg("diff");
-                    if let Some(filter) = path_filter {
-                        git_cmd.arg("--").arg(filter);
-                    }
-                    match git_cmd.output().await {
-                        Ok(out) => {
-                            let diff = String::from_utf8_lossy(&out.stdout);
-                            if diff.trim().is_empty() {
-                                eprintln!(
-                                    "{}No changes to display.{} (stderr: {})",
-                                    ansi!("33"),
-                                    ansi!("0"),
-                                    String::from_utf8_lossy(&out.stderr).trim()
-                                );
-                            } else {
-                                display_diff(&diff, None);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("{}Git diff failed: {}{}", ansi!("31"), e, ansi!("0"));
-                        }
-                    }
-                    continue;
-                }
-                "commit" => {
-                    // ── Get diff stats ──
-                    let diff_output = match tokio::process::Command::new("git")
-                        .args(["diff", "--stat"])
-                        .output()
-                        .await
-                    {
-                        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
-                        Err(e) => {
-                            eprintln!("{}Git diff failed: {}{}", ansi!("31"), e, ansi!("0"));
-                            continue;
-                        }
-                    };
-                    if diff_output.trim().is_empty() {
-                        eprintln!("{}Nothing to commit.{}", ansi!("33"), ansi!("0"));
-                        continue;
-                    }
-                    eprintln!(
-                        "{}Changes:{} {}",
-                        ansi!("1"),
-                        ansi!("0"),
-                        diff_output.trim()
-                    );
-
-                    // ── Get full diff for AI analysis (truncated to 8K) ──
-                    let full_diff = match tokio::process::Command::new("git")
-                        .arg("diff")
-                        .output()
-                        .await
-                    {
-                        Ok(out) => {
-                            let s = String::from_utf8_lossy(&out.stdout).to_string();
-                            if s.len() > 8000 {
-                                format!("{}...\n[truncated]", &s[..8000])
-                            } else {
-                                s
-                            }
-                        }
-                        Err(_) => String::new(),
-                    };
-
-                    // ── Generate commit message with AI ──
-                    eprint!("{}Generating commit message...{}", ansi!("90"), ansi!("0"));
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-                    let prompt_msg =
-                        Message {
-                            role: "user".to_string(),
-                            content: format!(
-                            "Generate a single-line conventional commit message for these changes.\
-                             \nFormat: <type>(<scope>): <description>\
-                             \nExamples:\
-                             \n  feat(api): add user authentication endpoint\
-                             \n  fix(cache): resolve TTL race condition\
-                             \n  refactor(cli): simplify command dispatch\
-                             \n  docs(readme): update installation steps\
-                             \n\nReturn ONLY the commit message, nothing else.\n\n{}",
-                            if full_diff.is_empty() { &diff_output } else { &full_diff }
-                        ),
-                        };
-
-                    let suggested_msg =
-                        match chat_simple(&current_agent, vec![prompt_msg], vec![]).await {
-                            Ok(m) => m,
-                            Err(e) => {
-                                eprintln!(
-                                    "\r{}AI commit message failed: {} — using fallback{}",
-                                    ansi!("31"),
-                                    e,
-                                    ansi!("0")
-                                );
-                                format!(
-                                    "feat: {}",
-                                    diff_output.lines().filter(|l| l.contains('|')).count()
-                                )
-                            }
-                        };
-
-                    // ── Show offer for confirmation/edit ──
-                    eprintln!(
-                        "\r{}✓ Message generated{} {}",
-                        ansi!("32"),
-                        ansi!("0"),
-                        suggested_msg
-                    );
-                    eprint!(
-                        "  {}Press Enter to commit, type a custom message, or n/N to cancel: {} ",
-                        ansi!("90"),
-                        ansi!("0")
-                    );
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-                    // Read user input via stdin channel (reuse existing)
-                    let user_line = tokio::select! {
-                        line = stdin_rx.recv() => line.unwrap_or_default(),
-                        _ = signal::ctrl_c() => { eprintln!("\nCancelled."); continue; }
-                    };
-                    let trimmed = user_line.trim().to_string();
-
-                    if trimmed.eq_ignore_ascii_case("n") || trimmed.eq_ignore_ascii_case("no") {
-                        eprintln!("{}Commit cancelled.{}", ansi!("33"), ansi!("0"));
-                        continue;
-                    }
-
-                    let final_msg = if trimmed.is_empty() {
-                        suggested_msg
-                    } else {
-                        trimmed
-                    };
-
-                    // ── Stage all and commit ──
-                    let stage_ok = tokio::process::Command::new("git")
-                        .args(["add", "-A"])
-                        .output()
-                        .await
-                        .map(|o| o.status.success())
-                        .unwrap_or(false);
-
-                    if !stage_ok {
-                        eprintln!("{}Failed to stage changes.{}", ansi!("31"), ansi!("0"));
-                        continue;
-                    }
-
-                    match tokio::process::Command::new("git")
-                        .args(["commit", "-m", &final_msg])
-                        .output()
-                        .await
-                    {
-                        Ok(out) if out.status.success() => {
-                            eprintln!(
-                                "{}✓ Committed{}{}",
-                                ansi!("32"),
-                                ansi!("0"),
-                                String::from_utf8_lossy(&out.stdout).trim()
-                            );
-                        }
-                        Ok(out) => eprintln!(
-                            "{}Commit failed: {}{}",
-                            ansi!("31"),
-                            String::from_utf8_lossy(&out.stderr).trim(),
-                            ansi!("0")
-                        ),
-                        Err(e) => eprintln!("{}Git error: {}{}", ansi!("31"), e, ansi!("0")),
-                    }
-                    continue;
-                }
-                "plan" => {
-                    if messages.is_empty() {
-                        eprintln!(
-                            "{}No conversation to derive a plan from.{}",
-                            ansi!("33"),
-                            ansi!("0")
-                        );
-                        continue;
-                    }
-
-                    // Build a plan prompt from the conversation context
-                    let context: Vec<String> = messages
-                        .iter()
-                        .filter(|m| m.role != "system")
-                        .take(10) // limit context to last 10 non-system messages
-                        .map(|m| {
-                            format!(
-                                "{}: {}",
-                                m.role,
-                                m.content.chars().take(500).collect::<String>()
-                            )
-                        })
-                        .collect();
-                    let context_str = context.join("\n---\n");
-
-                    eprint!("{}Generating execution plan...{}", ansi!("90"), ansi!("0"));
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-                    let plan_prompt = Message {
-                        role: "user".to_string(),
-                        content: format!(
-                            "Based on this conversation, create a structured execution plan.\
-                             \nList specific steps with file paths where relevant.\
-                             \nFormat as a numbered list.\n\nConversation:\n{}",
-                            context_str
-                        ),
-                    };
-
-                    match chat_simple(&current_agent, vec![plan_prompt], vec![]).await {
-                        Ok(plan) => {
-                            eprintln!("\r{}── Execution Plan ──{}", ansi!("1"), ansi!("0"));
-                            eprintln!("{}", plan);
-                        }
-                        Err(e) => eprintln!(
-                            "\r{}Plan generation failed: {}{}",
-                            ansi!("31"),
-                            e,
-                            ansi!("0")
-                        ),
-                    }
-                    continue;
-                }
-                find_cmd if find_cmd.starts_with("find_path") || find_cmd.starts_with("find ") => {
-                    let pattern = find_cmd
-                        .strip_prefix("find_path ")
-                        .or_else(|| find_cmd.strip_prefix("find "))
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty());
-                    match pattern {
-                        Some(pattern) => {
-                            let args = serde_json::json!({"pattern": pattern});
-                            match execute_simple_tool("search_files", &args).await {
-                                Ok(result) => eprintln!("{}", result),
-                                Err(e) => eprintln!("{}Error: {}{}", ansi!("31"), e, ansi!("0")),
-                            }
-                        }
-                        None => {
-                            eprintln!("Usage: /find_path <glob>  (e.g. /find **/*.rs)");
-                        }
-                    }
-                    continue;
-                }
-                "review" => {
-                    // ── Get full diff for review ──
-                    let detailed = match tokio::process::Command::new("git")
-                        .args(["diff"])
-                        .output()
-                        .await
-                    {
-                        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
-                        Err(_) => String::new(),
-                    };
-                    if detailed.trim().is_empty() {
-                        eprintln!("{}No changes to review.{}", ansi!("33"), ansi!("0"));
-                        continue;
-                    }
-
-                    // Show stat summary first
-                    let stat_lines: Vec<&str> = detailed
-                        .lines()
-                        .filter(|l| {
-                            l.contains('|')
-                                && !l.starts_with("diff ")
-                                && !l.starts_with("index ")
-                                && !l.starts_with("---")
-                                && !l.starts_with("+++")
-                                && !l.starts_with("@@")
-                        })
-                        .collect();
-                    if !stat_lines.is_empty() {
-                        eprintln!(
-                            "{}── Changes ({} file(s)) ──{}",
-                            ansi!("1"),
-                            stat_lines.len(),
-                            ansi!("0")
-                        );
-                        for line in &stat_lines {
-                            eprintln!("  {}", line);
-                        }
-                        eprintln!();
-                    }
-
-                    // ── AI code review ──
-                    eprint!("{}Reviewing changes with AI...{}", ansi!("90"), ansi!("0"));
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-                    let truncated_diff = if detailed.len() > 12000 {
-                        format!(
-                            "{}...\n[truncated: {} total bytes]",
-                            &detailed[..12000],
-                            detailed.len()
-                        )
-                    } else {
-                        detailed.clone()
-                    };
-
-                    let review_prompt = Message {
-                        role: "user".to_string(),
-                        content: format!(
-                            "Review this git diff for bugs, security issues, code quality, and improvement suggestions.\
-                             \nBe concise but specific. Point to exact lines where issues exist.\
-                             \nIf the code looks good, say so briefly.\n\n```diff\n{}\n```",
-                            truncated_diff
-                        ),
-                    };
-
-                    match chat_simple(&current_agent, vec![review_prompt], vec![]).await {
-                        Ok(review) => {
-                            eprintln!("\r{}── AI Code Review ──{}", ansi!("1"), ansi!("0"));
-                            eprintln!("{}", review);
-                        }
-                        Err(e) => {
-                            // Fallback: show raw diff
-                            eprintln!("\r{}AI review failed: {}{}", ansi!("31"), e, ansi!("0"));
-                            display_diff(&detailed, Some(60));
-                        }
-                    }
-                    continue;
-                }
-                "models" => {
-                    let models = current_agent.available_models();
-                    if models.is_empty() {
-                        eprintln!(
-                            "{}No model information available for '{}'.{}",
-                            ansi!("33"),
-                            current_agent_name,
-                            ansi!("0")
-                        );
-                    } else {
-                        eprintln!(
-                            "{}Available models for '{}'{}:",
-                            ansi!("1"),
-                            current_agent_name,
-                            ansi!("0")
-                        );
-                        for m in &models {
-                            let default_flag = if m.is_default { " (default)" } else { "" };
-                            eprintln!("  {:<30} {} {}{}", m.id, m.name, ansi!("90"), default_flag);
-                        }
-                    }
-                    continue;
-                }
-                "retry" => {
-                    if messages.len() < 2 {
-                        eprintln!(
-                            "{}No messages to retry. Send a message first.{}",
-                            ansi!("33"),
-                            ansi!("0")
-                        );
-                        continue;
-                    }
-                    // Find the last user message
-                    let last_user_idx = messages.iter().rposition(|m| m.role == "user");
-                    match last_user_idx {
-                        Some(idx) => {
-                            let last_user_msg = messages[idx].content.clone();
-                            // Truncate messages after the last user message
-                            messages.truncate(idx + 1);
-                            eprintln!(
-                                "{}Retrying last message{}: {}",
-                                ansi!("33"),
-                                ansi!("0"),
-                                last_user_msg.chars().take(60).collect::<String>()
-                            );
-                            // Run agent with tools inline instead of looping back
-                            let principles = build_cli_principles();
-                            match run_agent_with_tools(&current_agent, &mut messages, principles)
-                                .await
-                            {
-                                Ok((resp, prompt_tokens, completion_tokens)) => {
-                                    token_tracker.record_usage(prompt_tokens, completion_tokens);
-                                    if !resp.trim().is_empty() {
-                                        eprintln!(
-                                            "{}── Turn complete (est. {} tokens) ──{}",
-                                            ansi!("90"),
-                                            prompt_tokens + completion_tokens,
-                                            ansi!("0")
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "\n{}⚠️  Retry failed: {}{}",
-                                        ansi!("31"),
-                                        e,
-                                        ansi!("0")
-                                    );
-                                }
-                            }
-                        }
-                        None => {
-                            eprintln!(
-                                "{}No user message found to retry.{}",
-                                ansi!("33"),
-                                ansi!("0")
-                            );
-                        }
-                    }
-                    continue;
-                }
-                model_cmd if model_cmd.starts_with("model") => {
-                    let rest = model_cmd.strip_prefix("model").unwrap_or("");
-                    let name = if rest.is_empty() || rest == " " {
-                        ""
-                    } else {
-                        rest.trim()
-                    };
-                    if name.is_empty() {
-                        eprintln!("Available agents: {}", agent_names.join(", "));
-                        eprintln!("Current: {}", current_agent_name);
-                        eprintln!("Usage: /model <agent_name>");
-                    } else if let Some(new_agent) = registry.get(name) {
-                        current_agent = new_agent;
-                        current_agent_name = name.to_string();
-                        eprintln!("{}Switched to agent: {}{}", ansi!("32"), name, ansi!("0"));
-                    } else {
-                        eprintln!(
-                            "{}Agent '{}' not found. Available: {}{}",
-                            ansi!("31"),
-                            name,
-                            agent_names.join(", "),
-                            ansi!("0")
-                        );
-                    }
-                    continue;
-                }
-                _ => {
-                    eprintln!("Unknown command: /{cmd}. Type /help.");
-                    continue;
-                }
-            }
+        _ = signal::ctrl_c() => {
+            eprintln!("\n{}Interrupted. Type /quit to exit, or continue typing.{}", ansi!("33"), ansi!("0"));
+            Some(String::new())
         }
+    }
+}
 
-        // ── Prompt injection detection ──
-        // Check user input for prompt injection before sending to the LLM.
-        // HIGH/CRITICAL patterns are blocked; MEDIUM/LOW are sanitized.
-        {
-            use crate::security::prompt_injection::InjectionSeverity;
-            let detector = injection_detector();
-            let (sanitized, result) = detector.detect_and_sanitize(&line);
-
-            if result.detected {
-                // Log detected patterns
-                for v in &result.violations {
-                    warn!(
-                        target: "cli_injection",
-                        category = ?v.category,
-                        severity = ?v.severity,
-                        pattern_id = ?v.pattern_id,
-                        description = %v.description,
-                        "prompt injection detected in user input"
-                    );
-                }
-
-                // HIGH/CRITICAL: block the message
-                if detector.should_block(&result, InjectionSeverity::High) {
-                    let critical: Vec<String> = result
-                        .violations
-                        .iter()
-                        .filter(|v| v.severity >= InjectionSeverity::High)
-                        .map(|v| format!("{:?}: {}", v.category, v.description))
-                        .collect();
-                    eprintln!(
-                        "{}{} Prompt injection detected and blocked!{} (violations: {})",
-                        ansi!("31"),
-                        ansi!("1"),
-                        ansi!("0"),
-                        critical.join("; ")
-                    );
-                    continue;
-                }
-
-                // MEDIUM/LOW: warn and use sanitized version
-                eprintln!(
-                    "{}⚠️  Warning: Potential prompt injection detected — input has been sanitized.{} (contamination: {:.2})",
-                    ansi!("33"),
-                    ansi!("0"),
-                    result.contamination_score
-                );
-                messages.push(Message {
-                    role: "user".to_string(),
-                    content: sanitized,
-                });
-            } else {
-                // No injection — use original input
-                messages.push(Message {
-                    role: "user".to_string(),
-                    content: line,
-                });
-            }
+/// Dispatch a built-in command. Returns `true` if the caller should exit the main loop.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_builtin_command(
+    cmd: &str,
+    messages: &mut Vec<Message>,
+    current_agent: &mut Arc<dyn Agent>,
+    current_agent_name: &mut String,
+    current_mode: &mut Box<dyn ModeRuntime>,
+    registry: &Arc<AgentRegistry>,
+    token_tracker: &mut TokenTracker,
+    session_path: &std::path::Path,
+    stdin_rx: &mut mpsc::UnboundedReceiver<String>,
+) -> bool {
+    match cmd {
+        // ── Session commands ──
+        "quit" | "exit" | "q" => return true,
+        "help" | "h" => {
+            eprint!("{}", HELP_TEXT);
         }
-
-        eprint!("{}🤖 {}", ansi!("1"), ansi!("0"));
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-
-        // ── Build principles once per turn (tool registry is static, skills rarely change) ──
-        let principles = build_cli_principles();
-
-        // ── Run agent with tool execution loop ──
-        match run_agent_with_tools(&current_agent, &mut messages, principles).await {
-            Ok((resp, prompt_tokens, completion_tokens)) => {
-                token_tracker.record_usage(prompt_tokens, completion_tokens);
-                if !resp.trim().is_empty() {
-                    eprintln!(
-                        "{}── Turn complete (est. {} tokens) ──{}",
-                        ansi!("90"),
-                        prompt_tokens + completion_tokens,
-                        ansi!("0")
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!("\n{}⚠️  Error: {}{}", ansi!("31"), e, ansi!("0"));
-            }
+        "clear" => {
+            messages.clear();
+            eprintln!("{}Conversation cleared.{}", ansi!("32"), ansi!("0"));
         }
-
-        // ── Auto-save session every turn (non-blocking, debounced, ChatSession format) ──
-        if !messages.is_empty() && !SAVE_IN_FLIGHT.load(Ordering::Acquire) {
-            SAVE_IN_FLIGHT.store(true, Ordering::Release);
-            let session = ChatSession {
-                messages: messages.clone(),
-                agent_name: current_agent_name.clone(),
-            };
-            let json = serde_json::to_string(&session).unwrap_or_default();
-            let path = session_path.clone();
-            let guard = AutoSaveGuard;
-            // Fire-and-forget auto-save — the guard notifies waiters on drop
-            tokio::spawn(async move {
-                if let Err(e) = tokio::fs::write(&path, &json).await {
-                    tracing::warn!("Failed to auto-save session: {e}");
-                }
-                drop(guard);
-            });
+        "save" => {
+            handle_save_command(messages, current_agent_name, current_mode, session_path).await;
         }
-
-        // ── Prompt to compact if conversation is long ──
-        let msg_count = messages.len();
-        if msg_count >= AUTO_COMPACT_THRESHOLD {
+        "load" => {
+            handle_load_command(
+                session_path,
+                messages,
+                current_agent,
+                current_agent_name,
+                current_mode,
+                registry,
+            )
+            .await;
+        }
+        // ── Agent / tool info commands ──
+        "agents" => {
+            let names = registry.names();
+            for name in &names {
+                eprintln!("  {name}");
+            }
             eprintln!(
-                "{}⚠️  Conversation is very long ({} msgs). Type /compact to summarize.{}  (Tip: /compact reduces context usage)",
-                ansi!("31"),
-                msg_count,
-                ansi!("0")
+                "Current: {}, use /model <name> to switch",
+                current_agent_name
             );
-        } else if msg_count >= COMPACT_PROMPT_THRESHOLD {
+        }
+        "tools" => {
+            let reg = tool_registry();
+            let names = reg.all_names();
+            eprintln!("Available tools ({}):", names.len());
+            for name in names {
+                if let Some(profile) = reg.profile(name) {
+                    eprintln!("  {:<25} [{}]", name, profile.capability);
+                } else {
+                    eprintln!("  {name}");
+                }
+            }
+        }
+        "skills" => {
+            display_skills();
+        }
+        // ── Information commands ──
+        "stats" => {
+            display_stats(messages, token_tracker);
+        }
+        "cost" => {
+            eprint!("{}", token_tracker.display());
+        }
+        "context" => {
+            display_context(messages);
+        }
+        // ── Compact ──
+        "compact" => {
+            execute_compact_command(messages, current_agent).await;
+        }
+        // ── Git commands ──
+        cmd if cmd == "diff" || cmd.starts_with("diff ") => {
+            execute_diff_command(cmd).await;
+        }
+        "commit" => {
+            execute_commit_command(messages, current_agent, stdin_rx).await;
+        }
+        "review" => {
+            execute_review_command(current_agent).await;
+        }
+        // ── Plan ──
+        "plan" => {
+            execute_plan_command(
+                messages,
+                current_agent,
+                registry,
+                current_agent_name,
+                current_mode,
+            )
+            .await;
+        }
+        // ── Find path ──
+        find_cmd if find_cmd.starts_with("find_path") || find_cmd.starts_with("find ") => {
+            execute_find_path_command(find_cmd).await;
+        }
+        // ── Mode ──
+        mode_cmd if mode_cmd.starts_with("mode") => {
+            execute_mode_command(mode_cmd, current_mode, registry, current_agent_name).await;
+        }
+        // ── Models ──
+        "models" => {
+            display_models(current_agent, current_agent_name);
+        }
+        // ── Retry ──
+        "retry" => {
+            execute_retry_command(messages, current_agent, current_mode, token_tracker).await;
+        }
+        // ── Model (switch agent) ──
+        model_cmd if model_cmd.starts_with("model") => {
+            execute_switch_agent(
+                model_cmd,
+                current_agent,
+                current_agent_name,
+                current_mode,
+                registry,
+            )
+            .await;
+        }
+        _ => {
+            eprintln!("Unknown command: /{cmd}. Type /help.");
+        }
+    }
+    false
+}
+
+/// Process a user message through injection detection, run the agent, and auto-save.
+async fn process_user_message_and_run_agent(
+    line: &str,
+    messages: &mut Vec<Message>,
+    current_agent: &Arc<dyn Agent>,
+    current_agent_name: &str,
+    token_tracker: &mut TokenTracker,
+    current_mode: &mut Box<dyn ModeRuntime>,
+    session_path: &std::path::Path,
+) {
+    // ── Prompt injection detection ──
+    {
+        use crate::security::prompt_injection::InjectionSeverity;
+        let detector = injection_detector();
+        let (sanitized, result) = detector.detect_and_sanitize(line);
+
+        if result.detected {
+            for v in &result.violations {
+                warn!(
+                    target: "cli_injection",
+                    category = ?v.category,
+                    severity = ?v.severity,
+                    pattern_id = ?v.pattern_id,
+                    description = %v.description,
+                    "prompt injection detected in user input"
+                );
+            }
+
+            if detector.should_block(&result, InjectionSeverity::High) {
+                let critical: Vec<String> = result
+                    .violations
+                    .iter()
+                    .filter(|v| v.severity >= InjectionSeverity::High)
+                    .map(|v| format!("{:?}: {}", v.category, v.description))
+                    .collect();
+                eprintln!(
+                    "{}{} Prompt injection detected and blocked!{} (violations: {})",
+                    ansi!("31"),
+                    ansi!("1"),
+                    ansi!("0"),
+                    critical.join("; ")
+                );
+                return;
+            }
+
             eprintln!(
-                "{}💡 Tip: Use /compact to summarize old messages and free context.{}  ({}/{} msgs)",
+                "{}⚠️  Warning: Potential prompt injection detected — input has been sanitized.{} (contamination: {:.2})",
                 ansi!("33"),
                 ansi!("0"),
-                msg_count,
-                COMPACT_PROMPT_THRESHOLD
+                result.contamination_score
             );
+            messages.push(Message {
+                role: "user".to_string(),
+                content: sanitized,
+            });
+        } else {
+            messages.push(Message {
+                role: "user".to_string(),
+                content: line.to_string(),
+            });
         }
     }
 
-    // ── Save session on clean exit (ChatSession format) ──
-    // Wait for any in-flight auto-save to complete before writing
-    // the final snapshot, preventing concurrent-write data loss.
-    if !messages.is_empty() {
-        // Wait for in-flight save to complete with bounded timeout
-        if SAVE_IN_FLIGHT.load(Ordering::Acquire) {
-            tokio::select! {
-                _ = save_notify().notified() => { /* save completed */ }
-                _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => { /* timeout */ }
+    eprint!("{}🤖 {}", ansi!("1"), ansi!("0"));
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+    let principles = build_cli_principles();
+
+    match run_agent_with_tools(
+        current_agent,
+        messages,
+        principles,
+        Some(current_mode.as_ref()),
+    )
+    .await
+    {
+        Ok((resp, prompt_tokens, completion_tokens)) => {
+            token_tracker.record_usage(prompt_tokens, completion_tokens);
+            if !resp.trim().is_empty() {
+                eprintln!(
+                    "{}── Turn complete (est. {} tokens) ──{}",
+                    ansi!("90"),
+                    prompt_tokens + completion_tokens,
+                    ansi!("0")
+                );
             }
         }
-        let session = ChatSession {
-            messages: messages.clone(),
-            agent_name: current_agent_name.clone(),
-        };
-        let json = serde_json::to_string(&session).unwrap_or_default();
-        if let Err(e) = tokio::fs::write(&session_path, &json).await {
-            tracing::warn!("Failed to save session on exit: {e}");
-        } else {
-            eprintln!("Session auto-saved");
+        Err(e) => {
+            eprintln!("\n{}⚠️  Error: {}{}", ansi!("31"), e, ansi!("0"));
         }
     }
 
-    eprintln!("Goodbye!");
-    Ok(())
+    // ── Auto-save session every turn ──
+    auto_save_turn(messages, current_agent_name, current_mode, session_path);
+
+    // ── Compact prompt threshold check ──
+    check_compact_threshold(messages);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Command handler helper functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[allow(clippy::borrowed_box)]
+async fn handle_save_command(
+    messages: &[Message],
+    current_agent_name: &str,
+    current_mode: &Box<dyn ModeRuntime>,
+    session_path: &std::path::Path,
+) {
+    let session = ChatSession {
+        messages: messages.to_vec(),
+        agent_name: current_agent_name.to_string(),
+        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
+    };
+    match serde_json::to_string_pretty(&session) {
+        Ok(json) => match tokio::fs::write(session_path, &json).await {
+            Ok(()) => eprintln!(
+                "{}Session saved to {}{}",
+                ansi!("32"),
+                session_path.display(),
+                ansi!("0")
+            ),
+            Err(e) => eprintln!(
+                "{}Failed to write session: {}{}",
+                ansi!("31"),
+                e,
+                ansi!("0")
+            ),
+        },
+        Err(e) => eprintln!(
+            "{}Failed to serialize session: {}{}",
+            ansi!("31"),
+            e,
+            ansi!("0")
+        ),
+    }
+}
+
+async fn handle_load_command(
+    session_path: &std::path::Path,
+    messages: &mut Vec<Message>,
+    current_agent: &mut Arc<dyn Agent>,
+    current_agent_name: &mut String,
+    current_mode: &mut Box<dyn ModeRuntime>,
+    registry: &Arc<AgentRegistry>,
+) {
+    match tokio::fs::read_to_string(session_path).await {
+        Ok(json) => match serde_json::from_str::<ChatSession>(&json) {
+            Ok(session) => {
+                let agent_valid = registry.get(&session.agent_name).is_some();
+                if !agent_valid {
+                    eprintln!(
+                        "{}Warning: agent '{}' from session no longer available. Using current agent '{}'.{}",
+                        ansi!("33"), session.agent_name, current_agent_name, ansi!("0")
+                    );
+                }
+                *messages = session.messages;
+                if agent_valid && session.agent_name != *current_agent_name {
+                    if let Some(new_agent) = registry.get(&session.agent_name) {
+                        *current_agent = new_agent;
+                        *current_agent_name = session.agent_name.clone();
+                        let mode_str = match current_mode.kind() {
+                            ModeKind::Ask => "ask",
+                            ModeKind::Plan => "plan",
+                            ModeKind::Edit => "edit",
+                            ModeKind::FullAuto => "full_auto",
+                            ModeKind::SafeGuard => "safeguard",
+                        };
+                        if let Ok(runtime) = resolve_mode_runtime(
+                            mode_str,
+                            Some(registry.clone()),
+                            Some(current_agent_name.clone()),
+                        ) {
+                            *current_mode = runtime;
+                        }
+                    }
+                }
+                if !session.mode.is_empty() {
+                    let canonical = session.mode.to_lowercase();
+                    if let Ok(runtime) = resolve_mode_runtime(
+                        &canonical,
+                        Some(registry.clone()),
+                        Some(current_agent_name.clone()),
+                    ) {
+                        *current_mode = runtime;
+                        eprintln!("{}Restored mode: {}{}", ansi!("32"), canonical, ansi!("0"));
+                    }
+                }
+                eprintln!(
+                    "{}Session loaded: {} messages from '{}' (mode: {:?}){}",
+                    ansi!("32"),
+                    messages.len(),
+                    current_agent_name,
+                    current_mode.kind(),
+                    ansi!("0")
+                );
+            }
+            Err(e) => eprintln!(
+                "{}Failed to parse session: {}{}",
+                ansi!("31"),
+                e,
+                ansi!("0")
+            ),
+        },
+        Err(_) => eprintln!(
+            "{}No saved session found at {}{}",
+            ansi!("33"),
+            session_path.display(),
+            ansi!("0")
+        ),
+    }
+}
+
+fn display_skills() {
+    let descriptor_list = crate::orchestration::tool::skill_registry()
+        .and_then(|r| r.read().ok())
+        .map(|guard| guard.list())
+        .unwrap_or_default();
+    if descriptor_list.is_empty() {
+        eprintln!("No skills registered.");
+    } else {
+        eprintln!("Registered skills ({}):", descriptor_list.len());
+        for s in &descriptor_list {
+            eprintln!("  {:<25} score: {:.2}", s.name, s.score);
+        }
+    }
+}
+
+fn display_stats(messages: &[Message], token_tracker: &TokenTracker) {
+    let agent_msgs = messages.iter().filter(|m| m.role == "assistant").count();
+    let user_msgs = messages.iter().filter(|m| m.role == "user").count();
+    let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+    eprintln!("Conversation stats:");
+    eprintln!(
+        "  Messages: {} total ({} user, {} assistant)",
+        messages.len(),
+        user_msgs,
+        agent_msgs
+    );
+    eprintln!("  Total characters: {}", total_chars);
+    eprintln!(
+        "  Avg length: {} chars",
+        if !messages.is_empty() {
+            total_chars / messages.len()
+        } else {
+            0
+        }
+    );
+    eprint!("{}", token_tracker.display());
+}
+
+fn display_context(messages: &[Message]) {
+    let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+    let est_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
+    let system_msgs = messages.iter().filter(|m| m.role == "system").count();
+    eprintln!("Context window:");
+    eprintln!(
+        "  Messages: {} ({} system, {} user, {} assistant)",
+        messages.len(),
+        system_msgs,
+        messages.iter().filter(|m| m.role == "user").count(),
+        messages.iter().filter(|m| m.role == "assistant").count()
+    );
+    eprintln!(
+        "  Characters: {} (est. ~{} tokens, CJK-aware)",
+        total_chars, est_tokens
+    );
+    eprintln!(
+        "  Est. context used: {:.1}% of 128K window",
+        (est_tokens as f64 / 128_000.0 * 100.0).min(100.0)
+    );
+    if messages.len() >= COMPACT_PROMPT_THRESHOLD {
+        eprintln!(
+            "  {}Tip: Use /compact to reduce context usage.{}  ({}/{} msgs)",
+            ansi!("33"),
+            ansi!("0"),
+            messages.len(),
+            COMPACT_PROMPT_THRESHOLD
+        );
+    }
+}
+
+fn display_models(current_agent: &Arc<dyn Agent>, current_agent_name: &str) {
+    let models = current_agent.available_models();
+    if models.is_empty() {
+        eprintln!(
+            "{}No model information available for '{}'.{}",
+            ansi!("33"),
+            current_agent_name,
+            ansi!("0")
+        );
+    } else {
+        eprintln!(
+            "{}Available models for '{}'{}:",
+            ansi!("1"),
+            current_agent_name,
+            ansi!("0")
+        );
+        for m in &models {
+            let default_flag = if m.is_default { " (default)" } else { "" };
+            eprintln!("  {:<30} {} {}{}", m.id, m.name, ansi!("90"), default_flag);
+        }
+    }
+}
+
+async fn execute_diff_command(cmd: &str) {
+    // cmd is the part after '/', e.g. "diff" or "diff src/"
+    let path_filter = cmd
+        .strip_prefix("diff ")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let mut git_cmd = tokio::process::Command::new("git");
+    git_cmd.arg("diff");
+    if let Some(filter) = path_filter {
+        git_cmd.arg("--").arg(filter);
+    }
+    match git_cmd.output().await {
+        Ok(out) => {
+            let diff = String::from_utf8_lossy(&out.stdout);
+            if diff.trim().is_empty() {
+                eprintln!(
+                    "{}No changes to display.{} (stderr: {})",
+                    ansi!("33"),
+                    ansi!("0"),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            } else {
+                display_diff(&diff, None);
+            }
+        }
+        Err(e) => eprintln!("{}Git diff failed: {}{}", ansi!("31"), e, ansi!("0")),
+    }
+}
+
+async fn execute_compact_command(messages: &mut Vec<Message>, current_agent: &Arc<dyn Agent>) {
+    if messages.len() < 4 {
+        eprintln!(
+            "{}Conversation too short to compact.{}",
+            ansi!("33"),
+            ansi!("0")
+        );
+        return;
+    }
+    let keep_front = 1.min(messages.len());
+    let keep_back = 2.min(messages.len().saturating_sub(keep_front));
+    let compact_range = keep_front..(messages.len() - keep_back);
+    let compact_count = compact_range.len();
+    if compact_count == 0 {
+        eprintln!("{}No messages to compact.{}", ansi!("33"), ansi!("0"));
+        return;
+    }
+
+    eprintln!(
+        "{}Summarizing {} messages with LLM...{}",
+        ansi!("33"),
+        compact_count,
+        ansi!("0")
+    );
+
+    let to_compact: Vec<Message> = messages[compact_range.clone()].to_vec();
+    let summarize_prompt = Message {
+        role: "user".to_string(),
+        content: format!(
+            "Please provide a concise summary of the above conversation. \
+             Focus on: what has been accomplished, what decisions were made, \
+             what the current state of the project/task is, and what remains to be done. \
+             This summary replaces {} conversation turns, so include enough detail \
+             (file paths, important findings, key decisions) that the conversation \
+             can continue seamlessly without losing context.",
+            compact_count
+        ),
+    };
+
+    let mut summarize_msgs = to_compact;
+    summarize_msgs.push(summarize_prompt);
+
+    let (summary_tx, mut summary_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let summary_sender = crate::agents::agent::StreamingSender::from(summary_tx);
+    let agent_for_summary = Arc::clone(current_agent);
+    let summarize_task = tokio::spawn(async move {
+        agent_for_summary
+            .chat(summarize_msgs, None, None, summary_sender)
+            .await
+    });
+
+    let mut summary_text = String::new();
+    while let Some(token) = summary_rx.recv().await {
+        summary_text.push_str(&token);
+    }
+
+    if let Err(e) = summarize_task.await {
+        eprintln!("{}Summarization failed: {}{}", ansi!("31"), e, ansi!("0"));
+        return;
+    }
+
+    messages.drain(compact_range);
+    messages.insert(
+        1,
+        Message {
+            role: "user".to_string(),
+            content: format!(
+                "[Conversation compacted: summary of previous {} messages]\n{}",
+                compact_count,
+                summary_text.trim()
+            ),
+        },
+    );
+    eprintln!(
+        "{}Compacted {} messages. {} messages remaining.{}",
+        ansi!("32"),
+        compact_count,
+        messages.len(),
+        ansi!("0")
+    );
+}
+
+async fn execute_commit_command(
+    _messages: &[Message],
+    current_agent: &Arc<dyn Agent>,
+    stdin_rx: &mut mpsc::UnboundedReceiver<String>,
+) {
+    let (diff_output, full_diff) = match collect_git_diffs().await {
+        Some(pair) => pair,
+        None => return,
+    };
+
+    eprintln!(
+        "{}Changes:{} {}",
+        ansi!("1"),
+        ansi!("0"),
+        diff_output.trim()
+    );
+
+    let suggested_msg = generate_commit_message(current_agent, &diff_output, &full_diff).await;
+
+    eprintln!(
+        "\r{}✓ Message generated{} {}",
+        ansi!("32"),
+        ansi!("0"),
+        suggested_msg
+    );
+    eprint!(
+        "  {}Press Enter to commit, type a custom message, or n/N to cancel: {} ",
+        ansi!("90"),
+        ansi!("0")
+    );
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+    let user_line = tokio::select! {
+        line = stdin_rx.recv() => line.unwrap_or_default(),
+        _ = signal::ctrl_c() => { eprintln!("\nCancelled."); return; }
+    };
+    let trimmed = user_line.trim().to_string();
+
+    if trimmed.eq_ignore_ascii_case("n") || trimmed.eq_ignore_ascii_case("no") {
+        eprintln!("{}Commit cancelled.{}", ansi!("33"), ansi!("0"));
+        return;
+    }
+
+    let final_msg = if trimmed.is_empty() {
+        suggested_msg
+    } else {
+        trimmed
+    };
+
+    stage_and_commit(&final_msg).await;
+}
+
+/// Run `git diff --stat` and `git diff` to collect change information.
+/// Returns `None` if the diff failed or there is nothing to commit.
+async fn collect_git_diffs() -> Option<(String, String)> {
+    let diff_output = match tokio::process::Command::new("git")
+        .args(["diff", "--stat"])
+        .output()
+        .await
+    {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+        Err(e) => {
+            eprintln!("{}Git diff failed: {}{}", ansi!("31"), e, ansi!("0"));
+            return None;
+        }
+    };
+    if diff_output.trim().is_empty() {
+        eprintln!("{}Nothing to commit.{}", ansi!("33"), ansi!("0"));
+        return None;
+    }
+
+    let full_diff = match tokio::process::Command::new("git")
+        .arg("diff")
+        .output()
+        .await
+    {
+        Ok(out) => {
+            let s = String::from_utf8_lossy(&out.stdout).to_string();
+            if s.len() > 8000 {
+                format!("{}...\n[truncated]", &s[..8000])
+            } else {
+                s
+            }
+        }
+        Err(_) => String::new(),
+    };
+
+    Some((diff_output, full_diff))
+}
+
+/// Generate a commit message using the agent or a fallback heuristic.
+async fn generate_commit_message(
+    agent: &Arc<dyn Agent>,
+    diff_output: &str,
+    full_diff: &str,
+) -> String {
+    eprint!("{}Generating commit message...{}", ansi!("90"), ansi!("0"));
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+    let prompt_msg = Message {
+        role: "user".to_string(),
+        content: format!(
+            "Generate a single-line conventional commit message for these changes.\
+             \nFormat: <type>(<scope>): <description>\
+             \nExamples:\
+             \n  feat(api): add user authentication endpoint\
+             \n  fix(cache): resolve TTL race condition\
+             \n  refactor(cli): simplify command dispatch\
+             \n  docs(readme): update installation steps\
+             \n\nReturn ONLY the commit message, nothing else.\n\n{}",
+            if full_diff.is_empty() {
+                diff_output
+            } else {
+                full_diff
+            }
+        ),
+    };
+
+    match chat_simple(agent, vec![prompt_msg], vec![]).await {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "\r{}AI commit message failed: {} — using fallback{}",
+                ansi!("31"),
+                e,
+                ansi!("0")
+            );
+            format!(
+                "feat: {}",
+                diff_output.lines().filter(|l| l.contains('|')).count()
+            )
+        }
+    }
+}
+
+/// Stage all changes and commit with the given message.
+async fn stage_and_commit(msg: &str) {
+    let stage_ok = tokio::process::Command::new("git")
+        .args(["add", "-A"])
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !stage_ok {
+        eprintln!("{}Failed to stage changes.{}", ansi!("31"), ansi!("0"));
+        return;
+    }
+
+    match tokio::process::Command::new("git")
+        .args(["commit", "-m", msg])
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            eprintln!(
+                "{}✓ Committed{}{}",
+                ansi!("32"),
+                ansi!("0"),
+                String::from_utf8_lossy(&out.stdout).trim()
+            );
+        }
+        Ok(out) => eprintln!(
+            "{}Commit failed: {}{}",
+            ansi!("31"),
+            String::from_utf8_lossy(&out.stderr).trim(),
+            ansi!("0")
+        ),
+        Err(e) => eprintln!("{}Git error: {}{}", ansi!("31"), e, ansi!("0")),
+    }
+}
+
+#[allow(clippy::borrowed_box)]
+async fn execute_plan_command(
+    messages: &mut Vec<Message>,
+    current_agent: &Arc<dyn Agent>,
+    registry: &Arc<AgentRegistry>,
+    current_agent_name: &str,
+    _current_mode: &Box<dyn ModeRuntime>,
+) {
+    if messages.is_empty() {
+        eprintln!(
+            "{}No conversation to derive a plan from.{}",
+            ansi!("33"),
+            ansi!("0")
+        );
+        return;
+    }
+
+    let plan_runtime = resolve_mode_runtime(
+        "plan",
+        Some(registry.clone()),
+        Some(current_agent_name.to_string()),
+    );
+    match plan_runtime {
+        Ok(plan_mode) => {
+            eprint!(
+                "{}Generating execution plan with Plan mode constraints...{}",
+                ansi!("90"),
+                ansi!("0")
+            );
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+
+            let max_calls = plan_mode.max_tool_calls();
+            let allowed = plan_mode.allowed_tools();
+            eprintln!(
+                "{}[Plan Mode] max_tool_calls={}, allowed_tools={:?}{}",
+                ansi!("90"),
+                max_calls,
+                allowed,
+                ansi!("0")
+            );
+
+            let plan_principles = build_cli_principles();
+            match run_agent_with_tools(
+                current_agent,
+                messages,
+                plan_principles,
+                Some(plan_mode.as_ref()),
+            )
+            .await
+            {
+                Ok((plan, _, _)) => {
+                    eprintln!(
+                        "\r{}── Execution Plan (Plan Mode) ──{}",
+                        ansi!("1"),
+                        ansi!("0")
+                    );
+                    eprintln!("{}", plan);
+                }
+                Err(e) => eprintln!(
+                    "\r{}Plan generation failed: {}{}",
+                    ansi!("31"),
+                    e,
+                    ansi!("0")
+                ),
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "{}Failed to create Plan runtime: {}. Falling back to simple chat.{}",
+                ansi!("31"),
+                e,
+                ansi!("0")
+            );
+            let context: Vec<String> = messages
+                .iter()
+                .filter(|m| m.role != "system")
+                .take(10)
+                .map(|m| {
+                    format!(
+                        "{}: {}",
+                        m.role,
+                        m.content.chars().take(500).collect::<String>()
+                    )
+                })
+                .collect();
+            let context_str = context.join("\n---\n");
+            let plan_prompt_msg = Message {
+                role: "user".to_string(),
+                content: format!(
+                    "Based on this conversation, create a structured execution plan.\
+                     \nList specific steps with file paths where relevant.\
+                     \nFormat as a numbered list.\n\nConversation:\n{}",
+                    context_str
+                ),
+            };
+            match chat_simple(current_agent, vec![plan_prompt_msg], vec![]).await {
+                Ok(plan) => {
+                    eprintln!(
+                        "\r{}── Execution Plan (fallback) ──{}",
+                        ansi!("1"),
+                        ansi!("0")
+                    );
+                    eprintln!("{}", plan);
+                }
+                Err(e) => eprintln!(
+                    "\r{}Plan generation failed: {}{}",
+                    ansi!("31"),
+                    e,
+                    ansi!("0")
+                ),
+            }
+        }
+    }
+}
+
+async fn execute_review_command(current_agent: &Arc<dyn Agent>) {
+    let detailed = match tokio::process::Command::new("git")
+        .args(["diff"])
+        .output()
+        .await
+    {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+        Err(_) => String::new(),
+    };
+    if detailed.trim().is_empty() {
+        eprintln!("{}No changes to review.{}", ansi!("33"), ansi!("0"));
+        return;
+    }
+
+    let stat_lines: Vec<&str> = detailed
+        .lines()
+        .filter(|l| {
+            l.contains('|')
+                && !l.starts_with("diff ")
+                && !l.starts_with("index ")
+                && !l.starts_with("---")
+                && !l.starts_with("+++")
+                && !l.starts_with("@@")
+        })
+        .collect();
+    if !stat_lines.is_empty() {
+        eprintln!(
+            "{}── Changes ({} file(s)) ──{}",
+            ansi!("1"),
+            stat_lines.len(),
+            ansi!("0")
+        );
+        for line in &stat_lines {
+            eprintln!("  {}", line);
+        }
+        eprintln!();
+    }
+
+    eprint!("{}Reviewing changes with AI...{}", ansi!("90"), ansi!("0"));
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+    let truncated_diff = if detailed.len() > 12000 {
+        format!(
+            "{}...\n[truncated: {} total bytes]",
+            &detailed[..12000],
+            detailed.len()
+        )
+    } else {
+        detailed.clone()
+    };
+
+    let review_prompt = Message {
+        role: "user".to_string(),
+        content: format!(
+            "Review this git diff for bugs, security issues, code quality, and improvement suggestions.\
+             \nBe concise but specific. Point to exact lines where issues exist.\
+             \nIf the code looks good, say so briefly.\n\n```diff\n{}\n```",
+            truncated_diff
+        ),
+    };
+
+    match chat_simple(current_agent, vec![review_prompt], vec![]).await {
+        Ok(review) => {
+            eprintln!("\r{}── AI Code Review ──{}", ansi!("1"), ansi!("0"));
+            eprintln!("{}", review);
+        }
+        Err(e) => {
+            eprintln!("\r{}AI review failed: {}{}", ansi!("31"), e, ansi!("0"));
+            display_diff(&detailed, Some(60));
+        }
+    }
+}
+
+async fn execute_find_path_command(find_cmd: &str) {
+    let pattern = find_cmd
+        .strip_prefix("find_path ")
+        .or_else(|| find_cmd.strip_prefix("find "))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    match pattern {
+        Some(pattern) => {
+            let args = serde_json::json!({"pattern": pattern});
+            match execute_simple_tool("search_files", &args).await {
+                Ok(result) => eprintln!("{}", result),
+                Err(e) => eprintln!("{}Error: {}{}", ansi!("31"), e, ansi!("0")),
+            }
+        }
+        None => eprintln!("Usage: /find_path <glob>  (e.g. /find **/*.rs)"),
+    }
+}
+
+async fn execute_mode_command(
+    mode_cmd: &str,
+    current_mode: &mut Box<dyn ModeRuntime>,
+    registry: &Arc<AgentRegistry>,
+    current_agent_name: &str,
+) {
+    let rest = mode_cmd.strip_prefix("mode").unwrap_or("");
+    let name = if rest.is_empty() || rest == " " {
+        ""
+    } else {
+        rest.trim()
+    };
+    if name.is_empty() {
+        eprintln!("Available modes: ask, edit, plan, safeguard, full_auto");
+        eprintln!("Current: {:?}", current_mode.kind());
+        eprintln!("Usage: /mode <mode_name>");
+    } else {
+        let canonical = match name.to_lowercase().as_str() {
+            "edit" => "edit",
+            "ask" => "ask",
+            "plan" => "plan",
+            "safeguard" | "safe_guard" => "safeguard",
+            "full_auto" | "fullauto" => "full_auto",
+            _ => {
+                eprintln!(
+                    "{}Unknown mode '{}. Available: ask, edit, plan, safeguard, full_auto{}",
+                    ansi!("31"),
+                    name,
+                    ansi!("0")
+                );
+                return;
+            }
+        };
+        match resolve_mode_runtime(
+            canonical,
+            Some(registry.clone()),
+            Some(current_agent_name.to_string()),
+        ) {
+            Ok(runtime) => {
+                *current_mode = runtime;
+                eprintln!(
+                    "{}Switched to mode: {}{}",
+                    ansi!("32"),
+                    canonical,
+                    ansi!("0")
+                );
+                match current_mode.kind() {
+                    ModeKind::SafeGuard => eprintln!("{}SafeGuard: High-risk operations will require confirmation. Type /context to see mode constraints.{}", ansi!("90"), ansi!("0")),
+                    ModeKind::FullAuto => eprintln!("{}FullAuto: Fully autonomous execution. Use with caution.{}", ansi!("33"), ansi!("0")),
+                    ModeKind::Edit => eprintln!("{}Edit: Code changes with sandbox approval. Tool approval may be requested.{}", ansi!("90"), ansi!("0")),
+                    _ => {}
+                }
+            }
+            Err(e) => eprintln!("{}Failed to switch mode: {}{}", ansi!("31"), e, ansi!("0")),
+        }
+    }
+}
+
+#[allow(clippy::borrowed_box)]
+async fn execute_retry_command(
+    messages: &mut Vec<Message>,
+    current_agent: &Arc<dyn Agent>,
+    current_mode: &Box<dyn ModeRuntime>,
+    token_tracker: &mut TokenTracker,
+) {
+    if messages.len() < 2 {
+        eprintln!(
+            "{}No messages to retry. Send a message first.{}",
+            ansi!("33"),
+            ansi!("0")
+        );
+        return;
+    }
+    let last_user_idx = messages.iter().rposition(|m| m.role == "user");
+    match last_user_idx {
+        Some(idx) => {
+            let last_user_msg = messages[idx].content.clone();
+            messages.truncate(idx + 1);
+            eprintln!(
+                "{}Retrying last message{}: {}",
+                ansi!("33"),
+                ansi!("0"),
+                last_user_msg.chars().take(60).collect::<String>()
+            );
+            let principles = build_cli_principles();
+            match run_agent_with_tools(
+                current_agent,
+                messages,
+                principles,
+                Some(current_mode.as_ref()),
+            )
+            .await
+            {
+                Ok((resp, prompt_tokens, completion_tokens)) => {
+                    token_tracker.record_usage(prompt_tokens, completion_tokens);
+                    if !resp.trim().is_empty() {
+                        eprintln!(
+                            "{}── Turn complete (est. {} tokens) ──{}",
+                            ansi!("90"),
+                            prompt_tokens + completion_tokens,
+                            ansi!("0")
+                        );
+                    }
+                }
+                Err(e) => eprintln!("\n{}⚠️  Retry failed: {}{}", ansi!("31"), e, ansi!("0")),
+            }
+        }
+        None => eprintln!(
+            "{}No user message found to retry.{}",
+            ansi!("33"),
+            ansi!("0")
+        ),
+    }
+}
+
+async fn execute_switch_agent(
+    model_cmd: &str,
+    current_agent: &mut Arc<dyn Agent>,
+    current_agent_name: &mut String,
+    current_mode: &mut Box<dyn ModeRuntime>,
+    registry: &Arc<AgentRegistry>,
+) {
+    let rest = model_cmd.strip_prefix("model").unwrap_or("");
+    let name = if rest.is_empty() || rest == " " {
+        ""
+    } else {
+        rest.trim()
+    };
+    if name.is_empty() {
+        let names = registry.names();
+        eprintln!("Available agents: {}", names.join(", "));
+        eprintln!("Current: {}", current_agent_name);
+        eprintln!("Usage: /model <agent_name>");
+    } else if let Some(new_agent) = registry.get(name) {
+        *current_agent = new_agent;
+        *current_agent_name = name.to_string();
+        let mode_str = match current_mode.kind() {
+            ModeKind::Ask => "ask",
+            ModeKind::Plan => "plan",
+            ModeKind::Edit => "edit",
+            ModeKind::FullAuto => "full_auto",
+            ModeKind::SafeGuard => "safeguard",
+        };
+        if let Ok(runtime) = resolve_mode_runtime(
+            mode_str,
+            Some(registry.clone()),
+            Some(current_agent_name.clone()),
+        ) {
+            *current_mode = runtime;
+        }
+        eprintln!("{}Switched to agent: {}{}", ansi!("32"), name, ansi!("0"));
+    } else {
+        let names = registry.names();
+        eprintln!(
+            "{}Agent '{}' not found. Available: {}{}",
+            ansi!("31"),
+            name,
+            names.join(", "),
+            ansi!("0")
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper functions for session management
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Auto-save the session after each turn.
+#[allow(clippy::borrowed_box)]
+fn auto_save_turn(
+    messages: &[Message],
+    current_agent_name: &str,
+    current_mode: &Box<dyn ModeRuntime>,
+    session_path: &std::path::Path,
+) {
+    if messages.is_empty() || SAVE_IN_FLIGHT.load(Ordering::Acquire) {
+        return;
+    }
+    SAVE_IN_FLIGHT.store(true, Ordering::Release);
+    let session = ChatSession {
+        messages: messages.to_vec(),
+        agent_name: current_agent_name.to_string(),
+        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
+    };
+    let json = serde_json::to_string(&session).unwrap_or_default();
+    let path = session_path.to_path_buf();
+    let guard = AutoSaveGuard;
+    tokio::spawn(async move {
+        if let Err(e) = tokio::fs::write(&path, &json).await {
+            tracing::warn!("Failed to auto-save session: {e}");
+        }
+        drop(guard);
+    });
+}
+
+/// Check conversation length and suggest compact if needed.
+fn check_compact_threshold(messages: &[Message]) {
+    let msg_count = messages.len();
+    if msg_count >= AUTO_COMPACT_THRESHOLD {
+        eprintln!(
+            "{}⚠️  Conversation is very long ({} msgs). Type /compact to summarize.{}  (Tip: /compact reduces context usage)",
+            ansi!("31"), msg_count, ansi!("0")
+        );
+    } else if msg_count >= COMPACT_PROMPT_THRESHOLD {
+        eprintln!(
+            "{}💡 Tip: Use /compact to summarize old messages and free context.{}  ({}/{} msgs)",
+            ansi!("33"),
+            ansi!("0"),
+            msg_count,
+            COMPACT_PROMPT_THRESHOLD
+        );
+    }
+}
+
+/// Save the session on exit.
+#[allow(clippy::borrowed_box)]
+async fn save_session_on_exit(
+    messages: &[Message],
+    current_agent_name: &str,
+    current_mode: &Box<dyn ModeRuntime>,
+    session_path: &std::path::Path,
+) {
+    if messages.is_empty() {
+        return;
+    }
+    if SAVE_IN_FLIGHT.load(Ordering::Acquire) {
+        tokio::select! {
+            _ = save_notify().notified() => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+        }
+    }
+    let session = ChatSession {
+        messages: messages.to_vec(),
+        agent_name: current_agent_name.to_string(),
+        mode: format!("{:?}", current_mode.kind()).to_lowercase(),
+    };
+    let json = serde_json::to_string(&session).unwrap_or_default();
+    if let Err(e) = tokio::fs::write(session_path, &json).await {
+        tracing::warn!("Failed to save session on exit: {e}");
+    } else {
+        eprintln!("Session auto-saved");
+    }
 }
 
 /// Run a single agent turn: agent chat → tool execution → followup.
@@ -1249,316 +1657,39 @@ async fn run_agent_with_tools(
     agent: &Arc<dyn Agent>,
     messages: &mut Vec<Message>,
     principles: Vec<String>,
+    mode_runtime: Option<&dyn ModeRuntime>,
 ) -> Result<(String, usize, usize)> {
     // ── Estimate prompt tokens from existing messages using CJK-aware estimator ──
     let estimated_prompt_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let sender = StreamingSender::from(tx);
-    let msgs = messages.clone();
-    let initial_principles = if principles.is_empty() {
-        None
-    } else {
-        Some(principles.clone())
-    };
 
-    // ── Cancellation support for Ctrl+C ──
-    // The JoinHandle::abort() cancels the spawned task when the user presses Ctrl+C.
-    // This prevents zombie agent tasks from accumulating in the background.
-    let agent_ref = Arc::clone(agent);
-    let chat_task =
-        tokio::spawn(async move { agent_ref.chat(msgs, initial_principles, None, sender).await });
+    // ── Phase 1: Agent streaming with Ctrl+C interrupt + reasoning + markdown ──
+    let (mut response, tool_calls) =
+        run_agent_streaming_phase(agent, messages, &principles).await?;
 
-    let mut renderer = StreamMarkdownRenderer::new();
-    let mut tool_calls: Vec<(String, String)> = Vec::new();
-    let mut in_reasoning = false;
-    let mut thinking_buffer = String::new();
-
-    // ── Streaming output with interrupt support ──
-    // Thinking tokens are buffered and printed AFTER the reply completes,
-    // so reply appears above and thinking appears below (Zed-style).
-    loop {
-        tokio::select! {
-            token = rx.recv() => {
-                match token {
-                    Some(token) => {
-                        // Tool call detection (agents emit __tool_call__:tool_name:args)
-                        if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
-                            tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-                            eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
-                            continue;
-                        }
-
-                        // Reasoning content markers
-                        if token == REASONING_START {
-                            in_reasoning = true;
-                            continue;
-                        }
-                        if token == REASONING_END {
-                            in_reasoning = false;
-                            continue;
-                        }
-
-                        // __thinking__ prefixed tokens (from reasoning_content field)
-                        if let Some(think) = token.strip_prefix("__thinking__") {
-                            eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                            thinking_buffer.push_str(think);
-                            continue;
-                        }
-
-                        if in_reasoning {
-                            eprint!("{}💭 {}{}", ansi!("90"), token, ansi!("0"));
-                            thinking_buffer.push_str(&token);
-                        } else {
-                            // Feed to streaming renderer for ANSI formatting first,
-                            // then display only the formatted output — avoids the raw-text
-                            // flash followed by ANSI-replace flicker that occurs when
-                            // printing raw first then cursor-up+erase.
-                            renderer.feed(&token);
-                            let (formatted, _) = renderer.flush();
-                            if !formatted.is_empty() {
-                                eprint!("{}", formatted);
-                            } else {
-                                // No complete lines yet — buffer via renderer, do NOT
-                                // print raw to avoid flicker.
-                            }
-                        }
-                        std::io::Write::flush(&mut std::io::stdout()).ok();
-                    }
-                    None => break,
-                }
-            }
-            _ = signal::ctrl_c() => {
-                eprintln!(
-                    "\n{}Interrupted agent response. Use /clear to reset.{}",
-                    ansi!("33"), ansi!("0")
-                );
-                // Abort the agent task to prevent zombie background tasks
-                chat_task.abort();
-                break;
-            }
-        }
+    // ── Phase 2 (inline): Filter/block tool calls by mode constraints + SafeGuard ──
+    let filtered_calls = filter_tool_calls_by_mode(&tool_calls, mode_runtime);
+    let (filtered_calls, early_exit_tokens) =
+        safeguard_approval(&filtered_calls, mode_runtime, &response)?;
+    if let Some(tokens) = early_exit_tokens {
+        let estimated_completion_tokens = estimate_tokens(&response);
+        return Ok((response, tokens, estimated_completion_tokens));
     }
 
-    // Await the task — if it was aborted, JoinError is expected
-    match chat_task.await {
-        Ok(Ok(())) => {} // completed normally
-        Ok(Err(e)) => warn!("Agent chat failed: {e}"),
-        Err(e) => {
-            if e.is_cancelled() {
-                debug!("Agent chat cancelled by user");
-            } else {
-                warn!("Agent chat task panicked: {e}");
-            }
-        }
-    }
+    // ── Phase 3: Tool execution with FuturesUnordered + semaphore ──
+    let (tool_results, has_failure, followup_round_executed) =
+        run_tool_execution_phase(filtered_calls).await;
 
-    // ── Flush remaining renderer output and print thinking ──
-    let mut response: String = {
-        let (remaining, _) = renderer.flush();
-        if !remaining.is_empty() {
-            let n = remaining.lines().count();
-            for _ in 0..n {
-                eprint!("\x1B[F\x1B[K");
-            }
-            eprintln!("{}", remaining);
-            remaining
-        } else {
-            renderer.take_raw_response()
-        }
-    };
-
-    // ── End of inline streaming ──
-    // Thinking was already printed inline during streaming with dim styling.
-    // No further thinking print needed — matches Zed's real-time style.
-
-    // ── Phase 2: Execute tools with progressive streaming ──
-    let mut followup_round_executed = false;
-    if !tool_calls.is_empty() {
-        eprintln!("{}── Tool execution ──{}", ansi!("33"), ansi!("0"));
-
-        // Use FuturesUnordered for progressive tool result display — results
-        // appear as each tool completes rather than waiting for ALL tools to
-        // finish. This matches ZED chat's progressive result streaming pattern
-        // and provides immediate feedback for fast tools.
-        //
-        // A Semaphore limits concurrent tool executions to prevent resource
-        // exhaustion when the agent emits many parallel tool calls (e.g., 50+).
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TOOLS));
-        let mut tool_futures = FuturesUnordered::new();
-        for (tool_name, tool_args_str) in &tool_calls {
-            let tool_name = tool_name.clone();
-            let tool_args_str = tool_args_str.clone();
-            let sem_clone = Arc::clone(&semaphore);
-            tool_futures.push(async move {
-                // Acquire a permit — this limits concurrent exec to MAX_CONCURRENT_TOOLS.
-                // I/O-bound tools (read_file, search_files, http_request) benefit from
-                // parallelism while CPU-bound or resource-heavy tools are throttled.
-                let _permit = sem_clone.acquire().await.ok();
-                let parsed_args: Value = serde_json::from_str(&tool_args_str).unwrap_or(json!({}));
-                let start = std::time::Instant::now();
-                eprintln!("  {}⚡ {}{}...", ansi!("36"), tool_name, ansi!("0"));
-                let result = execute_simple_tool(&tool_name, &parsed_args).await;
-                let elapsed = start.elapsed();
-                (tool_name, tool_args_str, result, elapsed)
-            });
-        }
-
-        let mut tool_results: Vec<String> = Vec::new();
-        let mut has_failure = false;
-
-        // Process results as they arrive (progressive streaming)
-        while let Some((tool_name, _, result, elapsed)) = tool_futures.next().await {
-            match result {
-                Ok(result_text) => {
-                    let display = if result_text.len() > 500 {
-                        let end = result_text
-                            .char_indices()
-                            .nth(500)
-                            .map(|(i, _)| i)
-                            .unwrap_or(result_text.len());
-                        format!(
-                            "{}...\n[{} chars truncated]  ({:.1}s)",
-                            &result_text[..end],
-                            result_text.len(),
-                            elapsed.as_secs_f32()
-                        )
-                    } else {
-                        format!("{}  ({:.1}s)", result_text, elapsed.as_secs_f32())
-                    };
-                    eprintln!("    {}✓{} {}", ansi!("32"), ansi!("0"), display);
-                    let result_for_llm = if result_text.len() > MAX_TOOL_RESULT_CHARS {
-                        format!(
-                            "{}...\n[truncated: {} total chars, showing first {}]",
-                            &result_text[..MAX_TOOL_RESULT_CHARS],
-                            result_text.len(),
-                            MAX_TOOL_RESULT_CHARS
-                        )
-                    } else {
-                        result_text.clone()
-                    };
-                    tool_results.push(build_tool_result_block(&tool_name, &result_for_llm, false));
-                }
-                Err(e) => {
-                    has_failure = true;
-                    eprintln!(
-                        "    {}✗ Error: {}{}  ({:.1}s)",
-                        ansi!("31"),
-                        e,
-                        ansi!("0"),
-                        elapsed.as_secs_f32()
-                    );
-                    tool_results.push(build_tool_result_block(&tool_name, &e.to_string(), true));
-                }
-            }
-        }
-
-        // ── Phase 3: Send tool results back to agent for follow-up ──
-        if !tool_results.is_empty() {
-            followup_round_executed = true;
-            messages.push(Message {
-                role: "assistant".to_string(),
-                content: response.clone(),
-            });
-            messages.push(Message {
-                role: "user".to_string(),
-                content: build_tool_execution_followup_message(&tool_results, has_failure),
-            });
-
-            eprint!("{}── Agent follow-up ──{}\n🤖 ", ansi!("33"), ansi!("0"));
-            std::io::Write::flush(&mut std::io::stdout()).ok();
-
-            // Streaming follow-up
-            let (tx2, mut rx2) = mpsc::unbounded_channel::<String>();
-            let sender2 = StreamingSender::from(tx2);
-            let msgs2 = messages.clone();
-
-            let agent_ref2 = Arc::clone(agent);
-            let followup_principles = if principles.is_empty() {
-                None
-            } else {
-                Some(principles.clone())
-            };
-            let followup_task = tokio::spawn(async move {
-                agent_ref2
-                    .chat(msgs2, followup_principles, None, sender2)
-                    .await
-            });
-
-            let mut followup_renderer = StreamMarkdownRenderer::new();
-            let mut in_reasoning2 = false;
-            loop {
-                tokio::select! {
-                    token = rx2.recv() => {
-                        match token {
-                            Some(token) => {
-                                if token == REASONING_START {
-                                    in_reasoning2 = true;
-                                    eprint!("{}", ansi!("90"));
-                                    continue;
-                                }
-                                if token == REASONING_END {
-                                    in_reasoning2 = false;
-                                    eprint!("{}", ansi!("0"));
-                                    eprintln!();
-                                    continue;
-                                }
-                                // __thinking__ prefixed tokens (from reasoning_content field)
-                                if let Some(think) = token.strip_prefix("__thinking__") {
-                                    eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                                    continue;
-                                }
-                                if in_reasoning2 {
-                                    eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
-                                } else {
-                                    // Feed to renderer first, display only formatted output
-                                    followup_renderer.feed(&token);
-                                    let (formatted, _) = followup_renderer.flush();
-                                    if !formatted.is_empty() {
-                                        eprint!("{}", formatted);
-                                    }
-                                }
-                                std::io::Write::flush(&mut std::io::stdout()).ok();
-                            }
-                            None => break,
-                        }
-                    }
-                    _ = signal::ctrl_c() => {
-                        eprintln!(
-                            "\n{}Interrupted follow-up response.{}  [P3]",
-                            ansi!("33"), ansi!("0")
-                        );
-                        followup_task.abort();
-                        break;
-                    }
-                }
-            }
-
-            if let Err(e) = followup_task.await {
-                warn!("Agent followup task failed: {e}");
-            }
-
-            // ── Flush remaining follow-up renderer output ──
-            let rendered_final = {
-                let (remaining, _) = followup_renderer.flush();
-                if !remaining.is_empty() {
-                    let n = remaining.lines().count();
-                    for _ in 0..n {
-                        eprint!("\x1B[F\x1B[K");
-                    }
-                    eprintln!("{}", remaining);
-                    remaining
-                } else {
-                    followup_renderer.take_raw_response()
-                }
-            };
-
-            if !rendered_final.trim().is_empty() {
-                crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
-                response = rendered_final;
-            } else {
-                crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
-            }
-        }
+    // ── Phase 4: Send tool results back as follow-up message ──
+    if !tool_results.is_empty() {
+        response = run_followup_phase(
+            agent,
+            messages,
+            &principles,
+            &tool_results,
+            has_failure,
+            &response,
+        )
+        .await;
     }
 
     // ── Append assistant response to history ──
@@ -1589,6 +1720,455 @@ async fn run_agent_with_tools(
         estimated_prompt_tokens,
         estimated_completion_tokens,
     ))
+}
+
+/// Phase 1: Stream the agent response with progressive markdown rendering,
+/// reasoning markers, tool call notifications, and Ctrl+C interrupt handling.
+/// Returns the collected response text and any tool calls emitted by the agent.
+async fn run_agent_streaming_phase(
+    agent: &Arc<dyn Agent>,
+    messages: &[Message],
+    principles: &[String],
+) -> Result<(String, Vec<(String, String)>)> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let sender = StreamingSender::from(tx);
+    let msgs = messages.to_vec();
+    let initial_principles = if principles.is_empty() {
+        None
+    } else {
+        Some(principles.to_vec())
+    };
+
+    // ── Cancellation support for Ctrl+C ──
+    let agent_ref = Arc::clone(agent);
+    let chat_task =
+        tokio::spawn(async move { agent_ref.chat(msgs, initial_principles, None, sender).await });
+
+    // Use a forwarding channel: progressive display loop sends all tokens
+    // to the shared `collect_agent_responses` for final classification.
+    let (fwd_tx, fwd_rx) = mpsc::unbounded_channel::<String>();
+
+    let mut renderer = StreamMarkdownRenderer::new();
+    let mut in_reasoning = false;
+    let mut _thinking_buffer = String::new();
+
+    // ── Progressive streaming display with interrupt support ──
+    loop {
+        tokio::select! {
+            token = rx.recv() => {
+                match token {
+                    Some(token) => {
+                        // Forward ALL tokens to the shared collector
+                        let _ = fwd_tx.send(token.clone());
+
+                        // Tool call notification
+                        if let Some((tool_name, _)) = parse_tool_call_token(&token) {
+                            eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
+                            continue;
+                        }
+
+                        // Reasoning content markers
+                        if token == REASONING_START {
+                            in_reasoning = true;
+                            continue;
+                        }
+                        if token == REASONING_END {
+                            in_reasoning = false;
+                            continue;
+                        }
+
+                        // __thinking__ prefixed tokens
+                        if let Some(think) = token.strip_prefix("__thinking__") {
+                            eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                            _thinking_buffer.push_str(think);
+                            continue;
+                        }
+
+                        if in_reasoning {
+                            eprint!("{}💭 {}{}", ansi!("90"), token, ansi!("0"));
+                            _thinking_buffer.push_str(&token);
+                        } else {
+                            renderer.feed(&token);
+                            let (formatted, _) = renderer.flush();
+                            if !formatted.is_empty() {
+                                eprint!("{}", formatted);
+                            }
+                        }
+                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                    }
+                    None => break,
+                }
+            }
+            _ = signal::ctrl_c() => {
+                eprintln!(
+                    "\n{}Interrupted agent response. Use /clear to reset.{}",
+                    ansi!("33"), ansi!("0")
+                );
+                chat_task.abort();
+                break;
+            }
+        }
+    }
+
+    // Drop the forwarding sender so the collector's receiver closes cleanly
+    drop(fwd_tx);
+
+    // Await the agent task
+    match chat_task.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!("Agent chat failed: {e}"),
+        Err(e) => {
+            if e.is_cancelled() {
+                debug!("Agent chat cancelled by user");
+            } else {
+                warn!("Agent chat task panicked: {e}");
+            }
+        }
+    }
+
+    // ── Collect the full response via shared core ──
+    let CollectedResponse {
+        response,
+        reasoning: _reasoning_text,
+        tool_calls,
+    } = collect_agent_responses(fwd_rx).await.unwrap_or_else(|e| {
+        warn!("collect_agent_responses failed: {e}");
+        CollectedResponse {
+            response: renderer.take_raw_response(),
+            reasoning: String::new(),
+            tool_calls: Vec::new(),
+        }
+    });
+
+    // ── Flush remaining renderer output ──
+    {
+        let (remaining, _) = renderer.flush();
+        if !remaining.is_empty() {
+            let n = remaining.lines().count();
+            for _ in 0..n {
+                eprint!("\x1B[F\x1B[K");
+            }
+            eprintln!("{}", remaining);
+        }
+    }
+
+    Ok((response, tool_calls))
+}
+
+/// Filter tool calls based on mode constraints (allowed tools, max_calls).
+/// Returns the filtered list with blocked tools warned to stderr.
+fn filter_tool_calls_by_mode(
+    tool_calls: &[(String, String)],
+    mode_runtime: Option<&dyn ModeRuntime>,
+) -> Vec<(String, String)> {
+    let max_calls = mode_runtime.map(|m| m.max_tool_calls()).unwrap_or(20);
+    let allowed_tools: Vec<String> = mode_runtime.map(|m| m.allowed_tools()).unwrap_or_else(|| {
+        vec![
+            "read_file".to_string(),
+            "search_files".to_string(),
+            "write_file".to_string(),
+            "apply_patch".to_string(),
+            "run_tests".to_string(),
+            "inspect_git_diff".to_string(),
+            "shell_exec".to_string(),
+        ]
+    });
+
+    let filtered_calls: Vec<(String, String)> = tool_calls
+        .iter()
+        .filter(|(name, _)| {
+            if allowed_tools.contains(name) {
+                true
+            } else {
+                eprintln!(
+                    "{}⚠️  Tool '{}' blocked by mode constraints (allowed: {:?}){}",
+                    ansi!("33"),
+                    name,
+                    allowed_tools,
+                    ansi!("0")
+                );
+                false
+            }
+        })
+        .take(max_calls)
+        .cloned()
+        .collect();
+
+    if filtered_calls.len() < tool_calls.len() {
+        let blocked = tool_calls.len() - filtered_calls.len();
+        eprintln!(
+            "{}⚠️  {} tool call(s) blocked by mode '{}' constraints (max_calls={}){}",
+            ansi!("33"),
+            blocked,
+            mode_runtime
+                .map(|m| m.kind())
+                .map(|k| format!("{:?}", k))
+                .unwrap_or_default(),
+            max_calls,
+            ansi!("0")
+        );
+    }
+
+    filtered_calls
+}
+
+/// SafeGuard mode: interactive approval of high-risk operations.
+/// Returns `(filtered_calls, Option<early_exit_prompt_tokens>)`.
+/// If the user cancels, the second element contains the prompt token count for an early return.
+fn safeguard_approval<'a>(
+    filtered_calls: &'a [(String, String)],
+    mode_runtime: Option<&dyn ModeRuntime>,
+    _response: &str,
+) -> SafeguardApprovalResult<'a> {
+    let mode_kind = mode_runtime.map(|m| m.kind());
+    let is_safeguard = matches!(mode_kind, Some(ModeKind::SafeGuard));
+    let is_high_risk = if is_safeguard {
+        mode_runtime
+            .map(|m| {
+                m.is_high_risk_operation(
+                    &filtered_calls
+                        .iter()
+                        .map(|(n, a)| format!("{}: {}", n, a))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    if is_safeguard && is_high_risk {
+        eprintln!(
+            "{}🔒 SafeGuard: High-risk operation detected. Review the planned tool calls:{} {}",
+            ansi!("31"),
+            ansi!("0"),
+            filtered_calls
+                .iter()
+                .map(|(n, a)| format!("  ⚡ {}({})", n, a))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        eprint!(
+            "{}Proceed with execution? [y/N]{} ",
+            ansi!("33"),
+            ansi!("0")
+        );
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        let mut input = String::new();
+        let _ = std::io::stdin().read_line(&mut input);
+        if !input.trim().eq_ignore_ascii_case("y") {
+            eprintln!(
+                "{}SafeGuard: Operation cancelled by user.{}",
+                ansi!("33"),
+                ansi!("0")
+            );
+            return Ok((filtered_calls, Some(0)));
+        }
+    }
+
+    Ok((filtered_calls, None))
+}
+
+/// Phase 2: Execute tools with progressive streaming via FuturesUnordered + Semaphore.
+/// Returns (tool_results, has_failure, followup_round_executed).
+async fn run_tool_execution_phase(
+    filtered_calls: &[(String, String)],
+) -> (Vec<String>, bool, bool) {
+    let mut followup_round_executed = false;
+    if filtered_calls.is_empty() {
+        return (Vec::new(), false, followup_round_executed);
+    }
+
+    eprintln!("{}── Tool execution ──{}", ansi!("33"), ansi!("0"));
+
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TOOLS));
+    let mut tool_futures = FuturesUnordered::new();
+    for (tool_name, tool_args_str) in filtered_calls {
+        let tool_name = tool_name.clone();
+        let tool_args_str = tool_args_str.clone();
+        let sem_clone = Arc::clone(&semaphore);
+        tool_futures.push(async move {
+            let _permit = sem_clone.acquire().await.ok();
+            let parsed_args: Value = serde_json::from_str(&tool_args_str).unwrap_or(json!({}));
+            let start = std::time::Instant::now();
+            eprintln!("  {}⚡ {}{}...", ansi!("36"), tool_name, ansi!("0"));
+            let result = execute_simple_tool(&tool_name, &parsed_args).await;
+            let elapsed = start.elapsed();
+            (tool_name, tool_args_str, result, elapsed)
+        });
+    }
+
+    let mut tool_results: Vec<String> = Vec::new();
+    let mut has_failure = false;
+
+    while let Some((tool_name, _, result, elapsed)) = tool_futures.next().await {
+        match result {
+            Ok(result_text) => {
+                let display = if result_text.len() > 500 {
+                    let end = result_text
+                        .char_indices()
+                        .nth(500)
+                        .map(|(i, _)| i)
+                        .unwrap_or(result_text.len());
+                    format!(
+                        "{}...\n[{} chars truncated]  ({:.1}s)",
+                        &result_text[..end],
+                        result_text.len(),
+                        elapsed.as_secs_f32()
+                    )
+                } else {
+                    format!("{}  ({:.1}s)", result_text, elapsed.as_secs_f32())
+                };
+                eprintln!("    {}✓{} {}", ansi!("32"), ansi!("0"), display);
+                let result_for_llm = if result_text.len() > MAX_TOOL_RESULT_CHARS {
+                    tracing::warn!(
+                        tool_name = %tool_name,
+                        total_chars = result_text.len(),
+                        max_chars = MAX_TOOL_RESULT_CHARS,
+                        "Tool result truncated for LLM"
+                    );
+                    format!(
+                        "{}...\n[truncated: {} total chars, showing first {}]",
+                        &result_text[..MAX_TOOL_RESULT_CHARS],
+                        result_text.len(),
+                        MAX_TOOL_RESULT_CHARS
+                    )
+                } else {
+                    result_text.clone()
+                };
+                tool_results.push(build_tool_result_block(&tool_name, &result_for_llm, false));
+            }
+            Err(e) => {
+                has_failure = true;
+                eprintln!(
+                    "    {}✗ Error: {}{}  ({:.1}s)",
+                    ansi!("31"),
+                    e,
+                    ansi!("0"),
+                    elapsed.as_secs_f32()
+                );
+                tool_results.push(build_tool_result_block(&tool_name, &e.to_string(), true));
+            }
+        }
+    }
+
+    followup_round_executed = true;
+    (tool_results, has_failure, followup_round_executed)
+}
+
+/// Phase 3: Send tool results back to agent as a follow-up message,
+/// stream the follow-up response with markdown rendering + Ctrl+C interrupt.
+/// Returns the final response text.
+async fn run_followup_phase(
+    agent: &Arc<dyn Agent>,
+    messages: &mut Vec<Message>,
+    principles: &[String],
+    tool_results: &[String],
+    has_failure: bool,
+    response: &str,
+) -> String {
+    messages.push(Message {
+        role: "assistant".to_string(),
+        content: response.to_string(),
+    });
+    messages.push(Message {
+        role: "user".to_string(),
+        content: build_tool_execution_followup_message(tool_results, has_failure),
+    });
+
+    eprint!("{}── Agent follow-up ──{}\n🤖 ", ansi!("33"), ansi!("0"));
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+
+    // Streaming follow-up
+    let (tx2, mut rx2) = mpsc::unbounded_channel::<String>();
+    let sender2 = StreamingSender::from(tx2);
+    let msgs2 = messages.clone();
+
+    let agent_ref2 = Arc::clone(agent);
+    let followup_principles = if principles.is_empty() {
+        None
+    } else {
+        Some(principles.to_vec())
+    };
+    let followup_task = tokio::spawn(async move {
+        agent_ref2
+            .chat(msgs2, followup_principles, None, sender2)
+            .await
+    });
+
+    let mut followup_renderer = StreamMarkdownRenderer::new();
+    let mut in_reasoning2 = false;
+    loop {
+        tokio::select! {
+            token = rx2.recv() => {
+                match token {
+                    Some(token) => {
+                        if token == REASONING_START {
+                            in_reasoning2 = true;
+                            eprint!("{}", ansi!("90"));
+                            continue;
+                        }
+                        if token == REASONING_END {
+                            in_reasoning2 = false;
+                            eprint!("{}", ansi!("0"));
+                            eprintln!();
+                            continue;
+                        }
+                        if let Some(think) = token.strip_prefix("__thinking__") {
+                            eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                            continue;
+                        }
+                        if in_reasoning2 {
+                            eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
+                        } else {
+                            followup_renderer.feed(&token);
+                            let (formatted, _) = followup_renderer.flush();
+                            if !formatted.is_empty() {
+                                eprint!("{}", formatted);
+                            }
+                        }
+                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                    }
+                    None => break,
+                }
+            }
+            _ = signal::ctrl_c() => {
+                eprintln!(
+                    "\n{}Interrupted follow-up response.{}  [P3]",
+                    ansi!("33"), ansi!("0")
+                );
+                followup_task.abort();
+                break;
+            }
+        }
+    }
+
+    if let Err(e) = followup_task.await {
+        warn!("Agent followup task failed: {e}");
+    }
+
+    let rendered_final = {
+        let (remaining, _) = followup_renderer.flush();
+        if !remaining.is_empty() {
+            let n = remaining.lines().count();
+            for _ in 0..n {
+                eprint!("\x1B[F\x1B[K");
+            }
+            eprintln!("{}", remaining);
+            remaining
+        } else {
+            followup_renderer.take_raw_response()
+        }
+    };
+
+    if !rendered_final.trim().is_empty() {
+        crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
+        rendered_final
+    } else {
+        crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
+        response.to_string()
+    }
 }
 
 /// Execute a tool by name and arguments, returning the result as a string.
@@ -1778,76 +2358,85 @@ fn format_tool_output(tool_name: &str, output: &ToolOutput) -> Result<String> {
         }
 
         // ── Run tests: output + exit code + command ──
-        "run_tests" => {
-            use std::fmt::Write;
-            let mut buf = match r["filter"].as_str() {
-                Some(f) if !f.is_empty() => format!("filter: {f}"),
-                _ => String::new(),
-            };
-            append_stdouterr(&mut buf, r);
-            if let Some(code) = r["exit_code"].as_i64() {
-                if !buf.is_empty() {
-                    buf.push('\n');
-                }
-                let _ = write!(buf, "exit code: {code}");
-            }
-            if let Some(cmd) = r["command"].as_str() {
-                let _ = write!(buf, "\ncommand: {cmd}");
-            }
-            Ok(buf)
-        }
+        "run_tests" => format_run_tests_output(r),
 
         // ── Git diff: diff content ──
-        "inspect_git_diff" => {
-            let diff = r["diff"].as_str().unwrap_or("");
-            let staged = r["staged"].as_bool().unwrap_or(false);
-            let mut buf = if staged {
-                "(staged diff)".to_string()
-            } else {
-                "(unstaged diff)".to_string()
-            };
-            if !diff.is_empty() {
-                buf.push('\n');
-                buf.push_str(diff);
-            }
-            if let Some(stderr) = r["stderr"].as_str() {
-                if !stderr.is_empty() {
-                    buf.push('\n');
-                    buf.push_str(stderr);
-                }
-            }
-            Ok(buf)
-        }
+        "inspect_git_diff" => format_inspect_git_diff_output(r),
 
         // ── Cargo check: structured errors/warnings ──
-        "cargo_check" => {
-            use std::fmt::Write;
-            let error_count = r["error_count"].as_u64().unwrap_or(0);
-            let warning_count = r["warning_count"].as_u64().unwrap_or(0);
-            let mut buf = format!("cargo check: {error_count} errors, {warning_count} warnings\n");
-            if let Some(errors) = r["errors"].as_array() {
-                for e in errors {
-                    if let Some(rendered) = e["rendered"].as_str() {
-                        let _ = write!(buf, "\n── ERROR ──\n{rendered}");
-                    }
-                }
-            }
-            if let Some(warnings) = r["warnings"].as_array() {
-                for w in warnings {
-                    if let Some(rendered) = w["rendered"].as_str() {
-                        let _ = write!(buf, "\n── WARNING ──\n{rendered}");
-                    }
-                }
-            }
-            if let Some(code) = r["exit_code"].as_i64() {
-                let _ = write!(buf, "\nexit code: {code}");
-            }
-            Ok(buf)
-        }
+        "cargo_check" => format_cargo_check_output(r),
 
         // ── Generic fallback: pretty-printed JSON ──
         _ => Ok(serde_json::to_string_pretty(r).unwrap_or_default()),
     }
+}
+
+/// Format the output of a `run_tests` tool call.
+fn format_run_tests_output(r: &serde_json::Value) -> Result<String> {
+    use std::fmt::Write;
+    let mut buf = match r["filter"].as_str() {
+        Some(f) if !f.is_empty() => format!("filter: {f}"),
+        _ => String::new(),
+    };
+    append_stdouterr(&mut buf, r);
+    if let Some(code) = r["exit_code"].as_i64() {
+        if !buf.is_empty() {
+            buf.push('\n');
+        }
+        let _ = write!(buf, "exit code: {code}");
+    }
+    if let Some(cmd) = r["command"].as_str() {
+        let _ = write!(buf, "\ncommand: {cmd}");
+    }
+    Ok(buf)
+}
+
+/// Format the output of an `inspect_git_diff` tool call.
+fn format_inspect_git_diff_output(r: &serde_json::Value) -> Result<String> {
+    let diff = r["diff"].as_str().unwrap_or("");
+    let staged = r["staged"].as_bool().unwrap_or(false);
+    let mut buf = if staged {
+        "(staged diff)".to_string()
+    } else {
+        "(unstaged diff)".to_string()
+    };
+    if !diff.is_empty() {
+        buf.push('\n');
+        buf.push_str(diff);
+    }
+    if let Some(stderr) = r["stderr"].as_str() {
+        if !stderr.is_empty() {
+            buf.push('\n');
+            buf.push_str(stderr);
+        }
+    }
+    Ok(buf)
+}
+
+/// Format the output of a `cargo_check` tool call.
+fn format_cargo_check_output(r: &serde_json::Value) -> Result<String> {
+    use std::fmt::Write;
+    let error_count = r["error_count"].as_u64().unwrap_or(0);
+    let warning_count = r["warning_count"].as_u64().unwrap_or(0);
+    let mut buf = format!("cargo check: {error_count} errors, {warning_count} warnings\n");
+    if let Some(errors) = r["errors"].as_array() {
+        for e in errors {
+            if let Some(rendered) = e["rendered"].as_str() {
+                let _ = write!(buf, "\n── ERROR ──\n{rendered}");
+            }
+        }
+    }
+    if let Some(warnings) = r["warnings"].as_array() {
+        for w in warnings {
+            if let Some(rendered) = w["rendered"].as_str() {
+                let _ = write!(buf, "\n── WARNING ──\n{rendered}");
+            }
+        }
+    }
+    if let Some(code) = r["exit_code"].as_i64() {
+        let _ = write!(buf, "\nexit code: {code}");
+    }
+    Ok(buf)
 }
 
 /// Cached build of CLI principles — rebuilt only when skills change.

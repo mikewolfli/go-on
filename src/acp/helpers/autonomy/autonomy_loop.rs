@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::acp::r#impl::chat::streaming::StreamFrame;
+use crate::acp::r#impl::chat::streaming::{emit_tool_approval_event, StreamFrame};
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::autonomy_runtime::{
     parse_tool_call_token, TOKEN_FINISH_REASON_PREFIX, TOKEN_MODEL_USED_PREFIX,
@@ -76,6 +76,9 @@ pub struct AutonomyLoopConfig {
     /// keep the SSE inactivity timeout from firing during long tool runs.
     #[serde(skip)]
     pub(crate) progress_tx: Option<mpsc::UnboundedSender<StreamFrame>>,
+    /// The operation mode (edit, safeguard, full_auto, etc.) used for
+    /// tool approval events and mode-specific behavior.
+    pub operation_mode: String,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -98,6 +101,7 @@ impl Default for AutonomyLoopConfig {
             enable_early_stop: true,
             early_stop_confidence_threshold: 0.9,
             capability_signals: false,
+            operation_mode: "edit".to_string(),
             use_dag_execution: true,
             enable_agent_reroute: true,
             recovery_orchestrator: None,
@@ -180,6 +184,7 @@ pub async fn run_autonomy_loop(
     let mut response = String::new();
     let mut reasoning = String::new();
     let mut rounds: Vec<AutonomyRound> = Vec::new();
+    let mut actual_rounds: usize = 0;
     let max_iterations = config.max_iterations.max(1);
 
     for iteration in 0..max_iterations {
@@ -371,11 +376,15 @@ pub async fn run_autonomy_loop(
             if config.persistent_loop && iteration == 0 {
                 // Fall through to next iteration with planning prompt below
             } else {
+                actual_rounds += 1; // Terminal response round
                 break; // No tools to execute — final response ready
             }
         }
 
         if iteration + 1 >= max_iterations {
+            if !tool_calls.is_empty() {
+                actual_rounds += 1; // Tools were called this round
+            }
             break; // Max iterations reached
         }
 
@@ -438,6 +447,25 @@ pub async fn run_autonomy_loop(
                 continue;
             }
 
+            // ── Tool approval event for Edit/SafeGuard modes ──
+            // Emit a tool_approval SSE event if the operation mode requires
+            // frontend-side approval (edit, safeguard). The frontend displays
+            // an Approve/Deny dialog and the user can permit or block the tool.
+            if config.operation_mode == "edit" || config.operation_mode == "safeguard" {
+                let _ = emit_tool_approval_event(
+                    &config.progress_tx,
+                    tool_name,
+                    &parsed_args,
+                    &config.operation_mode,
+                    if config.operation_mode == "safeguard" {
+                        0.5
+                    } else {
+                        0.0
+                    },
+                )
+                .await;
+            }
+
             if let Some(tool) = tool_registry.get_arc(tool_name) {
                 tracing::info!("autonomy_loop: executing tool {}", tool_name);
                 let input = crate::orchestration::tool::ToolInput {
@@ -491,6 +519,11 @@ pub async fn run_autonomy_loop(
             }
         }
 
+        // Count rounds where tools actually executed
+        if !tool_calls.is_empty() {
+            actual_rounds += 1;
+        }
+
         // If we have a non-empty response (even from a tool), we're done.
         if !round_response.trim().is_empty() && !tool_calls.is_empty() {
             // Tools were executed; a follow-up round will continue with the context
@@ -517,32 +550,39 @@ pub async fn run_autonomy_loop(
     let last_round_had_tools = rounds.last().is_some_and(|r| !r.tools_executed.is_empty());
     let mut final_response = response;
     if last_round_had_tools {
-        let summary_msg = Message {
-            role: "user".to_string(),
-            content: format!(
-                "Summarize what was accomplished and provide the final result.\n\nContext: {}\n\nOriginal objective: {}",
-                final_response, params.objective
-            ),
-        };
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        let summary_sender = StreamingSender::from(tx);
-        if params
-            .agent
-            .chat(
-                vec![summary_msg],
-                params.principles.clone(),
-                params.options.clone(),
-                summary_sender,
-            )
-            .await
-            .is_ok()
-        {
-            let mut summary = String::new();
-            while let Some(token) = rx.recv().await {
-                summary.push_str(&token);
-            }
-            if !summary.trim().is_empty() {
-                final_response = summary;
+        // In FullAuto mode, if the last round already produced response
+        // text alongside tool calls, skip the extra summary LLM call to
+        // avoid n+1 calls. Only keep this behavior for Edit mode, where
+        // an explicit summary is always desirable after tool execution.
+        let should_skip = config.operation_mode == "full_auto" && !final_response.trim().is_empty();
+        if !should_skip {
+            let summary_msg = Message {
+                role: "user".to_string(),
+                content: format!(
+                    "Summarize what was accomplished and provide the final result.\n\nContext: {}\n\nOriginal objective: {}",
+                    final_response, params.objective
+                ),
+            };
+            let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+            let summary_sender = StreamingSender::from(tx);
+            if params
+                .agent
+                .chat(
+                    vec![summary_msg],
+                    params.principles.clone(),
+                    params.options.clone(),
+                    summary_sender,
+                )
+                .await
+                .is_ok()
+            {
+                let mut summary = String::new();
+                while let Some(token) = rx.recv().await {
+                    summary.push_str(&token);
+                }
+                if !summary.trim().is_empty() {
+                    final_response = summary;
+                }
             }
         }
     }
@@ -555,7 +595,7 @@ pub async fn run_autonomy_loop(
     Ok(AutonomyLoopResult {
         response: final_response,
         report: AutonomyLoopReport {
-            total_rounds: rounds.len(),
+            total_rounds: actual_rounds,
             total_tools,
             final_phase: AutonomyPhase::Completed,
             rounds,
