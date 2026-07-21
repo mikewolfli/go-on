@@ -90,7 +90,7 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     // Set global transport to StdioTransport for all output from this process.
     // Uses `let _ =` to ignore AlreadySetErr, which can happen in tests where
     // the transport was already set indirectly.
-    let _ = set_current_transport(Arc::new(StdioTransport));
+    set_current_transport(Arc::new(StdioTransport));
 
     info!("ACP server starting");
 

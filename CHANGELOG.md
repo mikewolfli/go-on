@@ -1,5 +1,77 @@
 # Changelog
 
+## [1.4.1] - 2026-07-21
+
+### Architecture — Transport Trait Phase 4 Complete + i18n Unification
+
+This release completes the Transport Trait migration (Phase 4) and unifies error messages across all three interfaces (CLI, GUI, ACP).
+
+#### Transport Trait — Phase 4 (RPC_BUFFER Elimination)
+
+- **RPC_BUFFER task-local removed**: All JSON-RPC output now routes through `CURRENT_TRANSPORT` (RwLock-based global transport), eliminating the dual-path legacy mechanism (io.rs).
+- **RpcBufferTransport wired**: HTTP RPC handler (`/rpc`) and TLS handler now use `set_current_transport(RpcBufferTransport)` instead of `RPC_BUFFER.scope()`. Response capture remains identical.
+- **SseTransport wired**: `/chat/stream`, `/v1/chat/completions`, and `/v1/responses` handlers set `SseTransport` per-connection.
+- **CURRENT_TRANSPORT upgraded**: OnceLock → RwLock, enabling runtime transport switching between stdio/HTTP-SSE/HTTP-RPC modes.
+- **Test serialization**: Dispatch tests use `DISPATCH_TEST_LOCK` to prevent parallel races on the global transport.
+- **dead_code annotation cleanup**: All Phase-1/2 stale `#[allow(dead_code)]` removed from transport.rs.
+
+#### i18n Error Message Unification (Cross-Module)
+
+- **12 new CLI i18n keys**: `cli.chat.git_diff_failed`, `cli.chat.summarization_failed`, `cli.chat.ai_review_failed`, `cli.chat.find_path_usage`, `cli.chat.tool_call_limit_mode`, `cli.chat.conversation_long_warning`, `cli.chat.tool_blocked_by_mode`, `cli.chat.tool_call_blocked_by_mode`, `cli.chat.tip_compact` — added to en-US.json, zh-CN.json, zh-TW.json.
+- **6 new GUI i18n keys**: `chat.error.*` hint keys matching the backend error template format.
+- **10 hardcoded CLI eprintln! messages migrated** to i18n `t()`/`tf()` calls.
+- **GUI Backend empty response**: Replaced misleading canned message with transparent empty-content propagation (the GUI's `finalize_stream_result` already provides helpful diagnostics).
+
+#### Chat Loop Reliability
+
+- **GUI generation timeout protection**: Added `generation_deadline` — after 330s, stuck generations are force-reset with error, preventing permanent UI lock.
+- **GUI event overflow fix**: `process_pending` changed from fixed-cap event processing to unbounded `while let Ok(...)` drain, eliminating silent event drops under high token throughput.
+- **GUI empty-generation-id cleanup**: Added fallback cleanup of orphan empty-assistant messages when `generation_id=None`.
+- **GUI phase sync**: Stream request body now includes `phase` field; `ChatCompleted` responses carry `actual_mode` for backend-side mode sync.
+- **GUI SSE flush optimization**: `/v1/chat/completions` streaming path changed from per-event flush to batch flush every 4 events (matching `/chat/stream` behavior).
+- **GUI StreamProcessor field removed**: Eliminated dead field that was set but never read.
+- **GUI split_thinking dead code fixed**: `extra_thinking` from content is now properly merged with authoritative thinking before display.
+- **CLI stdin async**: Replaced `spawn_blocking` with `tokio::io::stdin().lines()` for responsive Ctrl+C handling.
+- **CLI Ctrl+C re-arm**: `signal::ctrl_c()` now re-armed every iteration, enabling multiple interrupts.
+- **CLI mode persistence**: Mode saved to `goon-cli-mode.json` on `/mode` switch, restored on startup. `GOON_DEFAULT_MODE` env var supported.
+- **CLI failed-message cleanup**: Failed assistant messages automatically removed from history on error.
+- **CLI input backpressure**: `unbounded_channel` → bounded channel(32) for paste-storm protection.
+- **CLI multi-line input**: Support for backslash continuation, whitespace continuation, and unbalanced-brace detection.
+
+#### ACP/ZED Agent Server Integration
+
+- **Platform profile injection**: `initialize`, `session/new`, `tools/list` responses now include `platform_metadata` with available modes, capabilities list, and default mode.
+- **session/prompt thinking regex**: Now supports BOTH `<thinking>...</thinking>` AND `__thinking__` prefix formats.
+- **session/close cleanup**: Session close and delete now clean up permission state to prevent stale grants.
+- **session/config per-session**: Verified and documented — `session_set_config_option` already stores per-session via `acp_session_state().entry()`.
+- **MCP notifications/initialized**: Now returns `id: Some(Value::Null)` sentinel (skipped by dispatch layer), preventing Zed's client from logging spurious errors.
+
+#### Concurrency & Configuration
+
+- **AgentFactory lock unification**: Consolidated `instances` and `expirations` into a single `AgentFactoryInner` behind one Mutex, eliminating the TOCTOU race between capacity check and insert, and removing the double-lock crash-safety gap in `destroy_agent`.
+- **Config hot-reload**: Reduced full-config clones from 2 to 1; eliminated stale snapshot read race by capturing before dropping write guard.
+- **Config parser fix**: Auto-rules now applied AFTER schema migration to avoid referencing stale phase names; parse result validated before writing to disk.
+- **Config serde safety**: `flow` field in `AppConfig` now has `#[serde(default)]` — missing `[flow]` section deserializes as default rather than failing.
+
+#### Code Quality
+
+- **`is_clean()` cfg(test) fix**: Changed from `#[cfg(test)] pub fn` to `#[cfg(test)] pub(crate) fn` — the previous form would fail to compile if called from another module in non-test builds.
+- **18-line commented criterion benchmark removed** from `adaptive_selector.rs`.
+- **`connect_direct_for_test` renamed** to `connect_direct` — the method is used in both production and tests.
+- **All dead_code allows cleaned**: Zero `#[allow(dead_code)]` or `#[expect(dead_code)]` in production code.
+- **All profiles zero warnings**: `local`, `simple-server` 0 warnings; `multi-users-server` only 2 pre-existing `config_path` warnings.
+
+### Validation
+
+- **Tests**: 2069 passed, 0 failed, 0 ignored (full suite).
+- **GUI tests**: 25 passed, 0 failed.
+- **MCP tests**: 20 passed, 0 failed.
+- **Agent Factory tests**: 12 passed, 0 failed.
+- **Config core tests**: 49 passed, 0 failed.
+- **ACP tests**: 385 passed, 0 failed.
+- **Clippy**: `-D warnings` zero violations (backend + GUI).
+- **Profiles**: `local`, `simple-server` zero warnings.
+
 ## [1.3.0] - 2026-06-23
 
 ### Architecture — Lock Contention Elimination (Phase 4)

@@ -73,7 +73,7 @@ async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serd
     // Use per-request buffer via Transport trait (RpcBufferTransport), same as HTTP /rpc handler.
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let buf_clone = buffer.clone();
-    let _ = crate::acp::transport::set_current_transport(Arc::new(
+    crate::acp::transport::set_current_transport(Arc::new(
         crate::acp::transport::RpcBufferTransport::new(buf_clone),
     ));
     let result = handle_request(server, request, None).await;

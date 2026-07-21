@@ -1,5 +1,77 @@
 # 更新日志
 
+## [1.4.1] - 2026-07-21
+
+### 架构 — Transport Trait 第四阶段完成 + i18n 统一
+
+本版本完成了 Transport Trait 迁移（第四阶段）并统一了三端（CLI、GUI、ACP）的错误消息。
+
+#### Transport Trait 第四阶段（RPC_BUFFER 移除）
+
+- **RPC_BUFFER task-local 已移除**：所有 JSON-RPC 输出现在通过 `CURRENT_TRANSPORT`（基于 RwLock 的全局传输层）路由，消除了双路径遗留机制（io.rs）。
+- **RpcBufferTransport 已接线**：HTTP RPC handler（`/rpc`）和 TLS handler 现在使用 `set_current_transport(RpcBufferTransport)` 而非 `RPC_BUFFER.scope()`，响应捕获保持不变。
+- **SseTransport 已接线**：`/chat/stream`、`/v1/chat/completions`、`/v1/responses` handler 在连接建立时设置 `SseTransport`。
+- **CURRENT_TRANSPORT 升级**：OnceLock → RwLock，支持运行时在 stdio/HTTP-SSE/HTTP-RPC 模式间切换。
+- **测试串行化**：Dispatch 测试使用 `DISPATCH_TEST_LOCK` 防止全局传输的并行竞争。
+- **dead_code 标注清理**：移除 transport.rs 中所有过期的 Phase-1/2 `#[allow(dead_code)]`。
+
+#### i18n 错误消息统一（跨模块）
+
+- **12 个新 CLI i18n 密钥**：`cli.chat.git_diff_failed`、`cli.chat.summarization_failed`、`cli.chat.ai_review_failed`、`cli.chat.find_path_usage`、`cli.chat.tool_call_limit_mode`、`cli.chat.conversation_long_warning`、`cli.chat.tool_blocked_by_mode`、`cli.chat.tool_call_blocked_by_mode`、`cli.chat.tip_compact` — 已添加到 en-US.json、zh-CN.json、zh-TW.json。
+- **6 个新 GUI i18n 密钥**：与后端错误模板匹配的 `chat.error.*` 提示密钥。
+- **10 个硬编码 CLI eprintln! 消息** 已迁移至 i18n `t()`/`tf()` 调用。
+- **GUI 后端空响应**：用透明的空内容传播替换了误导性的预设消息（GUI 的 `finalize_stream_result` 已提供有用的诊断）。
+
+#### 对话循环可靠性
+
+- **GUI generation 超时保护**：添加 `generation_deadline` — 330s 后强制重置，防止永久 UI 锁定。
+- **GUI 事件溢出修复**：`process_pending` 从固定上限事件处理改为无限制 `while let Ok(...)` 排空，消除高吞吐 token 下的静默事件丢失。
+- **GUI 空 generation_id 清理**：当 `generation_id=None` 时添加了孤立空 assistant 消息的回退清理。
+- **GUI 阶段同步**：流请求体现在包含 `phase` 字段；`ChatCompleted` 响应携带 `actual_mode` 用于后端模式同步。
+- **GUI SSE flush 优化**：`/v1/chat/completions` 流路径从每次事件 flush 改为每 4 事件批量 flush（与 `/chat/stream` 行为一致）。
+- **GUI StreamProcessor 字段移除**：消除设置了但从未读取的死字段。
+- **GUI split_thinking 死代码修复**：`extra_thinking` 现在在显示前正确与权威 thinking 合并。
+- **CLI stdin 异步化**：用 `tokio::io::stdin().lines()` 替换 `spawn_blocking` 以获得响应式的 Ctrl+C 处理。
+- **CLI Ctrl+C 可重复**：`signal::ctrl_c()` 现在每轮迭代重新 arm，支持多次中断。
+- **CLI 模式持久化**：`/mode` 切换时模式保存到 `goon-cli-mode.json`，启动时恢复。支持 `GOON_DEFAULT_MODE` 环境变量。
+- **CLI 失败消息清理**：失败时自动从历史记录中移除 assistant 消息。
+- **CLI 输入回压**：`unbounded_channel` → 有界 channel(32) 防止粘贴风暴。
+- **CLI 多行输入**：支持反斜线续行、空格续行、括号不平衡检测。
+
+#### ACP/ZED Agent Server 集成
+
+- **平台 profile 注入增强**：`initialize`、`session/new`、`tools/list` 响应现在包含 `platform_metadata`，内含可用模式、能力列表和默认模式。
+- **session/prompt 思考正则增强**：现在同时支持 `<thinking>...</thinking>` 和 `__thinking__` 前缀格式。
+- **session/close 清理**：Session 关闭和删除现在清理权限状态以阻止过期授权。
+- **session/config per-session**：验证并记录 — `session_set_config_option` 已通过 `acp_session_state().entry()` 实现 per-session 存储。
+- **MCP notifications/initialized**：现在返回 `id: Some(Value::Null)` 哨兵值（由 dispatch 层跳过发送），防止 Zed 客户端记录无关错误。
+
+#### 并发与配置
+
+- **AgentFactory 锁统一**：将 `instances` 和 `expirations` 合并为单个 Mutex 保护的 `AgentFactoryInner`，消除了容量检查与插入之间的 TOCTOU 竞争，移除了 `destroy_agent` 的双锁崩溃安全缺口。
+- **Config 热重载**：完整 config 克隆从 2 次减为 1 次；通过释放写锁前捕获快照消除了过时读取竞争。
+- **Config 解析器修复**：自动规则现在在 schema 迁移后应用，避免引用过期的阶段名称；写入磁盘前验证解析结果。
+- **Config serde 安全**：`AppConfig` 中的 `flow` 字段现在有 `#[serde(default)]` — 缺失 `[flow]` 部分时使用默认值而非失败。
+
+#### 代码质量
+
+- **`is_clean()` cfg(test) 修复**：从 `#[cfg(test)] pub fn` 改为 `#[cfg(test)] pub(crate) fn` — 先前形式在非测试构建中被其他模块调用时会编译失败。
+- **18 行注释的 criterion 基准代码** 从 `adaptive_selector.rs` 中删除。
+- **`connect_direct_for_test` 重命名** 为 `connect_direct` — 该方法在生产环境和测试中均有使用。
+- **所有 dead_code allow 已清理**：生产代码中零 `#[allow(dead_code)]` 或 `#[expect(dead_code)]`。
+- **所有 profile 零警告**：`local`、`simple-server` 0 警告；`multi-users-server` 仅有 2 个预先存在的 `config_path` 警告。
+
+### 验证
+
+- **测试**：2069 通过，0 失败，0 忽略（完整套件）。
+- **GUI 测试**：25 通过，0 失败。
+- **MCP 测试**：20 通过，0 失败。
+- **Agent Factory 测试**：12 通过，0 失败。
+- **Config 核心测试**：49 通过，0 失败。
+- **ACP 测试**：385 通过，0 失败。
+- **Clippy**：`-D warnings` 零违规（后端 + GUI）。
+- **Profiles**：`local`、`simple-server` 零警告。
+
 ## [1.3.0] - 2026-06-23
 
 ### 架构 — 锁竞争消除（第四阶段）

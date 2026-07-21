@@ -488,7 +488,7 @@ pub(crate) async fn handle_openai_chat_completions(
     }
 
     write_sse_headers(socket, cors_headers).await?;
-    let _ = set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
+    set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
 
     // Periodic flush interval for SSE streaming — flushes every 4 events
     // to batch syscalls while keeping latency low (same pattern as http.rs).
@@ -1797,7 +1797,7 @@ async fn handle_response_stream(
     });
 
     write_sse_headers(socket, cors_headers).await?;
-    let _ = set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
+    set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
     write_sse_event(
         socket,
         "response.created",

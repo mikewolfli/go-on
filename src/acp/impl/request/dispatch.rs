@@ -362,7 +362,7 @@ mod tests {
         });
 
         clear_current_transport();
-        let _ = set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
+        set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
         dispatch_to_client(
             &server,
             Some(json!("stream-test")),
@@ -407,7 +407,7 @@ mod tests {
         });
 
         clear_current_transport();
-        let _ = set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
+        set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
         dispatch_to_client(
             &server,
             Some(json!("stream-error-test")),
@@ -442,7 +442,7 @@ mod tests {
         });
 
         clear_current_transport();
-        let _ = set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
+        set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
         dispatch_to_client(
             &server,
             Some(json!("unknown-test")),

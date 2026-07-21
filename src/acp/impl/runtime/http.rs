@@ -526,7 +526,7 @@ async fn route_http_post(
                         };
                     use super::sse::{flush_sse, write_sse_event, write_sse_headers};
                     write_sse_headers(socket, cors_headers).await?;
-                    let _ = set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
+                    set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
 
                     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
                     let trace = http_trace_context("chat.stream");
@@ -644,7 +644,7 @@ async fn route_http_post(
                     let headers_owned = header_part.to_string();
                     let server_ref = Arc::clone(&server);
 
-                    let _ = set_current_transport(Arc::new(RpcBufferTransport::new(transport_buffer)));
+                    set_current_transport(Arc::new(RpcBufferTransport::new(transport_buffer)));
                     let rpc_result = handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await;
 
                     if let Err(err) = &rpc_result {
