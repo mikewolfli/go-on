@@ -130,8 +130,10 @@ impl McpStdioServer {
                                             let req_id = req.id.clone();
                                             match self.mcp_server.handle_request(req).await {
                                                 Ok(resp) => {
-                                                    // Notifications (id=null) don't produce a response.
-                                                    if resp.id.is_none() {
+                                                // Notifications (id=null or id=Value::Null sentinel) don't produce a response.
+                                                    if resp.id.is_none()
+                                                        || resp.id == Some(serde_json::Value::Null)
+                                                    {
                                                         continue;
                                                     }
                                                     let mut stdout = stdout.lock().await;
@@ -171,9 +173,11 @@ impl McpStdioServer {
                                         let response = self.mcp_server.handle_request(request).await;
                                         match response {
                                             Ok(resp) => {
-                                                // MCP notifications (JSON-RPC with id=null) must not produce
-                                                // any response per JSON-RPC 2.0 spec (§notifications).
-                                                if resp.id.is_none() {
+                                                // MCP notifications (JSON-RPC with id=null or id=Value::Null
+                                                    // sentinel) must not produce any response per JSON-RPC 2.0 spec.
+                                                    if resp.id.is_none()
+                                                        || resp.id == Some(serde_json::Value::Null)
+                                                    {
                                                     continue;
                                                 }
                                                 let mut stdout = stdout.lock().await;

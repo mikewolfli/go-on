@@ -17,9 +17,27 @@ use crate::acp::r#impl::cors::{
 };
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::acp::server::AcpServer;
+use crate::acp::transport::{set_current_transport, RpcBufferTransport, SseTransport};
 use crate::core::error::error_code_from_status;
 use crate::i18n::runtime::{t, tf};
 use crate::rpc_protocol::{chat_trace_context, JsonRpcRequest, RequestTraceContext};
+
+/// Clone a [`tokio::net::TcpStream`] by duplicating the underlying file descriptor.
+///
+/// Tokio's `TcpStream` does not implement `Clone` or `TryClone`, so we use
+/// `std::net::TcpStream::try_clone` via the raw file descriptor.
+pub(crate) fn clone_tcp_stream(
+    socket: &tokio::net::TcpStream,
+) -> std::io::Result<tokio::net::TcpStream> {
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+    let raw_fd = socket.as_raw_fd();
+    // Safety: the original socket keeps the fd alive while we temporarily wrap it.
+    let std_socket = unsafe { std::net::TcpStream::from_raw_fd(raw_fd) };
+    let cloned = std_socket.try_clone()?;
+    // Forget the wrapper so the fd is not closed when it drops.
+    std::mem::forget(std_socket);
+    tokio::net::TcpStream::from_std(cloned)
+}
 
 use super::openai_compat::{
     build_openai_models_response, extract_response_id_from_path, handle_openai_chat_completions,
@@ -508,6 +526,7 @@ async fn route_http_post(
                         };
                     use super::sse::{flush_sse, write_sse_event, write_sse_headers};
                     write_sse_headers(socket, cors_headers).await?;
+                    let _ = set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
 
                     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
                     let trace = http_trace_context("chat.stream");
@@ -617,19 +636,16 @@ async fn route_http_post(
                         }
                     };
 
-                    // Per-request output buffer — no pipe swap, no serial lock.
-                    // The handler writes to this buffer via task-local RPC_BUFFER;
-                    // write_json_line checks the task-local before falling back to stdout.
+                    // Per-request output buffer via Transport trait.
+                    // RpcBufferTransport captures JSON-RPC output into this buffer;
+                    // after handle_request completes, the buffer contains the response body.
                     let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
-                    let buffer_for_scope = buffer.clone();
+                    let transport_buffer = buffer.clone();
                     let headers_owned = header_part.to_string();
                     let server_ref = Arc::clone(&server);
 
-                    let rpc_result = crate::acp::r#impl::io::RPC_BUFFER
-                        .scope(buffer_for_scope, async move {
-                            handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await
-                        })
-                        .await;
+                    let _ = set_current_transport(Arc::new(RpcBufferTransport::new(transport_buffer)));
+                    let rpc_result = handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await;
 
                     if let Err(err) = &rpc_result {
                         write_http_json_response_with_context(

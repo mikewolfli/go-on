@@ -70,13 +70,13 @@ pub(crate) fn build_root_capabilities_response() -> serde_json::Value {
 async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serde_json::Value {
     let method = request.method.clone();
 
-    // Use per-request buffer via task-local, same as HTTP /rpc handler.
+    // Use per-request buffer via Transport trait (RpcBufferTransport), same as HTTP /rpc handler.
     let buffer = Arc::new(Mutex::new(Vec::new()));
-    let result = crate::acp::r#impl::io::RPC_BUFFER
-        .scope(buffer, async {
-            handle_request(server, request, None).await
-        })
-        .await;
+    let buf_clone = buffer.clone();
+    let _ = crate::acp::transport::set_current_transport(Arc::new(
+        crate::acp::transport::RpcBufferTransport::new(buf_clone),
+    ));
+    let result = handle_request(server, request, None).await;
 
     match result {
         Ok(()) => {

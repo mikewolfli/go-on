@@ -51,6 +51,8 @@ jobs:
         run: cargo check --all-targets --locked
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Cargo deny (advisories / licenses / bans)
+        run: cargo deny check
 
   # ── GUI ──────────────────────────────────────────────────
   gate-gui:

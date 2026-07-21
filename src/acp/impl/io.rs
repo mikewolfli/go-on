@@ -5,22 +5,18 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
 
 use crate::acp::server::AcpServer;
+use crate::acp::transport::get_current_transport;
 use crate::rpc_protocol::{JsonRpcError, JsonRpcResponse};
 
-// Per-request output buffer for HTTP RPC calls.
-// When set, write_json_line writes into this buffer instead of server.output.
-// This eliminates the need for pipe-swapping and the rpc_serial lock.
-tokio::task_local! {
-    pub(crate) static RPC_BUFFER: Arc<Mutex<Vec<u8>>>;
-}
+// RPC_BUFFER task-local has been removed in Phase 4.
+// All output now routes through the Transport trait (CURRENT_TRANSPORT).
+// HTTP RPC mode sets RpcBufferTransport, SSE mode sets SseTransport,
+// stdio mode sets StdioTransport.
 
 /// Send result response
 ///
@@ -136,18 +132,18 @@ pub async fn respond(
 
 /// Write JSON line to output.
 ///
-/// In HTTP RPC mode, writes to the per-request buffer (set via RPC_BUFFER task-local).
-/// In stdio mode, writes directly to tokio::io::stdout() — no lock, no heap-allocated writer.
+/// Routes through the Transport trait (CURRENT_TRANSPORT) if set:
+/// - **Stdio mode**: StdioTransport writes to stdout.
+/// - **HTTP RPC mode**: RpcBufferTransport captures into a response buffer.
+/// - **SSE mode**: SseTransport writes SSE frames.
+///
+/// Fallback: If no transport is set (tests, initialization), writes to stdout.
 pub async fn write_json_line(_server: &AcpServer, value: &Value) -> Result<()> {
-    // Prefer per-request RPC buffer over global output
-    if let Ok(buffer) = RPC_BUFFER.try_with(|b| b.clone()) {
-        let mut buf = buffer.lock().await;
-        let mut encoded = serde_json::to_vec(value)?;
-        encoded.push(b'\n');
-        buf.extend_from_slice(&encoded);
-        return Ok(());
+    // Use global Transport trait if set
+    if let Some(transport) = get_current_transport() {
+        return transport.write_json_line(value).await;
     }
-    // Fallback: stdout (stdio mode) — direct write, no Box<dyn> indirection
+    // Fallback: stdout (direct stdio mode or no transport configured)
     let mut encoded = serde_json::to_vec(value)?;
     encoded.push(b'\n');
     tokio::io::stdout().write_all(&encoded).await?;

@@ -100,6 +100,8 @@ struct StreamResult {
     used_model: Option<String>,
     conv_id: Option<String>,
     branch_id: Option<String>,
+    /// Actual mode reported by the backend (from SSE done/result event).
+    actual_mode: Option<String>,
     sse_errors: u32,
 }
 
@@ -112,6 +114,7 @@ impl StreamResult {
             used_model: None,
             conv_id: None,
             branch_id: None,
+            actual_mode: None,
             sse_errors: 0,
         }
     }
@@ -123,6 +126,7 @@ impl StreamResult {
 struct ChatRequestBodyParams<'a> {
     use_workflow_rpc: bool,
     mode: &'a str,
+    phase: &'a str,
     model: &'a str,
     history_messages: &'a [serde_json::Value],
     outbound_msg: &'a str,
@@ -134,10 +138,13 @@ struct ChatRequestBodyParams<'a> {
 
 /// Build the JSON request body for the chat stream endpoint.
 /// Supports both standard chat mode and workflow RPC mode.
+/// The `phase` field is included when non-empty so the backend can use
+/// the selected phase instead of default/adaptive inference.
 async fn build_chat_request_body(p: ChatRequestBodyParams<'_>) -> serde_json::Value {
     let ChatRequestBodyParams {
         use_workflow_rpc,
         mode,
+        phase,
         model,
         history_messages,
         outbound_msg,
@@ -158,10 +165,15 @@ async fn build_chat_request_body(p: ChatRequestBodyParams<'_>) -> serde_json::Va
             }
         })
     } else {
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "messages": history_messages,
             "mode": mode,
-        })
+        });
+        // Include phase so the backend uses the user-selected phase
+        if !phase.is_empty() {
+            body["phase"] = serde_json::json!(phase);
+        }
+        body
     };
 
     if !use_workflow_rpc {
@@ -265,6 +277,7 @@ async fn handle_workflow_rpc(
                             model: None,
                             conversation_id: None,
                             branch_id: None,
+                            actual_mode: None,
                         },
                     )
                     .await;
@@ -334,6 +347,7 @@ async fn fallback_chat_request(
                 model: selected_model,
                 conversation_id: None,
                 branch_id: None,
+                actual_mode: None,
             },
         )
         .unwrap_or_else(|e| PendingResponse::Error {
@@ -623,6 +637,8 @@ async fn process_stream_events(
                                 .get("branch_id")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
+                            result.actual_mode =
+                                val.get("mode").and_then(|v| v.as_str()).map(String::from);
                             if val.get("plan_output").is_some() {
                                 #[cfg(debug_assertions)]
                                 eprintln!("[Plan] Captured plan_output");
@@ -780,6 +796,7 @@ Check the backend log and agent configuration."
                 model: result.used_model,
                 conversation_id: result.conv_id,
                 branch_id: result.branch_id,
+                actual_mode: result.actual_mode,
             },
         )
         .await;
@@ -1023,6 +1040,11 @@ impl ChatView {
         // Reset per-turn tool call counter for max_tool_calls enforcement
         self.turn_tool_calls = 0;
 
+        // Set generation deadline to auto-recover from hung tasks
+        // 300s = HTTP client timeout; +30s grace for task cleanup
+        self.generation_deadline =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(330));
+
         // ── 1. Prepare request parameters ──
         let (expanded_msg, mode, phase, base_url, autotune_extra) =
             self.prepare_chat_request(&msg, autotune_chain_enabled, backend);
@@ -1125,7 +1147,6 @@ impl ChatView {
             // Create and store an abort controller for this generation
             let abort_ctrl = AbortController::new();
             self.stream_state.abort_controller = Some(abort_ctrl.clone());
-            self.stream_state.stream_processor = Some(StreamProcessor::new());
             self.stream_state.stream_progress = TokenProgress::default();
             let active_gen_guard = ActiveGenerationGuard::new(active_gen_count.clone());
             let sc = stream_client.clone();
@@ -1140,6 +1161,7 @@ impl ChatView {
                 let body = build_chat_request_body(ChatRequestBodyParams {
                     use_workflow_rpc,
                     mode: &mode_clone,
+                    phase: &phase_clone,
                     model: &model_clone,
                     history_messages: &history_messages,
                     outbound_msg: &outbound_clone,
@@ -1248,13 +1270,40 @@ impl ChatView {
     }
 
     /// Drain any pending async responses and update the session / `ai_status`.
+    ///
+    /// # Event drain strategy
+    /// Uses `while let Ok(...)` to drain ALL pending events without a fixed cap.
+    /// This prevents silent event drops (previously: fixed `max_pending_events_per_frame` cap).
+    /// `ctx.request_repaint()` is called every ~5 events to amortize repaint cost
+    /// while keeping UI responsive under high token throughput.
     pub(super) fn process_pending(&mut self, i18n: &I18n, ctx: &egui::Context) {
+        // ── Generation deadline guard ──
+        // If a generation is stuck and exceeds the 330s deadline, force-reset
+        // sending to prevent permanent UI lock (the user can retry).
+        if self.sending {
+            if let Some(deadline) = self.generation_deadline {
+                if deadline.elapsed().as_secs() > 330 {
+                    tracing::warn!(
+                        "Generation deadline exceeded (330s) — force-resetting sending state"
+                    );
+                    self.sending = false;
+                    self.ai_status = AiStatus::Error;
+                    self.generation_deadline = None;
+                    // Reset the active generation counter to unblock future sends
+                    self.active_generations
+                        .store(0, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+
         let mut had_events = false;
-        for _ in 0..self.stream_state.max_pending_events_per_frame {
+        let mut event_count = 0u32;
+        loop {
             let Ok(pending) = self.stream_state.pending_rx.try_recv() else {
                 break;
             };
             had_events = true;
+            event_count += 1;
             match pending {
                 PendingResponse::Phases(list) => {
                     self.phases = list;
@@ -1404,6 +1453,7 @@ impl ChatView {
                     model,
                     conversation_id,
                     branch_id,
+                    actual_mode,
                 } => {
                     // Store conversation tracking IDs on the session
                     if let Some(conv_id) = conversation_id {
@@ -1445,11 +1495,17 @@ impl ChatView {
                                     let (clean_content, extra_thinking) =
                                         split_thinking_from_content(&content);
                                     m.content = clean_content;
-                                    if !extra_thinking.is_empty() {
-                                        if m.thinking.is_empty() {
-                                            self.show_thinking_idx = Some(idx);
-                                        }
-                                        m.thinking.push_str(&extra_thinking);
+                                    // Merge extra_thinking (from __thinking__ markers in final content)
+                                    // with the authoritative thinking from the SSE done event.
+                                    // If the done event has thinking, it takes precedence;
+                                    // otherwise use the extracted extra_thinking.
+                                    if !thinking.is_empty() {
+                                        m.thinking.clone_from(&thinking);
+                                    } else if !extra_thinking.is_empty() {
+                                        m.thinking = extra_thinking;
+                                    }
+                                    if !m.thinking.is_empty() && self.show_thinking_idx.is_none() {
+                                        self.show_thinking_idx = Some(idx);
                                     }
                                 }
 
@@ -1459,11 +1515,6 @@ impl ChatView {
                                     lower.contains("not in sandbox whitelist")
                                         && lower.contains("requires user confirmation")
                                 };
-                                // Replace with authoritative thinking from the completed response
-                                // (overrides any incremental reasoning accumulated during streaming)
-                                if !thinking.is_empty() {
-                                    m.thinking = thinking;
-                                }
                                 // Auto-collapse thinking when the response is complete.
                                 // Only the first chunk of new thinking shows expanded;
                                 // once ChatCompleted arrives, collapse it (Zed-style).
@@ -1484,9 +1535,20 @@ impl ChatView {
                                     m.model = agent.clone();
                                     session.model = agent.clone();
                                 }
+                                // Sync session.mode from backend's actual_mode if provided
+                                // This keeps the UI mode selector in sync with what the
+                                // backend actually used (e.g. capability routing may
+                                // override the requested mode).
+                                if let Some(ref actual_mode) = actual_mode {
+                                    if !actual_mode.is_empty() && *actual_mode != self.selected_mode
+                                    {
+                                        self.selected_mode = actual_mode.clone();
+                                        self.mode_policy = ModePolicy::new(actual_mode);
+                                        session.mode = actual_mode.clone();
+                                    }
+                                }
                                 if self.last_token_estimate == 0 {
-                                    self.output_token_estimate =
-                                        Self::estimate_tokens_improved(&m.content);
+                                    Self::estimate_tokens_improved(&m.content);
                                     self.last_token_estimate =
                                         self.input_token_estimate + self.output_token_estimate;
                                 }
@@ -1584,7 +1646,6 @@ impl ChatView {
                     self.save_sessions_to_disk();
                     // Reset streaming progress on completion
                     self.stream_state.stream_progress = TokenProgress::default();
-                    self.stream_state.stream_processor = None;
                     self.stream_state.abort_controller = None;
                 }
                 PendingResponse::Error {
@@ -1599,34 +1660,25 @@ impl ChatView {
                         if lower.contains("unknown stream error")
                             || (lower.contains("stream error") && lower.contains("unknown"))
                         {
-                            format!(
-                                "{} \n\n💡 The AI provider returned a generic stream error. \
-                                 This often means the API key is missing, expired, or the provider \
-                                 endpoint is unreachable. Check your provider configuration in \
-                                 the Providers tab and verify that DEEPSEEK_API_KEY (or the \
-                                 appropriate env var) is set correctly.",
-                                message
-                            )
+                            let hint = i18n.t("chat.error.apiKeyHint").replace(
+                                "{key_env}",
+                                "DEEPSEEK_API_KEY (or the appropriate env var)",
+                            );
+                            format!("{} \n\n💡 {}", message, hint)
                         } else if lower.contains("401")
                             || lower.contains("unauthorized")
                             || lower.contains("authentication")
                             || lower.contains("invalid api key")
                             || lower.contains("invalid_api_key")
                         {
-                            format!(
-                                "{} \n\n💡 Authentication failed. Check that your API key is \
-                                 correct and has not expired. Update it in the Providers tab.",
-                                message
-                            )
+                            let hint = i18n.t("chat.error.authHint");
+                            format!("{} \n\n💡 {}", message, hint)
                         } else if lower.contains("402")
                             || lower.contains("insufficient_quota")
                             || lower.contains("rate limit")
                         {
-                            format!(
-                                "{} \n\n💡 You may have exceeded your API usage quota or rate \
-                                 limit. Check your provider account billing and usage.",
-                                message
-                            )
+                            let hint = i18n.t("chat.error.quotaHint");
+                            format!("{} \n\n💡 {}", message, hint)
                         } else if lower.contains("not in sandbox whitelist")
                             && lower.contains("requires user confirmation")
                         {
@@ -1638,21 +1690,24 @@ impl ChatView {
                                 if !self.mode_policy.allowed_tools.is_empty()
                                     && !self.mode_policy.allowed_tools.contains(&tool_name)
                                 {
-                                    format!(
-                                        "{} \n\n🚫 Tool '{}' is not allowed in '{}' mode.",
-                                        message, tool_name, self.mode_policy.mode
-                                    )
+                                    let hint = i18n
+                                        .t("chat.error.toolNotAllowed")
+                                        .replace("{tool_name}", &tool_name)
+                                        .replace("{mode}", &self.mode_policy.mode);
+                                    format!("{} \n\n🚫 {}", message, hint)
                                 // Wire: enforce max_tool_calls per turn
                                 } else {
                                     self.turn_tool_calls += 1;
                                     if self.turn_tool_calls > self.mode_policy.max_tool_calls {
-                                        format!(
-                                            "{} \n\n🛑 Tool call limit reached ({}/{}). Cannot execute '{}'.",
-                                            message,
-                                            self.turn_tool_calls,
-                                            self.mode_policy.max_tool_calls,
-                                            tool_name
-                                        )
+                                        let hint = i18n
+                                            .t("chat.error.toolCallLimit")
+                                            .replace("{tool_name}", &tool_name)
+                                            .replace("{current}", &self.turn_tool_calls.to_string())
+                                            .replace(
+                                                "{max}",
+                                                &self.mode_policy.max_tool_calls.to_string(),
+                                            );
+                                        format!("{} \n\n🛑 {}", message, hint)
                                     } else {
                                         // Find the last user message index
                                         let last_user_idx = self
@@ -1668,11 +1723,10 @@ impl ChatView {
                                             .unwrap_or(0);
                                         self.pending_tool_approval =
                                             Some((tool_name.clone(), 0.5, last_user_idx));
-                                        format!(
-                                            "{} \n\n💡 The tool '{}' requires your approval to proceed. \
-                                                     Click 'Approve' to allow it, or 'Deny' to block it.",
-                                            message, tool_name
-                                        )
+                                        let hint = i18n
+                                            .t("chat.error.toolApproval")
+                                            .replace("{tool_name}", &tool_name);
+                                        format!("{} \n\n💡 {}", message, hint)
                                     }
                                 }
                             } else {
@@ -1694,6 +1748,8 @@ impl ChatView {
                     self.set_phase_record_status("error");
 
                     // Drop empty placeholder assistant message on failure.
+                    // Also handle generation_id=None: remove the most recent empty
+                    // assistant message as a fallback cleanup.
                     if let Some(idx) = generation_id.and_then(|id| self.generation_msg_idx(id)) {
                         let should_remove = self
                             .session_state
@@ -1707,6 +1763,21 @@ impl ChatView {
                         if should_remove {
                             self.remove_message_at(idx);
                         }
+                    } else if generation_id.is_none() {
+                        // Fallback: remove the most recent empty assistant message
+                        if let Some(session) = self
+                            .session_state
+                            .sessions
+                            .get_mut(self.session_state.active_session)
+                        {
+                            let empty_pos = session
+                                .messages
+                                .iter()
+                                .rposition(|m| m.role == "assistant" && m.content.is_empty());
+                            if let Some(pos) = empty_pos {
+                                session.messages.remove(pos);
+                            }
+                        }
                     }
 
                     if let Some(id) = generation_id {
@@ -1717,7 +1788,6 @@ impl ChatView {
                     self.stop_requested = false;
                     // Reset streaming progress on error
                     self.stream_state.stream_progress = TokenProgress::default();
-                    self.stream_state.stream_processor = None;
                     self.stream_state.abort_controller = None;
                 }
                 PendingResponse::SubAgentEvent {
@@ -1833,6 +1903,12 @@ impl ChatView {
                 PendingResponse::ExternalEditorResult(content) => {
                     self.input = content;
                 }
+            }
+
+            // Request repaint every ~5 events to keep UI responsive
+            // under high token throughput without excessive per-event overhead.
+            if event_count.is_multiple_of(5) {
+                ctx.request_repaint();
             }
         }
         if had_events {

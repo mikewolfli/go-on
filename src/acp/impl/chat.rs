@@ -572,10 +572,11 @@ pub(crate) async fn process_chat_request(
                 target: "chat_stream",
                 "process_chat_request: result has empty response AND empty agent — sending error event"
             );
+            let no_response_msg = crate::i18n::runtime::t("error.chat.no_response_from_pipeline");
             observer.send_sse(crate::acp::r#impl::chat::streaming::StreamFrame {
                 event: "error",
                 payload: serde_json::json!({
-                    "error": "The chat completed but produced no response. This can happen if no agents are available, API keys are misconfigured, or the backend is overloaded.",
+                    "error": no_response_msg,
                     "message": "error.chat.no_response_from_pipeline",
                 }),
                 status: None,

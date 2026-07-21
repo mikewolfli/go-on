@@ -49,7 +49,8 @@ pub struct StreamState {
     stream_client: reqwest::Client,
     abort_controller: Option<AbortController>,
     pub stream_progress: TokenProgress,
-    stream_processor: Option<StreamProcessor>,
+    // stream_processor field removed: the spawned task creates its own
+    // StreamProcessor per-stream, so this field was never read.
 }
 
 /// Model and agent selection state.
@@ -159,6 +160,9 @@ pub struct ChatView {
     pub mode_policy: ModePolicy,
     /// Counter of tool calls in the current turn, used to enforce max_tool_calls.
     turn_tool_calls: usize,
+    /// Monotonic deadline for the current generation. When exceeded,
+    /// self.sending is force-reset to prevent permanent lock.
+    generation_deadline: Option<std::time::Instant>,
 }
 
 impl ChatView {
@@ -484,7 +488,6 @@ impl ChatView {
                 }),
             abort_controller: None,
             stream_progress: TokenProgress::default(),
-            stream_processor: None,
         };
         let model_state = ModelState {
             selected_agent: String::new(),
@@ -562,6 +565,7 @@ impl ChatView {
             pending_tool_approval: None,
             mode_policy: ModePolicy::new("edit"),
             turn_tool_calls: 0,
+            generation_deadline: None,
         }
     }
 
@@ -1024,7 +1028,6 @@ impl ChatView {
         self.ai_status = AiStatus::Idle;
         self.set_phase_record_status("stopped");
         self.stream_state.stream_progress = TokenProgress::default();
-        self.stream_state.stream_processor = None;
     }
 }
 
@@ -1115,7 +1118,6 @@ mod tests {
                 stream_client: reqwest::Client::new(),
                 abort_controller: None,
                 stream_progress: TokenProgress::default(),
-                stream_processor: None,
             },
             model_state: ModelState {
                 selected_agent: String::new(),
@@ -1178,10 +1180,13 @@ mod tests {
             risk_reasons: String::new(),
             enable_markdown: true,
             show_token_details: true,
+            show_mode_row: true,
+            show_extra_buttons: true,
             rendered_content_hashes: Vec::new(),
             pending_tool_approval: None,
             mode_policy: ModePolicy::new("edit"),
             turn_tool_calls: 0,
+            generation_deadline: None,
         }
     }
 

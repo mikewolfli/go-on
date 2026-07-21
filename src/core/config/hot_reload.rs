@@ -137,7 +137,7 @@ impl WatchDog {
     /// Set up a notify-based file watcher on the config file and its parent.
     async fn run_notify_watch(
         path: &Path,
-        _debounce: Duration,
+        debounce: Duration,
     ) -> Result<tokio::sync::mpsc::Receiver<notify::Event>> {
         use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -152,7 +152,7 @@ impl WatchDog {
                 }
             },
             Config::default()
-                .with_poll_interval(_debounce)
+                .with_poll_interval(debounce)
                 .with_compare_contents(false),
         )
         .map_err(|e| anyhow::anyhow!("failed to create notify watcher: {e}"))?;
@@ -244,7 +244,8 @@ impl WatchDog {
             Ok(new_config) => {
                 // B51-35: Validate the new config before applying. If the config
                 // has critical validation errors, reject the reload entirely.
-                let validator = ConfigValidator::new(path, new_config.clone());
+                let snapshot = new_config.clone();
+                let validator = ConfigValidator::new(path, new_config);
                 let validation = validator.validate();
                 if validation.has_critical_errors() {
                     let error_details: Vec<String> = validation
@@ -262,7 +263,7 @@ impl WatchDog {
 
                 info!("Config hot-reloaded successfully from: {:?}", path);
                 let mut guard = self.active_config.write().await;
-                *guard = new_config.clone();
+                *guard = snapshot.clone();
                 drop(guard);
 
                 // Notify all connected clients via state sync broadcaster
@@ -271,13 +272,7 @@ impl WatchDog {
                 });
 
                 if let Some(ref cb) = self.on_reload {
-                    let cb = cb.clone();
-                    let config_snapshot = self.active_config.read().await.clone();
-                    tokio::task::spawn_blocking(move || {
-                        cb(&config_snapshot);
-                    })
-                    .await
-                    .ok();
+                    cb(&snapshot);
                 }
 
                 for observer in &self.observers {

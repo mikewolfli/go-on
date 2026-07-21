@@ -133,6 +133,9 @@ pub enum PendingResponse {
         model: Option<String>,
         conversation_id: Option<String>,
         branch_id: Option<String>,
+        /// The mode that was actually used by the backend.
+        /// When set, the GUI should sync session.mode to this value.
+        actual_mode: Option<String>,
     },
     StreamChunk {
         generation_id: u64,

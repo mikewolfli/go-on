@@ -107,6 +107,9 @@ pub(crate) async fn emit_stream_chunk(
             "token": display_token,
             "total_chars": total_chars,
             "trace_id": meta.trace_id,
+            "mode": meta.mode,
+            "risk_score": meta.risk_score,
+            "degrade_policy": meta.degrade_policy,
         });
         if !reasoning_token.is_empty() {
             payload["reasoning"] = json!(reasoning_token);
@@ -175,6 +178,9 @@ pub(crate) async fn emit_stream_done(
             "phase": meta.phase_name,
             "total_chars": total_chars,
             "trace_id": meta.trace_id,
+            "mode": meta.mode,
+            "risk_score": meta.risk_score,
+            "degrade_policy": meta.degrade_policy,
         });
         if let Some(ref m) = selected_model {
             if let Some(obj) = payload.as_object_mut() {
@@ -235,6 +241,9 @@ pub(crate) async fn emit_stream_token_economy(
                 "agent": meta.agent_name,
                 "phase": meta.phase_name,
                 "trace_id": meta.trace_id,
+                "mode": meta.mode,
+                "risk_score": meta.risk_score,
+                "degrade_policy": meta.degrade_policy,
                 "token_economy": token_economy,
             }),
             status: None,
@@ -319,7 +328,7 @@ pub(crate) async fn emit_tool_approval_event(
             "tool_args": tool_args,
             "mode": mode,
             "risk_score": risk_score,
-            "message": format!("Tool '{}' requires approval (mode: {}, risk: {:.2})", tool_name, mode, risk_score),
+            "message": crate::i18n::runtime::tf("acp.error.tool_approval_required", &[("tool_name", tool_name), ("mode", mode), ("risk", &format!("{:.2}", risk_score))]),
         }),
         status: None,
     });
@@ -338,12 +347,21 @@ pub(crate) struct StreamNotificationContext<'a> {
     pub(crate) trace_id: &'a str,
 }
 
-/// Metadata about a streaming event (agent, phase, trace).
+/// Metadata about a streaming event (agent, phase, trace, mode, risk, degrade policy).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StreamEventMeta<'a> {
     pub(crate) agent_name: &'a str,
     pub(crate) phase_name: &'a str,
     pub(crate) trace_id: &'a str,
+    /// Execution mode (e.g. "ask", "edit", "safeguard", "full_auto").
+    /// `None` when unavailable (legacy callers or phase events without mode context).
+    pub(crate) mode: Option<&'a str>,
+    /// Risk score (0-100) from risk assessment, if available.
+    /// `None` when risk assessment has not been performed yet.
+    pub(crate) risk_score: Option<&'a str>,
+    /// Degrade policy name if the request is being degraded (e.g. "no-tools", "fast-lane").
+    /// `None` under normal operation.
+    pub(crate) degrade_policy: Option<&'a str>,
 }
 
 /// A single SSE frame to be sent to the client.

@@ -339,11 +339,12 @@ impl McpServer {
             "notifications/initialized" => {
                 // MCP notification — no response expected per JSON-RPC spec.
                 // Zed's context_server client logs an error for id:null responses,
-                // so we skip sending any response at all.
+                // so return a silent response marker: id=Some(Value::Null) instead of
+                // id=None. The dispatch layer skips sending when id is null sentinel.
                 info!("MCP: received notifications/initialized (no response sent)");
                 return Ok(JsonRpcResponse {
                     jsonrpc: JSONRPC_VERSION.to_string(),
-                    id: None,
+                    id: Some(serde_json::Value::Null),
                     result: None,
                     error: None,
                 });

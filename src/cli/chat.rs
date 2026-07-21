@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
 use serde_json::{json, Value};
+use tokio::io::AsyncBufReadExt;
 use tokio::signal;
 use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio::time::{timeout, Duration};
@@ -34,6 +35,7 @@ use crate::acp::r#impl::chat::agent_runtime::{collect_agent_responses, Collected
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::cli::markdown_renderer::StreamMarkdownRenderer;
 use crate::config::AppConfig;
+use crate::i18n::runtime::{t, tf};
 use crate::orchestration::mode::{resolve_mode_runtime, GenericModeRuntime, ModeKind, ModeRuntime};
 
 use crate::governance::status::quick_check_tool as governance_gate;
@@ -237,7 +239,7 @@ impl TokenTracker {
 /// Run an interactive terminal chat session with full agent capabilities.
 pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     if config.agents().is_empty() {
-        eprintln!("No AI agents configured. Run `go-on --init` to set up a provider first.");
+        eprintln!("{}", tf("error.no_agents", &[]));
         return Ok(());
     }
 
@@ -305,7 +307,7 @@ pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
     // ── Save session on clean exit ──
     save_session_on_exit(&messages, &current_agent_name, &current_mode, &session_path).await;
 
-    eprintln!("Goodbye!");
+    eprintln!("{}", t("cli.chat.goodbye"));
     Ok(())
 }
 
@@ -320,7 +322,7 @@ struct ChatEnvironment {
     current_mode: Box<dyn ModeRuntime>,
     messages: Vec<Message>,
     token_tracker: TokenTracker,
-    stdin_rx: mpsc::UnboundedReceiver<String>,
+    stdin_rx: mpsc::Receiver<String>,
     session_path: std::path::PathBuf,
 }
 
@@ -361,8 +363,26 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
         .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found in registry", current_agent_name))?;
 
     // ── Resolve current mode runtime ──
+    // Default to GOON_DEFAULT_MODE env var, or load from goon-cli-mode.json,
+    // or fall back to "edit".
+    let default_mode = std::env::var("GOON_DEFAULT_MODE")
+        .ok()
+        .or_else(|| {
+            let config_path = std::path::Path::new("goon-cli-mode.json");
+            std::fs::read_to_string(config_path)
+                .ok()
+                .and_then(|content| {
+                    serde_json::from_str::<serde_json::Value>(&content)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("mode")
+                                .and_then(|m| m.as_str().map(|s| s.to_string()))
+                        })
+                })
+        })
+        .unwrap_or_else(|| "edit".to_string());
     let current_mode = resolve_mode_runtime(
-        "edit",
+        &default_mode,
         Some(registry.clone()),
         Some(current_agent_name.clone()),
     )
@@ -412,24 +432,31 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
 
     let token_tracker = TokenTracker::default();
 
-    // ── Dedicated stdin channel — spawn once ──
-    let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<String>();
-    tokio::task::spawn_blocking(move || {
-        let stdin = std::io::stdin();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match stdin.read_line(&mut line) {
-                Ok(_) => {
-                    let trimmed = line.trim().to_string();
-                    if stdin_tx.send(trimmed).is_err() {
-                        break;
+    // ── Async stdin reader using tokio::io::stdin().lines() ──
+    // Replaces the previous spawn_blocking approach so that Ctrl+C
+    // during input is handled immediately (not blocked on read_line).
+    let mut stdin_lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    let stdin_rx = {
+        // Bounded channel (32) provides backpressure: if the user pastes
+        // faster than the agent processes, the channel buffers the last 32
+        // lines and the stdin reader task awaits before reading more.
+        let (stdin_tx, stdin_rx) = mpsc::channel::<String>(32);
+        tokio::spawn(async move {
+            loop {
+                match stdin_lines.next_line().await {
+                    Ok(Some(line)) => {
+                        let trimmed = line.trim().to_string();
+                        if stdin_tx.send(trimmed).await.is_err() {
+                            break;
+                        }
                     }
+                    Ok(None) => break,
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
-        }
-    });
+        });
+        stdin_rx
+    };
 
     // ── Session persistence path ──
     let session_path = std::path::PathBuf::from(SESSION_FILE);
@@ -465,14 +492,53 @@ fn print_chat_banner(current_agent_name: &str) {
 }
 
 /// Read a line from stdin with Ctrl+C handling. Returns None on EOF.
-async fn read_user_input(stdin_rx: &mut mpsc::UnboundedReceiver<String>) -> Option<String> {
-    tokio::select! {
-        line = stdin_rx.recv() => {
-            line
-        }
-        _ = signal::ctrl_c() => {
-            eprintln!("\n{}Interrupted. Type /quit to exit, or continue typing.{}", ansi!("33"), ansi!("0"));
-            Some(String::new())
+async fn read_user_input(stdin_rx: &mut mpsc::Receiver<String>) -> Option<String> {
+    let mut buffer = String::new();
+    loop {
+        tokio::select! {
+            line = stdin_rx.recv() => {
+                let line = match line {
+                    Some(l) => l,
+                    None => return if buffer.is_empty() { None } else { Some(buffer) },
+                };
+                // If we already have buffered content, this is a continuation line.
+                if !buffer.is_empty() {
+                    buffer.push('\n');
+                    buffer.push_str(line.trim_end());
+                } else {
+                    // Check for backslash continuation: line ends with \
+                    if let Some(trimmed) = line.strip_suffix('\\') {
+                        buffer.push_str(trimmed.trim_end());
+                        // Continue reading
+                        continue;
+                    }
+                    // Check for whitespace continuation: line starts with whitespace
+                    if line.starts_with(' ') || line.starts_with('\t') {
+                        buffer.push_str(line.trim_end());
+                        continue;
+                    }
+                    buffer = line.trim_end().to_string();
+                }
+
+                // Check for unbalanced braces (multi-line payloads like JSON).
+                let open_count = buffer.chars().filter(|c| *c == '{').count();
+                let close_count = buffer.chars().filter(|c| *c == '}').count();
+                if open_count > close_count {
+                    // Braces are unbalanced — continue reading.
+                    continue;
+                }
+
+                return Some(buffer);
+            }
+            _ = signal::ctrl_c() => {
+                if buffer.is_empty() {
+                    eprintln!("\n{}{}{}", ansi!("33"), t("cli.chat.interrupted"), ansi!("0"));
+                    return Some(String::new());
+                } else {
+                    // Return whatever we've buffered so far.
+                    return Some(buffer);
+                }
+            }
         }
     }
 }
@@ -488,7 +554,7 @@ async fn dispatch_builtin_command(
     registry: &Arc<AgentRegistry>,
     token_tracker: &mut TokenTracker,
     session_path: &std::path::Path,
-    stdin_rx: &mut mpsc::UnboundedReceiver<String>,
+    stdin_rx: &mut mpsc::Receiver<String>,
 ) -> bool {
     match cmd {
         // ── Session commands ──
@@ -498,7 +564,12 @@ async fn dispatch_builtin_command(
         }
         "clear" => {
             messages.clear();
-            eprintln!("{}Conversation cleared.{}", ansi!("32"), ansi!("0"));
+            eprintln!(
+                "{}{}{}",
+                ansi!("32"),
+                t("cli.chat.conversation_cleared"),
+                ansi!("0")
+            );
         }
         "save" => {
             handle_save_command(messages, current_agent_name, current_mode, session_path).await;
@@ -518,20 +589,38 @@ async fn dispatch_builtin_command(
         "agents" => {
             let names = registry.names();
             for name in &names {
-                eprintln!("  {name}");
+                eprintln!("{}", tf("cli.chat.agents_list", &[("name", name)]));
             }
             eprintln!(
-                "Current: {}, use /model <name> to switch",
-                current_agent_name
+                "{}",
+                tf(
+                    "cli.chat.switch_agent_hint",
+                    &[("name", current_agent_name)]
+                )
             );
         }
         "tools" => {
             let reg = tool_registry();
             let names = reg.all_names();
-            eprintln!("Available tools ({}):", names.len());
+            eprintln!(
+                "{}",
+                tf(
+                    "cli.chat.tools_count",
+                    &[("count", &names.len().to_string())]
+                )
+            );
             for name in names {
                 if let Some(profile) = reg.profile(name) {
-                    eprintln!("  {:<25} [{}]", name, profile.capability);
+                    eprintln!(
+                        "{}",
+                        tf(
+                            "cli.chat.tools_list_entry",
+                            &[
+                                ("name", name),
+                                ("capability", &profile.capability.to_string())
+                            ]
+                        )
+                    );
                 } else {
                     eprintln!("  {name}");
                 }
@@ -603,7 +692,7 @@ async fn dispatch_builtin_command(
             .await;
         }
         _ => {
-            eprintln!("Unknown command: /{cmd}. Type /help.");
+            eprintln!("{}", tf("cli.chat.unknown_command", &[("cmd", cmd)]));
         }
     }
     false
@@ -645,20 +734,25 @@ async fn process_user_message_and_run_agent(
                     .map(|v| format!("{:?}: {}", v.category, v.description))
                     .collect();
                 eprintln!(
-                    "{}{} Prompt injection detected and blocked!{} (violations: {})",
+                    "{}{}{}",
                     ansi!("31"),
-                    ansi!("1"),
-                    ansi!("0"),
-                    critical.join("; ")
+                    tf(
+                        "cli.chat.injection_blocked",
+                        &[("violations", &critical.join("; "))]
+                    ),
+                    ansi!("0")
                 );
                 return;
             }
 
             eprintln!(
-                "{}⚠️  Warning: Potential prompt injection detected — input has been sanitized.{} (contamination: {:.2})",
+                "{}{}{}",
                 ansi!("33"),
-                ansi!("0"),
-                result.contamination_score
+                tf(
+                    "cli.chat.injection_warning",
+                    &[("score", &format!("{:.2}", result.contamination_score))]
+                ),
+                ansi!("0")
             );
             messages.push(Message {
                 role: "user".to_string(),
@@ -689,15 +783,29 @@ async fn process_user_message_and_run_agent(
             token_tracker.record_usage(prompt_tokens, completion_tokens);
             if !resp.trim().is_empty() {
                 eprintln!(
-                    "{}── Turn complete (est. {} tokens) ──{}",
+                    "{}{}{}",
                     ansi!("90"),
-                    prompt_tokens + completion_tokens,
+                    tf(
+                        "cli.chat.turn_complete",
+                        &[("tokens", &(prompt_tokens + completion_tokens).to_string())]
+                    ),
                     ansi!("0")
                 );
             }
         }
         Err(e) => {
-            eprintln!("\n{}⚠️  Error: {}{}", ansi!("31"), e, ansi!("0"));
+            let err_msg = tf("error.generation_failed", &[("reason", &e.to_string())]);
+            eprintln!("\n{}⚠️  {} {}", ansi!("31"), err_msg, ansi!("0"));
+            // Clean up the failed assistant message to avoid token waste on retry
+            if messages.last().map(|m| m.role.as_str()) == Some("assistant") {
+                let last_empty = messages
+                    .last()
+                    .map(|m| m.content.is_empty())
+                    .unwrap_or(false);
+                if last_empty {
+                    messages.pop();
+                }
+            }
         }
     }
 
@@ -727,22 +835,28 @@ async fn handle_save_command(
     match serde_json::to_string_pretty(&session) {
         Ok(json) => match tokio::fs::write(session_path, &json).await {
             Ok(()) => eprintln!(
-                "{}Session saved to {}{}",
+                "{}{}{}",
                 ansi!("32"),
-                session_path.display(),
+                tf(
+                    "cli.chat.session_saved",
+                    &[("path", &session_path.display().to_string())]
+                ),
                 ansi!("0")
             ),
             Err(e) => eprintln!(
-                "{}Failed to write session: {}{}",
+                "{}{}{}",
                 ansi!("31"),
-                e,
+                tf("cli.chat.session_save_failed", &[("error", &e.to_string())]),
                 ansi!("0")
             ),
         },
         Err(e) => eprintln!(
-            "{}Failed to serialize session: {}{}",
+            "{}{}{}",
             ansi!("31"),
-            e,
+            tf(
+                "cli.chat.session_serialize_failed",
+                &[("error", &e.to_string())]
+            ),
             ansi!("0")
         ),
     }
@@ -762,8 +876,13 @@ async fn handle_load_command(
                 let agent_valid = registry.get(&session.agent_name).is_some();
                 if !agent_valid {
                     eprintln!(
-                        "{}Warning: agent '{}' from session no longer available. Using current agent '{}'.{}",
-                        ansi!("33"), session.agent_name, current_agent_name, ansi!("0")
+                        "{}{}{}",
+                        ansi!("33"),
+                        tf(
+                            "cli.chat.session_load_agent_warn",
+                            &[("agent", &session.agent_name)]
+                        ),
+                        ansi!("0")
                     );
                 }
                 *messages = session.messages;
@@ -795,29 +914,45 @@ async fn handle_load_command(
                         Some(current_agent_name.clone()),
                     ) {
                         *current_mode = runtime;
-                        eprintln!("{}Restored mode: {}{}", ansi!("32"), canonical, ansi!("0"));
+                        eprintln!(
+                            "{}{}{}",
+                            ansi!("32"),
+                            tf("cli.chat.restored_mode", &[("mode", &canonical)]),
+                            ansi!("0")
+                        );
                     }
                 }
                 eprintln!(
-                    "{}Session loaded: {} messages from '{}' (mode: {:?}){}",
+                    "{}{}{}",
                     ansi!("32"),
-                    messages.len(),
-                    current_agent_name,
-                    current_mode.kind(),
+                    tf(
+                        "cli.chat.session_loaded",
+                        &[
+                            ("count", &messages.len().to_string()),
+                            ("agent", current_agent_name),
+                            ("mode", &format!("{:?}", current_mode.kind())),
+                        ]
+                    ),
                     ansi!("0")
                 );
             }
             Err(e) => eprintln!(
-                "{}Failed to parse session: {}{}",
+                "{}{}{}",
                 ansi!("31"),
-                e,
+                tf(
+                    "cli.chat.session_parse_failed",
+                    &[("error", &e.to_string())]
+                ),
                 ansi!("0")
             ),
         },
         Err(_) => eprintln!(
-            "{}No saved session found at {}{}",
+            "{}{}{}",
             ansi!("33"),
-            session_path.display(),
+            tf(
+                "cli.chat.session_not_found",
+                &[("path", &session_path.display().to_string())]
+            ),
             ansi!("0")
         ),
     }
@@ -829,9 +964,15 @@ fn display_skills() {
         .map(|guard| guard.list())
         .unwrap_or_default();
     if descriptor_list.is_empty() {
-        eprintln!("No skills registered.");
+        eprintln!("{}", t("cli.chat.no_skills"));
     } else {
-        eprintln!("Registered skills ({}):", descriptor_list.len());
+        eprintln!(
+            "{}",
+            tf(
+                "cli.chat.skills_count",
+                &[("count", &descriptor_list.len().to_string())]
+            )
+        );
         for s in &descriptor_list {
             eprintln!("  {:<25} score: {:.2}", s.name, s.score);
         }
@@ -896,16 +1037,16 @@ fn display_models(current_agent: &Arc<dyn Agent>, current_agent_name: &str) {
     let models = current_agent.available_models();
     if models.is_empty() {
         eprintln!(
-            "{}No model information available for '{}'.{}",
+            "{}{}{}",
             ansi!("33"),
-            current_agent_name,
+            tf("cli.chat.no_models", &[("agent", current_agent_name)]),
             ansi!("0")
         );
     } else {
         eprintln!(
-            "{}Available models for '{}'{}:",
+            "{}{}{}:",
             ansi!("1"),
-            current_agent_name,
+            tf("cli.chat.models_header", &[("agent", current_agent_name)]),
             ansi!("0")
         );
         for m in &models {
@@ -940,7 +1081,12 @@ async fn execute_diff_command(cmd: &str) {
                 display_diff(&diff, None);
             }
         }
-        Err(e) => eprintln!("{}Git diff failed: {}{}", ansi!("31"), e, ansi!("0")),
+        Err(e) => eprintln!(
+            "{}{}{}",
+            ansi!("31"),
+            tf("cli.chat.git_diff_failed", &[("reason", &e.to_string())]),
+            ansi!("0")
+        ),
     }
 }
 
@@ -1001,7 +1147,15 @@ async fn execute_compact_command(messages: &mut Vec<Message>, current_agent: &Ar
     }
 
     if let Err(e) = summarize_task.await {
-        eprintln!("{}Summarization failed: {}{}", ansi!("31"), e, ansi!("0"));
+        eprintln!(
+            "{}{}{}",
+            ansi!("31"),
+            tf(
+                "cli.chat.summarization_failed",
+                &[("reason", &e.to_string())]
+            ),
+            ansi!("0")
+        );
         return;
     }
 
@@ -1029,7 +1183,7 @@ async fn execute_compact_command(messages: &mut Vec<Message>, current_agent: &Ar
 async fn execute_commit_command(
     _messages: &[Message],
     current_agent: &Arc<dyn Agent>,
-    stdin_rx: &mut mpsc::UnboundedReceiver<String>,
+    stdin_rx: &mut mpsc::Receiver<String>,
 ) {
     let (diff_output, full_diff) = match collect_git_diffs().await {
         Some(pair) => pair,
@@ -1088,7 +1242,12 @@ async fn collect_git_diffs() -> Option<(String, String)> {
     {
         Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
         Err(e) => {
-            eprintln!("{}Git diff failed: {}{}", ansi!("31"), e, ansi!("0"));
+            eprintln!(
+                "{}{}{}",
+                ansi!("31"),
+                tf("cli.chat.git_diff_failed", &[("reason", &e.to_string())]),
+                ansi!("0")
+            );
             return None;
         }
     };
@@ -1193,7 +1352,12 @@ async fn stage_and_commit(msg: &str) {
             String::from_utf8_lossy(&out.stderr).trim(),
             ansi!("0")
         ),
-        Err(e) => eprintln!("{}Git error: {}{}", ansi!("31"), e, ansi!("0")),
+        Err(e) => eprintln!(
+            "{}{}{}",
+            ansi!("31"),
+            tf("cli.chat.git_diff_failed", &[("reason", &e.to_string())]),
+            ansi!("0")
+        ),
     }
 }
 
@@ -1379,7 +1543,12 @@ async fn execute_review_command(current_agent: &Arc<dyn Agent>) {
             eprintln!("{}", review);
         }
         Err(e) => {
-            eprintln!("\r{}AI review failed: {}{}", ansi!("31"), e, ansi!("0"));
+            eprintln!(
+                "\r{}{}{}",
+                ansi!("31"),
+                tf("cli.chat.ai_review_failed", &[("reason", &e.to_string())]),
+                ansi!("0")
+            );
             display_diff(&detailed, Some(60));
         }
     }
@@ -1399,7 +1568,7 @@ async fn execute_find_path_command(find_cmd: &str) {
                 Err(e) => eprintln!("{}Error: {}{}", ansi!("31"), e, ansi!("0")),
             }
         }
-        None => eprintln!("Usage: /find_path <glob>  (e.g. /find **/*.rs)"),
+        None => eprintln!("{}", t("cli.chat.find_path_usage")),
     }
 }
 
@@ -1416,9 +1585,15 @@ async fn execute_mode_command(
         rest.trim()
     };
     if name.is_empty() {
-        eprintln!("Available modes: ask, edit, plan, safeguard, full_auto");
-        eprintln!("Current: {:?}", current_mode.kind());
-        eprintln!("Usage: /mode <mode_name>");
+        eprintln!("{}", t("cli.chat.available_modes"));
+        eprintln!(
+            "{}",
+            tf(
+                "cli.chat.current_mode",
+                &[("mode", &format!("{:?}", current_mode.kind()))]
+            )
+        );
+        eprintln!("{}", t("cli.chat.usage_mode"));
     } else {
         let canonical = match name.to_lowercase().as_str() {
             "edit" => "edit",
@@ -1428,9 +1603,9 @@ async fn execute_mode_command(
             "full_auto" | "fullauto" => "full_auto",
             _ => {
                 eprintln!(
-                    "{}Unknown mode '{}. Available: ask, edit, plan, safeguard, full_auto{}",
+                    "{}{}{}",
                     ansi!("31"),
-                    name,
+                    tf("cli.chat.unknown_mode", &[("mode", name)]),
                     ansi!("0")
                 );
                 return;
@@ -1444,19 +1619,56 @@ async fn execute_mode_command(
             Ok(runtime) => {
                 *current_mode = runtime;
                 eprintln!(
-                    "{}Switched to mode: {}{}",
+                    "{}{}{}",
                     ansi!("32"),
-                    canonical,
+                    tf("cli.chat.switched_mode", &[("mode", canonical)]),
                     ansi!("0")
                 );
+                // Persist mode to config for next session
+                let config_path = std::path::Path::new("goon-cli-mode.json");
+                if let Ok(content) = std::fs::read_to_string(config_path) {
+                    if let Ok(mut state) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(obj) = state.as_object_mut() {
+                            obj.insert("mode".to_string(), serde_json::json!(canonical));
+                            let _ = std::fs::write(
+                                config_path,
+                                serde_json::to_string_pretty(&state).unwrap(),
+                            );
+                        }
+                    }
+                } else {
+                    let state = serde_json::json!({"mode": canonical});
+                    let _ =
+                        std::fs::write(config_path, serde_json::to_string_pretty(&state).unwrap());
+                }
                 match current_mode.kind() {
-                    ModeKind::SafeGuard => eprintln!("{}SafeGuard: High-risk operations will require confirmation. Type /context to see mode constraints.{}", ansi!("90"), ansi!("0")),
-                    ModeKind::FullAuto => eprintln!("{}FullAuto: Fully autonomous execution. Use with caution.{}", ansi!("33"), ansi!("0")),
-                    ModeKind::Edit => eprintln!("{}Edit: Code changes with sandbox approval. Tool approval may be requested.{}", ansi!("90"), ansi!("0")),
+                    ModeKind::SafeGuard => eprintln!(
+                        "{}{}{}",
+                        ansi!("90"),
+                        t("cli.chat.mode_safeguard_desc"),
+                        ansi!("0")
+                    ),
+                    ModeKind::FullAuto => eprintln!(
+                        "{}{}{}",
+                        ansi!("33"),
+                        t("cli.chat.mode_full_auto_desc"),
+                        ansi!("0")
+                    ),
+                    ModeKind::Edit => eprintln!(
+                        "{}{}{}",
+                        ansi!("90"),
+                        t("cli.chat.mode_edit_desc"),
+                        ansi!("0")
+                    ),
                     _ => {}
                 }
             }
-            Err(e) => eprintln!("{}Failed to switch mode: {}{}", ansi!("31"), e, ansi!("0")),
+            Err(e) => eprintln!(
+                "{}{}{}",
+                ansi!("31"),
+                tf("cli.chat.mode_switch_failed", &[("reason", &e.to_string())]),
+                ansi!("0")
+            ),
         }
     }
 }
@@ -1470,8 +1682,9 @@ async fn execute_retry_command(
 ) {
     if messages.len() < 2 {
         eprintln!(
-            "{}No messages to retry. Send a message first.{}",
+            "{}{}{}",
             ansi!("33"),
+            t("cli.chat.no_messages_retry"),
             ansi!("0")
         );
         return;
@@ -1481,11 +1694,12 @@ async fn execute_retry_command(
         Some(idx) => {
             let last_user_msg = messages[idx].content.clone();
             messages.truncate(idx + 1);
+            let preview: String = last_user_msg.chars().take(60).collect();
             eprintln!(
-                "{}Retrying last message{}: {}",
+                "{}{}{}",
                 ansi!("33"),
-                ansi!("0"),
-                last_user_msg.chars().take(60).collect::<String>()
+                tf("cli.chat.retrying_message", &[("preview", &preview)]),
+                ansi!("0")
             );
             let principles = build_cli_principles();
             match run_agent_with_tools(
@@ -1500,19 +1714,28 @@ async fn execute_retry_command(
                     token_tracker.record_usage(prompt_tokens, completion_tokens);
                     if !resp.trim().is_empty() {
                         eprintln!(
-                            "{}── Turn complete (est. {} tokens) ──{}",
+                            "{}{}{}",
                             ansi!("90"),
-                            prompt_tokens + completion_tokens,
+                            tf(
+                                "cli.chat.turn_complete",
+                                &[("tokens", &(prompt_tokens + completion_tokens).to_string())]
+                            ),
                             ansi!("0")
                         );
                     }
                 }
-                Err(e) => eprintln!("\n{}⚠️  Retry failed: {}{}", ansi!("31"), e, ansi!("0")),
+                Err(e) => eprintln!(
+                    "\n{}{}{}",
+                    ansi!("31"),
+                    tf("cli.chat.retry_failed", &[("reason", &e.to_string())]),
+                    ansi!("0")
+                ),
             }
         }
         None => eprintln!(
-            "{}No user message found to retry.{}",
+            "{}{}{}",
             ansi!("33"),
+            t("cli.chat.no_user_message_retry"),
             ansi!("0")
         ),
     }
@@ -1533,9 +1756,15 @@ async fn execute_switch_agent(
     };
     if name.is_empty() {
         let names = registry.names();
-        eprintln!("Available agents: {}", names.join(", "));
-        eprintln!("Current: {}", current_agent_name);
-        eprintln!("Usage: /model <agent_name>");
+        eprintln!(
+            "{}",
+            tf("cli.chat.available_agents", &[("names", &names.join(", "))])
+        );
+        eprintln!(
+            "{}",
+            tf("cli.chat.current_agent", &[("name", current_agent_name)])
+        );
+        eprintln!("{}", t("cli.chat.usage_model"));
     } else if let Some(new_agent) = registry.get(name) {
         *current_agent = new_agent;
         *current_agent_name = name.to_string();
@@ -1553,14 +1782,21 @@ async fn execute_switch_agent(
         ) {
             *current_mode = runtime;
         }
-        eprintln!("{}Switched to agent: {}{}", ansi!("32"), name, ansi!("0"));
+        eprintln!(
+            "{}{}{}",
+            ansi!("32"),
+            tf("cli.chat.switched_agent", &[("name", name)]),
+            ansi!("0")
+        );
     } else {
         let names = registry.names();
         eprintln!(
-            "{}Agent '{}' not found. Available: {}{}",
+            "{}{}{}",
             ansi!("31"),
-            name,
-            names.join(", "),
+            tf(
+                "cli.chat.agent_not_found",
+                &[("name", name), ("names", &names.join(", "))]
+            ),
             ansi!("0")
         );
     }
@@ -1603,17 +1839,16 @@ fn check_compact_threshold(messages: &[Message]) {
     let msg_count = messages.len();
     if msg_count >= AUTO_COMPACT_THRESHOLD {
         eprintln!(
-            "{}⚠️  Conversation is very long ({} msgs). Type /compact to summarize.{}  (Tip: /compact reduces context usage)",
-            ansi!("31"), msg_count, ansi!("0")
+            "{}{}{}",
+            ansi!("31"),
+            tf(
+                "cli.chat.conversation_long_warning",
+                &[("count", &msg_count.to_string())]
+            ),
+            ansi!("0")
         );
     } else if msg_count >= COMPACT_PROMPT_THRESHOLD {
-        eprintln!(
-            "{}💡 Tip: Use /compact to summarize old messages and free context.{}  ({}/{} msgs)",
-            ansi!("33"),
-            ansi!("0"),
-            msg_count,
-            COMPACT_PROMPT_THRESHOLD
-        );
+        eprintln!("{}{}{}", ansi!("33"), t("cli.chat.tip_compact"), ansi!("0"));
     }
 }
 
@@ -1754,6 +1989,10 @@ async fn run_agent_streaming_phase(
 
     // ── Progressive streaming display with interrupt support ──
     loop {
+        // Re-arm Ctrl+C each iteration: signal::ctrl_c() is a one-shot future.
+        // Without this, the second Ctrl+C would be ignored.
+        let ctrl_c = signal::ctrl_c();
+        tokio::pin!(ctrl_c);
         tokio::select! {
             token = rx.recv() => {
                 match token {
@@ -1799,10 +2038,11 @@ async fn run_agent_streaming_phase(
                     None => break,
                 }
             }
-            _ = signal::ctrl_c() => {
+            _ = &mut ctrl_c => {
                 eprintln!(
-                    "\n{}Interrupted agent response. Use /clear to reset.{}",
-                    ansi!("33"), ansi!("0")
+                    "\n{}Interrupted agent response. Use /clear to reset.{} ({})",
+                    ansi!("33"), ansi!("0"),
+                    if chat_task.is_finished() { "done" } else { "aborting" }
                 );
                 chat_task.abort();
                 break;
@@ -1881,10 +2121,15 @@ fn filter_tool_calls_by_mode(
                 true
             } else {
                 eprintln!(
-                    "{}⚠️  Tool '{}' blocked by mode constraints (allowed: {:?}){}",
+                    "{}{}{}",
                     ansi!("33"),
-                    name,
-                    allowed_tools,
+                    tf(
+                        "cli.chat.tool_blocked_by_mode",
+                        &[
+                            ("tool_name", name),
+                            ("allowed", &format!("{:?}", allowed_tools))
+                        ]
+                    ),
                     ansi!("0")
                 );
                 false
@@ -1896,15 +2141,21 @@ fn filter_tool_calls_by_mode(
 
     if filtered_calls.len() < tool_calls.len() {
         let blocked = tool_calls.len() - filtered_calls.len();
+        let mode_str = mode_runtime
+            .map(|m| m.kind())
+            .map(|k| format!("{:?}", k))
+            .unwrap_or_default();
         eprintln!(
-            "{}⚠️  {} tool call(s) blocked by mode '{}' constraints (max_calls={}){}",
+            "{}{}{}",
             ansi!("33"),
-            blocked,
-            mode_runtime
-                .map(|m| m.kind())
-                .map(|k| format!("{:?}", k))
-                .unwrap_or_default(),
-            max_calls,
+            tf(
+                "cli.chat.tool_call_blocked_by_mode",
+                &[
+                    ("blocked", &blocked.to_string()),
+                    ("mode", &mode_str),
+                    ("max", &max_calls.to_string())
+                ]
+            ),
             ansi!("0")
         );
     }

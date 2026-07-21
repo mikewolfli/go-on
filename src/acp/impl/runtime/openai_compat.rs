@@ -15,12 +15,14 @@ use crate::acp::r#impl::chat::{ChatParams, ChatRequestContext, StreamFrame, Stre
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::acp::r#impl::session::UserSession;
 use crate::acp::server::AcpServer;
+use crate::acp::transport::{set_current_transport, SseTransport};
 use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 use crate::rpc_protocol::RequestTraceContext;
 
 use super::http::{
-    http_trace_context, write_http_json_response, write_http_json_response_with_context,
+    clone_tcp_stream, http_trace_context, write_http_json_response,
+    write_http_json_response_with_context,
 };
 use super::sse::{
     write_openai_sse_data, write_openai_sse_done, write_sse_event, write_sse_headers,
@@ -486,6 +488,12 @@ pub(crate) async fn handle_openai_chat_completions(
     }
 
     write_sse_headers(socket, cors_headers).await?;
+    let _ = set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
+
+    // Periodic flush interval for SSE streaming — flushes every 4 events
+    // to batch syscalls while keeping latency low (same pattern as http.rs).
+    const SSE_FLUSH_INTERVAL: usize = 4;
+    let mut sse_event_count: usize = 0;
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let trace = http_trace_context("openai.chat.completions.stream");
@@ -532,8 +540,7 @@ pub(crate) async fn handle_openai_chat_completions(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !response_text.is_empty() {
-                let payload =
-                    build_openai_chunk(&request_id, &model, response_text, Some("stop"));
+                let payload = build_openai_chunk(&request_id, &model, response_text, Some("stop"));
                 let _ = write_openai_sse_data(socket, &payload).await;
                 write_openai_sse_done(socket).await?;
                 record_outcome(true);
@@ -582,6 +589,13 @@ pub(crate) async fn handle_openai_chat_completions(
             task.abort();
             record_outcome(false);
             return Err(err);
+        }
+        sse_event_count += 1;
+        // Periodic flush: every SSE_FLUSH_INTERVAL events.
+        // This batches syscalls while keeping latency low.
+        if sse_event_count.is_multiple_of(SSE_FLUSH_INTERVAL) {
+            use super::sse::flush_sse;
+            let _ = flush_sse(socket).await;
         }
     }
 
@@ -1783,6 +1797,7 @@ async fn handle_response_stream(
     });
 
     write_sse_headers(socket, cors_headers).await?;
+    let _ = set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
     write_sse_event(
         socket,
         "response.created",

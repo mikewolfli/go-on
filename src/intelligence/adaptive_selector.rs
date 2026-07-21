@@ -378,25 +378,6 @@ fn chrono_hour() -> u32 {
 // Tests
 // ---------------------------------------------------------------------------
 
-// T11: No criterion dependency is added to keep the project lightweight.
-// For performance-sensitive selection logic (e.g. ranking 10k candidates)
-// add `criterion = "0.5"` to `[dev-dependencies]` and write:
-//
-//   #[cfg(test)]
-//   mod benches {
-//       extern crate criterion;
-//       use criterion::{black_box, Criterion};
-//
-//       pub fn bench_rank_10k(c: &mut Criterion) {
-//           c.bench_function("rank_candidates_10k", |b| {
-//               let selector = /* … */;
-//               b.iter(|| selector.rank_candidates(black_box(&candidates)));
-//           });
-//       }
-//   }
-//
-// The above can be registered via `criterion_group!` and `criterion_main!`.
-
 #[cfg(test)]
 mod tests {
     use super::*;

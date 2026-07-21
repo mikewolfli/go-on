@@ -28,7 +28,7 @@ pub mod excel_writer;
 pub mod ppt_processor;
 
 // ── Re-exports from document_parser ────────────────────────────────────────
-#[allow(unused_imports)]
+#[allow(unused_imports)] // public API surface — used by external consumers
 pub use document_parser::DocumentParser;
 #[allow(unused_imports)]
 pub use document_parser::DocumentParserError;
@@ -38,7 +38,7 @@ pub use document_parser::ParsedContent;
 pub use document_parser::Table;
 
 // ── Re-exports from audio_processor ────────────────────────────────────────
-#[allow(unused_imports)]
+#[allow(unused_imports)] // public API surface — used by external consumers
 pub use audio_processor::AudioFormat;
 #[allow(unused_imports)]
 pub use audio_processor::AudioProcessor;
@@ -54,7 +54,7 @@ pub use audio_processor::TranscriptSegment;
 pub use audio_processor::Transcription;
 
 // ── Re-exports from code_repo_analyzer ──────────────────────────────────────
-#[allow(unused_imports)]
+#[allow(unused_imports)] // public API surface — used by external consumers
 pub use code_repo_analyzer::Answer;
 #[allow(unused_imports)]
 pub use code_repo_analyzer::AnswerCoverage;
@@ -78,7 +78,7 @@ pub use code_repo_analyzer::TypeIndex;
 pub use code_repo_analyzer::REPO_PREFIX;
 
 // ── Re-exports from video_processor ─────────────────────────────────────────
-#[allow(unused_imports)]
+#[allow(unused_imports)] // public API surface — used by external consumers
 pub use video_processor::Frame;
 #[allow(unused_imports)]
 pub use video_processor::FullVideoResult;
@@ -99,22 +99,22 @@ pub use video_processor::MAX_DURATION_SECS;
 #[allow(unused_imports)]
 pub use video_processor::MAX_FILE_SIZE_MB;
 
-// ── Re-exports from excel_processor ──────────────────────────────────────
+// ── Re-exports from excel_processor (feature-gated) ──────────────────────
 #[cfg(feature = "document-excel")]
-#[allow(unused_imports)]
+#[allow(unused_imports)] // only needed when feature is enabled
 pub use excel_processor::parse_excel_bytes;
 
-// ── Re-exports from excel_writer ──────────────────────────────────────────
+// ── Re-exports from excel_writer (feature-gated) ──────────────────────────
 #[cfg(feature = "document-excel-write")]
-#[allow(unused_imports)]
+#[allow(unused_imports)] // only needed when feature is enabled
 pub use excel_writer::write_excel_bytes;
 #[cfg(feature = "document-excel-write")]
 #[allow(unused_imports)]
 pub use excel_writer::WriteExcelConfig;
 
-// ── Re-exports from ppt_processor ────────────────────────────────────────
+// ── Re-exports from ppt_processor (feature-gated) ────────────────────────
 #[cfg(feature = "document-ppt")]
-#[allow(unused_imports)]
+#[allow(unused_imports)] // only needed when feature is enabled
 pub use ppt_processor::parse_pptx_bytes;
 
 /// Represents a multimodal input payload that can be routed to an appropriate

@@ -24,7 +24,7 @@ fn resolve_path(config_path: &Path, raw_path: &str) -> PathBuf {
 }
 
 /// Initialize response cache.
-#[allow(unused_variables)] // config_path unused in backend-postgres code path
+#[cfg_attr(not(feature = "backend-postgres"), allow(unused_variables))] // config_path unused in backend-postgres code path
 pub async fn initialize_cache(
     config_path: &Path,
     cache_cfg: Option<CacheConfig>,
@@ -87,7 +87,7 @@ pub async fn initialize_cache(
 }
 
 /// Initialize the vector store.
-#[allow(unused_variables)]
+#[cfg_attr(not(feature = "backend-postgres"), allow(unused_variables))]
 pub async fn initialize_vector_store(
     config_path: &Path,
     vector_cfg: Option<VectorConfig>,

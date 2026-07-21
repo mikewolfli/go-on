@@ -31,7 +31,7 @@ impl HubClient {
         // 1. Check env var for direct URL.
         if let Ok(url) = std::env::var("GO_ON_HUB_URL") {
             if !url.is_empty() {
-                return Ok(Some(Self::connect_direct_for_test(&url).await?));
+                return Ok(Some(Self::connect_direct(&url).await?));
             }
         }
 
@@ -50,13 +50,12 @@ impl HubClient {
         }
 
         // 4. Connect.
-        Ok(Some(
-            Self::connect_direct_for_test(&discovery.endpoint).await?,
-        ))
+        Ok(Some(Self::connect_direct(&discovery.endpoint).await?))
     }
 
     /// Connect to a Hub at the given endpoint URL.
-    pub async fn connect_direct_for_test(endpoint: &str) -> Result<Self> {
+    /// Used both in tests and when GO_ON_HUB_URL env var is set.
+    pub async fn connect_direct(endpoint: &str) -> Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()?;

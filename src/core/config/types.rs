@@ -210,6 +210,7 @@ pub struct AppConfig {
     #[serde(flatten)]
     pub provider: ProviderConfig,
     /// Flow configuration defining phase sequence
+    #[serde(default)]
     pub flow: FlowConfig,
     /// Map of phase configurations
     pub phases: HashMap<String, PhaseConfig>,

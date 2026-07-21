@@ -991,6 +991,9 @@ pub(crate) async fn act_phase(
                     agent_name: &selected_agent,
                     phase_name: &resolve_out.phase_name,
                     trace_id: &trace.trace_id,
+                    mode: Some(&params.mode),
+                    risk_score: None,
+                    degrade_policy: None,
                 };
                 let total_chars = response_text.chars().count();
                 emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
@@ -1158,6 +1161,9 @@ pub(crate) async fn act_phase(
                     agent_name: &selected_agent,
                     phase_name: &resolve_out.phase_name,
                     trace_id: &trace.trace_id,
+                    mode: Some(&params.mode),
+                    risk_score: None,
+                    degrade_policy: None,
                 },
                 &estimate_token_economy(&params.messages, &response_text),
             )
@@ -1301,6 +1307,9 @@ async fn stream_cache_response(
             agent_name: agent,
             phase_name: phase,
             trace_id: tid,
+            mode: None,
+            risk_score: None,
+            degrade_policy: None,
         };
         let total = text.chars().count();
         emit_stream_chunk(server, Some(o), meta, text, 1, total).await?;

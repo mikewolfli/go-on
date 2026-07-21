@@ -104,6 +104,17 @@ pub struct CreateAgentRequest {
 
 // ─── Main factory ────────────────────────────────────────────────────────────
 
+/// Inner state shared by all factory methods — consolidates `instances` and
+/// `expirations` under a single mutex to eliminate lock-ordering issues,
+/// TOCTOU races, and double-lock problems.
+#[derive(Debug)]
+struct AgentFactoryInner {
+    /// Active agent instances (id → instance).
+    instances: HashMap<String, SubAgentInstance>,
+    /// Expiration timestamps for instances (id → expiry_ms).
+    expirations: HashMap<String, u64>,
+}
+
 /// Agent factory — creates, configures, and manages sub-agent instances.
 ///
 /// The factory is thread-safe and uses interior mutability (`Arc<Mutex<>>`)
@@ -115,10 +126,8 @@ pub struct AgentFactory {
     config: AgentFactoryConfig,
     /// Registered agent templates (name → template).
     templates: Arc<Mutex<HashMap<String, AgentTemplate>>>,
-    /// Active agent instances (id → instance).
-    instances: Arc<Mutex<HashMap<String, SubAgentInstance>>>,
-    /// Expiration timestamps for instances (id → expiry_ms).
-    expirations: Arc<Mutex<HashMap<String, u64>>>,
+    /// Shared inner state: instances + expirations behind a single mutex.
+    inner: Arc<Mutex<AgentFactoryInner>>,
     /// Monotonically increasing counter for instance IDs.
     id_counter: AtomicU64,
     /// Total number of instances ever created.
@@ -135,8 +144,10 @@ impl AgentFactory {
         Self {
             config,
             templates: Arc::new(Mutex::new(HashMap::new())),
-            instances: Arc::new(Mutex::new(HashMap::new())),
-            expirations: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(Mutex::new(AgentFactoryInner {
+                instances: HashMap::new(),
+                expirations: HashMap::new(),
+            })),
             id_counter: AtomicU64::new(1),
             created_count: AtomicU64::new(0),
             destroyed_count: AtomicU64::new(0),
@@ -189,36 +200,17 @@ impl AgentFactory {
                 .ok_or_else(|| anyhow!("Template '{}' not found", request.template_name))?
         };
 
-        // Check max instances limit.
-        {
-            let instances = match self.instances.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    warn!("agent factory instances lock poisoned during create_agent; recovering state");
-                    poisoned.into_inner()
-                }
-            };
-            let max = self.config.max_instances;
-            if max > 0 && instances.len() as u32 >= max {
-                return Err(anyhow!(
-                    "Maximum number of agent instances ({}) reached",
-                    max
-                ));
-            }
-        }
-
-        let now_ms = now_epoch_ms();
+        // Check max instances limit AND insert under the same lock
+        // to prevent TOCTOU races (previous code released the lock between
+        // check and insert, allowing concurrent creates to exceed max).
         let instance_id = format!("agent-{}", self.id_counter.fetch_add(1, Ordering::AcqRel));
+        let now_ms = now_epoch_ms();
 
         // Merge default config with overrides (overrides take precedence).
         let mut merged_config = template.default_config.clone();
         for (key, value) in &request.config_overrides {
             merged_config.insert(key.clone(), value.clone());
         }
-
-        // Merge capability tags.
-        let mut merged_tags = template.capability_tags.clone();
-        merged_tags.extend(request.tags.iter().cloned());
 
         let instance = SubAgentInstance {
             id: instance_id.clone(),
@@ -233,26 +225,29 @@ impl AgentFactory {
         let ttl = request.ttl_ms.unwrap_or(self.config.default_ttl_ms);
         let expiry_ms = now_ms + ttl;
 
+        // Single lock acquisition: check max instances, insert into instances AND expirations.
+        // This eliminates the TOCTOU race, double-lock, and lock-ordering problems.
         {
-            let mut instances = match self.instances.lock() {
+            let mut inner = match self.inner.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
-                    warn!("agent factory instances lock poisoned during create_agent (insert); recovering state");
+                    warn!(
+                        "agent factory inner lock poisoned during create_agent; recovering state"
+                    );
                     poisoned.into_inner()
                 }
             };
-            instances.insert(instance_id.clone(), instance.clone());
-        }
-
-        {
-            let mut expirations = match self.expirations.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    warn!("agent factory expirations lock poisoned during create_agent (insert); recovering state");
-                    poisoned.into_inner()
-                }
-            };
-            expirations.insert(instance_id, expiry_ms);
+            let max = self.config.max_instances;
+            if max > 0 && inner.instances.len() as u32 >= max {
+                return Err(anyhow!(
+                    "Maximum number of agent instances ({}) reached",
+                    max
+                ));
+            }
+            inner
+                .instances
+                .insert(instance_id.clone(), instance.clone());
+            inner.expirations.insert(instance_id, expiry_ms);
         }
 
         self.created_count.fetch_add(1, Ordering::Release);
@@ -266,27 +261,19 @@ impl AgentFactory {
     /// instance is a no-op.
     pub fn destroy_agent(&self, instance_id: &str) {
         {
-            let mut instances = match self.instances.lock() {
+            let mut inner = match self.inner.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
-                    warn!("agent factory instances lock poisoned during destroy_agent; recovering state");
+                    warn!(
+                        "agent factory inner lock poisoned during destroy_agent; recovering state"
+                    );
                     poisoned.into_inner()
                 }
             };
-            if instances.remove(instance_id).is_none() {
+            if inner.instances.remove(instance_id).is_none() {
                 return; // Not found — no-op.
             }
-        }
-
-        {
-            let mut expirations = match self.expirations.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    warn!("agent factory expirations lock poisoned during destroy_agent; recovering state");
-                    poisoned.into_inner()
-                }
-            };
-            expirations.remove(instance_id);
+            inner.expirations.remove(instance_id);
         }
 
         self.destroyed_count.fetch_add(1, Ordering::Release);
@@ -294,26 +281,26 @@ impl AgentFactory {
 
     /// Get details of a specific agent instance by its ID.
     pub fn get_agent(&self, instance_id: &str) -> Option<SubAgentInstance> {
-        let guard = match self.instances.lock() {
+        let guard = match self.inner.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                warn!("agent factory instances lock poisoned during get_agent; recovering state");
+                warn!("agent factory inner lock poisoned during get_agent; recovering state");
                 poisoned.into_inner()
             }
         };
-        guard.get(instance_id).cloned()
+        guard.instances.get(instance_id).cloned()
     }
 
     /// List all currently active agent instances.
     pub fn list_agents(&self) -> Vec<SubAgentInstance> {
-        let guard = match self.instances.lock() {
+        let guard = match self.inner.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                warn!("agent factory instances lock poisoned during list_agents; recovering state");
+                warn!("agent factory inner lock poisoned during list_agents; recovering state");
                 poisoned.into_inner()
             }
         };
-        guard.values().cloned().collect()
+        guard.instances.values().cloned().collect()
     }
 
     /// List all registered templates.
@@ -336,6 +323,14 @@ impl AgentFactory {
     /// Since instances do not store their own tags after creation, this method
     /// looks up the template that created each instance and checks its tags.
     pub fn find_agents_by_capability(&self, tag: &str) -> Vec<SubAgentInstance> {
+        let inner = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("agent factory inner lock poisoned during find_agents_by_capability; recovering state");
+                poisoned.into_inner()
+            }
+        };
+
         let templates = match self.templates.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
@@ -344,15 +339,8 @@ impl AgentFactory {
             }
         };
 
-        let instances = match self.instances.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                warn!("agent factory instances lock poisoned during find_agents_by_capability; recovering state");
-                poisoned.into_inner()
-            }
-        };
-
-        instances
+        inner
+            .instances
             .values()
             .filter(|inst| {
                 templates
@@ -374,11 +362,11 @@ impl AgentFactory {
             }
         };
 
-        let active_instances = match self.instances.lock() {
-            Ok(guard) => guard.len(),
+        let active_instances = match self.inner.lock() {
+            Ok(guard) => guard.instances.len(),
             Err(poisoned) => {
-                warn!("agent factory instances lock poisoned during profile; recovering state");
-                poisoned.into_inner().len()
+                warn!("agent factory inner lock poisoned during profile; recovering state");
+                poisoned.into_inner().instances.len()
             }
         };
 
@@ -409,52 +397,39 @@ impl AgentFactory {
     pub fn prune_expired(&self) -> usize {
         let now_ms = now_epoch_ms();
 
-        // Collect expired instance IDs while holding only the expirations lock.
-        let expired_ids: Vec<String> = {
-            let guard = match self.expirations.lock() {
+        // Single lock acquisition: collect, check, and remove all in one shot.
+        // This eliminates the TOCTOU race where destroy_agent could remove an
+        // instance between collection and removal in the old separate-lock approach,
+        // and also avoids the double-lock leak problem.
+        let mut destroyed: usize = 0;
+        {
+            let mut inner = match self.inner.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
-                    warn!("agent factory expirations lock poisoned during prune_expired; recovering state");
+                    warn!(
+                        "agent factory inner lock poisoned during prune_expired; recovering state"
+                    );
                     poisoned.into_inner()
                 }
             };
-            guard
+            let expired_ids: Vec<String> = inner
+                .expirations
                 .iter()
                 .filter(|(_, &expiry)| now_ms > expiry)
                 .map(|(id, _)| id.clone())
-                .collect()
-        };
+                .collect();
 
-        let count = expired_ids.len();
-        for id in &expired_ids {
-            // Inline removal with consistent lock order (instances -> expirations)
-            // instead of calling destroy_agent, to avoid potential deadlock
-            // with find_agents_by_capability (which locks templates -> instances).
-            {
-                let mut instances = match self.instances.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => {
-                        warn!("agent factory instances lock poisoned during prune_expired; recovering state");
-                        poisoned.into_inner()
-                    }
-                };
-                if instances.remove(id).is_none() {
-                    continue;
+            for id in &expired_ids {
+                if inner.instances.remove(id).is_some() {
+                    inner.expirations.remove(id);
+                    destroyed += 1;
                 }
             }
-            {
-                let mut expirations = match self.expirations.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => {
-                        warn!("agent factory expirations lock poisoned during prune_expired (remove); recovering state");
-                        poisoned.into_inner()
-                    }
-                };
-                expirations.remove(id);
-            }
-            self.destroyed_count.fetch_add(1, Ordering::Release);
         }
-        count
+
+        self.destroyed_count
+            .fetch_add(destroyed as u64, Ordering::Release);
+        destroyed
     }
 }
 

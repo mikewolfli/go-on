@@ -88,6 +88,17 @@ impl AppConfig {
 
         let normalized = if content.trim().is_empty() {
             let bootstrap = defaults::default_non_ai_config_toml();
+            // Verify the bootstrap defaults parse correctly in memory before writing to disk
+            let _parsed: AppConfig = toml::from_str(&bootstrap).map_err(|e| {
+                anyhow::anyhow!(
+                    "{}: {}",
+                    crate::i18n::runtime::tf(
+                        "error.config_parse_failed",
+                        &[("error", &path.display().to_string())],
+                    ),
+                    e,
+                )
+            })?;
             fs::write(path, &bootstrap).with_context(|| {
                 format!(
                     "failed to write bootstrap defaults to blank config: {}",
@@ -103,20 +114,27 @@ impl AppConfig {
             content
         };
 
-        let mut cfg: AppConfig = toml::from_str(&normalized).with_context(|| {
-            crate::i18n::runtime::tf(
-                "error.config_parse_failed",
-                &[("error", &path.display().to_string())],
+        let mut cfg: AppConfig = toml::from_str(&normalized).map_err(|e| {
+            anyhow::anyhow!(
+                "{}: {}",
+                crate::i18n::runtime::tf(
+                    "error.config_parse_failed",
+                    &[("error", &path.display().to_string())],
+                ),
+                e,
             )
         })?;
         defaults::normalize_nested_phase_option_extra(&mut cfg);
+
+        // Validate and migrate schema version BEFORE applying auto-rules
+        // so that auto-rules don't reference stale phase names after migration.
+        migrator::migrate_config_schema(&mut cfg, &normalized)?;
+
+        // Apply auto-rules AFTER migration to ensure phase structure is final.
         defaults::apply_auto_rules(path, &mut cfg);
         if !cfg.role_registry().is_empty() {
             install_role_registry(cfg.role_registry().clone());
         }
-
-        // Validate and migrate schema version based on the parsed config's version field.
-        migrator::migrate_config_schema(&mut cfg, &normalized)?;
 
         Ok(cfg)
     }

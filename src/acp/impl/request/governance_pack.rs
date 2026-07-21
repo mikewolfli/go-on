@@ -883,6 +883,60 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
     let Some(obj) = result.as_object_mut() else {
         return result;
     };
+
+    // ── Well-known platform metadata endpoints ────────────────────────────
+    // These endpoints get full platform metadata (available modes, default mode,
+    // capabilities list) alongside the standard governance profiles.
+    let is_platform_metadata = matches!(method, "initialize" | "session/new" | "tools/list");
+
+    if is_platform_metadata {
+        if !obj.contains_key("platform_metadata") {
+            let available_modes = vec![
+                json!({"id": "safeguard", "name": "SafeGuard / 安全", "description": "Safety-first — escalation on high-risk operations (default)"}),
+                json!({"id": "ask", "name": "Ask / 对话", "description": "Q&A assistant — general questions"}),
+                json!({"id": "plan", "name": "Plan / 计划", "description": "Planning mode — structured task breakdown"}),
+                json!({"id": "edit", "name": "Edit / 编辑", "description": "Edit/review mode — code changes"}),
+                json!({"id": "full_auto", "name": "Full Auto / 全自动", "description": "Fully autonomous — agent runs without user confirmation"}),
+            ];
+            let platform_md = json!({
+                "schema_version": "blue24-platform-universal-v1",
+                "platform": "go-on",
+                "default_mode": "safeguard",
+                "available_modes": available_modes,
+                "capabilities": [
+                    "core.session.lifecycle",
+                    "core.session.prompt",
+                    "core.tools.list",
+                    "core.tools.call",
+                    "core.terminals",
+                    "governance.profiles",
+                    "governance.audit",
+                    "security.sandbox",
+                ],
+            });
+            obj.insert("platform_metadata".to_string(), platform_md);
+        }
+        // Also inject standard profiles for these endpoints
+        let empty_params = json!({});
+        if !obj.contains_key("learning_profile") {
+            obj.insert(
+                "learning_profile".to_string(),
+                build_learning_profile(method, "", &empty_params),
+            );
+        }
+        if !obj.contains_key("knowledge_refinement") {
+            let lp = obj
+                .get("learning_profile")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            obj.insert(
+                "knowledge_refinement".to_string(),
+                build_knowledge_refinement_profile(method, "", &empty_params, &lp),
+            );
+        }
+        return result;
+    }
+
     // Infrastructure endpoints (metrics, health, shutdown, protocol handshakes, trace, debug)
     // get a lightweight platform_context marker only — they carry no AI task semantics.
     let is_infrastructure = matches!(
@@ -899,8 +953,6 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
             | "health"
             | "runtime.health"
             | "health.probes"
-            | "initialize"
-            | "session/new"
             | "session/load"
             | "session/prompt"
             | "session/cancel"
@@ -920,7 +972,6 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
             | "mcp.sampling.createMessage"
             | "mcp.tools.list"
             | "mcp.tools.call"
-            | "tools/list"
             | "tools/call"
             | "resources/list"
             | "resources/read"

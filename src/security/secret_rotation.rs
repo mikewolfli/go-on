@@ -378,7 +378,6 @@ impl KeyRotator for VaultRotator {
         }
         #[cfg(not(feature = "vault"))]
         {
-            #[allow(unused_variables)]
             let _ = (key_id, algorithm);
             return Err(SecretError::BackendError(format!(
                 "Vault not configured: would create key {} at {}/{}",
@@ -426,7 +425,6 @@ impl KeyRotator for VaultRotator {
         }
         #[cfg(not(feature = "vault"))]
         {
-            #[allow(unused_variables)]
             let _ = entry;
             return Err(SecretError::BackendError(
                 "Vault not configured: store".into(),
@@ -509,7 +507,6 @@ impl KeyRotator for VaultRotator {
         }
         #[cfg(not(feature = "vault"))]
         {
-            #[allow(unused_variables)]
             let _ = key_id;
             return Err(SecretError::BackendError(
                 "Vault not configured: retrieve".into(),
@@ -545,7 +542,6 @@ impl KeyRotator for VaultRotator {
         }
         #[cfg(not(feature = "vault"))]
         {
-            #[allow(unused_variables)]
             let _ = key_id;
             return Err(SecretError::BackendError(
                 "Vault not configured: delete".into(),

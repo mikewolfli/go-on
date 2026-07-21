@@ -718,14 +718,14 @@ impl ApprovalEngine {
         if let Some(db_path) = db_path {
             let mut handles = Vec::with_capacity(snapshots.len());
             for req in &snapshots {
-                let db_path = db_path.clone();
-                let req = req.clone();
+                let _db_path = db_path.clone();
+                let _req = req.clone();
                 handles.push(tokio::task::spawn_blocking(move || {
                     #[cfg(feature = "backend-sqlite")]
-                    if let Err(e) = Self::update_status_sqlite(&db_path, &req) {
+                    if let Err(e) = Self::update_status_sqlite(&_db_path, &_req) {
                         tracing::warn!(
                             error = %e,
-                            id = %req.id,
+                            id = %_req.id,
                             "Failed to persist timeout status to SQLite"
                         );
                     }

@@ -81,13 +81,117 @@
 //! - **Datadog**: Metrics and traces can be sent to Datadog
 //! - **New Relic**: Metrics and traces can be sent to New Relic
 
+use regex::Regex;
+use std::io::{self, Write};
+use std::sync::LazyLock;
 use std::sync::Once;
 use std::sync::OnceLock;
 use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::reload;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+
+// ---------------------------------------------------------------------------
+// RedactingWriter — wraps an io::Write to redact sensitive content before
+// it is emitted to the output stream.
+// ---------------------------------------------------------------------------
+
+/// A [`MakeWriter`] that wraps stderr output and redacts sensitive patterns
+/// from every completed line before writing.
+struct RedactingMakeWriter;
+
+impl<'writer> MakeWriter<'writer> for RedactingMakeWriter {
+    type Writer = RedactingWriter<io::Stderr>;
+
+    fn make_writer(&self) -> Self::Writer {
+        RedactingWriter {
+            inner: io::stderr(),
+            buffer: Vec::new(),
+        }
+    }
+}
+
+/// Wraps a `Write` and redacts sensitive content on each flush (line end).
+struct RedactingWriter<W: Write> {
+    inner: W,
+    buffer: Vec<u8>,
+}
+
+impl<W: Write> Write for RedactingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // Buffer everything; we redact on flush (line end).
+        // Check if the buffer contains a complete line (ends with newline)
+        // and immediately redact + flush so output is not delayed.
+        self.buffer.extend_from_slice(buf);
+        if buf.last() == Some(&b'\n') {
+            self.flush()?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        // Use from_utf8_lossy to safely handle any partial UTF-8 sequences
+        // that may remain in the buffer across write calls.
+        let raw = String::from_utf8_lossy(&self.buffer);
+        let redacted = REDACTOR.redact(&raw);
+        self.inner.write_all(redacted.as_bytes())?;
+        self.inner.flush()?;
+        self.buffer.clear();
+        Ok(())
+    }
+}
+
+// Lazy-init global redactor that compiles patterns once.
+
+struct MessageRedactor {
+    patterns: Vec<(Regex, &'static str)>,
+}
+
+impl MessageRedactor {
+    fn redact(&self, input: &str) -> String {
+        let mut output = input.to_string();
+        for (re, replacement) in &self.patterns {
+            output = re.replace_all(&output, *replacement).to_string();
+        }
+        output
+    }
+}
+
+static REDACTOR: LazyLock<MessageRedactor> = LazyLock::new(|| MessageRedactor {
+    patterns: vec![
+        // OpenAI / Anthropic / generic API keys: sk-, pk-
+        (
+            Regex::new(r"(?i)(sk-|pk-)[a-z0-9A-Z_-]{20,}").unwrap(),
+            "${1}****",
+        ),
+        // Authorization header values
+        (
+            Regex::new(r"(?i)(Authorization:\s*Bearer\s+)\S+").unwrap(),
+            "${1}****",
+        ),
+        // URL-embedded passwords
+        (
+            Regex::new(r"(?i)(password|passwd|pwd|secret)(=|:\s*)\S+").unwrap(),
+            "${1}${2}****",
+        ),
+        // Generic api_key / api-secret values
+        (
+            Regex::new(r"(?i)(api_key|api_secret|api-key|api-secret)(=|:\s*)\S+").unwrap(),
+            "${1}${2}****",
+        ),
+        // JWT-like tokens
+        (
+            Regex::new(r"(?i)(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})")
+                .unwrap(),
+            "****.****.****",
+        ),
+    ],
+});
 
 /// Local time formatter that displays timestamps in the system's local timezone
 /// instead of the default UTC. Uses chrono::Local for timezone-aware formatting.
@@ -182,8 +286,10 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
 
         // Configure logging layer
         if config.enable_logging {
+            // Use RedactingMakeWriter to redact sensitive content (API keys,
+            // tokens, passwords) before it reaches the stderr output stream.
             let fmt_layer = fmt::layer()
-                .with_writer(std::io::stderr)
+                .with_writer(RedactingMakeWriter)
                 .with_target(true)
                 .with_thread_ids(true)
                 .with_thread_names(true)

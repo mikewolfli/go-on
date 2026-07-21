@@ -34,8 +34,9 @@ pub struct CodeQualityReport {
 
 impl CodeQualityReport {
     /// Returns true if no issues were found.
+    /// Used in tests to verify code quality analysis results.
     #[cfg(test)]
-    pub fn is_clean(&self) -> bool {
+    pub(crate) fn is_clean(&self) -> bool {
         self.issues.is_empty()
     }
 }

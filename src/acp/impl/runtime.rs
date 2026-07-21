@@ -24,6 +24,7 @@ use tracing::{error, info};
 use crate::acp::r#impl::io::send_error;
 use crate::acp::r#impl::request::handle_request;
 use crate::acp::server::AcpServer;
+use crate::acp::transport::{set_current_transport, StdioTransport};
 use crate::agent::AgentRegistry;
 use crate::flow::FlowManager;
 use crate::rpc_protocol::JsonRpcRequest;
@@ -86,6 +87,11 @@ pub(crate) async fn tcp_write_timeout(
 /// The synchronous work before entering the stdin loop is minimal:
 /// build AcpServer + initialize_cache (~30-100ms spawned_blocking).
 pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
+    // Set global transport to StdioTransport for all output from this process.
+    // Uses `let _ =` to ignore AlreadySetErr, which can happen in tests where
+    // the transport was already set indirectly.
+    let _ = set_current_transport(Arc::new(StdioTransport));
+
     info!("ACP server starting");
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);

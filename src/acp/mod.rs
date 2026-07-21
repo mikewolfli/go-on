@@ -18,6 +18,7 @@ pub mod helpers;
 pub mod r#impl;
 pub mod prelude;
 pub mod server;
+pub mod transport;
 pub mod transport_factory;
 
 /// Async SQLite-backed session persistence.
@@ -25,6 +26,8 @@ pub mod transport_factory;
 #[cfg(feature = "backend-sqlite")]
 pub mod session_persistence;
 
+// Explicit re-exports of items that external consumers need.
+// Avoid `pub use prelude::*;` to make dead-code detection easier.
 // Explicit re-exports of items that external consumers need.
 // Avoid `pub use prelude::*;` to make dead-code detection easier.
 #[allow(unused_imports)]

@@ -61,6 +61,12 @@ pub(crate) async fn flush_sse(socket: &mut (impl tokio::io::AsyncWrite + Unpin))
 }
 
 /// Write an OpenAI-style SSE `data:` frame.
+///
+/// # Performance
+///
+/// This function does NOT flush — flushing is the caller's responsibility.
+/// The HTTP handler loop should call [`flush_sse`] periodically (every N
+/// events or after a batch) to batch syscalls.
 pub(crate) async fn write_openai_sse_data(
     socket: &mut (impl tokio::io::AsyncWrite + Unpin),
     payload: &serde_json::Value,
@@ -72,10 +78,6 @@ pub(crate) async fn write_openai_sse_data(
     frame.push_str(&json_str);
     frame.push_str("\n\n");
     tcp_write_timeout(socket, frame.as_bytes()).await?;
-    tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
-        .await
-        .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?
-        .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))?;
     Ok(())
 }
 

@@ -507,7 +507,7 @@ impl BackendClient {
         &self,
         message: &str,
         mode: &str,
-        _phase: &str,
+        phase: &str,
         model: Option<&str>,
         options_extra: Option<Value>,
         history: Option<Vec<Value>>,
@@ -528,6 +528,12 @@ impl BackendClient {
             "messages": messages,
             "mode": effective_mode,
         });
+
+        // Wire the phase into the request body so the backend uses the
+        // user-selected phase instead of default/adaptive inference.
+        if !phase.is_empty() {
+            body["phase"] = serde_json::json!(phase);
+        }
 
         if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
             body["options"] = serde_json::json!({
@@ -756,15 +762,21 @@ impl BackendClient {
         }
 
         if response_text.is_empty() && thinking_text.is_empty() {
-            // If the backend returned no content, generate a friendly fallback
-            // message instead of a confusing "(empty)" response.
-            let fallback = "I received your request but was unable to generate a complete response. Please try rephrasing or check if the provider is properly configured.";
-            Ok((
-                fallback.to_string(),
-                String::new(),
+            // Empty response: return a descriptive warning that preserves
+            // the agent and selected_model metadata so the GUI can still
+            // show the model info even when the response is empty.
+            //
+            // NOTE: We do NOT silently replace with a canned message here.
+            // The GUI should display the empty response so the user can
+            // diagnose the issue (misconfigured provider, empty model output,
+            // etc.). If the agent had an error, it should have emitted an
+            // SSE error event which would have been caught above.
+            tracing::warn!(
+                "Backend returned empty response for chat (agent={:?}, model={:?})",
                 agent_text,
-                selected_model,
-            ))
+                selected_model
+            );
+            Ok((String::new(), String::new(), agent_text, selected_model))
         } else {
             Ok((response_text, thinking_text, agent_text, selected_model))
         }
@@ -841,6 +853,7 @@ impl BackendClient {
     }
 
     /// Fetch the full provider catalog from the backend.
+    /// Calls `provider.catalog` RPC directly (no health check needed).
     /// Returns a JSON value with provider specs including agent_type, default_url,
     /// default_model, and supports_system per provider.
     /// This is the canonical source when the backend is reachable; the GUI falls

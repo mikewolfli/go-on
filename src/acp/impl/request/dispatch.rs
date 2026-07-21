@@ -172,11 +172,12 @@ pub async fn dispatch_to_client(
                         send_result(server, Some(id.clone()), frame.payload).await?;
                     }
                     "error" => {
+                        let err_str = crate::i18n::runtime::t("acp.error.stream_error");
                         let msg = frame
                             .payload
                             .get("message")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("stream error");
+                            .unwrap_or(&err_str);
                         send_error(server, Some(id.clone()), -32603, msg.to_string(), None).await?;
                     }
                     "status" => {
@@ -214,21 +215,29 @@ pub async fn dispatch_to_client(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::r#impl::io::RPC_BUFFER;
+    use crate::acp::transport::{
+        clear_current_transport, set_current_transport, RpcBufferTransport,
+    };
     use crate::acp::ServerBuilder;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
+    /// Global tests lock for dispatch tests.
+    /// Ensures that parallel tokio tests don't race on the global transport.
+    static DISPATCH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Helper: capture dispatch_to_client output into a Vec<u8> buffer.
+    /// Uses global transport (RpcBufferTransport) — serialized via DISPATCH_TEST_LOCK
+    /// to prevent parallel test races on the shared CURRENT_TRANSPORT.
     async fn capture_dispatch(output: Result<DispatchOutput>) -> Vec<u8> {
+        let _lock = DISPATCH_TEST_LOCK.lock().await;
         let server = ServerBuilder::new().build();
         let buffer = Arc::new(Mutex::new(Vec::new()));
-        let buf_clone = buffer.clone();
-        RPC_BUFFER
-            .scope(buf_clone, async {
-                dispatch_to_client(&server, Some(serde_json::json!("test-id")), output).await
-            })
+        let buf_for_transport = buffer.clone();
+        clear_current_transport();
+        set_current_transport(Arc::new(RpcBufferTransport::new(buf_for_transport)));
+        dispatch_to_client(&server, Some(serde_json::json!("test-id")), output)
             .await
             .expect("dispatch should succeed");
         let locked = buffer.lock().await;
@@ -330,6 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_stream_forwards_chunk_and_done() {
+        let _lock = DISPATCH_TEST_LOCK.lock().await;
         let (tx, rx) = mpsc::unbounded_channel::<StreamFrame>();
         let server = ServerBuilder::new().build();
         let buffer = Arc::new(Mutex::new(Vec::new()));
@@ -351,17 +361,15 @@ mod tests {
             .ok();
         });
 
-        RPC_BUFFER
-            .scope(buf_clone, async {
-                dispatch_to_client(
-                    &server,
-                    Some(json!("stream-test")),
-                    Ok(DispatchOutput::Stream { receiver: rx }),
-                )
-                .await
-            })
-            .await
-            .expect("stream dispatch should succeed");
+        clear_current_transport();
+        let _ = set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
+        dispatch_to_client(
+            &server,
+            Some(json!("stream-test")),
+            Ok(DispatchOutput::Stream { receiver: rx }),
+        )
+        .await
+        .expect("stream dispatch should succeed");
 
         let locked = buffer.lock().await;
         let lines: Vec<&[u8]> = locked
@@ -383,6 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_stream_error_event_sends_error() {
+        let _lock = DISPATCH_TEST_LOCK.lock().await;
         let (tx, rx) = mpsc::unbounded_channel::<StreamFrame>();
         let server = ServerBuilder::new().build();
         let buffer = Arc::new(Mutex::new(Vec::new()));
@@ -397,17 +406,15 @@ mod tests {
             .ok();
         });
 
-        RPC_BUFFER
-            .scope(buf_clone, async {
-                dispatch_to_client(
-                    &server,
-                    Some(json!("stream-error-test")),
-                    Ok(DispatchOutput::Stream { receiver: rx }),
-                )
-                .await
-            })
-            .await
-            .expect("error dispatch should not panic");
+        clear_current_transport();
+        let _ = set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
+        dispatch_to_client(
+            &server,
+            Some(json!("stream-error-test")),
+            Ok(DispatchOutput::Stream { receiver: rx }),
+        )
+        .await
+        .expect("error dispatch should not panic");
 
         let locked = buffer.lock().await;
         let line_count = locked
@@ -419,6 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_stream_unknown_event_ignored() {
+        let _lock = DISPATCH_TEST_LOCK.lock().await;
         let (tx, rx) = mpsc::unbounded_channel::<StreamFrame>();
         let server = ServerBuilder::new().build();
         let buffer = Arc::new(Mutex::new(Vec::new()));
@@ -433,17 +441,15 @@ mod tests {
             .ok();
         });
 
-        RPC_BUFFER
-            .scope(buf_clone, async {
-                dispatch_to_client(
-                    &server,
-                    Some(json!("unknown-test")),
-                    Ok(DispatchOutput::Stream { receiver: rx }),
-                )
-                .await
-            })
-            .await
-            .expect("unknown event dispatch should not panic");
+        clear_current_transport();
+        let _ = set_current_transport(Arc::new(RpcBufferTransport::new(buf_clone)));
+        dispatch_to_client(
+            &server,
+            Some(json!("unknown-test")),
+            Ok(DispatchOutput::Stream { receiver: rx }),
+        )
+        .await
+        .expect("unknown event dispatch should not panic");
 
         // Unknown events produce no output — channel just closes
         // The dispatch loop processes nothing and returns Ok(())
