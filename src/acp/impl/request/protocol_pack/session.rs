@@ -135,6 +135,7 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
 
 /// Handle `session/prompt` — processes a user prompt within a session.
 pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result<Value> {
+    use crate::acp::r#impl::chat::streaming::StreamObserver;
     use crate::acp::r#impl::chat::{process_chat_request, ChatParams};
     use crate::rpc_protocol::chat_trace_context;
 
@@ -157,11 +158,142 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
 
     tracing::info!("ACP session/prompt: delegating to process_chat_request");
 
+    // ── Create real-time streaming bridge ─────────────────────────────
+    // Create a channel that receives StreamFrame events from the autonomy
+    // loop / pipeline, and bridge them to ACP session/update notifications
+    // (agent_thought_chunk / agent_message_chunk) so Zed sees streaming
+    // text and reasoning in real-time instead of a blank wait.
+    let (sse_tx, mut sse_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::acp::r#impl::chat::streaming::StreamFrame>();
+    // Clone the sender: one copy goes to StreamObserver (shared with pipeline),
+    // the other stays here to signal bridge exit via drop(sse_signal) below.
+    let sse_signal = sse_tx.clone();
+    let stream_observer = StreamObserver::sse(sse_tx);
+
+    // Spawn bridge task: StreamFrame → session/update JSON-RPC notification
+    let bridge_sid = session_id_for_notification.clone();
+    let bridge_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
+        let sid = match bridge_sid {
+            Some(ref s) => s.clone(),
+            None => return, // No session ID, nothing to bridge
+        };
+        let mut thinking_buf = String::new();
+        let mut message_buf = String::new();
+        // Flush threshold: flush accumulated content when buffer exceeds this length
+        const FLUSH_THRESHOLD: usize = 20;
+
+        while let Some(frame) = sse_rx.recv().await {
+            match frame.event {
+                "chunk" => {
+                    // Reasoning token — accumulate into thinking buffer
+                    if let Some(reasoning) = frame.payload.get("reasoning").and_then(|v| v.as_str())
+                    {
+                        if !reasoning.is_empty() {
+                            // Flush any pending message text before starting thought block
+                            if !message_buf.is_empty() {
+                                send_session_update_notification(
+                                    &sid,
+                                    "agent_message_chunk",
+                                    &message_buf,
+                                )
+                                .await;
+                                message_buf.clear();
+                            }
+                            thinking_buf.push_str(reasoning);
+                            if thinking_buf.len() >= FLUSH_THRESHOLD {
+                                send_session_update_notification(
+                                    &sid,
+                                    "agent_thought_chunk",
+                                    &thinking_buf,
+                                )
+                                .await;
+                                thinking_buf.clear();
+                            }
+                        }
+                    }
+                    // Regular token — accumulate into message buffer
+                    if let Some(token) = frame.payload.get("token").and_then(|v| v.as_str()) {
+                        if !token.is_empty() {
+                            // Flush any pending thinking before starting message
+                            if !thinking_buf.is_empty() {
+                                send_session_update_notification(
+                                    &sid,
+                                    "agent_thought_chunk",
+                                    &thinking_buf,
+                                )
+                                .await;
+                                thinking_buf.clear();
+                            }
+                            message_buf.push_str(token);
+                            if message_buf.len() >= FLUSH_THRESHOLD {
+                                send_session_update_notification(
+                                    &sid,
+                                    "agent_message_chunk",
+                                    &message_buf,
+                                )
+                                .await;
+                                message_buf.clear();
+                            }
+                        }
+                    }
+                }
+                "phase_start" | "phase_end" => {
+                    // Send phase transitions as lightweight thought markers
+                    if let Some(desc) = frame.payload.get("description").and_then(|v| v.as_str()) {
+                        let phase = frame
+                            .payload
+                            .get("phase")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if !phase.is_empty() && !desc.is_empty() {
+                            send_session_update_notification(
+                                &sid,
+                                "agent_thought_chunk",
+                                &format!("[{}] {}", phase, desc),
+                            )
+                            .await;
+                        }
+                    }
+                }
+                "result" | "done" => {
+                    // Stream ending — flush remaining buffers
+                    if !thinking_buf.is_empty() {
+                        send_session_update_notification(
+                            &sid,
+                            "agent_thought_chunk",
+                            &thinking_buf,
+                        )
+                        .await;
+                        thinking_buf.clear();
+                    }
+                    if !message_buf.is_empty() {
+                        send_session_update_notification(&sid, "agent_message_chunk", &message_buf)
+                            .await;
+                        message_buf.clear();
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        process_chat_request(server, &mut chat_params, None, &pipeline_trace, None, None),
+        process_chat_request(
+            server,
+            &mut chat_params,
+            Some(stream_observer),
+            &pipeline_trace,
+            None,
+            None,
+        ),
     )
     .await;
+
+    // Ensure bridge task finishes — drop our clone of the sender so the
+    // receiver gets None and the bridge loop exits.
+    drop(sse_signal);
+    let _ = bridge_handle.await;
 
     match result {
         Ok(Ok(chat_result)) => {
@@ -175,51 +307,9 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                 "ACP session/prompt: completed successfully"
             );
 
-            if let Some(ref sid) = session_id_for_notification {
-                // Matches both <thinking>...</thinking> and __thinking__ ... (until newline)
-                static THINKING_RE: std::sync::LazyLock<regex::Regex> =
-                    std::sync::LazyLock::new(|| {
-                        regex::Regex::new(r"<thinking>(.*?)</thinking>|__thinking__(.*?)(?:\n|$)")
-                            .expect("B48: hardcoded thinking regex is valid")
-                    });
-                let mut last_end = 0;
-                let sid = sid.as_str();
-
-                for cap in THINKING_RE.captures_iter(response_text) {
-                    let m = match cap.get(0) {
-                        Some(m) => m,
-                        None => continue,
-                    };
-                    // Capture group 1: <thinking>...</thinking> content
-                    // Capture group 2: __thinking__ prefix token content
-                    let thought_content = cap
-                        .get(1)
-                        .or_else(|| cap.get(2))
-                        .map(|c| c.as_str())
-                        .unwrap_or("");
-
-                    let before = &response_text[last_end..m.start()];
-                    let before = before.trim();
-                    if !before.is_empty() {
-                        send_chunk(server, sid, "agent_message_chunk", before).await;
-                    }
-
-                    if !thought_content.is_empty() {
-                        send_chunk(server, sid, "agent_thought_chunk", thought_content).await;
-                    }
-
-                    last_end = m.end();
-                }
-
-                let after = response_text[last_end..].trim();
-                if !after.is_empty() {
-                    send_chunk(server, sid, "agent_message_chunk", after).await;
-                }
-
-                if last_end == 0 && response_text.trim().is_empty() {
-                    send_chunk(server, sid, "agent_message_chunk", "").await;
-                }
-            }
+            // ✅ Real-time streaming via bridge task above handles all
+            // `agent_thought_chunk` and `agent_message_chunk` notifications.
+            // No post-hoc <thinking> parsing needed.
 
             let prompt_response = serde_json::to_value(crate::schema::PromptResponse::new(
                 crate::schema::StopReason::EndTurn,
@@ -262,6 +352,37 @@ pub async fn send_chunk(server: &AcpServer, session_id: &str, chunk_type: &str, 
     let notif = SessionNotification::new(session_id.into(), update);
     if let Ok(value) = serde_json::to_value(&notif) {
         let _ = crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
+    }
+}
+
+/// Send a session/update notification via the global transport (no &AcpServer needed).
+///
+/// Used by the streaming bridge task (`session_prompt_payload`) to send
+/// real-time `agent_thought_chunk` and `agent_message_chunk` notifications
+/// from the autonomy loop's `StreamFrame` events directly through the global
+/// transport, without borrowing the `AcpServer` across a `tokio::spawn` boundary.
+async fn send_session_update_notification(session_id: &str, chunk_type: &str, text: &str) {
+    use crate::schema::{
+        ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
+    };
+    let update = match chunk_type {
+        "agent_thought_chunk" => SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new(text)),
+        )),
+        _ => SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new(text),
+        ))),
+    };
+    let notif = SessionNotification::new(session_id.into(), update);
+    if let Ok(value) = serde_json::to_value(&notif) {
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": value,
+        });
+        if let Some(transport) = crate::acp::transport::get_current_transport() {
+            let _ = transport.write_json_line(&payload).await;
+        }
     }
 }
 
