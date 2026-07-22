@@ -27,7 +27,7 @@ use crate::acp::server::AcpServer;
 use crate::acp::transport::{set_current_transport, StdioTransport};
 use crate::agent::AgentRegistry;
 use crate::flow::FlowManager;
-use crate::rpc_protocol::JsonRpcRequest;
+use crate::rpc_protocol::{JsonRpcRequest, JsonRpcResponse};
 
 // ---------------------------------------------------------------------------
 // Sub-module declarations
@@ -91,6 +91,7 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     // Uses `let _ =` to ignore AlreadySetErr, which can happen in tests where
     // the transport was already set indirectly.
     set_current_transport(Arc::new(StdioTransport));
+    crate::acp::server::set_current_acp_server(Arc::clone(&server));
 
     info!("ACP server starting");
 
@@ -189,7 +190,36 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
             continue;
         }
 
-        let request = match serde_json::from_str::<JsonRpcRequest>(&line) {
+        let raw_message: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(message) => message,
+            Err(err) => {
+                send_error(
+                    &server,
+                    None,
+                    -32700,
+                    crate::i18n::runtime::tf("error.parse_error", &[("error", &err.to_string())]),
+                    None,
+                )
+                .await?;
+                continue;
+            }
+        };
+
+        if is_jsonrpc_response(&raw_message) {
+            match serde_json::from_value::<JsonRpcResponse>(raw_message) {
+                Ok(response) => {
+                    if !server.resolve_pending_client_response(response).await {
+                        tracing::warn!("received unmatched ACP client response");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("invalid ACP client response: {err}");
+                }
+            }
+            continue;
+        }
+
+        let request = match serde_json::from_value::<JsonRpcRequest>(raw_message) {
             Ok(request) => request,
             Err(err) => {
                 send_error(
@@ -216,9 +246,12 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
             continue;
         }
 
-        if let Err(err) = handle_request(&server, request, None).await {
-            error!("request failed: {err:#}");
-        }
+        let server_for_task = Arc::clone(&server);
+        tokio::spawn(async move {
+            if let Err(err) = handle_request(&server_for_task, request, None).await {
+                error!("request failed: {err:#}");
+            }
+        });
     }
 
     // ── Graceful shutdown ──────────────────────────────────────────
@@ -226,6 +259,12 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     shutdown_notify.notify_waiters();
     info!("ACP server shutting down");
     Ok(())
+}
+
+fn is_jsonrpc_response(value: &serde_json::Value) -> bool {
+    value.get("id").is_some()
+        && (value.get("result").is_some() || value.get("error").is_some())
+        && value.get("method").is_none()
 }
 
 // ---------------------------------------------------------------------------
@@ -258,4 +297,46 @@ pub fn artifact_ledger(server: &AcpServer) -> crate::reinforcement::ArtifactLedg
             tracing::warn!("artifact_ledger lock poisoned — recovering inner state");
             poisoned.into_inner().clone()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn jsonrpc_response_detection_distinguishes_requests() {
+        assert!(is_jsonrpc_response(&json!({
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {"ok": true}
+        })));
+        assert!(!is_jsonrpc_response(&json!({
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "method": "session/new",
+            "params": {}
+        })));
+    }
+
+    #[tokio::test]
+    async fn pending_client_response_round_trips_result() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let rx = server
+            .register_pending_client_request("req-42".to_string())
+            .await;
+
+        let resolved = server
+            .resolve_pending_client_response(JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: Some(json!({"optionId": "allow"})),
+                error: None,
+                id: Some(json!("req-42")),
+            })
+            .await;
+
+        assert!(resolved);
+        let value = rx.await.unwrap().unwrap();
+        assert_eq!(value["optionId"], "allow");
+    }
 }

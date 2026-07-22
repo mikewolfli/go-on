@@ -41,7 +41,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
         },
         "search_files" => McpTool {
             name: name.to_string(),
-            description: Some("Search for files matching a glob pattern".to_string()),
+            description: Some("Find files and directories matching a glob pattern".to_string()),
             input_schema: Some(json!({
                 "type": "object",
                 "properties": {
@@ -51,20 +51,56 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["pattern"]
             })),
         },
+        "find_path" => McpTool {
+            name: name.to_string(),
+            description: Some("Find files and directories matching a glob pattern.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern to match file paths (e.g. '**/*.rs')"},
+                    "base_dir": {"type": "string", "description": "Optional base directory to search from"}
+                },
+                "required": ["pattern"]
+            })),
+        },
         "apply_patch" => McpTool {
             name: name.to_string(),
-            description: Some("Apply a patch artifact".to_string()),
-            input_schema: Some(json!({"type": "object"})),
+            description: Some("Apply a patch to a file or directory.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to apply the patch to"},
+                    "patch_content": {"type": "string", "description": "The unified diff/patch content to apply"},
+                    "format": {"type": "string", "enum": ["unified", "git"], "description": "Patch format (default: unified)"}
+                },
+                "required": ["path", "patch_content"]
+            })),
         },
         "run_tests" => McpTool {
             name: name.to_string(),
-            description: Some("Run test suite".to_string()),
-            input_schema: Some(json!({"type": "object"})),
+            description: Some("Run tests for a Rust project.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Project directory containing Cargo.toml"},
+                    "filter": {"type": "string", "description": "Optional test name filter"},
+                    "features": {"type": "string", "description": "Optional feature flags (e.g. '--features local')"}
+                },
+                "required": ["directory"]
+            })),
         },
         "inspect_git_diff" => McpTool {
             name: name.to_string(),
-            description: Some("Inspect git diff".to_string()),
-            input_schema: Some(json!({"type": "object"})),
+            description: Some("Inspect the current git diff for a project.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Git repository directory"},
+                    "staged": {"type": "boolean", "description": "If true, show staged diff (--cached); otherwise show unstaged"},
+                    "files": {"type": "array", "items": {"type": "string"}, "description": "Optional list of file paths to filter the diff"}
+                },
+                "required": ["directory"]
+            })),
         },
         "workflow_execute" => McpTool {
             name: name.to_string(),
@@ -254,7 +290,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["path"]
             })),
         },
-        "file_move" => McpTool {
+        "move_path" | "file_move" => McpTool {
             name: name.to_string(),
             description: Some("Move or rename a file or directory.".to_string()),
             input_schema: Some(json!({
@@ -266,7 +302,23 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["source", "destination"]
             })),
         },
-        "file_delete" => McpTool {
+        "edit_file" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Edit a file by replacing exact old_text with new_text (single occurrence)."
+                    .to_string(),
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to edit"},
+                    "old_text": {"type": "string", "description": "Exact text to find and replace"},
+                    "new_text": {"type": "string", "description": "Replacement text"}
+                },
+                "required": ["path", "old_text", "new_text"]
+            })),
+        },
+        "delete_path" | "file_delete" => McpTool {
             name: name.to_string(),
             description: Some("Delete a file (requires explicit confirmation).".to_string()),
             input_schema: Some(json!({
@@ -1122,26 +1174,40 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("list_directory requires arguments.path"))?;
         }
-        "file_move" => {
+        "move_path" | "file_move" => {
             tool_input
                 .get("source")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("file_move requires arguments.source"))?;
+                .ok_or_else(|| anyhow::anyhow!("move_path requires arguments.source"))?;
             tool_input
                 .get("destination")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("file_move requires arguments.destination"))?;
+                .ok_or_else(|| anyhow::anyhow!("move_path requires arguments.destination"))?;
         }
-        "file_delete" => {
+        "edit_file" => {
             tool_input
                 .get("path")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("file_delete requires arguments.path"))?;
+                .ok_or_else(|| anyhow::anyhow!("edit_file requires arguments.path"))?;
+            tool_input
+                .get("old_text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("edit_file requires arguments.old_text"))?;
+            tool_input
+                .get("new_text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("edit_file requires arguments.new_text"))?;
+        }
+        "delete_path" | "file_delete" => {
+            tool_input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("delete_path requires arguments.path"))?;
             tool_input
                 .get("confirm")
                 .and_then(|v| v.as_bool())
                 .ok_or_else(|| {
-                    anyhow::anyhow!("file_delete requires arguments.confirm (boolean)")
+                    anyhow::anyhow!("delete_path requires arguments.confirm (boolean)")
                 })?;
         }
         "git" => {
@@ -1321,8 +1387,9 @@ mod tests {
         "find_files",
         "git",
         "list_directory",
-        "file_move",
-        "file_delete",
+        "move_path",
+        "delete_path",
+        "edit_file",
         "cargo_check",
         "cargo_test",
         "compress",

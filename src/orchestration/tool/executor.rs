@@ -1,0 +1,502 @@
+//! Unified concurrent tool execution engine.
+//!
+//! Executes a batch of tool calls concurrently using `FuturesUnordered`,
+//! with built-in governance gating, per-tool retry, circuit breaker,
+//! ACP session notifications, SSE progress events, and concurrency limiting.
+//!
+//! Replaces the duplicated serial loops in:
+//! - `autonomy_loop.rs` (ACP main path)
+//! - `agent_runtime.rs` (ACP secondary path)
+//! - `cli/chat.rs` (CLI path — was already parallel but independently implemented)
+//! - `dag_driver.rs` (dead code, entire module to be deleted)
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
+use serde_json::Value;
+use tokio::sync::Semaphore;
+
+use crate::acp::r#impl::chat::streaming::{emit_tool_approval_event, StreamFrame};
+use crate::orchestration::tool::{RetryPolicy, ToolInput, ToolOutput, ToolRegistry};
+
+/// Configuration for concurrent tool execution.
+#[derive(Clone)]
+pub(crate) struct ToolExecConfig {
+    /// Maximum number of tools to execute concurrently.
+    pub max_concurrency: usize,
+    /// Maximum consecutive tool failures before circuit breaker trips (0 = disabled).
+    pub circuit_breaker_limit: usize,
+    /// Operation mode for governance gate ("edit", "safeguard", "full_auto", etc.).
+    pub operation_mode: String,
+    /// ACP session ID for tool call notifications.
+    pub acp_session_id: Option<String>,
+}
+
+impl Default for ToolExecConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrency: 10,
+            circuit_breaker_limit: 5,
+            operation_mode: "ask".to_string(),
+            acp_session_id: None,
+        }
+    }
+}
+
+/// Result of executing a batch of tool calls.
+#[derive(Debug, Default)]
+pub(crate) struct ToolExecResult {
+    /// Individual tool results (tool_name → formatted output).
+    pub tool_results: Vec<ToolExecItem>,
+    /// Total number of tools that failed.
+    pub failure_count: usize,
+    /// True if the circuit breaker was triggered.
+    pub circuit_breaker_triggered: bool,
+}
+
+/// Result of a single tool execution.
+#[derive(Debug)]
+pub(crate) struct ToolExecItem {
+    pub tool_name: String,
+    pub output: ToolOutput,
+    pub success: bool,
+    pub duration_ms: u64,
+    pub formatted: String,
+}
+
+/// Execute a batch of tool calls concurrently with governance, retry, and circuit breaker.
+///
+/// This is the single entry point for all tool execution in go-on. All paths
+/// (ACP autonomy loop, ACP agent_runtime, CLI chat) should call this function
+/// instead of implementing their own tool execution loops.
+///
+/// # Arguments
+/// * `tool_calls` — List of (tool_name, args_json) tuples.
+/// * `tool_registry` — Registry to resolve tools and their RetryPolicies.
+/// * `config` — Execution configuration (concurrency, circuit breaker, governance).
+/// * `progress_tx` — Optional SSE progress stream.
+/// * `objective` — Current task objective (for ToolInput).
+/// * `iteration` — Current iteration/round number (for task_id generation).
+/// * `emit_acp_notifications` — Whether to emit ACP session tool call started/completed events.
+pub(crate) async fn execute_tools_concurrent(
+    tool_calls: &[(String, String)],
+    tool_registry: &ToolRegistry,
+    config: &ToolExecConfig,
+    progress_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamFrame>>,
+    objective: &str,
+    iteration: usize,
+) -> ToolExecResult {
+    if tool_calls.is_empty() {
+        return ToolExecResult::default();
+    }
+
+    let max_concurrency = config.max_concurrency.max(1);
+    let semaphore = Arc::new(Semaphore::new(max_concurrency));
+    let circuit_breaker_limit = config.circuit_breaker_limit;
+    let mut circuit_breaker_triggered = false;
+    let mut failure_count: usize = 0;
+    let mut total_success: usize = 0;
+    let mut tool_results: Vec<ToolExecItem> = Vec::with_capacity(tool_calls.len());
+
+    // Build concurrent futures for all tool calls.
+    let mut futures: FuturesUnordered<_> = FuturesUnordered::new();
+
+    for (tool_name, tool_args_str) in tool_calls {
+        let tool_name = tool_name.clone();
+        let tool_args_str = tool_args_str.clone();
+        let sem_clone = Arc::clone(&semaphore);
+        let config_clone = config.clone();
+        let progress_tx_clone = progress_tx.clone();
+        let objective = objective.to_string();
+
+        futures.push(async move {
+            let _permit = sem_clone.acquire().await.ok();
+            execute_single_tool(
+                &tool_name,
+                &tool_args_str,
+                tool_registry,
+                &config_clone,
+                progress_tx_clone,
+                &objective,
+                iteration,
+            )
+            .await
+        });
+    }
+
+    // Collect results as they complete.
+    while let Some(result) = futures.next().await {
+        let success = result.success;
+
+        if success {
+            total_success += 1;
+        } else {
+            failure_count += 1;
+        }
+
+        tool_results.push(result);
+
+        // Check circuit breaker.
+        if circuit_breaker_limit > 0 && failure_count >= circuit_breaker_limit && total_success == 0
+        {
+            circuit_breaker_triggered = true;
+            // Cancel remaining futures by dropping the stream.
+            break;
+        }
+    }
+
+    ToolExecResult {
+        tool_results,
+        failure_count,
+        circuit_breaker_triggered,
+    }
+}
+
+/// Execute a single tool with governance, retry, notifications, and SSE events.
+///
+/// This function handles the full lifecycle of a single tool call:
+/// 1. Parse and validate arguments
+/// 2. Governance gate (edit/safeguard mode approval)
+/// 3. Per-tool retry loop for execution
+/// 4. ACP session notifications (tool_call_started / tool_call_completed)
+/// 5. SSE progress events
+async fn execute_single_tool(
+    tool_name: &str,
+    tool_args_str: &str,
+    tool_registry: &ToolRegistry,
+    config: &ToolExecConfig,
+    progress_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamFrame>>,
+    objective: &str,
+    iteration: usize,
+) -> ToolExecItem {
+    let start = Instant::now();
+    let tool_name = tool_name.to_string();
+
+    // ── Retrieve per-tool retry policy from the registry ───────────
+    let retry_policy = tool_registry
+        .profile(&tool_name)
+        .map(|p| p.retry_policy.clone())
+        .unwrap_or(RetryPolicy {
+            max_retries: 0,
+            retry_on_failure: false,
+        });
+
+    // ── Stream progress event before executing tool ────────────────
+    if let Some(ref tx) = progress_tx {
+        let _ = tx.send(StreamFrame {
+            event: "progress",
+            payload: serde_json::json!({
+                "message": format!("executing tool {}...", tool_name),
+            }),
+            status: Some("analyzing"),
+        });
+    }
+
+    // ── Parse and validate arguments ───────────────────────────────
+    let parsed_args: Value = serde_json::from_str(tool_args_str).unwrap_or_default();
+    let validation_passed =
+        crate::shared::tool_descriptors::validate_required_arguments(&tool_name, &parsed_args)
+            .is_ok();
+
+    if !validation_passed {
+        let err_msg = if let Some(schema_str) = lookup_tool_schema(&tool_name) {
+            format!(
+                "Tool '{}' call rejected: required parameters were not provided.\n\
+                 Expected input schema for '{}':\n{}\n\
+                 Please re-read the schema and provide ALL required parameters in your next tool call.",
+                tool_name, tool_name, schema_str
+            )
+        } else {
+            format!(
+                "Tool '{}' call rejected: required parameters were not provided.",
+                tool_name
+            )
+        };
+        let tool_name_owned = tool_name.clone();
+        return ToolExecItem {
+            tool_name,
+            output: ToolOutput {
+                success: false,
+                result: None,
+                error: Some(err_msg.clone()),
+                verification: None,
+                audit_log: None,
+                pua_report: None,
+            },
+            success: false,
+            duration_ms: start.elapsed().as_millis() as u64,
+            formatted: format!(
+                "\n[Tool {} validation failed:]\n{}\n\n",
+                tool_name_owned, err_msg
+            ),
+        };
+    }
+
+    // ── Governance gate (edit/safeguard mode) ──────────────────────
+    if config.operation_mode == "edit" || config.operation_mode == "safeguard" {
+        let _ = emit_tool_approval_event(
+            &progress_tx,
+            &tool_name,
+            &parsed_args,
+            &config.operation_mode,
+            if config.operation_mode == "safeguard" {
+                0.5
+            } else {
+                0.0
+            },
+        )
+        .await;
+
+        let approved = ensure_tool_permission(
+            config,
+            &tool_name,
+            &parsed_args,
+            if config.operation_mode == "safeguard" {
+                0.5
+            } else {
+                0.0
+            },
+        )
+        .await;
+
+        if !approved {
+            let denied_msg = format!("Tool '{}' denied by user approval gate.", tool_name);
+            return ToolExecItem {
+                tool_name,
+                output: ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(denied_msg.clone()),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                },
+                success: false,
+                duration_ms: start.elapsed().as_millis() as u64,
+                formatted: format!("\n[{}]\n", denied_msg),
+            };
+        }
+    }
+
+    // ── Execute tool via registry ──────────────────────────────────
+    if let Some(tool) = tool_registry.get_arc(&tool_name) {
+        // ── Emit ToolCallUpdate::InProgress ────────────────────────
+        if let Some(ref sid) = config.acp_session_id {
+            if let Some(srv) = crate::acp::server::current_acp_server() {
+                srv.emit_tool_call_started(sid, &tool_name, &parsed_args)
+                    .await;
+            }
+        }
+
+        let input = ToolInput {
+            task_id: format!("autonomy-{}-{}", iteration, tool_name),
+            phase: "execute".to_string(),
+            agent_role: "assistant".to_string(),
+            objective: objective.to_string(),
+            constraints: None,
+            evidence: None,
+            payload: parsed_args.clone(),
+            allowed_base_dir: None,
+        };
+
+        // ── Execute with per-tool retry ────────────────────────────
+        let max_exec_retries = if retry_policy.retry_on_failure {
+            retry_policy.max_retries
+        } else {
+            0
+        };
+
+        let (output, success) = {
+            let mut tool_result: Option<ToolOutput> = None;
+            let mut last_error: Option<String> = None;
+            let mut attempt: usize = 0;
+            loop {
+                match Arc::clone(&tool).run_async(input.clone()).await {
+                    Ok(out) => {
+                        tool_result = Some(out);
+                        break;
+                    }
+                    Err(e) => {
+                        last_error = Some(e.to_string());
+                        if attempt >= max_exec_retries {
+                            break;
+                        }
+                        attempt += 1;
+                    }
+                }
+            }
+            match tool_result {
+                Some(out) => (out, true),
+                None => {
+                    let err_msg = last_error.unwrap_or_else(|| {
+                        "tool execution stopped (retries exhausted)".to_string()
+                    });
+                    (
+                        ToolOutput {
+                            success: false,
+                            result: None,
+                            error: Some(err_msg),
+                            verification: None,
+                            audit_log: None,
+                            pua_report: None,
+                        },
+                        false,
+                    )
+                }
+            }
+        };
+
+        // ── Emit ToolCallUpdate::Completed ─────────────────────────
+        let success_bool = output.error.is_none();
+        if let Some(ref sid) = config.acp_session_id {
+            if let Some(srv) = crate::acp::server::current_acp_server() {
+                let output_val = output
+                    .result
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                srv.emit_tool_call_completed(
+                    sid,
+                    &tool_name,
+                    &parsed_args,
+                    &output_val,
+                    success_bool,
+                )
+                .await;
+            }
+        }
+
+        // ── SSE completion notification ────────────────────────────
+        if let Some(ref tx) = progress_tx {
+            let status = if success_bool { "completed" } else { "failed" };
+            let summary = if success_bool {
+                format!("✅ **{}** ", tool_name)
+            } else {
+                format!("❌ **{}** failed ", tool_name)
+            };
+            let _ = tx.send(StreamFrame {
+                event: "chunk",
+                payload: serde_json::json!({
+                    "token": summary,
+                    "tool_status": status,
+                }),
+                status: Some("generating"),
+            });
+        }
+
+        let formatted = format_tool_output_for_response(&tool_name, &output);
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        ToolExecItem {
+            tool_name,
+            output,
+            success,
+            duration_ms,
+            formatted,
+        }
+    } else {
+        let err_msg = format!("Tool '{}' not found in registry", tool_name);
+        let tool_name_owned = tool_name.clone();
+        ToolExecItem {
+            tool_name,
+            output: ToolOutput {
+                success: false,
+                result: None,
+                error: Some(err_msg.clone()),
+                verification: None,
+                audit_log: None,
+                pua_report: None,
+            },
+            success: false,
+            duration_ms: start.elapsed().as_millis() as u64,
+            formatted: format!("\n[Tool {} not available]\n", tool_name_owned),
+        }
+    }
+}
+
+/// Format a tool's output for the consolidated response string.
+fn format_tool_output_for_response(tool_name: &str, output: &ToolOutput) -> String {
+    let success = output.error.is_none();
+    let status_icon = if success { "✅" } else { "❌" };
+
+    let body_content = if success {
+        output
+            .result
+            .as_ref()
+            .and_then(|r| {
+                if let Some(s) = r.as_str() {
+                    if !s.is_empty() {
+                        return Some(s.to_string());
+                    }
+                }
+                None
+            })
+            .unwrap_or_else(|| format!("{:?}", output))
+    } else {
+        output
+            .error
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| format!("{:?}", output))
+    };
+
+    format!(
+        "\n<details>\
+         \n<summary>{} {}</summary>\
+         \n```\n{}\n```\
+         \n</details>\n",
+        status_icon, tool_name, body_content
+    )
+}
+
+/// Check tool permission via ACP session for governance gate (edit/safeguard mode).
+async fn ensure_tool_permission(
+    config: &ToolExecConfig,
+    tool_name: &str,
+    parsed_args: &serde_json::Value,
+    risk_score: f64,
+) -> bool {
+    let Some(server) = crate::acp::server::current_acp_server() else {
+        return true;
+    };
+    let Some(session_id) = config.acp_session_id.as_ref() else {
+        return true;
+    };
+
+    let timeout_secs = 300;
+    match server
+        .request_client_permission(
+            session_id,
+            tool_name,
+            parsed_args,
+            &config.operation_mode,
+            risk_score,
+            timeout_secs,
+        )
+        .await
+    {
+        Ok(true) => true,
+        Ok(false) => false,
+        Err(err) => {
+            tracing::warn!(
+                "executor: permission gate fallback for tool '{}' due to error: {}",
+                tool_name,
+                err
+            );
+            false
+        }
+    }
+}
+
+/// Look up a tool's input schema JSON string by name, at runtime.
+fn lookup_tool_schema(tool_name: &str) -> Option<String> {
+    let registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
+    if let Some(tool) = registry.get(tool_name) {
+        let schema = tool.input_schema();
+        serde_json::to_string_pretty(&schema).ok()
+    } else {
+        None
+    }
+}

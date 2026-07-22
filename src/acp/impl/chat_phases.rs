@@ -133,6 +133,8 @@ pub(crate) struct ActOutput {
     pub knowledge: Value,
     pub metacognitive_loop: Value,
     pub distillation: Value,
+    /// True when tools were requested but ALL of them failed.
+    pub all_tools_failed: bool,
 }
 
 // ── ThresholdLearner (INT-2) ──────────────────────────────────────────
@@ -909,12 +911,14 @@ pub(crate) async fn act_phase(
             selected_agent: String::new(),
             response_text: String::new(),
             agent_attempts: Vec::new(),
+            all_tools_failed: false,
         }
     };
     if autonomy_outcome.autonomy_loop_executed {
         selected_agent = autonomy_outcome.selected_agent;
         response_text = autonomy_outcome.response_text;
     }
+    let all_tools_failed = autonomy_outcome.all_tools_failed;
     agent_attempts.extend(autonomy_outcome.agent_attempts);
     let autonomy_loop_executed = autonomy_outcome.autonomy_loop_executed;
 
@@ -1220,6 +1224,7 @@ pub(crate) async fn act_phase(
         used_multi_agent_vote: false,
         review_required: false,
         review_blocked,
+        all_tools_failed,
         checkpoint,
         knowledge,
         metacognitive_loop,
@@ -1811,6 +1816,24 @@ pub(crate) async fn reflect_phase(
     // Uses lazy initialization (S1 startup optimization).
     if let Some(engine) = server.get_or_init_memory_retrieval_engine() {
         let _ = engine.index_session_memory(&routing_out.conversation_id, &trace.request_id);
+    }
+
+    // Include all_tools_failed flag when all tools failed
+    if exec_out.all_tools_failed {
+        if let Some(obj) = result.as_object() {
+            let mut enriched = obj.clone();
+            enriched.insert(
+                "all_tools_failed".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            enriched.insert(
+                "error".to_string(),
+                serde_json::Value::String(
+                    "All tools failed to execute. The task could not be completed.".to_string(),
+                ),
+            );
+            return Ok(serde_json::Value::Object(enriched));
+        }
     }
 
     // Include review_blocked flag in the response when SafeGuard blocked execution

@@ -259,15 +259,46 @@ pub struct PermissionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionOption {
     /// Unique ID for this option (sent back in session/request_permission).
-    pub id: PermissionOptionId,
-    /// Human-readable label.
-    pub label: String,
+    #[serde(alias = "id")]
+    pub option_id: PermissionOptionId,
+    /// Human-readable option name.
+    #[serde(alias = "label")]
+    pub name: String,
+    /// Semantic permission choice kind used by ACP clients like Zed.
+    #[serde(default)]
+    pub kind: PermissionOptionKind,
     /// Optional description of what this option allows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// The permission level granted (read, write, destructive, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
+}
+
+impl PermissionOption {
+    pub fn new(
+        option_id: PermissionOptionId,
+        name: impl Into<String>,
+        kind: PermissionOptionKind,
+    ) -> Self {
+        Self {
+            option_id,
+            name: name.into(),
+            kind,
+            description: None,
+            permission: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionOptionKind {
+    #[default]
+    AllowOnce,
+    AllowAlways,
+    RejectOnce,
+    RejectAlways,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

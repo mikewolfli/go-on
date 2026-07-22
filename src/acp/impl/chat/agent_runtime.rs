@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -20,6 +20,7 @@ use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
     REASONING_END, REASONING_START, TOKEN_THINKING_PREFIX,
 };
+use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
 
 use super::streaming::{
     emit_stream_chunk, emit_stream_done, StreamEventMeta, StreamNotificationContext,
@@ -98,7 +99,7 @@ pub(crate) async fn run_agent_collecting(
     options: Option<HashMap<String, Value>>,
     timeout_duration: Option<Duration>,
 ) -> Result<(String, String, Option<String>)> {
-    use crate::acp::r#impl::request::tools_pack::execute_mcp_tool_call;
+    // tool execution delegated to execute_tools_concurrent
     let base_messages = messages.clone();
     let followup_agent = Arc::clone(&agent);
     let followup_principles = principles.clone();
@@ -281,24 +282,42 @@ pub(crate) async fn run_agent_collecting(
                         MAX_TOOL_CALLS_PER_AGENT
                     );
                 }
+                // ── Execute tool calls concurrently via unified executor ──
+                let exec_result = execute_tools_concurrent(
+                    &tool_calls,
+                    server.tool_registry(),
+                    &ToolExecConfig {
+                        max_concurrency: 10,
+                        circuit_breaker_limit: 5,
+                        operation_mode: "edit".to_string(),
+                        acp_session_id: None,
+                    },
+                    None, // no progress_tx in ACP secondary path
+                    "",
+                    0,
+                )
+                .await;
+
+                // Build tool result blocks from the executor output
                 let mut tool_results: Vec<String> = Vec::new();
-                for (tool_name, tool_args_str) in tool_calls.iter().take(MAX_TOOL_CALLS_PER_AGENT) {
-                    let parsed_args: Value =
-                        serde_json::from_str(tool_args_str).unwrap_or(json!({}));
-                    match execute_mcp_tool_call(server, tool_name, &parsed_args).await {
-                        Ok(result) => {
-                            let result_text =
-                                serde_json::to_string_pretty(&result).unwrap_or_default();
-                            let tool_block =
-                                build_tool_result_block(tool_name, &result_text, false);
-                            tool_results.push(tool_block);
-                        }
-                        Err(err) => {
-                            let err_block =
-                                build_tool_result_block(tool_name, &err.to_string(), true);
-                            tool_results.push(err_block);
-                        }
-                    }
+                for item in &exec_result.tool_results {
+                    let block = if item.success {
+                        let result_text = item
+                            .output
+                            .result
+                            .as_ref()
+                            .and_then(|r| serde_json::to_string_pretty(r).ok())
+                            .unwrap_or_default();
+                        build_tool_result_block(&item.tool_name, &result_text, false)
+                    } else {
+                        let err_text = item
+                            .output
+                            .error
+                            .as_deref()
+                            .unwrap_or("tool execution failed");
+                        build_tool_result_block(&item.tool_name, err_text, true)
+                    };
+                    tool_results.push(block);
                 }
                 if !tool_results.is_empty() {
                     let combined = tool_results.join("\n");

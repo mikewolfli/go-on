@@ -42,10 +42,11 @@ pub(super) use mcp::{
 
 // Session handlers
 pub(super) use session::{
-    session_cancel_payload, session_close_payload, session_config_get_payload,
-    session_config_set_payload, session_delete_payload, session_list_payload, session_load_payload,
-    session_new_payload, session_prompt_payload, session_request_permission_payload,
-    session_resume_payload, session_set_config_option_payload, session_set_mode_payload,
+    session_cancel_payload, session_close_payload, session_config_favorite_toggle_payload,
+    session_config_get_payload, session_config_set_payload, session_delete_payload,
+    session_list_payload, session_load_payload, session_new_payload, session_prompt_payload,
+    session_request_permission_payload, session_resume_payload, session_set_config_option_payload,
+    session_set_mode_payload,
 };
 
 // Skill handlers
@@ -78,6 +79,17 @@ pub(super) struct AcpSessionState {
     pub(super) mode: String,
     pub(super) additional_directories: Vec<String>,
     pub(super) config_options: HashMap<String, Value>,
+    /// Per-config-id set of favorited value IDs.
+    /// Key: config_id (e.g. "model"), Value: set of favorited value IDs.
+    pub(super) favorite_config_values: HashMap<String, std::collections::HashSet<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingPermissionRequest {
+    pub(super) tool_name: String,
+    pub(super) tool_args: Value,
+    pub(super) mode: String,
+    pub(super) risk_score: f64,
 }
 
 #[derive(Serialize)]
@@ -122,9 +134,18 @@ static ACP_PERMISSION_STATE: OnceLock<
     tokio::sync::Mutex<HashMap<String, crate::schema::PermissionOptionId>>,
 > = OnceLock::new();
 
-pub(super) fn acp_permission_state(
+pub(crate) fn acp_permission_state(
 ) -> &'static tokio::sync::Mutex<HashMap<String, crate::schema::PermissionOptionId>> {
     ACP_PERMISSION_STATE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+static ACP_PENDING_PERMISSION_REQUESTS: OnceLock<
+    tokio::sync::Mutex<HashMap<String, PendingPermissionRequest>>,
+> = OnceLock::new();
+
+pub(crate) fn acp_pending_permission_requests(
+) -> &'static tokio::sync::Mutex<HashMap<String, PendingPermissionRequest>> {
+    ACP_PENDING_PERMISSION_REQUESTS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
 static ACP_TERMINAL_STATE: OnceLock<StdMutex<HashMap<String, TerminalProcess>>> = OnceLock::new();
@@ -321,6 +342,7 @@ pub(super) fn build_chat_params_from_acp(params: Value, session_state: &AcpSessi
 /// Build config options for model selection, populated from the agent registry.
 pub(super) fn build_model_config_options(
     server: &AcpServer,
+    current_model: Option<&str>,
 ) -> Vec<crate::schema::SessionConfigOption> {
     use crate::schema::{
         SessionConfigGroupId, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -341,6 +363,7 @@ pub(super) fn build_model_config_options(
                     value: SessionConfigValueId::new(m.id.clone()),
                     name: m.name,
                     description: Some(m.id.clone()),
+                    favorite: false,
                     meta: None,
                 })
                 .collect();
@@ -361,7 +384,11 @@ pub(super) fn build_model_config_options(
         ),
         category: Some(SessionConfigOptionCategory::Model),
         kind: SessionConfigKind::Select(SessionConfigSelect {
-            current_value: SessionConfigValueId::new("auto"),
+            current_value: SessionConfigValueId::new(
+                current_model
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("auto"),
+            ),
             options: SessionConfigSelectOptions::Grouped(groups),
         }),
         meta: None,
@@ -601,6 +628,31 @@ mod tests {
         assert_eq!(get_result["configOptions"]["temperature"], 0.7);
     }
 
+    #[tokio::test]
+    async fn session_config_set_payload_returns_selected_model_as_current_value() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let new_result = session_new_payload(&server, json!({"mode": "edit"}))
+            .await
+            .unwrap();
+        let session_id = new_result["sessionId"].as_str().unwrap().to_string();
+
+        let set_result = session_config_set_payload(
+            &server,
+            json!({
+                "sessionId": session_id,
+                "configId": "model",
+                "value": "gpt-test-model"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            set_result["configOptions"][0]["currentValue"],
+            serde_json::Value::String("gpt-test-model".to_string())
+        );
+    }
+
     // ── session/config/get ────────────────────────────────────────────
 
     #[tokio::test]
@@ -625,5 +677,181 @@ mod tests {
             .await
             .unwrap();
         assert!(get_result["configOptions"].as_object().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_request_permission_payload_consumes_pending_request() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let new_result = session_new_payload(&server, json!({"mode": "edit"}))
+            .await
+            .unwrap();
+        let session_id = new_result["sessionId"].as_str().unwrap().to_string();
+
+        {
+            let mut pending = acp_pending_permission_requests().lock().await;
+            pending.insert(
+                session_id.clone(),
+                PendingPermissionRequest {
+                    tool_name: "apply_patch".to_string(),
+                    tool_args: json!({"path": "src/lib.rs"}),
+                    mode: "edit".to_string(),
+                    risk_score: 0.8,
+                },
+            );
+        }
+
+        let result = session_request_permission_payload(
+            &server,
+            json!({
+                "sessionId": session_id,
+                "optionId": "approve"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_object());
+        let pending = acp_pending_permission_requests().lock().await;
+        assert!(!pending.contains_key(new_result["sessionId"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn permission_request_serializes_zed_compatible_option_fields() {
+        let payload = serde_json::to_value(crate::schema::PermissionRequest {
+            message: "confirm".to_string(),
+            options: vec![crate::schema::PermissionOption::new(
+                crate::schema::PermissionOptionId::new("allow"),
+                "Approve",
+                crate::schema::PermissionOptionKind::AllowOnce,
+            )],
+            timeout_secs: Some(30),
+            meta: None,
+        })
+        .unwrap();
+
+        assert_eq!(payload["options"][0]["optionId"], "allow");
+        assert_eq!(payload["options"][0]["name"], "Approve");
+        assert_eq!(payload["options"][0]["kind"], "allow_once");
+        assert!(payload["options"][0].get("id").is_none());
+        assert!(payload["options"][0].get("label").is_none());
+    }
+
+    // ── session/config/favorite/toggle ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn session_config_favorite_toggle_toggle_on() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let new_result = session_new_payload(&server, json!({"mode": "edit"}))
+            .await
+            .unwrap();
+        let session_id = new_result["sessionId"].as_str().unwrap().to_string();
+
+        let result = session_config_favorite_toggle_payload(
+            &server,
+            json!({
+                "sessionId": session_id,
+                "configId": "model",
+                "valueId": "gpt-4"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["favorited"], true);
+        assert_eq!(result["configId"], "model");
+        assert_eq!(result["valueId"], "gpt-4");
+    }
+
+    #[tokio::test]
+    async fn session_config_favorite_toggle_toggle_off() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let new_result = session_new_payload(&server, json!({"mode": "edit"}))
+            .await
+            .unwrap();
+        let session_id = new_result["sessionId"].as_str().unwrap().to_string();
+
+        // First toggle on
+        let _ = session_config_favorite_toggle_payload(
+            &server,
+            json!({
+                "sessionId": session_id,
+                "configId": "model",
+                "valueId": "gpt-4"
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Second toggle off
+        let result = session_config_favorite_toggle_payload(
+            &server,
+            json!({
+                "sessionId": session_id,
+                "configId": "model",
+                "valueId": "gpt-4"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["favorited"], false);
+    }
+
+    #[tokio::test]
+    async fn session_config_favorite_toggle_invalid_returns_false() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+
+        let result = session_config_favorite_toggle_payload(
+            &server,
+            json!({
+                "sessionId": "",
+                "configId": "model",
+                "valueId": "gpt-4"
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["favorited"], false);
+    }
+
+    #[tokio::test]
+    async fn session_config_favorite_toggle_isolation() {
+        // Verify favorites are per-session, not global
+        let server = crate::acp::server::ServerBuilder::default().build();
+        let s1 = session_new_payload(&server, json!({"mode": "edit"}))
+            .await
+            .unwrap();
+        let s2 = session_new_payload(&server, json!({"mode": "edit"}))
+            .await
+            .unwrap();
+        let id1 = s1["sessionId"].as_str().unwrap().to_string();
+        let id2 = s2["sessionId"].as_str().unwrap().to_string();
+
+        // Toggle favorite in session 1
+        let _ = session_config_favorite_toggle_payload(
+            &server,
+            json!({
+                "sessionId": id1,
+                "configId": "model",
+                "valueId": "gpt-4"
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Verify it's not favorited in session 2 (isolation)
+        let result2 = session_config_favorite_toggle_payload(
+            &server,
+            json!({
+                "sessionId": id2,
+                "configId": "model",
+                "valueId": "gpt-4"
+            }),
+        )
+        .await
+        .unwrap();
+        // First toggle on session 2 should be "favorited: true" since it was not yet toggled
+        assert_eq!(result2["favorited"], true);
     }
 }

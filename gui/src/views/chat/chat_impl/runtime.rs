@@ -103,6 +103,9 @@ struct StreamResult {
     /// Actual mode reported by the backend (from SSE done/result event).
     actual_mode: Option<String>,
     sse_errors: u32,
+    /// True when an Error PendingResponse was already sent by process_stream_events.
+    /// Prevents finalize_stream_result from sending a redundant fallback error.
+    error_already_sent: bool,
 }
 
 impl StreamResult {
@@ -116,6 +119,7 @@ impl StreamResult {
             branch_id: None,
             actual_mode: None,
             sse_errors: 0,
+            error_already_sent: false,
         }
     }
 }
@@ -682,6 +686,7 @@ async fn process_stream_events(
                                 },
                             )
                             .await;
+                            result.error_already_sent = true;
                             return result;
                         }
                         _ => {
@@ -765,6 +770,12 @@ async fn finalize_stream_result(
         );
         tracing::warn!("{}", warn_msg);
         send_pending(tx, PendingResponse::UiMessage(warn_msg)).await;
+    }
+
+    // When an error event was already sent by process_stream_events, skip
+    // the fallback diagnostic — the real error message is more useful.
+    if result.error_already_sent {
+        return;
     }
 
     let content_empty = result.content.as_ref().is_none_or(|c| c.is_empty());
@@ -1280,9 +1291,16 @@ impl ChatView {
         // ── Generation deadline guard ──
         // If a generation is stuck and exceeds the 330s deadline, force-reset
         // sending to prevent permanent UI lock (the user can retry).
+        // ── Generation deadline guard ──
+        // If a generation is stuck and exceeds the 330s deadline, force-reset
+        // sending to prevent permanent UI lock (the user can retry).
+        //
+        // Implementation: deadline is set to `Instant::now() + 330s` in send_message.
+        // After 330s of wall time have passed, `Instant::now() > deadline`.
+        // (Do NOT use deadline.elapsed() — that returns 0 if deadline is in the future.)
         if self.sending {
             if let Some(deadline) = self.generation_deadline {
-                if deadline.elapsed().as_secs() > 330 {
+                if std::time::Instant::now() >= deadline {
                     tracing::warn!(
                         "Generation deadline exceeded (330s) — force-resetting sending state"
                     );
@@ -1292,6 +1310,20 @@ impl ChatView {
                     // Reset the active generation counter to unblock future sends
                     self.active_generations
                         .store(0, std::sync::atomic::Ordering::Relaxed);
+                    // Abort all in-flight generation tasks
+                    for gen in self.generation_states.drain(..) {
+                        gen.handle.abort();
+                    }
+                    // Remove empty assistant placeholder messages
+                    if let Some(session) = self
+                        .session_state
+                        .sessions
+                        .get_mut(self.session_state.active_session)
+                    {
+                        session.messages.retain(|m| {
+                            m.role != "assistant" || !m.content.is_empty() || !m.thinking.is_empty()
+                        });
+                    }
                 }
             }
         }

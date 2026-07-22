@@ -6,6 +6,7 @@
 
 // ── Sub-modules (moved from orchestration/ for cohesion) ───────────────────
 pub mod builtin_tools;
+pub mod executor;
 pub mod extended;
 pub mod lock;
 pub mod loop_executor;
@@ -295,7 +296,21 @@ impl ToolRegistry {
                     max_retries: 1,
                     retry_on_failure: true,
                 },
-                fallback_chain: vec!["file_move".to_string()],
+                fallback_chain: vec!["move_path".to_string()],
+            },
+        );
+
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::EditFileTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_edit".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
             },
         );
 
@@ -1631,8 +1646,9 @@ impl ToolRegistry {
         // Some now have their own Tool implementations; others alias
         // to existing tools with the same functionality.
         // create_directory and copy_path have dedicated implementations above.
-        registry.register_alias("delete_path", "file_delete");
-        registry.register_alias("move_path", "file_move");
+        // file_move/file_delete are the old primary names; now they alias to the new canonical names.
+        registry.register_alias("file_move", "move_path");
+        registry.register_alias("file_delete", "delete_path");
         registry.register_alias("execute_command", "shell_exec");
         registry.register_alias("terminal", "shell_exec");
         registry.register_alias("bash", "shell_exec");

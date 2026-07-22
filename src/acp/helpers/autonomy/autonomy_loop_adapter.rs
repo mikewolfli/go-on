@@ -29,6 +29,7 @@ pub(crate) struct AcpAutonomyLoopParams {
     pub agent: Arc<dyn Agent>,
     pub tool_registry: Option<Arc<ToolRegistry>>,
     pub messages: Vec<Message>,
+    pub acp_session_id: Option<String>,
     pub principles: Option<Vec<String>>,
     pub options: Option<std::collections::HashMap<String, Value>>,
     pub timeout_duration: Option<std::time::Duration>,
@@ -76,7 +77,6 @@ pub(crate) async fn run_acp_autonomy_loop(
         max_messages: 200,
         use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default.
         tool_timeout_ms: None,
-        max_tool_concurrency: 4,
         max_tool_retries: 2,
         enable_governance_gate: true,
         // Enable persistent loop so the autonomy loop doesn't stop after
@@ -84,6 +84,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         // encourage tool-based autonomous execution (like Zed's agent).
         persistent_loop: true,
         operation_mode: params.operation_mode.clone(),
+        acp_session_id: params.acp_session_id.clone(),
     };
 
     let result = if config.use_brain_loop {
@@ -175,6 +176,7 @@ fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> 
         "convergence_info": profile.convergence_info,
     });
 
+    let all_tools_failed = profile.failed_plans > 0 && profile.completed_plans == 0;
     AutonomyLoopResult {
         response: response.to_string(),
         report: AutonomyLoopReport {
@@ -193,13 +195,15 @@ fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> 
             total_duration_ms: 0,
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
-            audit_trail: None,
-            stop_reason: if profile.failed_plans > 0 {
+            stop_reason: if all_tools_failed {
+                "all_tools_failed".to_string()
+            } else if profile.failed_plans > 0 {
                 "failed".to_string()
             } else {
                 "completed".to_string()
             },
         },
+        all_tools_failed,
     }
 }
 

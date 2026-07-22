@@ -17,12 +17,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::acp::r#impl::chat::streaming::{emit_tool_approval_event, StreamFrame};
+use crate::acp::r#impl::chat::streaming::StreamFrame;
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::autonomy_runtime::{
     parse_tool_call_token, TOKEN_FINISH_REASON_PREFIX, TOKEN_MODEL_USED_PREFIX,
     TOKEN_THINKING_PREFIX, TOKEN_USAGE_PREFIX,
 };
+use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
 use crate::orchestration::tool::{ToolOutput, ToolRegistry};
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ pub struct AutonomyLoopParams {
 
 /// Configuration for the autonomy loop execution.
 /// Used by autonomy_loop_adapter to create the loop config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AutonomyLoopConfig {
     pub max_iterations: usize,
     pub max_tools_per_round: usize,
@@ -54,7 +55,6 @@ pub struct AutonomyLoopConfig {
     pub require_replan_for_complex: bool,
     pub enable_execution_intelligence: bool,
     pub tool_timeout_ms: Option<u64>,
-    pub max_tool_concurrency: usize,
     pub max_tool_retries: usize,
     pub use_brain_loop: bool,
     pub enable_governance_gate: bool,
@@ -79,6 +79,8 @@ pub struct AutonomyLoopConfig {
     /// The operation mode (edit, safeguard, full_auto, etc.) used for
     /// tool approval events and mode-specific behavior.
     pub operation_mode: String,
+    /// ACP session ID used for permission request round-trips with ACP clients.
+    pub acp_session_id: Option<String>,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -91,7 +93,6 @@ impl Default for AutonomyLoopConfig {
             require_replan_for_complex: true,
             enable_execution_intelligence: true,
             tool_timeout_ms: None,
-            max_tool_concurrency: 4,
             max_tool_retries: 2,
             use_brain_loop: false,
             enable_governance_gate: true,
@@ -102,6 +103,7 @@ impl Default for AutonomyLoopConfig {
             early_stop_confidence_threshold: 0.9,
             capability_signals: false,
             operation_mode: "edit".to_string(),
+            acp_session_id: None,
             use_dag_execution: true,
             enable_agent_reroute: true,
             recovery_orchestrator: None,
@@ -125,7 +127,6 @@ pub struct AutonomyLoopReport {
     pub total_duration_ms: u64,
     pub corrective_actions_applied_total: u64,
     pub corrective_action_effectiveness_ratio: f64,
-    pub audit_trail: Option<Vec<AuditEntry>>,
     pub stop_reason: String,
 }
 
@@ -160,6 +161,10 @@ pub struct AutonomyRound {
 pub struct AutonomyLoopResult {
     pub response: String,
     pub report: AutonomyLoopReport,
+    /// True when tools were requested but ALL of them failed validation or execution.
+    /// The caller can use this flag to return an error status to the client instead
+    /// of pretending the task succeeded.
+    pub all_tools_failed: bool,
 }
 
 /// Execute a full autonomy loop: plan → (execute + observe × N) → finalize.
@@ -185,6 +190,7 @@ pub async fn run_autonomy_loop(
     let mut reasoning = String::new();
     let mut rounds: Vec<AutonomyRound> = Vec::new();
     let mut actual_rounds: usize = 0;
+    let mut any_tool_executed_successfully = false;
     let max_iterations = config.max_iterations.max(1);
 
     for iteration in 0..max_iterations {
@@ -292,6 +298,15 @@ pub async fn run_autonomy_loop(
                             // Tool call detection
                             if let Some((tool_name, tool_args)) = parse_tool_call_token(&t) {
                                 tool_calls.push((tool_name.to_string(), tool_args.to_string()));
+                                // Also append a visible marker to round_response so the
+                                // context fed back to the model on the next iteration
+                                // includes what tool it decided to call and with what args.
+                                let tool_call_text = format!(
+                                    "\n[Calling tool: {} with arguments: {}]\n",
+                                    tool_name, tool_args
+                                );
+                                round_response.push_str(&tool_call_text);
+                                response.push_str(&tool_call_text);
                                 continue;
                             }
                             // Reasoning content — forward to SSE as chunk token
@@ -388,150 +403,76 @@ pub async fn run_autonomy_loop(
             break; // Max iterations reached
         }
 
-        let mut consecutive_failures = 0;
+        // ── Execute all tool calls concurrently via unified executor ──
         const MAX_CONSECUTIVE_TOOL_FAILURES: usize = 5;
+        let exec_result = execute_tools_concurrent(
+            &tool_calls,
+            &tool_registry,
+            &ToolExecConfig {
+                max_concurrency: 10,
+                circuit_breaker_limit: MAX_CONSECUTIVE_TOOL_FAILURES,
+                operation_mode: config.operation_mode.clone(),
+                acp_session_id: config.acp_session_id.clone(),
+            },
+            config.progress_tx.clone(),
+            &params.objective,
+            iteration,
+        )
+        .await;
 
-        for (tool_name, tool_args) in &tool_calls {
-            // ── Stream tool execution progress as visible chat tokens ──
-            // Send SSE progress event before executing tool ────────
-            if let Some(ref tx) = config.progress_tx {
-                let _ = tx.send(StreamFrame {
-                    event: "progress",
-                    payload: serde_json::json!({
-                        "message": format!("executing tool {}...", tool_name),
-                    }),
-                    status: Some("analyzing"),
-                });
-            }
-
-            // Validate tool arguments BEFORE execution
-            let parsed_args: serde_json::Value =
-                serde_json::from_str(tool_args).unwrap_or_default();
-            if let Err(validation_err) =
-                crate::shared::tool_descriptors::validate_required_arguments(
-                    tool_name,
-                    &parsed_args,
-                )
-            {
-                consecutive_failures += 1;
-                let err_msg = format!(
-                    "Tool '{}' call rejected: {}. Required parameters were not provided.\n\
-                     Please provide the required parameters in your next tool call.",
-                    tool_name, validation_err
-                );
-                tracing::warn!(
-                    "autonomy_loop: {} (failure {}/{})",
-                    err_msg,
-                    consecutive_failures,
-                    MAX_CONSECUTIVE_TOOL_FAILURES
-                );
-                round_response.push_str(&format!(
-                    "\n[Tool {} validation failed:]\n{}\n",
-                    tool_name, err_msg
-                ));
-                response.push_str(&format!(
-                    "\n[Tool {} validation failed:]\n{}\n",
-                    tool_name, err_msg
-                ));
-
-                // Circuit breaker: break out if too many consecutive failures
-                if consecutive_failures >= MAX_CONSECUTIVE_TOOL_FAILURES {
-                    let breaker_msg = format!(
-                        "\n[Circuit breaker: stopped after {} consecutive tool call failures. \
-                         Please re-examine the tool schemas and retry with valid arguments.]",
-                        consecutive_failures
-                    );
-                    round_response.push_str(&breaker_msg);
-                    break;
-                }
-                continue;
-            }
-
-            // ── Tool approval event for Edit/SafeGuard modes ──
-            // Emit a tool_approval SSE event if the operation mode requires
-            // frontend-side approval (edit, safeguard). The frontend displays
-            // an Approve/Deny dialog and the user can permit or block the tool.
-            if config.operation_mode == "edit" || config.operation_mode == "safeguard" {
-                let _ = emit_tool_approval_event(
-                    &config.progress_tx,
-                    tool_name,
-                    &parsed_args,
-                    &config.operation_mode,
-                    if config.operation_mode == "safeguard" {
-                        0.5
-                    } else {
-                        0.0
-                    },
-                )
-                .await;
-            }
-
-            if let Some(tool) = tool_registry.get_arc(tool_name) {
-                tracing::info!("autonomy_loop: executing tool {}", tool_name);
-                let input = crate::orchestration::tool::ToolInput {
-                    task_id: format!("autonomy-{}-{}", iteration, tool_name),
-                    phase: "execute".to_string(),
-                    agent_role: "assistant".to_string(),
-                    objective: params.objective.clone(),
-                    constraints: None,
-                    evidence: None,
-                    payload: parsed_args,
-                    allowed_base_dir: None,
-                };
-                let tool_output = match tool.run_async(input).await {
-                    Ok(out) => out,
-                    Err(e) => {
-                        consecutive_failures += 1;
-                        let err_msg = format!("Tool '{}' execution failed: {}", tool_name, e);
-                        tracing::warn!("autonomy_loop: {}", err_msg);
-                        round_response.push_str(&format!("\n❌ **{}** failed: {}\n", tool_name, e));
-                        response.push_str(&format!("\n❌ **{}** failed: {}\n", tool_name, e));
-                        if consecutive_failures >= MAX_CONSECUTIVE_TOOL_FAILURES {
-                            let breaker = format!(
-                                "\n[Circuit breaker: stopped after {} consecutive tool failures]\n",
-                                consecutive_failures
-                            );
-                            round_response.push_str(&breaker);
-                            break;
-                        }
-                        continue;
-                    }
-                };
-                let (tool_summary, tool_body) = format_tool_output(tool_name, &tool_output);
+        // ── Write tool results back to round_response and response ──
+        for item in &exec_result.tool_results {
+            if item.success {
+                let (summary, body) = format_tool_output(&item.tool_name, &item.output);
+                round_response.push_str(&body);
+                response.push_str(&body);
+                any_tool_executed_successfully = true;
 
                 // ── Send completion notification as visible chunk token ──
                 if let Some(ref tx) = config.progress_tx {
                     let _ = tx.send(StreamFrame {
                         event: "chunk",
                         payload: serde_json::json!({
-                            "token": tool_summary,
+                            "token": summary,
                             "tool_status": "completed",
                         }),
                         status: Some("generating"),
                     });
                 }
-                round_response.push_str(&tool_body);
-                response.push_str(&tool_body);
-                consecutive_failures = 0;
             } else {
-                tracing::warn!("autonomy_loop: tool '{}' not found in registry", tool_name);
-                round_response.push_str(&format!("\n[Tool {} not available]\n", tool_name));
+                round_response.push_str(&item.formatted);
+                response.push_str(&item.formatted);
+
+                // ── Send failure notification ──
+                if let Some(ref tx) = config.progress_tx {
+                    let _ = tx.send(StreamFrame {
+                        event: "chunk",
+                        payload: serde_json::json!({
+                            "token": format!("❌ **{}** failed ", item.tool_name),
+                            "tool_status": "failed",
+                        }),
+                        status: Some("generating"),
+                    });
+                }
             }
+        }
+
+        if exec_result.circuit_breaker_triggered {
+            let breaker_msg = format!(
+                "\n[Circuit breaker: stopped after {} consecutive tool call failures]",
+                exec_result.failure_count
+            );
+            round_response.push_str(&breaker_msg);
+            response.push_str(&breaker_msg);
         }
 
         // Count rounds where tools actually executed
         if !tool_calls.is_empty() {
             actual_rounds += 1;
         }
-
-        // If we have a non-empty response (even from a tool), we're done.
-        if !round_response.trim().is_empty() && !tool_calls.is_empty() {
-            // Tools were executed; a follow-up round will continue with the context
-        }
     }
 
     let total_duration_ms = start.elapsed().as_millis() as u64;
-    let total_tools: usize = rounds.iter().map(|r| r.tools_executed.len()).sum();
 
     // ── Emit final summary phase status ─────────────────────────────
     if let Some(ref tx) = config.progress_tx {
@@ -547,9 +488,14 @@ pub async fn run_autonomy_loop(
     // Post-loop summary: if tools were executed in the last round, the
     // agent may not have produced a final text response. Do one more call
     // asking for a summary so the user always sees a final answer.
+    let total_tools = rounds.iter().map(|r| r.tools_executed.len()).sum();
+    let any_tool_executed_successfully_value = any_tool_executed_successfully;
     let last_round_had_tools = rounds.last().is_some_and(|r| !r.tools_executed.is_empty());
     let mut final_response = response;
-    if last_round_had_tools {
+    // Skip summary if all tools failed — the failure context is more
+    // useful to the user than an LLM-summarized version of the same errors.
+    let all_tools_failed = total_tools > 0 && !any_tool_executed_successfully_value;
+    if last_round_had_tools && !all_tools_failed {
         // In FullAuto mode, if the last round already produced response
         // text alongside tool calls, skip the extra summary LLM call to
         // avoid n+1 calls. Only keep this behavior for Edit mode, where
@@ -592,6 +538,8 @@ pub async fn run_autonomy_loop(
         final_response = reasoning;
     }
 
+    let all_tools_failed = total_tools > 0 && !any_tool_executed_successfully;
+
     Ok(AutonomyLoopResult {
         response: final_response,
         report: AutonomyLoopReport {
@@ -604,13 +552,15 @@ pub async fn run_autonomy_loop(
             total_duration_ms,
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
-            audit_trail: None,
-            stop_reason: if total_tools > 0 {
+            stop_reason: if all_tools_failed {
+                "all_tools_failed".to_string()
+            } else if total_tools > 0 {
                 "tools_executed".to_string()
             } else {
                 "completed".to_string()
             },
         },
+        all_tools_failed,
     })
 }
 
@@ -663,38 +613,6 @@ fn format_tool_output(tool_name: &str, output: &ToolOutput) -> (String, String) 
     (summary, body)
 }
 
-/// Compute and return a predictive reroute score.
-#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
-pub fn compute_predictive_reroute(
-    consecutive_failures: u32,
-    _avg_latency: f64,
-    _avg_success_rate: f64,
-    _total_tools: usize,
-    _health_score: f64,
-) -> RerouteDecision {
-    let reroute = consecutive_failures >= 3;
-    RerouteDecision {
-        should_reroute: reroute,
-        score: if reroute { 0.8 } else { 0.0 },
-        reason: if reroute {
-            Some(format!(
-                "{} consecutive failures exceeded threshold",
-                consecutive_failures
-            ))
-        } else {
-            None
-        },
-    }
-}
-
-/// Decision result from the predictive reroute analysis.
-#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
-pub struct RerouteDecision {
-    pub should_reroute: bool,
-    pub score: f64,
-    pub reason: Option<String>,
-}
-
 /// Build a contract snapshot from the loop report.
 pub fn contract_snapshot(report: &AutonomyLoopReport) -> Value {
     json!({
@@ -706,13 +624,6 @@ pub fn contract_snapshot(report: &AutonomyLoopReport) -> Value {
         "corrective_actions_applied_total": report.corrective_actions_applied_total,
         "corrective_action_effectiveness_ratio": report.corrective_action_effectiveness_ratio,
     })
-}
-
-/// Audit entry for tracking governance events.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditEntry {
-    pub event: String,
-    pub status: String,
 }
 
 #[cfg(test)]
@@ -767,7 +678,6 @@ mod tests {
             total_duration_ms: 5000,
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
-            audit_trail: None,
             stop_reason: "completed".to_string(),
         };
         assert_eq!(report.final_phase, AutonomyPhase::Completed);
@@ -786,7 +696,6 @@ mod tests {
             total_duration_ms: 0,
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
-            audit_trail: None,
             stop_reason: "initial".to_string(),
         };
         let json_val = serde_json::to_value(&report).unwrap();
@@ -809,9 +718,9 @@ mod tests {
                 total_duration_ms: 0,
                 corrective_actions_applied_total: 0,
                 corrective_action_effectiveness_ratio: 0.0,
-                audit_trail: None,
                 stop_reason: "no_response".to_string(),
             },
+            all_tools_failed: false,
         };
         assert!(result.response.is_empty());
         assert_eq!(result.report.final_phase, AutonomyPhase::Failed);
@@ -848,7 +757,6 @@ mod tests {
             total_duration_ms: 3000,
             corrective_actions_applied_total: 1,
             corrective_action_effectiveness_ratio: 0.0,
-            audit_trail: None,
             stop_reason: "completed".to_string(),
         };
         let snapshot = contract_snapshot(&report);
@@ -856,48 +764,5 @@ mod tests {
         assert_eq!(snapshot["total_tools"], 5);
         assert_eq!(snapshot["total_duration_ms"], 3000);
         assert_eq!(snapshot["stop_reason"], "completed");
-    }
-
-    #[test]
-    fn predictive_reroute_does_not_trigger_below_threshold() {
-        let decision = compute_predictive_reroute(0, 0.5, 0.3, 2, 0.5);
-        assert!(!decision.should_reroute);
-    }
-
-    #[test]
-    fn predictive_reroute_detects_failure_recovery_when_consecutive_failures_high() {
-        let decision = compute_predictive_reroute(3, 0.5, 0.3, 2, 0.5);
-        assert!(decision.should_reroute);
-        assert!(decision.score > 0.5);
-    }
-
-    #[test]
-    fn predictive_reroute_threshold_edge() {
-        let decision = compute_predictive_reroute(2, 0.5, 0.5, 2, 0.5);
-        assert!(!decision.should_reroute);
-        let decision = compute_predictive_reroute(3, 0.5, 0.5, 2, 0.5);
-        assert!(decision.should_reroute);
-    }
-
-    #[test]
-    fn build_tool_execution_dag_integrated() {
-        let tool_calls: Vec<(String, String)> = vec![
-            (
-                "read_file".to_string(),
-                r#"{"path": "test.txt"}"#.to_string(),
-            ),
-            ("grep".to_string(), r#"{"pattern": "fn"}"#.to_string()),
-            (
-                "search_files".to_string(),
-                r#"{"query": "test"}"#.to_string(),
-            ),
-        ];
-        let node_ids = crate::orchestration::dag_driver::build_tool_execution_dag(&tool_calls);
-        assert!(!node_ids.is_empty());
-        let mut node_ids = node_ids;
-        node_ids.sort();
-        assert_eq!(node_ids[0], "tool-grep-1");
-        assert_eq!(node_ids[1], "tool-read_file-0");
-        assert_eq!(node_ids[2], "tool-search_files-2");
     }
 }

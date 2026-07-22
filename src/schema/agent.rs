@@ -120,6 +120,21 @@ impl NewSessionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionConfigFavoriteToggleResponse {
+    /// The config ID that was toggled.
+    pub config_id: SessionConfigId,
+    /// The value ID that was toggled.
+    pub value_id: SessionConfigValueId,
+    /// Whether the value is now favorited.
+    pub favorited: bool,
+    /// Updated config options after the toggle (includes favorite state).
+    pub config_options: Vec<SessionConfigOption>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct LoadSessionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modes: Option<SessionModeState>,
@@ -218,8 +233,17 @@ pub struct SessionConfigSelectOption {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Whether this option is marked as a favorite/preferred value.
+    /// Zed's ACP client uses this to display starred/pinned config options.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub favorite: bool,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
+}
+
+/// Helper for skip_serializing_if used by `SessionConfigSelectOption::favorite`.
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

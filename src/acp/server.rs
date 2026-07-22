@@ -10,7 +10,9 @@ use std::sync::{
 };
 
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex, Notify, Semaphore};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify, Semaphore};
+
+use serde_json::Value;
 
 use crate::acp::prelude::RuntimeMetrics;
 use crate::adaptive_selector::AdaptiveModelSelector;
@@ -46,8 +48,15 @@ use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::reinforcement::ArtifactLedger;
+use crate::rpc_protocol::{value_to_id, JsonRpcError, JsonRpcResponse};
+use crate::schema::{
+    PermissionOption, PermissionOptionId, PermissionOptionKind, PermissionRequest,
+    SessionNotification, SessionUpdate,
+};
 use crate::security::rate_limiter::GlobalRateLimiter;
 use crate::vector::VectorStore;
+
+type PendingClientRpcResult = std::result::Result<Value, JsonRpcError>;
 
 /// Fire-and-forget outcome event for online_controller.
 /// Write-only operations are sent via channel to eliminate lock contention.
@@ -540,6 +549,23 @@ pub struct AcpServer {
     lazy_memory_retrieval_engine: OnceLock<Option<Arc<MemoryRetrievalEngine>>>,
     /// Lazy initialization parameters for memory persistence.
     lazy_memory_persistence_params: OnceLock<LazyMemoryPersistenceParams>,
+    /// Pending outbound ACP client requests waiting for JSON-RPC responses.
+    pending_client_requests:
+        Arc<tokio::sync::Mutex<HashMap<String, oneshot::Sender<PendingClientRpcResult>>>>,
+}
+
+static CURRENT_ACP_SERVER: OnceLock<StdMutex<Option<Arc<AcpServer>>>> = OnceLock::new();
+
+pub(crate) fn set_current_acp_server(server: Arc<AcpServer>) {
+    let cell = CURRENT_ACP_SERVER.get_or_init(|| StdMutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(server);
+    }
+}
+
+pub(crate) fn current_acp_server() -> Option<Arc<AcpServer>> {
+    let cell = CURRENT_ACP_SERVER.get_or_init(|| StdMutex::new(None));
+    cell.lock().ok().and_then(|guard| guard.clone())
 }
 
 /// Deferred initialization parameters for MemoryPersistence.
@@ -1594,8 +1620,332 @@ impl ServerBuilder {
                 }
                 lock
             },
+            pending_client_requests: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
+}
+
+impl AcpServer {
+    pub(crate) async fn register_pending_client_request(
+        &self,
+        request_id: String,
+    ) -> oneshot::Receiver<PendingClientRpcResult> {
+        let (tx, rx) = oneshot::channel();
+        let mut pending = self.pending_client_requests.lock().await;
+        pending.insert(request_id, tx);
+        rx
+    }
+
+    pub(crate) async fn resolve_pending_client_response(&self, response: JsonRpcResponse) -> bool {
+        let Some(id) = response.id.as_ref().map(value_to_id) else {
+            return false;
+        };
+
+        let sender = {
+            let mut pending = self.pending_client_requests.lock().await;
+            pending.remove(&id)
+        };
+
+        let Some(sender) = sender else {
+            return false;
+        };
+
+        let outcome = match (response.result, response.error) {
+            (Some(result), None) => Ok(result),
+            (None, Some(error)) => Err(error),
+            (Some(result), Some(_)) => Ok(result),
+            (None, None) => Ok(Value::Null),
+        };
+
+        let _ = sender.send(outcome);
+        true
+    }
+
+    pub(crate) async fn request_client_permission(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_args: &Value,
+        mode: &str,
+        risk_score: f64,
+        timeout_secs: u64,
+    ) -> anyhow::Result<bool> {
+        let request_id = format!(
+            "perm-{}-{}",
+            crate::acp::prelude::now_ts_ms(),
+            fastrand::u32(..)
+        );
+        let rx = self
+            .register_pending_client_request(request_id.clone())
+            .await;
+
+        let message = format!("Tool '{}' requires approval in {} mode.", tool_name, mode);
+
+        // ── Send session/update::PermissionRequest notification ──
+        // This is a UI-level notification so the client shows an approval dialog.
+        // The standard ACP session/request_permission JSON-RPC request (below)
+        // is the authoritative approval flow; this notification is a companion
+        // that ensures Zed's UI is aware of the pending approval.
+        self.emit_permission_request_notification(session_id, &message, tool_name, tool_args)
+            .await;
+
+        let request_payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": session_id,
+                "message": message,
+                "toolName": tool_name,
+                "toolArgs": tool_args,
+                "mode": mode,
+                "riskScore": risk_score,
+                "options": [
+                    PermissionOption::new(
+                        PermissionOptionId::new("approve"),
+                        "Approve",
+                        PermissionOptionKind::AllowOnce,
+                    ),
+                    PermissionOption::new(
+                        PermissionOptionId::new("deny"),
+                        "Deny",
+                        PermissionOptionKind::RejectOnce,
+                    )
+                ],
+                "timeoutSecs": timeout_secs,
+            }
+        });
+
+        let Some(transport) = crate::acp::transport::get_current_transport() else {
+            let mut pending = self.pending_client_requests.lock().await;
+            pending.remove(&request_id);
+            return Err(anyhow::anyhow!(
+                "no active ACP transport available for permission request"
+            ));
+        };
+
+        if let Err(e) = transport.write_json_line(&request_payload).await {
+            let mut pending = self.pending_client_requests.lock().await;
+            pending.remove(&request_id);
+            return Err(anyhow::anyhow!(
+                "failed to send permission request to ACP client: {}",
+                e
+            ));
+        }
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await;
+
+        match outcome {
+            Ok(Ok(Ok(result))) => Ok(permission_decision_from_result(&result)),
+            Ok(Ok(Err(err))) => {
+                self.emit_tool_call_update_rejected(
+                    session_id,
+                    tool_name,
+                    tool_args,
+                    &format!("permission error {}: {}", err.code, err.message),
+                )
+                .await;
+                Err(anyhow::anyhow!(
+                    "ACP client returned permission error {}: {}",
+                    err.code,
+                    err.message
+                ))
+            }
+            Ok(Err(_recv_closed)) => {
+                self.emit_tool_call_update_rejected(
+                    session_id,
+                    tool_name,
+                    tool_args,
+                    "permission response channel closed before response arrived",
+                )
+                .await;
+                Err(anyhow::anyhow!(
+                    "permission response channel closed before response arrived"
+                ))
+            }
+            Err(_timeout) => {
+                let mut pending = self.pending_client_requests.lock().await;
+                pending.remove(&request_id);
+                self.emit_tool_call_update_rejected(
+                    session_id,
+                    tool_name,
+                    tool_args,
+                    &format!("permission request timed out after {}s", timeout_secs),
+                )
+                .await;
+                Err(anyhow::anyhow!(
+                    "permission request timed out after {}s",
+                    timeout_secs
+                ))
+            }
+        }
+    }
+
+    /// Emit a `session/update::PermissionRequest` notification so the client
+    /// displays an approval dialog in its UI.
+    async fn emit_permission_request_notification(
+        &self,
+        session_id: &str,
+        message: &str,
+        _tool_name: &str,
+        _tool_args: &Value,
+    ) {
+        let notif = SessionNotification::new(
+            session_id.to_string().into(),
+            SessionUpdate::PermissionRequest(PermissionRequest {
+                message: message.to_string(),
+                options: vec![
+                    PermissionOption::new(
+                        PermissionOptionId::new("approve"),
+                        "Approve",
+                        PermissionOptionKind::AllowOnce,
+                    ),
+                    PermissionOption::new(
+                        PermissionOptionId::new("deny"),
+                        "Deny",
+                        PermissionOptionKind::RejectOnce,
+                    ),
+                ],
+                timeout_secs: None,
+                meta: None,
+            }),
+        );
+        if let Ok(value) = serde_json::to_value(&notif) {
+            let payload = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": value,
+            });
+            if let Some(transport) = crate::acp::transport::get_current_transport() {
+                let _ = transport.write_json_line(&payload).await;
+            }
+        }
+    }
+
+    /// Emit a standard `ToolCallUpdate` with status `InProgress` when a tool starts executing.
+    pub(crate) async fn emit_tool_call_started(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_args: &Value,
+    ) {
+        let update = SessionUpdate::ToolCallUpdate(crate::schema::ToolCallUpdate {
+            id: format!("tool-{}", fastrand::u64(..)),
+            fields: crate::schema::ToolCallUpdateFields {
+                title: Some(format!("Tool '{}'", tool_name)),
+                kind: Some(crate::schema::ToolKind::Other),
+                status: Some(crate::schema::ToolCallStatus::InProgress),
+                raw_input: Some(tool_args.clone()),
+                raw_output: None,
+                content: None,
+            },
+            meta: None,
+        });
+        let notif = SessionNotification::new(session_id.to_string().into(), update);
+        if let Ok(value) = serde_json::to_value(&notif) {
+            let payload = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": value,
+            });
+            if let Some(transport) = crate::acp::transport::get_current_transport() {
+                let _ = transport.write_json_line(&payload).await;
+            }
+        }
+    }
+
+    /// Emit a standard `ToolCallUpdate` when a tool completes (success or failure).
+    pub(crate) async fn emit_tool_call_completed(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_args: &Value,
+        tool_output: &Value,
+        success: bool,
+    ) {
+        let status = if success {
+            crate::schema::ToolCallStatus::Completed
+        } else {
+            crate::schema::ToolCallStatus::Failed
+        };
+        let update = SessionUpdate::ToolCallUpdate(crate::schema::ToolCallUpdate {
+            id: format!("tool-{}", fastrand::u64(..)),
+            fields: crate::schema::ToolCallUpdateFields {
+                title: Some(if success {
+                    format!("Tool '{}' completed", tool_name)
+                } else {
+                    format!("Tool '{}' failed", tool_name)
+                }),
+                kind: Some(crate::schema::ToolKind::Other),
+                status: Some(status),
+                raw_input: Some(tool_args.clone()),
+                raw_output: Some(tool_output.clone()),
+                content: None,
+            },
+            meta: None,
+        });
+        let notif = SessionNotification::new(session_id.to_string().into(), update);
+        if let Ok(value) = serde_json::to_value(&notif) {
+            let payload = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": value,
+            });
+            if let Some(transport) = crate::acp::transport::get_current_transport() {
+                let _ = transport.write_json_line(&payload).await;
+            }
+        }
+    }
+
+    /// Emit a standard `ToolCallUpdate` with status `Cancelled`
+    /// when a permission request is denied or times out.
+    async fn emit_tool_call_update_rejected(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_args: &Value,
+        reason: &str,
+    ) {
+        let update = SessionUpdate::ToolCallUpdate(crate::schema::ToolCallUpdate {
+            id: format!("tool-{}", fastrand::u64(..)),
+            fields: crate::schema::ToolCallUpdateFields {
+                title: Some(format!("Tool '{}': {}", tool_name, reason)),
+                kind: Some(crate::schema::ToolKind::Other),
+                status: Some(crate::schema::ToolCallStatus::Cancelled),
+                raw_input: Some(tool_args.clone()),
+                raw_output: None,
+                content: None,
+            },
+            meta: None,
+        });
+        let notif = SessionNotification::new(session_id.to_string().into(), update);
+        if let Ok(value) = serde_json::to_value(&notif) {
+            let payload = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": value,
+            });
+            if let Some(transport) = crate::acp::transport::get_current_transport() {
+                let _ = transport.write_json_line(&payload).await;
+            }
+        }
+    }
+}
+
+fn permission_decision_from_result(result: &Value) -> bool {
+    if let Some(option_id) = result.get("optionId").and_then(Value::as_str) {
+        return option_id.eq_ignore_ascii_case("approve")
+            || option_id.eq_ignore_ascii_case("allow")
+            || option_id.eq_ignore_ascii_case("allow_once")
+            || option_id.eq_ignore_ascii_case("allow_always");
+    }
+    if let Some(approved) = result.get("approved").and_then(Value::as_bool) {
+        return approved;
+    }
+    if let Some(allowed) = result.get("allow").and_then(Value::as_bool) {
+        return allowed;
+    }
+    false
 }
 
 impl Default for ServerBuilder {

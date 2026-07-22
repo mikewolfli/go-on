@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 
 use serde::Serialize;
-use tracing::warn;
 
 use crate::acp::prelude::functions::now_ts;
 
@@ -110,10 +109,7 @@ impl CircuitBreakerRegistry {
 
     /// Get the number of open circuit breakers
     pub fn open_count(&self) -> u32 {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let guard = crate::lock_or_recover!(self.inner);
         guard
             .values()
             .filter(|state| matches!(state.stage, CircuitBreakerStage::Open))
@@ -122,10 +118,7 @@ impl CircuitBreakerRegistry {
 
     /// Get circuit breaker snapshots
     pub fn snapshots(&self) -> Vec<CircuitBreakerSnapshot> {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let guard = crate::lock_or_recover!(self.inner);
         guard
             .iter()
             .map(|(name, state)| CircuitBreakerSnapshot {
@@ -146,10 +139,7 @@ impl CircuitBreakerRegistry {
 
     /// Reset one circuit breaker or all tracked breakers back to closed state.
     pub fn reset(&self, name: Option<&str>) -> usize {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = crate::lock_or_recover!(self.inner);
 
         let reset_state = |state: &mut CircuitBreakerState| {
             state.stage = CircuitBreakerStage::Closed;
@@ -182,10 +172,7 @@ impl CircuitBreakerRegistry {
     /// Check whether the named breaker is in the HalfOpen state.
     /// Returns `false` if the breaker is not tracked.
     pub fn is_half_open(&self, name: &str) -> bool {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let guard = crate::lock_or_recover!(self.inner);
         guard
             .get(name)
             .is_some_and(|state| state.stage == CircuitBreakerStage::HalfOpen)
@@ -197,10 +184,7 @@ impl CircuitBreakerRegistry {
     /// [`CircuitBreakerAdmission::HalfOpenProbe`] when a probe is allowed,
     /// and [`CircuitBreakerAdmission::Rejected`] when the breaker is open.
     pub fn admit(&self, name: &str) -> CircuitBreakerAdmission {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = crate::lock_or_recover!(self.inner);
         let state = guard.entry(name.to_string()).or_default();
         match state.stage {
             CircuitBreakerStage::Closed => CircuitBreakerAdmission::Closed,
@@ -232,10 +216,7 @@ impl CircuitBreakerRegistry {
 
     /// Record a successful call, closing or moving out of half-open state.
     pub fn record_success(&self, name: &str) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = crate::lock_or_recover!(self.inner);
         if let Some(state) = guard.get_mut(name) {
             state.success_count += 1;
             match state.stage {
@@ -258,10 +239,7 @@ impl CircuitBreakerRegistry {
 
     /// Internal implementation shared by `record_failure`.
     fn _record_failure(&self, name: &str) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = crate::lock_or_recover!(self.inner);
         let state = guard.entry(name.to_string()).or_default();
         state.failure_count += 1;
         match state.stage {

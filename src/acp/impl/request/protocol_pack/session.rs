@@ -1,4 +1,10 @@
 use super::*;
+use crate::schema::{
+    ConfigOptionUpdate, ContentBlock, ContentChunk, SessionConfigSelectOptions, SessionUpdate,
+    TextContent,
+};
+
+const ACP_PERMISSION_OPTION_APPROVE: &str = "approve";
 
 // ── Session handlers ─────────────────────────────────────────────────────
 
@@ -56,6 +62,7 @@ pub async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Va
                 mode: current_mode.clone(),
                 additional_directories: additional_directories.clone(),
                 config_options: config_options_init.clone(),
+                favorite_config_values: Default::default(),
             },
         );
     }
@@ -80,7 +87,7 @@ pub async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Va
         }
     }
 
-    let config_options = super::build_model_config_options(server);
+    let config_options = super::build_model_config_options(server, None);
 
     Ok(serde_json::to_value(
         crate::schema::NewSessionResponse::new(crate::schema::SessionId::new(session_id))
@@ -109,6 +116,7 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
                             mode: persisted.mode.clone(),
                             additional_directories: persisted.additional_directories.clone(),
                             config_options: persisted.config_options.clone(),
+                            favorite_config_values: Default::default(),
                         },
                     );
                 }
@@ -116,6 +124,7 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
         }
     }
 
+    // Build response
     let stored = {
         let state = super::acp_session_state().lock().await;
         state.get(session_id).cloned().unwrap_or_default()
@@ -124,7 +133,8 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
     let mut modes = super::build_default_modes();
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode);
 
-    let config_options = super::build_model_config_options(server);
+    let current_model = stored.config_options.get("model").and_then(Value::as_str);
+    let config_options = super::build_model_config_options(server, current_model);
 
     Ok(serde_json::to_value(&crate::schema::LoadSessionResponse {
         modes: Some(modes),
@@ -255,6 +265,80 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         }
                     }
                 }
+                "tool_approval" => {
+                    if !thinking_buf.is_empty() {
+                        send_session_update(
+                            &sid,
+                            SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+                                ContentBlock::Text(TextContent::new(std::mem::take(
+                                    &mut thinking_buf,
+                                ))),
+                            )),
+                        )
+                        .await;
+                    }
+                    if !message_buf.is_empty() {
+                        send_session_update(
+                            &sid,
+                            SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                ContentBlock::Text(TextContent::new(std::mem::take(
+                                    &mut message_buf,
+                                ))),
+                            )),
+                        )
+                        .await;
+                    }
+
+                    let tool_name = frame
+                        .payload
+                        .get("tool_name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let tool_args = frame
+                        .payload
+                        .get("tool_args")
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    let mode = frame
+                        .payload
+                        .get("mode")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let risk_score = frame
+                        .payload
+                        .get("risk_score")
+                        .and_then(Value::as_f64)
+                        .unwrap_or_default();
+
+                    // Register pending permission request for the inbound
+                    // session/request_permission handler to consume.
+                    // The actual authorization JSON-RPC request/response flow
+                    // is handled by AcpServer::request_client_permission() via
+                    // ensure_tool_permission in the autonomy loop. This pending
+                    // registration ensures that when the ACP client responds to
+                    // the session/request_permission JSON-RPC request, the
+                    // inbound handler can still route the decision back to the
+                    // governance layer (evaluator.approve_tool / .revoke_tool_approval).
+                    register_pending_permission_request(
+                        &sid,
+                        tool_name.clone(),
+                        tool_args.clone(),
+                        mode.clone(),
+                        risk_score,
+                    )
+                    .await;
+
+                    // NOTE: We no longer send SessionUpdate::PermissionRequest here.
+                    // The AcpServer::request_client_permission() method (called by
+                    // ensure_tool_permission in the autonomy loop) now centrally
+                    // emits both:
+                    //   1. session/update::PermissionRequest notification (UI hint)
+                    //   2. session/request_permission JSON-RPC request (authoritative)
+                    // This eliminates the double-send that occurred when both
+                    // the bridge and the autonomy loop emitted permission requests.
+                }
                 "result" | "done" => {
                     // Stream ending — flush remaining buffers
                     if !thinking_buf.is_empty() {
@@ -362,9 +446,7 @@ pub async fn send_chunk(server: &AcpServer, session_id: &str, chunk_type: &str, 
 /// from the autonomy loop's `StreamFrame` events directly through the global
 /// transport, without borrowing the `AcpServer` across a `tokio::spawn` boundary.
 async fn send_session_update_notification(session_id: &str, chunk_type: &str, text: &str) {
-    use crate::schema::{
-        ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
-    };
+    use crate::schema::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
     let update = match chunk_type {
         "agent_thought_chunk" => SessionUpdate::AgentThoughtChunk(ContentChunk::new(
             ContentBlock::Text(TextContent::new(text)),
@@ -373,6 +455,11 @@ async fn send_session_update_notification(session_id: &str, chunk_type: &str, te
             TextContent::new(text),
         ))),
     };
+    send_session_update(session_id, update).await;
+}
+
+async fn send_session_update(session_id: &str, update: SessionUpdate) {
+    use crate::schema::SessionNotification;
     let notif = SessionNotification::new(session_id.into(), update);
     if let Ok(value) = serde_json::to_value(&notif) {
         let payload = serde_json::json!({
@@ -384,6 +471,29 @@ async fn send_session_update_notification(session_id: &str, chunk_type: &str, te
             let _ = transport.write_json_line(&payload).await;
         }
     }
+}
+
+async fn register_pending_permission_request(
+    session_id: &str,
+    tool_name: String,
+    tool_args: Value,
+    mode: String,
+    risk_score: f64,
+) {
+    {
+        let mut decisions = super::acp_permission_state().lock().await;
+        decisions.remove(session_id);
+    }
+    let mut pending = super::acp_pending_permission_requests().lock().await;
+    pending.insert(
+        session_id.to_string(),
+        super::PendingPermissionRequest {
+            tool_name,
+            tool_args,
+            mode,
+            risk_score,
+        },
+    );
 }
 
 /// Handle `session/cancel` — cancels a session.
@@ -530,6 +640,7 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
                             mode: persisted.mode.clone(),
                             additional_directories: persisted.additional_directories.clone(),
                             config_options: persisted.config_options.clone(),
+                            favorite_config_values: Default::default(),
                         },
                     );
                 }
@@ -550,7 +661,15 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
 
     let mut modes = super::build_default_modes();
     modes.current_mode_id = SessionModeId::new(current_mode);
-    let config_options = super::build_model_config_options(server);
+    let current_model = {
+        let state = super::acp_session_state().lock().await;
+        state
+            .get(session_id)
+            .and_then(|entry| entry.config_options.get("model"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    };
+    let config_options = super::build_model_config_options(server, current_model.as_deref());
 
     Ok(serde_json::to_value(&ResumeSessionResponse {
         modes: Some(modes),
@@ -577,6 +696,10 @@ pub async fn session_close_payload(server: &AcpServer, params: Value) -> Result<
             let mut permissions = super::acp_permission_state().lock().await;
             permissions.remove(session_id);
         }
+        {
+            let mut pending = super::acp_pending_permission_requests().lock().await;
+            pending.remove(session_id);
+        }
 
         #[cfg(feature = "multi-users-server")]
         if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
@@ -596,7 +719,7 @@ pub async fn session_close_payload(server: &AcpServer, params: Value) -> Result<
 
 /// Handle `session/request_permission` — client responds to a permission request.
 pub async fn session_request_permission_payload(
-    _server: &AcpServer,
+    server: &AcpServer,
     params: Value,
 ) -> Result<Value> {
     use crate::schema::PermissionOptionId;
@@ -615,6 +738,35 @@ pub async fn session_request_permission_payload(
             session_id.to_string(),
             PermissionOptionId::new(option_id.to_string()),
         );
+
+        let pending_request = {
+            let mut pending = super::acp_pending_permission_requests().lock().await;
+            pending.remove(session_id)
+        };
+
+        if let Some(pending_request) = pending_request {
+            if let Some(ref harness_bus) = server.governance_deps.harness_bus {
+                if option_id.eq_ignore_ascii_case(ACP_PERMISSION_OPTION_APPROVE) {
+                    harness_bus
+                        .evaluator
+                        .approve_tool(&pending_request.tool_name);
+                } else {
+                    harness_bus
+                        .evaluator
+                        .revoke_tool_approval(&pending_request.tool_name);
+                }
+            }
+
+            tracing::info!(
+                session_id = %session_id,
+                tool_name = %pending_request.tool_name,
+                mode = %pending_request.mode,
+                risk_score = pending_request.risk_score,
+                tool_args = %pending_request.tool_args,
+                decision = %option_id,
+                "ACP permission response recorded"
+            );
+        }
     }
 
     Ok(serde_json::Value::Object(serde_json::Map::new()))
@@ -627,10 +779,7 @@ pub async fn session_request_permission_payload(
 /// Each session gets its own entry (via `state.entry(session_id).or_default()`),
 /// so options from different sessions never collide. The value is also persisted
 /// to SQLite when feature `backend-sqlite` is enabled.
-pub async fn session_set_config_option_payload(
-    _server: &AcpServer,
-    params: Value,
-) -> Result<Value> {
+pub async fn session_set_config_option_payload(server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -664,7 +813,7 @@ pub async fn session_set_config_option_payload(
         };
 
         #[cfg(feature = "backend-sqlite")]
-        if let Some(ref store) = _server.session_store {
+        if let Some(ref store) = server.session_store {
             use crate::acp::session_persistence::PersistedSession;
             let now = crate::shared::timestamps::now_ts_ms();
             let persisted = PersistedSession {
@@ -680,6 +829,28 @@ pub async fn session_set_config_option_payload(
                 tracing::warn!(error = %e, session_id = %session_id, "Failed to persist config option change to SQLite");
             }
         }
+
+        let current_model = if config_id == "model" {
+            value.as_str()
+        } else {
+            None
+        };
+        let config_options = super::build_model_config_options(server, current_model);
+        send_session_update(
+            session_id,
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate {
+                config_options: config_options.clone(),
+                meta: None,
+            }),
+        )
+        .await;
+
+        return Ok(serde_json::to_value(
+            &crate::schema::SetSessionConfigOptionResponse {
+                config_options,
+                meta: None,
+            },
+        )?);
     }
 
     Ok(serde_json::to_value(
@@ -717,6 +888,10 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
             {
                 let mut permissions = super::acp_permission_state().lock().await;
                 permissions.remove(session_id);
+            }
+            {
+                let mut pending = super::acp_pending_permission_requests().lock().await;
+                pending.remove(session_id);
             }
 
             #[cfg(feature = "multi-users-server")]
@@ -784,4 +959,130 @@ pub async fn session_config_get_payload(_server: &AcpServer, params: Value) -> R
         "configOptions": all_options,
         "sessionId": session_id
     }))
+}
+
+/// Handle `session/config/favorite/toggle` — toggle the favorite status of a config option value.
+///
+/// Zed's ACP client supports marking config option values as favorites ("starred").
+/// This endpoint toggles the favorite state and returns the updated config options
+/// with the new favorite state reflected.
+pub async fn session_config_favorite_toggle_payload(
+    server: &AcpServer,
+    params: Value,
+) -> Result<Value> {
+    use crate::schema::{SessionConfigId, SessionConfigKind, SessionConfigValueId};
+
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let config_id = params
+        .get("configId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let value_id = params
+        .get("valueId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if session_id.is_empty() || config_id.is_empty() || value_id.is_empty() {
+        return Ok(serde_json::json!({
+            "configId": config_id,
+            "valueId": value_id,
+            "favorited": false,
+            "configOptions": [],
+        }));
+    }
+
+    let favorited = {
+        let mut state = super::acp_session_state().lock().await;
+        let session = state.entry(session_id.to_string()).or_default();
+        let favorites = session
+            .favorite_config_values
+            .entry(config_id.to_string())
+            .or_default();
+        if !favorites.insert(value_id.to_string()) {
+            // Already favorited — remove it (toggle off)
+            favorites.remove(value_id);
+            false
+        } else {
+            true
+        }
+    };
+
+    // Mark the version timestamp for config option change
+    tracing::info!(
+        target: "acp::protocol_pack",
+        session_id = %session_id,
+        config_id = %config_id,
+        value_id = %value_id,
+        favorited = %favorited,
+        "session/config/favorite/toggle"
+    );
+
+    // Build updated config options with favorite state
+    let current_model = {
+        let state = super::acp_session_state().lock().await;
+        state.get(session_id).and_then(|s| {
+            s.config_options
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+    };
+    let mut all_options = super::build_model_config_options(server, current_model.as_deref());
+
+    // Apply favorite state to the returned config options
+    for option in &mut all_options {
+        if option.id.as_str() == config_id {
+            // SessionConfigKind::Select is the only variant
+            let SessionConfigKind::Select(ref mut select) = option.kind;
+            apply_favorites_to_select(&mut select.options, session_id, config_id).await;
+        }
+    }
+
+    Ok(serde_json::to_value(
+        &crate::schema::SessionConfigFavoriteToggleResponse {
+            config_id: SessionConfigId::new(config_id),
+            value_id: SessionConfigValueId::new(value_id),
+            favorited,
+            config_options: all_options,
+            meta: None,
+        },
+    )?)
+}
+
+/// Apply favorite state to select options based on stored session favorites.
+async fn apply_favorites_to_select(
+    options: &mut SessionConfigSelectOptions,
+    session_id: &str,
+    config_id: &str,
+) {
+    let favorites = {
+        let state = super::acp_session_state().lock().await;
+        state
+            .get(session_id)
+            .and_then(|s| s.favorite_config_values.get(config_id))
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    match options {
+        SessionConfigSelectOptions::Ungrouped(ref mut list) => {
+            for opt in list.iter_mut() {
+                if favorites.contains(opt.value.as_str()) {
+                    opt.favorite = true;
+                }
+            }
+        }
+        SessionConfigSelectOptions::Grouped(ref mut groups) => {
+            for group in groups.iter_mut() {
+                for opt in group.options.iter_mut() {
+                    if favorites.contains(opt.value.as_str()) {
+                        opt.favorite = true;
+                    }
+                }
+            }
+        }
+    }
 }

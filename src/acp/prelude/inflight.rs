@@ -12,7 +12,7 @@ use std::sync::Arc;
 // See docs/log/log-20260625-1.md §Remaining Non-Issues.
 use std::sync::Mutex as StdMutex;
 
-use tracing::{trace, warn};
+use tracing::trace;
 
 // ============================================================================
 // Internal state
@@ -87,10 +87,7 @@ impl InflightLimiter {
         phase_limit: Option<u64>,
         global_limit: Option<u64>,
     ) -> Option<InflightGuard> {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = crate::lock_or_recover!(self.inner);
         let effective_global = global_limit.unwrap_or_else(|| {
             if self.max_inflight > 0 {
                 self.max_inflight as u64
@@ -118,10 +115,7 @@ impl InflightLimiter {
     }
 
     fn leave(&self, phase_name: &str) {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = crate::lock_or_recover!(self.inner);
         guard.global = guard.global.saturating_sub(1);
         if let Some(value) = guard.phase.get_mut(phase_name) {
             *value = value.saturating_sub(1);
@@ -141,10 +135,7 @@ impl InflightLimiter {
 
     /// Check if inflight limiter is healthy
     pub fn is_healthy(&self) -> bool {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let guard = crate::lock_or_recover!(self.inner);
         let healthy = if self.max_inflight == 0 {
             true // unlimited
         } else {

@@ -90,7 +90,7 @@ pub struct FileMoveTool;
 
 impl Tool for FileMoveTool {
     fn name(&self) -> &'static str {
-        "file_move"
+        "move_path"
     }
     fn description(&self) -> &str {
         "Move or rename a file from source to destination"
@@ -139,7 +139,7 @@ impl Tool for FileMoveTool {
                 source_path.display(),
                 dest_path.display()
             )),
-            pua_report: Some(tool_execution_report("file_move", Some("file_moved"))),
+            pua_report: Some(tool_execution_report("move_path", Some("file_moved"))),
         })
     }
 }
@@ -150,7 +150,7 @@ pub struct FileDeleteTool;
 
 impl Tool for FileDeleteTool {
     fn name(&self) -> &'static str {
-        "file_delete"
+        "delete_path"
     }
     fn description(&self) -> &str {
         "Delete a file (requires confirmation)"
@@ -198,7 +198,7 @@ impl Tool for FileDeleteTool {
                 if is_dir { "directory" } else { "file" },
                 validated.display()
             )),
-            pua_report: Some(tool_execution_report("file_delete", Some("file_deleted"))),
+            pua_report: Some(tool_execution_report("delete_path", Some("file_deleted"))),
         })
     }
 }
@@ -261,6 +261,79 @@ impl Tool for CreateDirectoryTool {
                 "create_directory",
                 Some("directory_created"),
             )),
+        })
+    }
+}
+
+// ── EditFileTool ────────────────────────────────────────────────────────
+
+pub struct EditFileTool;
+
+impl Tool for EditFileTool {
+    fn name(&self) -> &'static str {
+        "edit_file"
+    }
+    fn description(&self) -> &str {
+        "Edit a file by replacing exact text with new text (precision text replacement)"
+    }
+    fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let path = input.payload["path"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
+        let old_text = input.payload["old_text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("edit_file requires arguments.old_text"))?;
+        let new_text = input.payload["new_text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("edit_file requires arguments.new_text"))?;
+
+        let validated = sanitize_path_for_write(input, path)?;
+
+        if !validated.exists() {
+            anyhow::bail!("{}", tf("error.path_not_found", &[("path", path)]));
+        }
+
+        // Read the file content
+        let content = fs::read_to_string(&validated).context("failed to read file")?;
+
+        // Count occurrences of old_text
+        let occurrences = content.matches(old_text).count();
+
+        if occurrences == 0 {
+            anyhow::bail!("edit_file: old_text not found in '{}'", validated.display());
+        }
+
+        if occurrences > 1 {
+            anyhow::bail!(
+                "edit_file: old_text found {} times in '{}'; expected exactly one occurrence",
+                occurrences,
+                validated.display()
+            );
+        }
+
+        // Perform the single replacement
+        let new_content = content.replace(old_text, new_text);
+
+        fs::write(&validated, &new_content).context("failed to write file after edit")?;
+
+        info!(
+            path = %validated.display(),
+            "tool: file edited successfully"
+        );
+
+        Ok(ToolOutput {
+            success: true,
+            result: Some(serde_json::json!({
+                "path": validated.to_string_lossy(),
+                "replacement_count": 1,
+            })),
+            error: None,
+            verification: Some("file_edited".to_string()),
+            audit_log: Some(format!(
+                "Edited file: {} (1 replacement)",
+                validated.display()
+            )),
+            pua_report: Some(tool_execution_report("edit_file", Some("file_edited"))),
         })
     }
 }

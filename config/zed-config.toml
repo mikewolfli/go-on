@@ -86,7 +86,7 @@ supports_system = true
 [flow]
 name = "go-on-zed"
 workflow_type = "auto"
-phases = ["think", "act", "check", "done"]
+phases = ["think", "act", "check", "review", "done"]
 
 [phases.think]
 description = "Think — analyze requirements, gather context, plan"
@@ -129,6 +129,22 @@ cache_enabled = true
 vector_enabled = true
 summary_enabled = true
 phase_max_inflight = 6
+global_max_inflight = 32
+
+[phases.review]
+description = "Review — validate changes, inspect diff, verify quality"
+agents = ["deepseek", "copilot"]
+fallback = true
+
+[phases.review.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+review_timeout_policy = "reject"
+review_min_response_chars = 12
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 4
 global_max_inflight = 32
 
 [phases.done]

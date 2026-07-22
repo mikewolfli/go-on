@@ -101,9 +101,10 @@ impl ChatView {
         let in_flight = self.template_state.template_save_in_flight.clone();
         let epoch = self.template_state.template_save_epoch.clone();
         let this_epoch = epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
-        let templates = self.template_state.prompt_templates.clone();
         let path = Self::templates_path();
-        let json_payload = match serde_json::to_string_pretty(&templates) {
+        // Serialize from reference to avoid deep-cloning all templates.
+        let json_payload = match serde_json::to_string_pretty(&self.template_state.prompt_templates)
+        {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Failed to serialize templates: {e}; save skipped");
@@ -145,9 +146,9 @@ impl ChatView {
         let in_flight = self.session_state.session_save_in_flight.clone();
         let epoch = self.session_state.session_save_epoch.clone();
         let this_epoch = epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
-        let sessions = self.session_state.sessions.clone();
         let path = Self::sessions_path();
-        let json_payload = match serde_json::to_string_pretty(&sessions) {
+        // Serialize from reference to avoid deep-cloning all sessions.
+        let json_payload = match serde_json::to_string_pretty(&self.session_state.sessions) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Failed to serialize sessions: {e}; save skipped");

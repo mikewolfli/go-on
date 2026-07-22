@@ -130,7 +130,8 @@ pub use dxf_tool::DxfReadTool;
 pub use email::EmailParseTool;
 pub use environment_info::EnvironmentInfoTool;
 pub use filesystem::{
-    CopyPathTool, CreateDirectoryTool, FileDeleteTool, FileMoveTool, ListDirectoryTool,
+    CopyPathTool, CreateDirectoryTool, EditFileTool, FileDeleteTool, FileMoveTool,
+    ListDirectoryTool,
 };
 pub use format::FormatCodeTool;
 #[cfg(feature = "cam-gcode")]

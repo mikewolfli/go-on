@@ -819,6 +819,7 @@ pub(crate) async fn execute_autonomy_round(
             selected_agent: String::new(),
             response_text: String::new(),
             agent_attempts: Vec::new(),
+            all_tools_failed: false,
         };
     }
 
@@ -828,6 +829,7 @@ pub(crate) async fn execute_autonomy_round(
     let mut response_text = String::new();
     let mut selected_agent = String::new();
     let mut autonomy_loop_executed = false;
+    let mut all_tools_failed_outcome = false;
 
     for (idx, (agent_name, agent)) in autonomy_candidates.into_iter().enumerate() {
         if idx > 0 && !reroute_enabled {
@@ -855,13 +857,7 @@ pub(crate) async fn execute_autonomy_round(
             agent_opts.remove("tool_choice");
         }
         let agent_opts = Some(agent_opts);
-        let autonomy_tool_registry = if agent_name.to_lowercase().contains("copilot") {
-            None // Copilot has its own native tools, no Go-On tool registry needed
-        } else {
-            Some(std::sync::Arc::new(
-                crate::orchestration::tool::ToolRegistry::new(),
-            ))
-        };
+        let autonomy_tool_registry = None;
 
         let effective_mode = if _params.mode.is_empty() {
             "edit"
@@ -872,6 +868,7 @@ pub(crate) async fn execute_autonomy_round(
             agent,
             tool_registry: autonomy_tool_registry,
             messages: agent_messages.to_vec(),
+            acp_session_id: _params.conversation_id.clone(),
             principles: phase.principles.clone(),
             options: agent_opts,
             timeout_duration: request_timeout(phase.options.as_ref()),
@@ -885,12 +882,16 @@ pub(crate) async fn execute_autonomy_round(
         match result {
             Ok(loop_result) => {
                 let stop_reason = loop_result.report.stop_reason.clone();
+                all_tools_failed_outcome = loop_result.all_tools_failed;
                 let produced_response = !loop_result.response.trim().is_empty();
+                // When all tools failed, the response contains only error messages.
+                // We still consider the autonomy loop "executed" but mark the
+                // failure so the caller can return an appropriate error status.
                 let autonomy_contract =
                     crate::acp::helpers::autonomy_loop::contract_snapshot(&loop_result.report);
                 agent_attempts.push(json!({
                     "agent": agent_name,
-                    "ok": produced_response,
+                    "ok": produced_response && !all_tools_failed_outcome,
                     "autonomy_loop": true,
                     "autonomy_contract": autonomy_contract,
                     "total_rounds": loop_result.report.total_rounds,
@@ -903,7 +904,7 @@ pub(crate) async fn execute_autonomy_round(
                     "duration_ms": attempt_started.elapsed().as_millis() as u64,
                 }));
                 record_autonomy_loop_stop_reason(&loop_result.report.stop_reason);
-                if produced_response {
+                if produced_response && !all_tools_failed_outcome {
                     autonomy_loop_executed = true;
                     response_text = loop_result.response;
                     selected_agent = agent_name;
@@ -936,6 +937,7 @@ pub(crate) async fn execute_autonomy_round(
         selected_agent,
         response_text,
         agent_attempts,
+        all_tools_failed: all_tools_failed_outcome,
     }
 }
 

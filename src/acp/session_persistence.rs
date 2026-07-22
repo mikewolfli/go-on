@@ -86,7 +86,10 @@ impl SessionStore {
         let last_active = session.last_active_ms;
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let guard = conn.lock().unwrap();
+            let guard = conn.lock().unwrap_or_else(|e| {
+                tracing::warn!("session_persistence: mutex poisoned in upsert, recovering");
+                e.into_inner()
+            });
             guard.execute(
                 "INSERT INTO acp_sessions (session_id, cwd, mode, additional_directories, config_options, created_at_ms, last_active_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -110,7 +113,10 @@ impl SessionStore {
         let session_id = session_id.to_string();
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let guard = conn.lock().unwrap();
+            let guard = conn.lock().unwrap_or_else(|e| {
+                tracing::warn!("session_persistence: mutex poisoned in load, recovering");
+                e.into_inner()
+            });
             let mut stmt = guard.prepare(
                 "SELECT session_id, cwd, mode, additional_directories, config_options, created_at_ms, last_active_ms
                  FROM acp_sessions WHERE session_id = ?1"
@@ -152,10 +158,15 @@ impl SessionStore {
         let session_id = session_id.to_string();
         let conn = self.conn.clone();
         let affected = tokio::task::spawn_blocking(move || {
-            conn.lock().unwrap().execute(
-                "DELETE FROM acp_sessions WHERE session_id = ?1",
-                rusqlite::params![session_id],
-            )
+            conn.lock()
+                .unwrap_or_else(|e| {
+                    tracing::warn!("session_persistence: mutex poisoned in delete, recovering");
+                    e.into_inner()
+                })
+                .execute(
+                    "DELETE FROM acp_sessions WHERE session_id = ?1",
+                    rusqlite::params![session_id],
+                )
         })
         .await??;
         Ok(affected > 0)
@@ -165,7 +176,10 @@ impl SessionStore {
     pub async fn list_all(&self) -> Result<Vec<PersistedSession>> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let guard = conn.lock().unwrap();
+            let guard = conn.lock().unwrap_or_else(|e| {
+                tracing::warn!("session_persistence: mutex poisoned in list_all, recovering");
+                e.into_inner()
+            });
             let mut stmt = guard.prepare(
                 "SELECT session_id, cwd, mode, additional_directories, config_options, created_at_ms, last_active_ms
                  FROM acp_sessions ORDER BY last_active_ms DESC"
@@ -204,10 +218,17 @@ impl SessionStore {
     pub async fn cleanup_stale(&self, before_ms: i64) -> Result<usize> {
         let conn = self.conn.clone();
         let affected = tokio::task::spawn_blocking(move || {
-            conn.lock().unwrap().execute(
-                "DELETE FROM acp_sessions WHERE last_active_ms < ?1",
-                rusqlite::params![before_ms],
-            )
+            conn.lock()
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "session_persistence: mutex poisoned in cleanup_stale, recovering"
+                    );
+                    e.into_inner()
+                })
+                .execute(
+                    "DELETE FROM acp_sessions WHERE last_active_ms < ?1",
+                    rusqlite::params![before_ms],
+                )
         })
         .await??;
         Ok(affected)

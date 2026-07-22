@@ -18,19 +18,18 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
 
-use futures_util::stream::FuturesUnordered;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use anyhow::Result;
 use serde_json::{json, Value};
 use tokio::io::AsyncBufReadExt;
 use tokio::signal;
-use tokio::sync::{mpsc, Notify, Semaphore};
+use tokio::sync::{mpsc, Notify};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 use crate::acp::helpers::autonomy::terminal_chat_contract_snapshot;
+use crate::acp::helpers::context::run_with_optional_timeout;
 use crate::acp::r#impl::chat::agent_runtime::{collect_agent_responses, CollectedResponse};
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::cli::markdown_renderer::StreamMarkdownRenderer;
@@ -44,10 +43,18 @@ use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
     REASONING_END, REASONING_START,
 };
+use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
 use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry};
 
 /// Maximum number of characters from a tool result sent to the LLM.
 const MAX_TOOL_RESULT_CHARS: usize = 100_000;
+
+/// Maximum number of tool results included in a single follow-up message.
+/// Mirrors ACP's default max_tools_per_round (8). Prevents message bloat.
+const MAX_TOOLS_IN_FOLLOWUP: usize = 8;
+
+/// Default timeout (seconds) for the follow-up agent chat call.
+const DEFAULT_FOLLOWUP_TIMEOUT_SECS: u64 = 60;
 
 /// Maximum number of concurrent tool executions.
 /// Prevents resource exhaustion when the agent emits many parallel tool calls.
@@ -1630,16 +1637,16 @@ async fn execute_mode_command(
                     if let Ok(mut state) = serde_json::from_str::<serde_json::Value>(&content) {
                         if let Some(obj) = state.as_object_mut() {
                             obj.insert("mode".to_string(), serde_json::json!(canonical));
-                            let _ = std::fs::write(
-                                config_path,
-                                serde_json::to_string_pretty(&state).unwrap(),
-                            );
+                            if let Ok(json) = serde_json::to_string_pretty(&state) {
+                                let _ = std::fs::write(config_path, json);
+                            }
                         }
                     }
                 } else {
                     let state = serde_json::json!({"mode": canonical});
-                    let _ =
-                        std::fs::write(config_path, serde_json::to_string_pretty(&state).unwrap());
+                    if let Ok(json) = serde_json::to_string_pretty(&state) {
+                        let _ = std::fs::write(config_path, json);
+                    }
                 }
                 match current_mode.kind() {
                     ModeKind::SafeGuard => eprintln!(
@@ -2103,15 +2110,12 @@ fn filter_tool_calls_by_mode(
 ) -> Vec<(String, String)> {
     let max_calls = mode_runtime.map(|m| m.max_tool_calls()).unwrap_or(20);
     let allowed_tools: Vec<String> = mode_runtime.map(|m| m.allowed_tools()).unwrap_or_else(|| {
-        vec![
-            "read_file".to_string(),
-            "search_files".to_string(),
-            "write_file".to_string(),
-            "apply_patch".to_string(),
-            "run_tests".to_string(),
-            "inspect_git_diff".to_string(),
-            "shell_exec".to_string(),
-        ]
+        // 默认允许所有已注册的工具
+        tool_registry()
+            .names()
+            .iter()
+            .map(|n| n.to_string())
+            .collect()
     });
 
     let filtered_calls: Vec<(String, String)> = tool_calls
@@ -2231,76 +2235,167 @@ async fn run_tool_execution_phase(
         return (Vec::new(), false, followup_round_executed);
     }
 
+    // ── Skill dedup: when AI calls multiple skills simultaneously, auto-select
+    //    the one with the highest score and drop the rest. Non-skill tools are
+    //    preserved. This mirrors the same logic in ACP's run_agent_collecting.
+    let tool_calls = {
+        let skill_names: Vec<&str> = filtered_calls
+            .iter()
+            .filter(|(name, _)| {
+                // Only consider names that are registered as skills (not regular tools)
+                crate::orchestration::tool::skill_registry()
+                    .and_then(|r| r.read().ok())
+                    .map(|guard| guard.get(name).is_some())
+                    .unwrap_or(false)
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        if skill_names.len() > 1 {
+            let best = {
+                let reg = crate::orchestration::tool::skill_registry().and_then(|r| r.read().ok());
+                reg.as_ref().and_then(|guard| {
+                    skill_names
+                        .iter()
+                        .filter_map(|name| {
+                            let score = guard.score_of(name).unwrap_or(0.5);
+                            guard.get(name).map(|_| (name.to_string(), score))
+                        })
+                        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                })
+            };
+            if let Some((best_name, _)) = best {
+                warn!(
+                    "skill dedup: AI called {} skills ({}), auto-selecting '{}'",
+                    skill_names.len(),
+                    skill_names.join(", "),
+                    best_name
+                );
+                eprintln!(
+                    "  {}skill dedup: {} skills called ({}), auto-selected '{}'{}",
+                    ansi!("33"),
+                    skill_names.len(),
+                    skill_names.join(", "),
+                    best_name,
+                    ansi!("0")
+                );
+                filtered_calls
+                    .iter()
+                    .filter(|(name, _)| {
+                        // Keep all non-skill tools, and only the best skill
+                        crate::orchestration::tool::skill_registry()
+                            .and_then(|r| r.read().ok())
+                            .map(|guard| {
+                                if guard.get(name).is_some() {
+                                    *name == best_name
+                                } else {
+                                    true
+                                }
+                            })
+                            .unwrap_or(true)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                filtered_calls.to_vec()
+            }
+        } else {
+            filtered_calls.to_vec()
+        }
+    };
+
     eprintln!("{}── Tool execution ──{}", ansi!("33"), ansi!("0"));
 
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TOOLS));
-    let mut tool_futures = FuturesUnordered::new();
-    for (tool_name, tool_args_str) in filtered_calls {
-        let tool_name = tool_name.clone();
-        let tool_args_str = tool_args_str.clone();
-        let sem_clone = Arc::clone(&semaphore);
-        tool_futures.push(async move {
-            let _permit = sem_clone.acquire().await.ok();
-            let parsed_args: Value = serde_json::from_str(&tool_args_str).unwrap_or(json!({}));
-            let start = std::time::Instant::now();
-            eprintln!("  {}⚡ {}{}...", ansi!("36"), tool_name, ansi!("0"));
-            let result = execute_simple_tool(&tool_name, &parsed_args).await;
-            let elapsed = start.elapsed();
-            (tool_name, tool_args_str, result, elapsed)
-        });
-    }
+    let exec_result = execute_tools_concurrent(
+        &tool_calls,
+        tool_registry(),
+        &ToolExecConfig {
+            max_concurrency: MAX_CONCURRENT_TOOLS,
+            circuit_breaker_limit: 0, // CLI handles failures inline
+            operation_mode: "ask".to_string(),
+            acp_session_id: None,
+        },
+        None, // no SSE progress in CLI
+        "",
+        0,
+    )
+    .await;
 
     let mut tool_results: Vec<String> = Vec::new();
     let mut has_failure = false;
 
-    while let Some((tool_name, _, result, elapsed)) = tool_futures.next().await {
-        match result {
-            Ok(result_text) => {
-                let display = if result_text.len() > 500 {
-                    let end = result_text
-                        .char_indices()
-                        .nth(500)
-                        .map(|(i, _)| i)
-                        .unwrap_or(result_text.len());
-                    format!(
-                        "{}...\n[{} chars truncated]  ({:.1}s)",
-                        &result_text[..end],
-                        result_text.len(),
-                        elapsed.as_secs_f32()
-                    )
-                } else {
-                    format!("{}  ({:.1}s)", result_text, elapsed.as_secs_f32())
-                };
-                eprintln!("    {}✓{} {}", ansi!("32"), ansi!("0"), display);
-                let result_for_llm = if result_text.len() > MAX_TOOL_RESULT_CHARS {
-                    tracing::warn!(
-                        tool_name = %tool_name,
-                        total_chars = result_text.len(),
-                        max_chars = MAX_TOOL_RESULT_CHARS,
-                        "Tool result truncated for LLM"
-                    );
-                    format!(
-                        "{}...\n[truncated: {} total chars, showing first {}]",
-                        &result_text[..MAX_TOOL_RESULT_CHARS],
-                        result_text.len(),
-                        MAX_TOOL_RESULT_CHARS
-                    )
-                } else {
-                    result_text.clone()
-                };
-                tool_results.push(build_tool_result_block(&tool_name, &result_for_llm, false));
-            }
-            Err(e) => {
-                has_failure = true;
-                eprintln!(
-                    "    {}✗ Error: {}{}  ({:.1}s)",
-                    ansi!("31"),
-                    e,
-                    ansi!("0"),
-                    elapsed.as_secs_f32()
+    for item in &exec_result.tool_results {
+        let tool_name = &item.tool_name;
+        if item.success {
+            // The executor returns formatted output; for CLI we need the raw
+            // result text for terminal display. Re-extract from ToolOutput.
+            let raw_text = item
+                .output
+                .result
+                .as_ref()
+                .and_then(|r| {
+                    if let Some(s) = r.as_str() {
+                        if !s.is_empty() {
+                            return Some(s.to_string());
+                        }
+                    }
+                    None
+                })
+                .unwrap_or_else(|| format!("{:?}", item.output));
+
+            let display = if raw_text.len() > 500 {
+                let end = raw_text
+                    .char_indices()
+                    .nth(500)
+                    .map(|(i, _)| i)
+                    .unwrap_or(raw_text.len());
+                format!(
+                    "{}...\n[{} chars truncated]  ({:.1}s)",
+                    &raw_text[..end],
+                    raw_text.len(),
+                    item.duration_ms as f32 / 1000.0
+                )
+            } else {
+                format!("{}  ({:.1}s)", raw_text, item.duration_ms as f32 / 1000.0)
+            };
+            eprintln!("    {}✓{} {}", ansi!("32"), ansi!("0"), display);
+
+            let result_for_llm = if raw_text.len() > MAX_TOOL_RESULT_CHARS {
+                tracing::warn!(
+                    tool_name = %tool_name,
+                    total_chars = raw_text.len(),
+                    max_chars = MAX_TOOL_RESULT_CHARS,
+                    "Tool result truncated for LLM"
                 );
-                tool_results.push(build_tool_result_block(&tool_name, &e.to_string(), true));
-            }
+                let trunc_end = raw_text
+                    .char_indices()
+                    .nth(MAX_TOOL_RESULT_CHARS)
+                    .map(|(i, _)| i)
+                    .unwrap_or(raw_text.len());
+                format!(
+                    "{}...\n[truncated: {} total chars, showing first {}]",
+                    &raw_text[..trunc_end],
+                    raw_text.len(),
+                    MAX_TOOL_RESULT_CHARS
+                )
+            } else {
+                raw_text.clone()
+            };
+            tool_results.push(build_tool_result_block(tool_name, &result_for_llm, false));
+        } else {
+            has_failure = true;
+            let err_text = item
+                .output
+                .error
+                .as_deref()
+                .unwrap_or("tool execution failed");
+            eprintln!(
+                "    {}✗ Error: {}{}  ({:.1}s)",
+                ansi!("31"),
+                err_text,
+                ansi!("0"),
+                item.duration_ms as f32 / 1000.0
+            );
+            tool_results.push(build_tool_result_block(tool_name, err_text, true));
         }
     }
 
@@ -2310,7 +2405,12 @@ async fn run_tool_execution_phase(
 
 /// Phase 3: Send tool results back to agent as a follow-up message,
 /// stream the follow-up response with markdown rendering + Ctrl+C interrupt.
-/// Returns the final response text.
+///
+/// Capabilities (matching ACP's `run_followup_after_tool_observation`):
+/// - Timeout wrapping via `run_with_optional_timeout` (default 60s)
+/// - Tool result count limited to `MAX_TOOLS_IN_FOLLOWUP` (8)
+/// - Skill dedup is already handled in Phase 2 (`run_tool_execution_phase`)
+/// - Streaming rendering with Ctrl+C interrupt
 async fn run_followup_phase(
     agent: &Arc<dyn Agent>,
     messages: &mut Vec<Message>,
@@ -2319,106 +2419,147 @@ async fn run_followup_phase(
     has_failure: bool,
     response: &str,
 ) -> String {
+    // ── Limit tool results to prevent message bloat (mirrors ACP max_tools_per_round) ──
+    let limited_results: Vec<&String> = tool_results.iter().take(MAX_TOOLS_IN_FOLLOWUP).collect();
+    let results_for_message: Vec<String> = limited_results.iter().map(|s| (*s).clone()).collect();
+    if tool_results.len() > MAX_TOOLS_IN_FOLLOWUP {
+        warn!(
+            "Tool results truncated for follow-up: {} total, showing {}",
+            tool_results.len(),
+            MAX_TOOLS_IN_FOLLOWUP
+        );
+        eprintln!(
+            "  {}⚠  Tool results truncated: {} total, showing first {}{}",
+            ansi!("33"),
+            tool_results.len(),
+            MAX_TOOLS_IN_FOLLOWUP,
+            ansi!("0")
+        );
+    }
+
     messages.push(Message {
         role: "assistant".to_string(),
         content: response.to_string(),
     });
     messages.push(Message {
         role: "user".to_string(),
-        content: build_tool_execution_followup_message(tool_results, has_failure),
+        content: build_tool_execution_followup_message(&results_for_message, has_failure),
     });
 
     eprint!("{}── Agent follow-up ──{}\n🤖 ", ansi!("33"), ansi!("0"));
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
-    // Streaming follow-up
+    // ── Set up streaming channel and timeout ──
     let (tx2, mut rx2) = mpsc::unbounded_channel::<String>();
     let sender2 = StreamingSender::from(tx2);
     let msgs2 = messages.clone();
-
     let agent_ref2 = Arc::clone(agent);
     let followup_principles = if principles.is_empty() {
         None
     } else {
         Some(principles.to_vec())
     };
+
     let followup_task = tokio::spawn(async move {
         agent_ref2
             .chat(msgs2, followup_principles, None, sender2)
             .await
     });
 
-    let mut followup_renderer = StreamMarkdownRenderer::new();
-    let mut in_reasoning2 = false;
-    loop {
-        tokio::select! {
-            token = rx2.recv() => {
-                match token {
-                    Some(token) => {
-                        if token == REASONING_START {
-                            in_reasoning2 = true;
-                            eprint!("{}", ansi!("90"));
-                            continue;
-                        }
-                        if token == REASONING_END {
-                            in_reasoning2 = false;
-                            eprint!("{}", ansi!("0"));
-                            eprintln!();
-                            continue;
-                        }
-                        if let Some(think) = token.strip_prefix("__thinking__") {
-                            eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                            continue;
-                        }
-                        if in_reasoning2 {
-                            eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
-                        } else {
-                            followup_renderer.feed(&token);
-                            let (formatted, _) = followup_renderer.flush();
-                            if !formatted.is_empty() {
-                                eprint!("{}", formatted);
+    // ── Collect streaming tokens with timeout ──
+    let timeout_duration = Duration::from_secs(DEFAULT_FOLLOWUP_TIMEOUT_SECS);
+    let collect = async {
+        let mut followup_renderer = StreamMarkdownRenderer::new();
+        let mut in_reasoning2 = false;
+        loop {
+            tokio::select! {
+                token = rx2.recv() => {
+                    match token {
+                        Some(token) => {
+                            if token == REASONING_START {
+                                in_reasoning2 = true;
+                                eprint!("{}", ansi!("90"));
+                                continue;
                             }
+                            if token == REASONING_END {
+                                in_reasoning2 = false;
+                                eprint!("{}", ansi!("0"));
+                                eprintln!();
+                                continue;
+                            }
+                            if let Some(think) = token.strip_prefix("__thinking__") {
+                                eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                                continue;
+                            }
+                            if in_reasoning2 {
+                                eprint!("{}{}{}", ansi!("90"), token, ansi!("0"));
+                            } else {
+                                followup_renderer.feed(&token);
+                                let (formatted, _) = followup_renderer.flush();
+                                if !formatted.is_empty() {
+                                    eprint!("{}", formatted);
+                                }
+                            }
+                            std::io::Write::flush(&mut std::io::stdout()).ok();
                         }
-                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                        None => break,
                     }
-                    None => break,
+                }
+                _ = signal::ctrl_c() => {
+                    eprintln!(
+                        "\n{}Interrupted follow-up response.{}  [P3]",
+                        ansi!("33"), ansi!("0")
+                    );
+                    followup_task.abort();
+                    break;
                 }
             }
-            _ = signal::ctrl_c() => {
-                eprintln!(
-                    "\n{}Interrupted follow-up response.{}  [P3]",
-                    ansi!("33"), ansi!("0")
-                );
-                followup_task.abort();
-                break;
-            }
         }
-    }
 
-    if let Err(e) = followup_task.await {
-        warn!("Agent followup task failed: {e}");
-    }
-
-    let rendered_final = {
-        let (remaining, _) = followup_renderer.flush();
-        if !remaining.is_empty() {
-            let n = remaining.lines().count();
-            for _ in 0..n {
-                eprint!("\x1B[F\x1B[K");
-            }
-            eprintln!("{}", remaining);
-            remaining
-        } else {
-            followup_renderer.take_raw_response()
+        if let Err(e) = followup_task.await {
+            warn!("Agent followup task failed: {e}");
         }
+
+        let rendered_final = {
+            let (remaining, _) = followup_renderer.flush();
+            if !remaining.is_empty() {
+                let n = remaining.lines().count();
+                for _ in 0..n {
+                    eprint!("\x1B[F\x1B[K");
+                }
+                eprintln!("{}", remaining);
+                remaining
+            } else {
+                followup_renderer.take_raw_response()
+            }
+        };
+
+        Ok::<String, anyhow::Error>(rendered_final)
     };
 
-    if !rendered_final.trim().is_empty() {
-        crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
-        rendered_final
-    } else {
-        crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
-        response.to_string()
+    let result = run_with_optional_timeout(Some(timeout_duration), collect, |duration| {
+        anyhow::anyhow!(
+            "Agent follow-up timed out after {}s",
+            duration.as_secs().max(1)
+        )
+    })
+    .await;
+
+    match result {
+        Ok(rendered_final) if !rendered_final.trim().is_empty() => {
+            crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
+            rendered_final
+        }
+        Ok(_) => {
+            crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
+            response.to_string()
+        }
+        Err(e) => {
+            warn!("Agent follow-up failed or timed out: {e}");
+            eprintln!("{}⚠  Follow-up: {}{}  [P3]", ansi!("33"), e, ansi!("0"));
+            crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
+            response.to_string()
+        }
     }
 }
 

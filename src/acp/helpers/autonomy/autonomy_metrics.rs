@@ -2,8 +2,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{json, Value};
 
-static PLANNER_GUIDED_ROUTE_TOTAL: AtomicU64 = AtomicU64::new(0);
-static EXPLICIT_TOOL_ROUTE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REQUIREMENT_AUTO_RECOVERY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REQUIREMENT_HUMAN_CONFIRMATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ORCHESTRATION_ALIGNMENT_HIGH_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -34,21 +32,9 @@ static VOTE_WINNER_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static FALLBACK_UNHEALTHY_AGENT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REPUTATION_ROUTING_APPLIED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VOTE_REPUTATION_TIEBREAK_TOTAL: AtomicU64 = AtomicU64::new(0);
-static PARALLEL_TOOL_FANOUT_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
-static PARALLEL_TOOL_FANOUT_BATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AGENT_SWITCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AGENT_SWITCH_BY_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AGENT_SWITCH_BY_REPUTATION_TOTAL: AtomicU64 = AtomicU64::new(0);
-
-#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
-pub(crate) fn record_planner_guided_route() {
-    PLANNER_GUIDED_ROUTE_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-
-#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
-pub(crate) fn record_explicit_tool_route() {
-    EXPLICIT_TOOL_ROUTE_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
 
 pub(crate) fn record_requirement_auto_recovery() {
     REQUIREMENT_AUTO_RECOVERY_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -165,12 +151,6 @@ pub(crate) fn record_vote_reputation_tiebreak() {
     VOTE_REPUTATION_TIEBREAK_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-#[allow(dead_code, reason = "reserved for future autonomy loop wiring")]
-pub(crate) fn record_parallel_tool_fanout(batch_size: u64) {
-    PARALLEL_TOOL_FANOUT_CALLS_TOTAL.fetch_add(1, Ordering::Relaxed);
-    PARALLEL_TOOL_FANOUT_BATCH_TOTAL.fetch_add(batch_size, Ordering::Relaxed);
-}
-
 pub(crate) fn record_agent_switch(reason: &str) {
     AGENT_SWITCH_TOTAL.fetch_add(1, Ordering::Relaxed);
     match reason {
@@ -195,8 +175,6 @@ pub(crate) fn record_cache_shortcircuit_refused(reason: &str) {
 }
 
 pub(crate) fn autonomy_metrics_snapshot() -> Value {
-    let planner_guided = PLANNER_GUIDED_ROUTE_TOTAL.load(Ordering::Relaxed);
-    let explicit = EXPLICIT_TOOL_ROUTE_TOTAL.load(Ordering::Relaxed);
     let auto_recovery = REQUIREMENT_AUTO_RECOVERY_TOTAL.load(Ordering::Relaxed);
     let human_confirmation = REQUIREMENT_HUMAN_CONFIRMATION_TOTAL.load(Ordering::Relaxed);
     let alignment_high = ORCHESTRATION_ALIGNMENT_HIGH_TOTAL.load(Ordering::Relaxed);
@@ -224,12 +202,10 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let fallback_unhealthy = FALLBACK_UNHEALTHY_AGENT_TOTAL.load(Ordering::Relaxed);
     let reputation_routing_applied = REPUTATION_ROUTING_APPLIED_TOTAL.load(Ordering::Relaxed);
     let vote_reputation_tiebreak = VOTE_REPUTATION_TIEBREAK_TOTAL.load(Ordering::Relaxed);
-    let route_total = planner_guided + explicit;
+    let decision_total = auto_recovery + human_confirmation;
     let capability_selection_total =
         capability_selection_applied + capability_selection_no_match + capability_selection_none;
     let vote_total = vote_winner_strong + vote_winner_escalation;
-    let parallel_tool_fanout_calls = PARALLEL_TOOL_FANOUT_CALLS_TOTAL.load(Ordering::Relaxed);
-    let parallel_tool_fanout_batch = PARALLEL_TOOL_FANOUT_BATCH_TOTAL.load(Ordering::Relaxed);
     let agent_switch_total = AGENT_SWITCH_TOTAL.load(Ordering::Relaxed);
     let agent_switch_by_failure = AGENT_SWITCH_BY_FAILURE_TOTAL.load(Ordering::Relaxed);
     let agent_switch_by_reputation = AGENT_SWITCH_BY_REPUTATION_TOTAL.load(Ordering::Relaxed);
@@ -239,12 +215,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let orchestration_node_total = orchestration_node_mapped + orchestration_node_unmapped;
     let loop_stop_total =
         loop_stop_complete + loop_stop_failed + loop_stop_escalated + loop_stop_incomplete;
-
-    let planner_guided_ratio = if route_total == 0 {
-        0.0
-    } else {
-        planner_guided as f64 / route_total as f64
-    };
 
     let auto_recovery_ratio = if recovery_total == 0 {
         0.0
@@ -300,22 +270,13 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         vote_winner_escalation as f64 / vote_total as f64
     };
 
-    let fallback_unhealthy_ratio = if route_total == 0 {
+    let fallback_unhealthy_ratio = if decision_total == 0 {
         0.0
     } else {
-        fallback_unhealthy as f64 / route_total as f64
-    };
-
-    let parallel_tool_fanout_avg_batch = if parallel_tool_fanout_calls == 0 {
-        0.0
-    } else {
-        parallel_tool_fanout_batch as f64 / parallel_tool_fanout_calls as f64
+        fallback_unhealthy as f64 / decision_total as f64
     };
 
     json!({
-        "planner_guided_tool_route_total": planner_guided,
-        "explicit_tool_route_total": explicit,
-        "planner_guided_route_ratio": planner_guided_ratio,
         "requirement_auto_recovery_total": auto_recovery,
         "requirement_human_confirmation_total": human_confirmation,
         "requirement_auto_recovery_ratio": auto_recovery_ratio,
@@ -356,9 +317,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         "fallback_unhealthy_ratio": fallback_unhealthy_ratio,
         "reputation_routing_applied_total": reputation_routing_applied,
         "vote_reputation_tiebreak_total": vote_reputation_tiebreak,
-        "parallel_tool_fanout_calls_total": parallel_tool_fanout_calls,
-        "parallel_tool_fanout_batch_total": parallel_tool_fanout_batch,
-        "parallel_tool_fanout_avg_batch": parallel_tool_fanout_avg_batch,
         "agent_switch_total": agent_switch_total,
         "agent_switch_by_failure_total": agent_switch_by_failure,
         "agent_switch_by_reputation_total": agent_switch_by_reputation,

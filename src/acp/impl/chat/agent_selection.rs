@@ -264,4 +264,7 @@ pub(crate) struct AutonomyOutcome {
     pub selected_agent: String,
     pub response_text: String,
     pub agent_attempts: Vec<Value>,
+    /// True when tools were requested but ALL of them failed.
+    /// The caller can use this to distinguish "task failed" from "task succeeded".
+    pub all_tools_failed: bool,
 }

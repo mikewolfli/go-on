@@ -169,6 +169,11 @@ make_handler!(
     protocol_pack::session_config_get_payload,
     params
 );
+make_handler!(
+    SessionConfigFavoriteToggleHandler,
+    protocol_pack::session_config_favorite_toggle_payload,
+    params
+);
 
 // ── Protocol handlers ──────────────────────────────────────────────────
 make_handler!(InitializeHandler, protocol_pack::initialize_payload);
@@ -361,6 +366,10 @@ pub fn global_router() -> &'static MethodRouter {
         router.register("session/delete", Box::new(SessionDeleteHandler));
         router.register("session/config/set", Box::new(SessionConfigSetHandler));
         router.register("session/config/get", Box::new(SessionConfigGetHandler));
+        router.register(
+            "session/config/favorite/toggle",
+            Box::new(SessionConfigFavoriteToggleHandler),
+        );
         router.register("session/resume", Box::new(SessionResumeHandler));
         router.register("session/close", Box::new(SessionCloseHandler));
         router.register(

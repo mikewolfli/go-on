@@ -97,7 +97,6 @@ pub(crate) fn terminal_chat_contract_snapshot(
         total_duration_ms: 0,
         corrective_actions_applied_total: 0,
         corrective_action_effectiveness_ratio: 0.0,
-        audit_trail: None,
         stop_reason: stop_reason.to_string(),
     })
 }
@@ -155,7 +154,6 @@ mod tests {
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
             stop_reason: "tools_exhausted_task_complete".to_string(),
-            audit_trail: None,
         });
 
         assert_eq!(cli_contract, acp_contract);
@@ -200,7 +198,6 @@ mod tests {
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
             stop_reason: stop_reason.to_string(),
-            audit_trail: None,
         }
     }
 

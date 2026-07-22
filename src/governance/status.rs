@@ -208,7 +208,11 @@ fn tool_category(name: &str) -> Option<ToolCategory> {
         | "archive_inspect" | "jsonl_read" | "diagnostics"
         | "environment_info" | "rss_read"
         | "code_index_search" | "semantic_search"
-        | "file_diff" | "read_file_lines"
+        | "code_metrics" | "encode_decode" | "file_diff" | "file_watch"
+        | "hash_file" | "lint_run" | "random_token"
+        | "read_file_lines"
+        | "search_packages" | "security_scan" | "template_render"
+        | "uuid_gen"
         | "dns_lookup" | "ping" | "port_scan"
         // ── Document read tools ──
         | "read_excel" | "read_ppt" | "read_docx" | "read_pdf"
@@ -222,14 +226,17 @@ fn tool_category(name: &str) -> Option<ToolCategory> {
         // ── Image read tools ──
         | "image_analyze" | "qrcode_generate"
         // ── SQL query ──
-        | "sqlite_query" => Some(ToolCategory::ReadOnly),
+        | "sqlite_query"
+        // ── Docker logs read ──
+        | "docker_logs" => Some(ToolCategory::ReadOnly),
 
         // ── Write operations ──
         "write_file" | "write" | "create"
         | "apply_patch"
-        | "create_directory" | "delete_path" | "move_path"
-        | "file_move" | "file_delete"
-        | "copy_path"
+        | "apply_code_action" | "create_directory"
+        | "dependency_add" | "delete_path" | "move_path"
+        | "edit_file" | "file_move" | "file_delete"
+        | "format_code" | "copy_path"
         | "compress" | "decompress" | "archive_extract"
         | "jsonl_write"
         | "csv_write" | "csv_transform" | "toml_write" | "yaml_write"
@@ -250,9 +257,10 @@ fn tool_category(name: &str) -> Option<ToolCategory> {
 
         // ── Shell operations ──
         "bash" | "execute_command" | "run"
-        | "shell_exec" | "terminal"
+        | "build_run" | "shell_exec" | "terminal"
         | "run_tests" | "cargo_test" | "cargo_check"
-        | "skill_execute" => Some(ToolCategory::Shell),
+        | "docker_build" | "docker_compose" | "docker_exec" | "docker_push"
+        | "skill_execute" | "spawn_agent" => Some(ToolCategory::Shell),
 
         // ── Network operations ──
         "http_request"

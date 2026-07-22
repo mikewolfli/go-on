@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 
-use tracing::{trace, warn};
+use tracing::trace;
 
 use crate::acp::prelude::functions::now_ts_ms;
 use crate::shared::token_bucket::TokenBucket;
@@ -31,10 +31,7 @@ impl PhaseRateLimiter {
         let refill_per_second = rpm_limit as f64 / 60.0;
         let capacity = burst_capacity.unwrap_or(rpm_limit).max(1) as f64;
 
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = crate::lock_or_recover!(self.inner);
         let state = guard
             .entry(phase_name.to_string())
             .or_insert_with(|| TokenBucket::new_ms(capacity, refill_per_second, now));
@@ -73,10 +70,7 @@ impl PhaseRateLimiter {
 
     /// Check if rate limiter is healthy
     pub fn is_healthy(&self) -> bool {
-        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let guard = crate::lock_or_recover!(self.inner);
         let healthy = if guard.is_empty() {
             // No phases configured — nothing to rate-limit, considered healthy
             true

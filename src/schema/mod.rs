@@ -139,6 +139,10 @@ impl SessionConfigId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
+    /// Return the inner string as a &str.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 impl From<String> for SessionConfigId {
     fn from(s: String) -> Self {
@@ -157,6 +161,10 @@ pub struct SessionConfigValueId(pub String);
 impl SessionConfigValueId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
+    }
+    /// Return the inner string as a &str.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 impl From<String> for SessionConfigValueId {
