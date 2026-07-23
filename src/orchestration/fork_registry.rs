@@ -11,6 +11,8 @@
 //! - Thread-safe via `Arc<RwLock<...>>`
 //! - Integration-ready for `AgentWorkerScheduler` fan-out (L2 scheduling)
 
+use crate::agents::communication::budget::AgentExecutionBudget;
+use crate::agents::communication::path::AgentPath;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::cmp;
@@ -187,7 +189,7 @@ impl Default for ForkConfig {
 // ForkEntry — internal tracked fork state
 // ──────────────────────────────────────────────
 
-/// A registered fork entry stored in the registry.
+/// A registered fork entry stored in the registry (BLUE70 enhanced).
 #[derive(Debug, Clone)]
 pub struct ForkEntry {
     /// Unique identifier for this fork.
@@ -200,6 +202,18 @@ pub struct ForkEntry {
     pub snapshot: Option<ForkSnapshot>,
     /// Whether this fork has completed execution.
     pub completed: bool,
+
+    // ── BLUE70: Agent communication fields ─────────────────────────
+    /// Agent path in the CommunicationBus tree (None for non-CommunicationBus forks).
+    pub agent_path: Option<AgentPath>,
+    /// Parent agent path in the CommunicationBus tree.
+    pub parent_agent_path: Option<AgentPath>,
+    /// Execution budget (token ceiling, concurrency, etc.).
+    pub budget: Option<AgentExecutionBudget>,
+    /// Fork start timestamp (ms since epoch).
+    pub started_at_ms: u64,
+    /// Fork completion timestamp (ms since epoch).
+    pub completed_at_ms: Option<u64>,
 }
 
 impl ForkEntry {
@@ -210,7 +224,44 @@ impl ForkEntry {
             quota,
             snapshot: None,
             completed: false,
+            agent_path: None,
+            parent_agent_path: None,
+            budget: None,
+            started_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            completed_at_ms: None,
         }
+    }
+
+    /// Set the agent path (BLUE70 convenience method).
+    pub fn with_agent_path(mut self, path: AgentPath) -> Self {
+        self.agent_path = Some(path);
+        self
+    }
+
+    /// Set the parent agent path (BLUE70 convenience method).
+    pub fn with_parent_agent_path(mut self, path: AgentPath) -> Self {
+        self.parent_agent_path = Some(path);
+        self
+    }
+
+    /// Set the execution budget (BLUE70 convenience method).
+    pub fn with_budget(mut self, budget: AgentExecutionBudget) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// Mark this fork as completed.
+    pub fn mark_completed(&mut self) {
+        self.completed = true;
+        self.completed_at_ms = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        );
     }
 }
 

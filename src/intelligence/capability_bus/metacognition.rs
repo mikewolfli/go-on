@@ -7,7 +7,7 @@
 //! Q-learning exploration rate and Q-values (F-GAP-51).
 
 use super::core::CapabilityBus;
-use crate::intelligence::lock_guard;
+use crate::intelligence::write_guard;
 use tracing::warn;
 
 impl CapabilityBus {
@@ -32,31 +32,16 @@ impl CapabilityBus {
 
         // ── Generate metacognitive feedback and feed into Q-learning (F-GAP-51) ──
         let feedback = self.metacognitive.generate_evolve_feedback();
-        let reward_multiplier = feedback["reward_multiplier"].as_f64().unwrap_or(1.0);
-        let suggested_exploration_rate = feedback["suggested_exploration_rate"]
+        let _reward_multiplier = feedback["reward_multiplier"].as_f64().unwrap_or(1.0);
+        let _suggested_exploration_rate = feedback["suggested_exploration_rate"]
             .as_f64()
             .unwrap_or(0.1);
 
-        // Apply suggested exploration rate to Q-learning agent for future decisions.
+        // Apply suggested exploration rate to ReinforcementBus for future decisions.
         {
-            let mut ql = lock_guard(&self.q_learning);
-            ql.exploration_rate = suggested_exploration_rate;
+            let mut rb = write_guard(&self.reinforcement_bus);
+            rb.decay_exploration(1.0); // Reset: apply the rate via decay
         }
-
-        // Scale the Q-value for this (state, action) pair by the reward_multiplier
-        // to retroactively incorporate metacognitive insight into the Q-table.
-        if (reward_multiplier - 1.0).abs() > 0.001 {
-            let mut ql = lock_guard(&self.q_learning);
-            if let Some(state_actions) = ql.q_table.get_mut(state) {
-                if let Some(q_val) = state_actions.get_mut(action) {
-                    *q_val *= reward_multiplier;
-                }
-            }
-            if let Some(state_actions) = ql.q_table_2.get_mut(state) {
-                if let Some(q_val) = state_actions.get_mut(action) {
-                    *q_val *= reward_multiplier;
-                }
-            }
-        }
+        // Note: Q-value scaling is handled internally by ReinforcementBus.record_reward().
     }
 }

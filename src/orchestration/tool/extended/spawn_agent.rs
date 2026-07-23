@@ -17,6 +17,12 @@
 //! - timeout guard with heartbeat-style cancellation
 //! - transient-failure retry with backoff (up to 2 retries)
 //! - global concurrency cap (SEMAPHORE: max 128 concurrent)
+//!
+//! # BLUE70 CommunicationBus integration
+//! - Each spawn is registered in the CommunicationBus AgentTree for observability.
+//! - Delegate/Result messages are sent via the CommunicationBus Messenger.
+//! - The global CommunicationBus is initialised at server startup via
+//!   `init_spawn_agent_communication_bus()`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -29,18 +35,23 @@ use tokio::sync::{mpsc, Semaphore};
 use tracing::{info, warn};
 
 use crate::agent::{AgentRegistry, Message, StreamingSender};
+use crate::agents::communication::bus::CommunicationBus;
+use crate::agents::communication::message::{AgentMessage, AgentTarget};
+use crate::agents::communication::path::AgentPath;
+use crate::agents::communication::tree::AgentNodeMetadata;
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 
 // ---------------------------------------------------------------------------
-// Global registry + semaphore — initialised once at server startup
+// Global registry + CommunicationBus + semaphore — initialised at server startup
 // ---------------------------------------------------------------------------
 
 static SPAWN_AGENT_REGISTRY: OnceLock<Arc<AgentRegistry>> = OnceLock::new();
 
+/// Global CommunicationBus for tree-based agent communication (BLUE70).
+static SPAWN_COMMUNICATION_BUS: OnceLock<Arc<CommunicationBus>> = OnceLock::new();
+
 /// Monotonically increasing sequence counter for fork IDs.
-/// Provides unique, ordered identifiers for each sub-agent spawn
-/// without coupling to the external ForkRegistry.
 static SPAWN_FORK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Global concurrency semaphore — limits total in-flight sub-agent spawns.
@@ -48,18 +59,26 @@ static SPAWN_FORK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static SPAWN_SEMAPHORE: Semaphore = Semaphore::const_new(128);
 
 /// Initialise the global `AgentRegistry` reference used by `SpawnAgentTool`.
-///
-/// Must be called once at server startup, after the `AgentRegistry` has been
-/// built but before any tool invocations.  Calling this more than once is a
-/// no-op (the second call is silently ignored by `OnceLock::set`).
 pub fn init_spawn_agent_registry(registry: Arc<AgentRegistry>) {
     SPAWN_AGENT_REGISTRY.set(registry).ok();
+}
+
+/// Initialise the global `CommunicationBus` for agent tree-based routing (BLUE70).
+///
+/// Must be called once at server startup, after the `CommunicationBus` has been
+/// built but before any tool invocations.
+pub fn init_spawn_agent_communication_bus(bus: Arc<CommunicationBus>) {
+    SPAWN_COMMUNICATION_BUS.set(bus).ok();
 }
 
 fn agent_registry() -> Result<&'static Arc<AgentRegistry>> {
     SPAWN_AGENT_REGISTRY
         .get()
         .ok_or_else(|| anyhow::anyhow!("SpawnAgentTool: AgentRegistry not initialised"))
+}
+
+fn communication_bus() -> Option<&'static Arc<CommunicationBus>> {
+    SPAWN_COMMUNICATION_BUS.get()
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +262,32 @@ async fn execute_spawn(
     let agent = registry
         .get(&agent_name)
         .ok_or_else(|| anyhow::anyhow!("agent '{}' not found in registry", agent_name))?;
+
+    // ── BLUE70: Register in CommunicationBus AgentTree ─────────────────
+    // Register the spawn in the agent tree for observability and future
+    // tree-based routing. Uses fork_id as the agent path segment.
+    let agent_path_str = format!("spawn/{}", fork_id);
+    if let Ok(child_path) = AgentPath::parse(&agent_path_str) {
+        if let Some(bus) = communication_bus() {
+            let metadata = AgentNodeMetadata::new()
+                .with_role(role.as_deref().unwrap_or("general"))
+                .with_model(model_override.as_deref().unwrap_or(&agent_name));
+            let _ = bus.register_agent(&child_path, &agent_name, metadata).await;
+
+            // Send a Delegate message for observability tracing
+            let delegate_msg = AgentMessage::delegate(
+                AgentPath::parse("root").unwrap_or_else(|_| child_path.clone()),
+                AgentTarget::Direct(child_path),
+                task.clone(),
+                role.clone(),
+                token_budget,
+                timeout_secs,
+            );
+            let _ = bus.send_message(delegate_msg).await;
+            bus.record_fork();
+        }
+    }
+    // ────────────────────────────────────────────────────────────────────
 
     // 2. Build messages with role-specific system prompt.
     let system_prompt = build_role_prompt(role.as_deref());

@@ -53,3 +53,8 @@ pub mod protocol_bus;
 pub mod sense;
 #[cfg(feature = "sub-bus-tool")]
 pub mod tool_bus;
+
+// BLUE70 consolidated buses (replacing 3 groups of legacy buses)
+pub mod unified_knowledge_bus;
+pub mod reinforcement_bus;
+pub mod learning_optimization_bus;

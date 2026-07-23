@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.4.1
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.4.2
 </p>
 
 <p align="center">
@@ -11,15 +11,15 @@
 </p>
 
 <p align="center">
-  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 1946 tests · zero clippy warnings</em>
+  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 2164+ tests · zero clippy warnings</em>
 </p>
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.4.1-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.4.2-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/mikeli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikeli/go-on/actions/workflows/build.yml)
-[![Tests](https://img.shields.io/badge/tests-2069-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-2164-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-38-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
@@ -169,20 +169,29 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 
 ## Architecture
 
-go-on uses a **14-bus capability architecture** with a cognitive loop and a unified **DispatchOutput** handler pattern:
+go-on uses a **12-bus capability architecture** (11 consolidated + 1 communication) with a cognitive loop and a unified **DispatchOutput** handler pattern:
 
 ```
 ┌────────────────────────────────────────────────────────────┐
 │                    HarnessBus (Governance)                  │
 │  Policy · Drift Detection · Resilience · Security · Audit  │
 ├────────────────────────────────────────────────────────────┤
-│                   CapabilityBus (Intelligence)              │
+│               CapabilityBus (Intelligence)                  │
 │  Sense → Decide → Act → Feedback → Evolve                 │
 ├──────────┬──────────┬──────────┬──────────┬───────────────┤
-│ ToolBus  │ ObservB. │ OptimizB.│ MemoryBus│ ProtocolBus   │
+│ ToolBus  │ ObservB. │ MemoryBus│ ProtocolB.│ OrchestB.    │
 ├──────────┼──────────┼──────────┼──────────┼───────────────┤
-│ OrchestB.│          │          │ DistMemB.│               │
-└──────────┴──────────┴──────────┴──────────┴───────────────┘
+│ Unified  │ Reinforc.│ Learning │ Capab.   │ DistMemB.    │
+│ Knowl.B. │ ementBus │ OptimB.  │ Graph    │              │
+├────────────────────────────────────────────────────────────┤
+│              CommunicationBus (Agent Tree)                  │
+│  AgentPath · AgentMessenger · ContextForker                │
+└────────────────────────────────────────────────────────────┘
+
+> **BLUE70**: The original 14 buses were consolidated into 11 core buses
+> (UnifiedKnowledgeBus, ReinforcementBus, LearningOptimizationBus merged
+> from 7 legacy buses). A new CommunicationBus was added for hierarchical
+> agent tree communication.
 ```
 
 ### Request Handler Dispatch
@@ -228,13 +237,16 @@ Client SSE parser → PendingResponse → UI panels
 |:-------|:------------|
 | **HarnessBus** | Central policy engine: evaluate/validate/verify, PUA rules, RBAC, drift detection, hyper-resilience, audit trail |
 | **CapabilityBus** | Multi-factor agent selection (reputation + task-fit + outcome) with causal Bayesian graph for routing |
+| **CommunicationBus** | Hierarchical agent tree, inter-agent messaging, cancellation propagation, context forking (BLUE70) |
+| **UnifiedKnowledgeBus** | Consolidated knowledge + reputation + experience management with EMA scoring (BLUE70) |
+| **ReinforcementBus** | Q-Learning + optional federated RL for routing optimization (BLUE70) |
+| **LearningOptimizationBus** | Atomic learn-and-optimize: execution events → optimization suggestions (BLUE70) |
 | **Planner** | Task-adaptive DAG planning with dependency inference |
 | **BrainLoop** | Plan → Execute → Reflect → Replan cognitive cycle |
 | **DAG Driver** | Topological execution with parallel group scheduling |
 | **SelfModelCore** | System self-awareness and capability tracking |
 | **MetacognitiveController** | Observation-driven reflection and corrective action |
 | **WorldModel** | Entity/event/relationship tracking with causal insight |
-| **FederatedRL** | Distributed reinforcement learning across nodes |
 | **HyperResilience** | Circuit breaker, failover group, self-healing |
 | **MultiChannelTransport** | QoS-aware, prioritized message transport |
 

@@ -7,6 +7,7 @@ pub mod ai21;
 pub mod aleph;
 pub mod anthropic;
 pub mod cohere;
+pub mod communication;
 pub mod copilot;
 pub mod deepquest;
 pub mod deepseek;

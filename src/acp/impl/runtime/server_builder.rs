@@ -414,6 +414,24 @@ pub async fn new_acp_server(
     // fully constructed at this point.
     crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_registry(registry.clone());
 
+    // ── BLUE70: Initialise SpawnAgentTool's CommunicationBus reference ──
+    // Creates and wires the global CommunicationBus for agent tree-based
+    // communication and observability.
+    let communication_bus = Arc::new(crate::agents::communication::bus::CommunicationBus::new());
+    crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_communication_bus(
+        communication_bus.clone(),
+    );
+
+    // Register the AgentCommunicationHook for spawn lifecycle events
+    let communication_hook = Arc::new(
+        crate::orchestration::tool::types::AgentCommunicationHook::new(communication_bus),
+    );
+    // Register hook with the global ToolHookRegistry so it fires on every tool execution.
+    // The global tool registry is lazily initialized; this call ensures it's ready.
+    let tool_registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
+    tool_registry.hooks.register(communication_hook);
+    tracing::info!("BLUE70: AgentCommunicationHook registered with ToolHookRegistry");
+
     // B51-26: Shared wiring extracted to wire_server()
     #[cfg(debug_assertions)]
     eprintln!("DEBUG: about to call wire_server...");

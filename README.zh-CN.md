@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.4.1
+  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.4.2
 </p>
 
 <p align="center">
@@ -12,9 +12,9 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.4.1-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.4.2-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2069-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-2164-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-38-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
@@ -162,7 +162,11 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 
 ## 架构
 
-go-on 采用 **14 条总线能力架构**，含认知循环和统一的 **DispatchOutput** handler 模式：
+go-on 采用 **12 条总线能力架构**（11 条核心 + 1 条通信总线），含认知循环和统一的 **DispatchOutput** handler 模式：
+
+> **BLUE70**：原有 14 条总线通过合并精简为 11 条核心总线（UnifiedKnowledgeBus、
+> ReinforcementBus、LearningOptimizationBus），新增 CommunicationBus 作为
+> 第 12 条总线，实现层次化智能体树形通信。
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -172,10 +176,14 @@ go-on 采用 **14 条总线能力架构**，含认知循环和统一的 **Dispat
 │                   CapabilityBus (智能层)                    │
 │  感知 → 决策 → 行动 → 反馈 → 进化                         │
 ├──────────┬──────────┬──────────┬──────────┬───────────────┤
-│ ToolBus  │ ObservB. │ OptimizB.│ MemoryBus│ ProtocolBus   │
+│ ToolBus  │ ObservB. │ MemoryBus│ ProtocolB.│ OrchestB.    │
 ├──────────┼──────────┼──────────┼──────────┼───────────────┤
-│ OrchestB.│          │          │ DistMemB.│               │
-└──────────┴──────────┴──────────┴──────────┴───────────────┘
+│ Unified  │ Reinforc.│ Learning │ Capab.   │ DistMemB.    │
+│ Knowl.B. │ ementBus │ OptimB.  │ Graph    │              │
+├────────────────────────────────────────────────────────────┤
+│              CommunicationBus (智能体通信层)                 │
+│  AgentPath · AgentMessenger · ContextForker                │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ### 请求处理分发
@@ -221,6 +229,10 @@ GUI/CLI → POST /chat/stream → 后端
 |:-----|:-----|
 | **HarnessBus 治理总线** | 中央策略引擎：评估/验证/审核、PUA 规则、RBAC、漂移检测、超弹性、审计追踪 |
 | **CapabilityBus 能力总线** | 多因子智能体选择（信誉+任务匹配+因果贝叶斯路由）|
+| **CommunicationBus** | 层次化 Agent 树形通信、消息路由、取消传播、上下文继承（BLUE70）|
+| **UnifiedKnowledgeBus** | 合并知识库+声誉+经验管理的统一知识总线，EMA 评分（BLUE70）|
+| **ReinforcementBus** | Q-Learning + 可选联邦强化学习的路由优化（BLUE70）|
+| **LearningOptimizationBus** | 原子化学习-优化：执行事件→优化建议（BLUE70）|
 | **Planner 规划器** | 任务自适应的 DAG 规划，含依赖推断 |
 | **BrainLoop 脑回路** | 规划→执行→反思→重规划的认知循环 |
 | **DAG Driver 执行引擎** | 拓扑排序执行，并行组调度 |

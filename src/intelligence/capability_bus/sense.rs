@@ -6,7 +6,7 @@
 //! Extracted from `core.rs` to isolate the `sense()` method and its helpers.
 //! (BLUE38 ARCH-13)
 
-use super::core::CapabilityBus;
+use super::core::{CapabilityBus, WorkflowLearningEvent};
 use crate::governance::pua::TaskContext;
 use crate::intelligence::{lock_guard, read_guard};
 
@@ -41,16 +41,38 @@ impl CapabilityBus {
         // Include task risk score in heartbeat so `task` is unconditionally referenced
         // across all feature configurations.
         let cap_agents = lock_guard(&self.capability_graph).total_agents();
-        let rep_snapshot = lock_guard(&self.reputation).snapshot();
-        let _learning_rates = {
-            let agents: Vec<String> = read_guard(&self.learning_bus)
-                .snapshot()
-                .iter()
-                .map(|e| e.agent.clone())
-                .collect();
-            agents
+        // BLUE70: Read from UnifiedKnowledgeBus (replaces legacy ReputationStore)
+        let rep_snapshot = {
+            let ukb = read_guard(&self.unified_knowledge_bus);
+            ukb.all_reputations().into_iter().map(|r| {
+                crate::intelligence::reputation::ReputationRecord {
+                    agent: r.agent.clone(),
+                    score: r.score,
+                    total_tasks: r.total_tasks,
+                    success_count: r.successful_tasks,
+                    failure_count: r.total_tasks.saturating_sub(r.successful_tasks),
+                    consecutive_failures: 0,
+                    last_updated_ms: 0,
+                }
+            }).collect::<Vec<_>>()
         };
-        let learning_snapshot = read_guard(&self.learning_bus).snapshot();
+        // BLUE70: Read from LearningOptimizationBus (replaces legacy WorkflowLearningBus)
+        let _learning_rates = {
+            let lob = read_guard(&self.learning_optimization_bus);
+            lob.events_snapshot().iter().map(|e| e.agent.clone()).collect::<Vec<_>>()
+        };
+        let learning_snapshot: Vec<WorkflowLearningEvent> = {
+            let lob = read_guard(&self.learning_optimization_bus);
+            lob.events_snapshot().into_iter().map(|e| WorkflowLearningEvent {
+                task_type: e.task_type,
+                agent: e.agent,
+                success: e.success,
+                duration_ms: e.duration_ms,
+                token_cost: e.token_cost,
+                quality_score: e.quality_score,
+                timestamp_ms: e.timestamp_ms,
+            }).collect()
+        };
 
         // Phase 4: Query ObservabilityBus for healthy agents
         #[cfg(feature = "sub-bus-observability")]
@@ -113,6 +135,26 @@ impl CapabilityBus {
             #[cfg(feature = "sub-bus-optimization")]
             optimization: Some(opt),
         }
+    }
+
+    /// BLUE70: Query consolidated buses for enhanced context.
+    /// Returns optimization suggestion from the LearningOptimizationBus.
+    pub fn blue70_sense_optimization(&self, task_type: &str) -> Option<String> {
+        let lob = read_guard(&self.learning_optimization_bus);
+        lob.suggestion_for(task_type)
+            .and_then(|s| s.recommended_agent.clone())
+    }
+
+    /// BLUE70: Get agent reputation from UnifiedKnowledgeBus.
+    pub fn blue70_agent_reputation(&self, agent: &str) -> Option<f64> {
+        let ukb = read_guard(&self.unified_knowledge_bus);
+        ukb.get_reputation(agent)
+    }
+
+    /// BLUE70: Get best agent for a task via ReinforcementBus Q-learning.
+    pub fn blue70_best_agent(&self, task_type: &str, agents: &[String]) -> Option<String> {
+        let rb = read_guard(&self.reinforcement_bus);
+        rb.select_action(task_type, agents)
     }
 
     /// Check if an agent is healthy via ObservabilityBus and OptimizationBus

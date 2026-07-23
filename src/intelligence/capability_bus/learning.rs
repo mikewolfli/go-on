@@ -7,9 +7,9 @@
 //! lock ordering discipline documented in `core::CapabilityBus`.
 
 use super::core::CapabilityBus;
-use crate::intelligence::lock_guard;
+use crate::intelligence::{lock_guard, write_guard};
 use crate::intelligence::now_ms;
-use crate::intelligence::reinforcement::learning::{RlTaskExecutionMetrics, SuccessCase};
+use crate::intelligence::reinforcement::learning::RlTaskExecutionMetrics;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
 
@@ -31,7 +31,9 @@ impl CapabilityBus {
             duration_ms: 0,
         };
         let reward = lock_guard(&self.reward_fn).calculate(&metrics);
-        lock_guard(&self.q_learning).update(state, action, reward, next_state);
+        // BLUE70: Use ReinforcementBus (replaces legacy QLearningAgent)
+        let mut rb = write_guard(&self.reinforcement_bus);
+        rb.record_reward(&state.0, action, reward, &next_state.0);
         reward
     }
 
@@ -39,16 +41,18 @@ impl CapabilityBus {
     pub(crate) fn evolve_experience(
         &self,
         state: &(String, String),
-        action: &str,
+        _action: &str,
         success: bool,
         quality_score: f64,
     ) {
         if success {
-            lock_guard(&self.experience).add_success_case(SuccessCase {
-                objective: format!("state_{:?}", state),
-                strategy: format!("action_{}", action),
-                confidence: quality_score,
-            });
+            // BLUE70: Record in UnifiedKnowledgeBus (replaces legacy ExperienceKnowledgeBase)
+            write_guard(&self.unified_knowledge_bus).record_outcome(
+                &state.0,
+                &state.1,
+                true,
+                format!("quality={:.2}", quality_score),
+            );
         }
     }
 
@@ -157,14 +161,12 @@ impl CapabilityBus {
                         if arr.len() >= 2 {
                             if let (Some(s0), Some(s1)) = (arr[0].as_str(), arr[1].as_str()) {
                                 let replayed_state = (s0.to_string(), s1.to_string());
-                                // Perform a mini Q-learning update with
-                                // replayed experience using the current
-                                // state as the next_state placeholder.
-                                lock_guard(&self.q_learning).update(
-                                    &replayed_state,
+                                // BLUE70: Use ReinforcementBus (replaces legacy QLearningAgent)
+                                write_guard(&self.reinforcement_bus).record_reward(
+                                    &replayed_state.0,
                                     action_str,
                                     replay_reward,
-                                    state,
+                                    &state.0,
                                 );
                             }
                         }

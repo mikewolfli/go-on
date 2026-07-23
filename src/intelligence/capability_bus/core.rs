@@ -4,22 +4,15 @@
 //!   sense → decide → act → feedback → evolve
 //!
 //! This module defines the top-level `CapabilityBus` struct that holds references
-//! to all 13 sub-bus components and orchestrates the complete lifecycle.
-//! Sub-buses:
-//!   1. WorkflowLearningBus  (existing)
-//!   2. KnowledgeBus          (existing)
-//!   3. ReputationStore       (existing)
+//! to all sub-bus components and orchestrates the complete lifecycle.
+//! Sub-buses (BLUE70 consolidated):
+//!   1. UnifiedKnowledgeBus  (merged KnowledgeBus + ReputationStore + ExperienceKnowledgeBase)
+//!   2. ReinforcementBus     (merged QLearningAgent + FederatedRL)
+//!   3. LearningOptimizationBus (merged WorkflowLearningBus + OptimizationBus)
 //!   4. CapabilityGraph       (existing)
-//!   5. QLearningAgent        (existing)
-//!   6. ExperienceKnowledgeBase (existing)
-//!   7. HarnessBus            (existing)
-//!   8. ToolBus               (new in Phase 4)
-//!   9. ObservabilityBus      (new in Phase 4)
-//!  10. OptimizationBus       (new in Phase 4)
-//!  11. MemoryBus             (new in Phase 4)
-//!  12. ProtocolBus           (new in Phase 4)
-//!  13. OrchestrationBus      (new in Phase 4)
-//!  14. DistributedMemoryBus  (new in Phase 4)
+//!   5. HarnessBus            (existing)
+//!   6-12. ToolBus, ObservabilityBus, OptimizationBus, MemoryBus,
+//!          ProtocolBus, OrchestrationBus, DistributedMemoryBus
 //!
 //! # Module structure
 //!
@@ -62,6 +55,11 @@ use crate::intelligence::continuous_learning::ContinuousLearningCenter;
 use crate::intelligence::discovery::DiscoveryCenter;
 use crate::intelligence::evolution_graph::EvolutionGraph;
 
+// BLUE70: Consolidated buses
+use crate::intelligence::capability_bus::unified_knowledge_bus::UnifiedKnowledgeBus;
+use crate::intelligence::capability_bus::reinforcement_bus::ReinforcementBus;
+use crate::intelligence::capability_bus::learning_optimization_bus::LearningOptimizationBus;
+
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::intelligence::hot_failover::HotFailover;
 use crate::intelligence::matcher::ScenarioMatcher;
@@ -69,10 +67,7 @@ use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::now_ms;
 use crate::intelligence::reinforcement::federated::FederatedLearning;
 use crate::intelligence::reinforcement::federated::FederatedRL;
-use crate::intelligence::reinforcement::learning::{
-    ExperienceKnowledgeBase, QLearningAgent, RewardFunction,
-};
-use crate::intelligence::reputation::ReputationStore;
+use crate::intelligence::reinforcement::learning::RewardFunction;
 use crate::intelligence::self_model::SelfModelCore;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::observability::live_performance::LivePerformanceFeed;
@@ -125,10 +120,10 @@ pub struct BusEvent {
 }
 
 // ---------------------------------------------------------------------------
-// WorkflowLearningBus — in-memory runtime bus
+// WorkflowLearningEvent — shared event type
 // ---------------------------------------------------------------------------
 
-/// Runtime event stored in the WorkflowLearningBus.
+/// Runtime execution event (used by SharedLearning and the BLUE70 LearningOptimizationBus).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowLearningEvent {
     pub task_type: String,
@@ -140,79 +135,9 @@ pub struct WorkflowLearningEvent {
     pub timestamp_ms: u64,
 }
 
-/// In-memory WorkflowLearningBus — replaces the file-only artifact.
-#[derive(Debug)]
-pub struct WorkflowLearningBus {
-    events: VecDeque<WorkflowLearningEvent>,
-    max_events: usize,
-}
-
-impl WorkflowLearningBus {
-    pub fn new(max_events: usize) -> Self {
-        Self {
-            events: VecDeque::with_capacity(max_events.min(100)),
-            max_events,
-        }
-    }
-
-    /// Push a new event, evicting oldest if at capacity.
-    pub fn push(&mut self, event: WorkflowLearningEvent) {
-        if self.events.len() >= self.max_events {
-            self.events.pop_front();
-        }
-        self.events.push_back(event);
-    }
-
-    /// Historical success rate for a given agent, over the entire window.
-    pub fn agent_success_rate(&self, agent: &str) -> Option<f64> {
-        let (total, successes) = self
-            .events
-            .iter()
-            .filter(|e| e.agent == agent)
-            .fold((0usize, 0usize), |(total, successes), e| {
-                (total + 1, successes + e.success as usize)
-            });
-        if total == 0 {
-            None
-        } else {
-            Some(successes as f64 / total as f64)
-        }
-    }
-
-    /// Historical success rate for a given task type.
-    pub fn task_type_success_rate(&self, task_type: &str) -> Option<f64> {
-        let (total, successes) = self
-            .events
-            .iter()
-            .filter(|e| e.task_type == task_type)
-            .fold((0usize, 0usize), |(total, successes), e| {
-                (total + 1, successes + e.success as usize)
-            });
-        if total == 0 {
-            None
-        } else {
-            Some(successes as f64 / total as f64)
-        }
-    }
-
-    /// All events (for snapshot / endpoint)
-    pub fn snapshot(&self) -> Vec<WorkflowLearningEvent> {
-        self.events.iter().cloned().collect()
-    }
-
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    /// Returns `true` if there are no events.
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-}
-
 /// Builder
 // ---------------------------------------------------------------------------
-// KnowledgeBus — in-memory runtime bus for reusable insights
+// KnowledgeInsight — reusable insight type (preserved for external consumers)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -223,33 +148,6 @@ pub struct KnowledgeInsight {
     pub applicability_tags: Vec<String>,
     pub confidence: f64,
     pub created_ms: u64,
-}
-
-const MAX_KNOWLEDGE_INSIGHTS: usize = 500;
-
-#[derive(Debug, Default)]
-pub struct KnowledgeBus {
-    insights: Vec<KnowledgeInsight>,
-}
-
-impl KnowledgeBus {
-    pub fn add_insight(&mut self, insight: KnowledgeInsight) {
-        if self.insights.len() >= MAX_KNOWLEDGE_INSIGHTS {
-            self.insights.remove(0);
-        }
-        self.insights.push(insight);
-    }
-
-    pub fn find_matching(&self, tags: &[String]) -> Vec<&KnowledgeInsight> {
-        self.insights
-            .iter()
-            .filter(|i| tags.iter().any(|t| i.applicability_tags.contains(t)))
-            .collect()
-    }
-
-    pub fn snapshot(&self) -> Vec<KnowledgeInsight> {
-        self.insights.clone()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +196,11 @@ pub struct CapabilityBusProfile {
     pub memory_cache_hit_rate: f64,
     #[cfg(feature = "sub-bus-memory")]
     pub memory_total_entries: u32,
+    // BLUE70: Consolidated bus metrics
+    pub unified_knowledge_insight_count: usize,
+    pub unified_knowledge_experience_count: usize,
+    pub reinforcement_table_size: usize,
+    pub learning_optimization_event_count: usize,
     #[cfg(feature = "sub-bus-distributed-memory")]
     pub distributed_memory_peers: u32,
     #[cfg(feature = "sub-bus-distributed-memory")]
@@ -367,6 +270,10 @@ impl Default for CapabilityBusProfile {
             council_active_members: 0,
             evolve_timeout_count: 0,
             council_pending_proposals: 0,
+            unified_knowledge_insight_count: 0,
+            unified_knowledge_experience_count: 0,
+            reinforcement_table_size: 0,
+            learning_optimization_event_count: 0,
         }
     }
 }
@@ -399,23 +306,8 @@ pub struct CapabilityBus {
     /// HarnessBus — strategy engine (pre-route / pre-tool / post-exec)
     pub harness: Arc<HarnessBus>,
 
-    /// Workflow learning bus — historical execution outcomes
-    pub learning_bus: Arc<RwLock<WorkflowLearningBus>>,
-
-    /// Knowledge bus — reusable solution insights
-    pub knowledge_bus: Arc<RwLock<KnowledgeBus>>,
-
-    /// Reputation store — per-agent EMA reliability scores
-    pub reputation: Arc<Mutex<ReputationStore>>,
-
     /// Capability graph — agent capability declarations and handoff edges
     pub capability_graph: Arc<Mutex<CapabilityGraph>>,
-
-    /// Q-Learning agent — reinforcement learning for routing decisions
-    pub q_learning: Arc<Mutex<QLearningAgent>>,
-
-    /// Experience knowledge base — success/failure case library
-    pub experience: Arc<Mutex<ExperienceKnowledgeBase>>,
 
     /// Reward function — calculates reward from execution metrics
     pub reward_fn: Arc<Mutex<RewardFunction>>,
@@ -440,6 +332,14 @@ pub struct CapabilityBus {
 
     /// Optimizer registry — workflow optimization plugins (ARCH-11)
     pub optimizer_registry: Arc<Mutex<OptimizerRegistry>>,
+
+    // ── BLUE70 consolidated buses ──
+    /// UnifiedKnowledgeBus — merged KnowledgeBus + ReputationStore + ExperienceKnowledgeBase
+    pub unified_knowledge_bus: Arc<RwLock<UnifiedKnowledgeBus>>,
+    /// ReinforcementBus — merged QLearningAgent + FederatedRL
+    pub reinforcement_bus: Arc<RwLock<ReinforcementBus>>,
+    /// LearningOptimizationBus — merged WorkflowLearningBus + OptimizationBus
+    pub learning_optimization_bus: Arc<RwLock<LearningOptimizationBus>>,
 
     // ── Phase 4 sub-buses ────────────────────────────────────────────────
     /// ToolBus — unified tool/skill invocation with capability-aware routing
@@ -539,7 +439,8 @@ impl CapabilityBus {
     // an earlier group:
     //
     //   Level 1 (innermost – acquire first, release last):
-    //     reward_fn, q_learning, experience, continuous_learning
+    //     reward_fn, q_learning, experience, continuous_learning,
+    //     reinforcement_bus          (BLUE70: replaces q_learning)
     //
     //   Level 2:
     //     federated_rl, metacognitive, discovery, self_model,
@@ -547,7 +448,9 @@ impl CapabilityBus {
     //
     //   Level 3 (outermost – acquire last, release first):
     //     evolution_graph, transport, learning_bus, reputation,
-    //     capability_graph, profile
+    //     capability_graph, profile,
+    //     unified_knowledge_bus       (BLUE70: replaces knowledge_bus+reputation)
+    //     learning_optimization_bus   (BLUE70: replaces learning_bus)
     //
     // Single-lock components (no ordering conflicts):
     //     harness, matcher, provenance_ledger, schema_registry
@@ -560,21 +463,13 @@ impl CapabilityBus {
 
     pub fn new(
         harness: Arc<HarnessBus>,
-        reputation: ReputationStore,
         capability_graph: CapabilityGraph,
-        q_learning: QLearningAgent,
-        experience: ExperienceKnowledgeBase,
         reward_fn: RewardFunction,
         provenance_ledger: Arc<ProvenanceLedger>,
     ) -> Self {
         Self {
             harness,
-            learning_bus: Arc::new(RwLock::new(WorkflowLearningBus::new(1000))),
-            knowledge_bus: Arc::new(RwLock::new(KnowledgeBus::default())),
-            reputation: Arc::new(Mutex::new(reputation)),
             capability_graph: Arc::new(Mutex::new(capability_graph)),
-            q_learning: Arc::new(Mutex::new(q_learning)),
-            experience: Arc::new(Mutex::new(experience)),
             reward_fn: Arc::new(Mutex::new(reward_fn)),
             event_history: Arc::new(RwLock::new(VecDeque::with_capacity(100))),
             profile: Arc::new(RwLock::new(CapabilityBusProfile::default())),
@@ -583,6 +478,10 @@ impl CapabilityBus {
             schema_registry: Arc::new(Mutex::new(SchemaRegistry::new())),
             tenant_budget: Arc::new(Mutex::new(TenantBudgetEnforcer::new())),
             optimizer_registry: Arc::new(Mutex::new(OptimizerRegistry::new())),
+            // BLUE70: Consolidated buses
+            unified_knowledge_bus: Arc::new(RwLock::new(UnifiedKnowledgeBus::new())),
+            reinforcement_bus: Arc::new(RwLock::new(ReinforcementBus::new())),
+            learning_optimization_bus: Arc::new(RwLock::new(LearningOptimizationBus::new())),
             #[cfg(feature = "sub-bus-tool")]
             tool_bus: ToolBus::new(
                 crate::acp::r#impl::request::tools_pack::global_tool_registry(),
@@ -661,11 +560,8 @@ impl CapabilityBus {
         workflow_registry: Option<Arc<Mutex<WorkflowRegistry>>>,
     ) -> Self {
         let mut bus = Self::new(
-            harness,
-            ReputationStore::new(crate::intelligence::reputation::ReputationConfig::default()),
+            harness.clone(),
             CapabilityGraph::new(),
-            QLearningAgent::default(),
-            ExperienceKnowledgeBase::default(),
             RewardFunction::default(),
             Arc::new(ProvenanceLedger::default()),
         );
@@ -904,19 +800,22 @@ impl CapabilityBus {
 
     pub fn capability_bus_profile(&self) -> CapabilityBusProfile {
         let mut p = write_guard(&self.profile);
-        p.learning_events_count = read_guard(&self.learning_bus).len();
-        p.reputation_agents_count = lock_guard(&self.reputation).tracked_agent_count();
-        p.capability_graph_agents = lock_guard(&self.capability_graph).total_agents();
-        p.knowledge_insights_count = read_guard(&self.knowledge_bus).snapshot().len();
-        p.q_learning_table_size = lock_guard(&self.q_learning)
-            .q_table
-            .values()
-            .map(|m| m.len())
-            .sum();
+        // BLUE70: Read from consolidated buses
         {
-            let exp = lock_guard(&self.experience);
-            p.experience_case_count = exp.success_cases.len() + exp.failure_patterns.len();
+            let ukb = read_guard(&self.unified_knowledge_bus);
+            p.reputation_agents_count = ukb.reputation_count();
+            p.knowledge_insights_count = ukb.insight_count();
+            p.experience_case_count = ukb.experience_count();
         }
+        {
+            let rb = read_guard(&self.reinforcement_bus);
+            p.q_learning_table_size = rb.table_size();
+        }
+        {
+            let lob = read_guard(&self.learning_optimization_bus);
+            p.learning_events_count = lob.event_count();
+        }
+        p.capability_graph_agents = lock_guard(&self.capability_graph).total_agents();
         p.event_history_len = read_guard(&self.event_history).len();
         p.workflow_presets_count = self
             .workflow_registry
@@ -980,6 +879,21 @@ impl CapabilityBus {
         p.evolve_timeout_count = self
             .evolve_timeout_count
             .load(std::sync::atomic::Ordering::Relaxed);
+
+        // BLUE70: Consolidated bus profile metrics
+        {
+            let ukb = read_guard(&self.unified_knowledge_bus);
+            p.unified_knowledge_insight_count = ukb.insight_count();
+            p.unified_knowledge_experience_count = ukb.experience_count();
+        }
+        {
+            let rb = read_guard(&self.reinforcement_bus);
+            p.reinforcement_table_size = rb.table_size();
+        }
+        {
+            let lob = read_guard(&self.learning_optimization_bus);
+            p.learning_optimization_event_count = lob.event_count();
+        }
 
         // Skill evolution metrics
         #[cfg(feature = "sub-bus-tool")]
@@ -1379,22 +1293,17 @@ impl CapabilityBus {
             warn!("evolve: evolve_world_model timed out — skipping");
         }
 
-        // ── Transport event & consensus ────────────────────────────────
+        // ── BLUE70: Read Q-value and exploration rate from ReinforcementBus ──
         let (q_value, exploration_rate) = timeout(timeout_dur, async {
-            let ql = lock_guard(&self.q_learning);
-            let qv = ql
-                .q_table
-                .get(state)
-                .and_then(|m| m.get(action))
-                .copied()
-                .unwrap_or(0.0);
-            let er = ql.exploration_rate;
-            drop(ql);
+            let rb = read_guard(&self.reinforcement_bus);
+            let qv = rb.best_q_value(&state.0);
+            let er = 0.1; // default exploration rate; ReinforcementBus manages its own
+            drop(rb);
             (qv, er)
         })
         .await
         .unwrap_or_else(|_| {
-            warn!("evolve: q_learning lock timed out — using defaults");
+            warn!("evolve: reinforcement_bus lock timed out — using defaults");
             (0.0, 0.0)
         });
 
@@ -1655,9 +1564,21 @@ pub(crate) mod tests {
 
     fn make_sensing(bus: &CapabilityBus, recent_agents: Vec<String>) -> super::SensingOutput {
         let snapshot = bus
-            .reputation
-            .lock()
-            .map(|r| r.snapshot())
+            .unified_knowledge_bus
+            .read()
+            .map(|ukb| {
+                ukb.all_reputations().into_iter().map(|r| {
+                    crate::intelligence::reputation::ReputationRecord {
+                        agent: r.agent.clone(),
+                        score: r.score,
+                        total_tasks: r.total_tasks,
+                        success_count: r.successful_tasks,
+                        failure_count: r.total_tasks.saturating_sub(r.successful_tasks),
+                        consecutive_failures: 0,
+                        last_updated_ms: 0,
+                    }
+                }).collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         super::SensingOutput {
             capability_agent_count: 0,
@@ -1705,16 +1626,16 @@ pub(crate) mod tests {
         }
 
         {
-            let mut rep = bus
-                .reputation
-                .lock()
-                .expect("reputation lock should not be poisoned");
-            rep.record_outcome("security-auditor", true);
-            rep.record_outcome("general-coder", true);
-            rep.record_outcome("general-coder", true);
-            rep.record_outcome("general-coder", true);
-            rep.record_outcome("fix-specialist", true);
-            rep.record_outcome("fix-specialist", true);
+            let mut ukb = bus
+                .unified_knowledge_bus
+                .write()
+                .expect("unified_knowledge_bus lock should not be poisoned");
+            ukb.record_outcome("security-auditor", "test", true, "test setup".to_string());
+            ukb.record_outcome("general-coder", "test", true, "test setup".to_string());
+            ukb.record_outcome("general-coder", "test", true, "test setup".to_string());
+            ukb.record_outcome("general-coder", "test", true, "test setup".to_string());
+            ukb.record_outcome("fix-specialist", "test", true, "test setup".to_string());
+            ukb.record_outcome("fix-specialist", "test", true, "test setup".to_string());
         }
 
         let recent = vec!["general-coder".to_string(), "fix-specialist".to_string()];
@@ -1779,13 +1700,13 @@ pub(crate) mod tests {
         }
 
         {
-            let mut rep = bus
-                .reputation
-                .lock()
-                .expect("reputation lock should not be poisoned");
-            rep.record_outcome("refactor-expert", true);
-            rep.record_outcome("general-coder", true);
-            rep.record_outcome("debugger", true);
+            let mut ukb = bus
+                .unified_knowledge_bus
+                .write()
+                .expect("unified_knowledge_bus lock should not be poisoned");
+            ukb.record_outcome("refactor-expert", "test", true, "test setup".to_string());
+            ukb.record_outcome("general-coder", "test", true, "test setup".to_string());
+            ukb.record_outcome("debugger", "test", true, "test setup".to_string());
         }
 
         let candidates = vec![
@@ -1856,11 +1777,11 @@ pub(crate) mod tests {
         }
 
         {
-            let mut rep = bus
-                .reputation
-                .lock()
-                .expect("reputation lock should not be poisoned");
-            rep.record_outcome("test-agent", true);
+            let mut ukb = bus
+                .unified_knowledge_bus
+                .write()
+                .expect("unified_knowledge_bus lock should not be poisoned");
+            ukb.record_outcome("test-agent", "test", true, "test setup".to_string());
         }
 
         let candidates = vec!["test-agent".to_string()];
@@ -1968,11 +1889,11 @@ pub(crate) mod tests {
             register_test_agent(&mut graph, "solo-agent", vec!["general"]);
         }
         {
-            let mut rep = bus
-                .reputation
-                .lock()
-                .expect("reputation lock should not be poisoned");
-            rep.record_outcome("solo-agent", true);
+            let mut ukb = bus
+                .unified_knowledge_bus
+                .write()
+                .expect("unified_knowledge_bus lock should not be poisoned");
+            ukb.record_outcome("solo-agent", "test", true, "test setup".to_string());
         }
 
         let candidates = vec!["solo-agent".to_string()];

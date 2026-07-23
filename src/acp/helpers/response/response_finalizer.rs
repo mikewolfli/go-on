@@ -319,10 +319,10 @@ fn build_response_metadata(
             .capability_bus
             .as_ref()
             .and_then(|cb| {
-                cb.learning_bus
+                cb.learning_optimization_bus
                     .read()
                     .ok()
-                    .and_then(|lb| lb.agent_success_rate(selected_agent))
+                    .and_then(|lob| lob.agent_success_rate(selected_agent))
             })
             .unwrap_or(1.0);
         reg.optimize_all(&OptimizationContext {

@@ -1,6 +1,40 @@
 # Changelog
 
-## [1.4.1] - 2026-07-21
+## [1.4.2] - 2026-07-23
+
+### BLUE70 — Multi-Agent Communication System + Architecture Consolidation
+
+This release introduces a complete multi-agent tree-based communication system and consolidates the 14-bus architecture down to 11 core buses + 1 communication bus.
+
+#### New: CommunicationBus (Agent Tree Communication)
+
+- **AgentPath**: Hierarchical agent addressing (`root/research/coder`) with simplified wildcard matching (`root/*/coder`).
+- **AgentMessage**: Structured inter-agent message types — Delegate, Result, Progress, Cancel, StatusQuery, Custom.
+- **AgentTree**: Lightweight hierarchical agent index with flat HashMap + parent pointers + BFS traversal (no recursion).
+- **AgentMessenger**: Two-level message delivery (AtMostOnce / AtLeastOnce) with inbox routing and cancellation propagation.
+- **CommunicationBus**: Top-level bus aggregating AgentTree + AgentMessenger, with profile and health endpoints.
+- **SpawnAgentTool integration**: Each sub-agent spawn is registered in the CommunicationBus AgentTree for observability.
+- **AgentCommunicationHook**: ToolHook that records execution metrics on every spawn_agent call.
+- **Agent trait extension**: New `on_message()` and `send_message()` methods on the Agent trait for future agent-to-agent communication.
+
+#### Architecture Consolidation (14 → 11 Buses)
+
+- **UnifiedKnowledgeBus**: Merged KnowledgeBus + ReputationStore + ExperienceKnowledgeBase into one cohesive bus with unified query/record APIs and EMA reputation smoothing.
+- **ReinforcementBus**: Merged QLearningAgent + FederatedRL with epsilon-greedy action selection and optional federated coordinator.
+- **LearningOptimizationBus**: Merged WorkflowLearningBus + OptimizationBus with atomic `record_and_optimize()` — learns from events and generates optimization suggestions and prevention rules.
+- **Legacy code removed**: All 6 legacy bus fields, 2 legacy struct definitions, and 3 legacy imports deleted (~250 lines). 22 call sites migrated.
+
+#### ForkRegistry Enhancement
+
+- New fields: `agent_path`, `parent_agent_path`, `budget`, `started_at_ms`, `completed_at_ms` on `ForkEntry`.
+- New methods: `with_agent_path()`, `with_parent_agent_path()`, `with_budget()`, `mark_completed()`.
+
+#### Quality
+
+- 97 new tests across all new modules, 276 BLUE70-related tests total.
+- Zero clippy warnings, zero compilation warnings.
+- All 3 server profiles (simple-server, multi-users-server, full) compile cleanly.
+- Full backward compatibility preserved — Agent trait extended with default implementations.
 
 ### Architecture — Transport Trait Phase 4 Complete + i18n Unification
 

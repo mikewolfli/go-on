@@ -13,6 +13,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::agents::communication::bus::CommunicationBus;
+// Reserved for future AgentCommunicationHook use
+// use crate::agents::communication::path::AgentPath;
+// use crate::agents::communication::tree::AgentNodeMetadata;
+
 // ---------------------------------------------------------------------------
 // Tool lifecycle hooks — observer trait + registry
 // ---------------------------------------------------------------------------
@@ -46,20 +51,67 @@ pub trait ToolHook: Send + Sync {
 /// a warning but does not abort the tool execution pipeline.
 #[derive(Default)]
 pub struct ToolHookRegistry {
-    hooks: Vec<Arc<dyn ToolHook>>,
+    hooks: std::sync::Mutex<Vec<Arc<dyn ToolHook>>>,
+}
+
+// ── BLUE70: AgentCommunicationHook ────────────────────────────────
+
+/// Tool hook that registers spawn events in the CommunicationBus AgentTree.
+///
+/// When the `spawn_agent` tool is executed, this hook:
+/// - Pre-execute: registers the spawned agent in the AgentTree
+/// - Post-execute: records execution metrics on the CommunicationBus
+pub struct AgentCommunicationHook {
+    /// Reference to the global CommunicationBus.
+    bus: Arc<CommunicationBus>,
+}
+
+impl AgentCommunicationHook {
+    /// Create a new hook with a reference to the CommunicationBus.
+    pub fn new(bus: Arc<CommunicationBus>) -> Self {
+        Self { bus }
+    }
+}
+
+impl ToolHook for AgentCommunicationHook {
+    fn pre_execute(&self, tool_name: &str, _input: &ToolInput) -> Result<()> {
+        if tool_name == "spawn_agent" {
+            // Registration happens inside execute_spawn() via the global
+            // SPAWN_COMMUNICATION_BUS — this hook provides observability.
+            tracing::debug!(tool = tool_name, "AgentCommunicationHook: pre_execute");
+        }
+        Ok(())
+    }
+
+    fn post_execute(
+        &self,
+        tool_name: &str,
+        _input: &ToolInput,
+        output: &ToolOutput,
+        duration_ms: u64,
+    ) -> Result<()> {
+        if tool_name == "spawn_agent" {
+            self.bus.record_metrics(tool_name, duration_ms, output.success);
+        }
+        Ok(())
+    }
 }
 
 impl ToolHookRegistry {
     /// Register a new hook. Hooks are invoked in registration order.
-    pub fn register(&mut self, hook: Arc<dyn ToolHook>) {
-        self.hooks.push(hook);
+    pub fn register(&self, hook: Arc<dyn ToolHook>) {
+        if let Ok(mut hooks) = self.hooks.lock() {
+            hooks.push(hook);
+        }
     }
 
     /// Invoke all registered pre-execute hooks.
     pub fn run_pre(&self, tool_name: &str, input: &ToolInput) {
-        for hook in &self.hooks {
-            if let Err(e) = hook.pre_execute(tool_name, input) {
-                tracing::warn!(tool = %tool_name, error = %e, "pre-execute hook failed");
+        if let Ok(hooks) = self.hooks.lock() {
+            for hook in hooks.iter() {
+                if let Err(e) = hook.pre_execute(tool_name, input) {
+                    tracing::warn!(tool = %tool_name, error = %e, "pre-execute hook failed");
+                }
             }
         }
     }
@@ -72,9 +124,11 @@ impl ToolHookRegistry {
         output: &ToolOutput,
         duration_ms: u64,
     ) {
-        for hook in &self.hooks {
-            if let Err(e) = hook.post_execute(tool_name, input, output, duration_ms) {
-                tracing::warn!(tool = %tool_name, error = %e, "post-execute hook failed");
+        if let Ok(hooks) = self.hooks.lock() {
+            for hook in hooks.iter() {
+                if let Err(e) = hook.post_execute(tool_name, input, output, duration_ms) {
+                    tracing::warn!(tool = %tool_name, error = %e, "post-execute hook failed");
+                }
             }
         }
     }

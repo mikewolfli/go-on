@@ -271,15 +271,16 @@ pub(crate) fn collect_reputation_scores(
 ) -> HashMap<String, f64> {
     let mut scores = HashMap::with_capacity(agents.len());
     if let Some(ref cb) = server.governance_deps.capability_bus {
-        // BLUE48-R2: Collect base reputation scores from ReputationStore
-        let rep = cb.reputation.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("reputation lock poisoned during score collection – recovered");
+        // BLUE70: Collect reputation scores from UnifiedKnowledgeBus
+        let ukb = cb.unified_knowledge_bus.read().unwrap_or_else(|poisoned| {
+            tracing::warn!("unified_knowledge_bus lock poisoned – recovered");
             poisoned.into_inner()
         });
         for (name, _) in agents {
-            scores.insert(name.clone(), rep.score(name));
+            let score = ukb.get_reputation(name).unwrap_or(0.5);
+            scores.insert(name.clone(), score);
         }
-        drop(rep);
+        drop(ukb);
 
         // BLUE48-R2: Augment with Council reputation influence multiplier.
         // The Council reputation system tracks member voting accuracy over time.

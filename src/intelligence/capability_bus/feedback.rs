@@ -8,10 +8,9 @@
 //! feedback loop helpers. (BLUE38 ARCH-13)
 
 use super::core::CapabilityBus;
-use super::core::WorkflowLearningEvent;
 #[cfg(feature = "sub-bus-orchestration")]
 use crate::intelligence::capability_bus::orchestration_bus::OrchestrationBus;
-use crate::intelligence::{lock_guard, write_guard};
+use crate::intelligence::write_guard;
 use crate::shared::provenance_helpers::make_entry;
 
 /// RAII guard that ensures `complete_flow` is called when `feedback()` returns,
@@ -66,10 +65,10 @@ impl CapabilityBus {
             }
         };
 
-        // 1. Write to learning bus
+        // 1. BLUE70: Write to LearningOptimizationBus (replaces legacy WorkflowLearningBus)
         {
-            let mut lb = write_guard(&self.learning_bus);
-            lb.push(WorkflowLearningEvent {
+            let mut lob = write_guard(&self.learning_optimization_bus);
+            lob.record_and_optimize(crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent {
                 task_type: task_type.to_string(),
                 agent: agent.to_string(),
                 success,
@@ -80,10 +79,20 @@ impl CapabilityBus {
             });
         }
 
-        // 2. Write to reputation store
+        // 2. BLUE70: Write to UnifiedKnowledgeBus + ReinforcementBus (replaces legacy ReputationStore + QLearningAgent + ExperienceKnowledgeBase)
         {
-            let mut rep = lock_guard(&self.reputation);
-            rep.record_outcome(agent, success);
+            let mut ukb = write_guard(&self.unified_knowledge_bus);
+            let outcome_summary = format!(
+                "agent={} task={} success={} dur={}ms tokens={} quality={:.2}",
+                agent, task_type, success, duration_ms, token_cost, quality_score
+            );
+            ukb.record_outcome(agent, task_type, success, outcome_summary);
+            // Feed reward signal to reinforcement bus
+            let reward = if success { 1.0 } else { -0.5 };
+            let next_state = format!("{}/next", task_type);
+            if let Ok(mut rb) = self.reinforcement_bus.try_write() {
+                rb.record_reward(task_type, agent, reward, &next_state);
+            }
         }
 
         // 3. Write to ObservabilityBus

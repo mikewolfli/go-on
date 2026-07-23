@@ -13,7 +13,7 @@ use crate::governance::harness_bus::{AgentExecutionPolicy, PolicyVerdict};
 use crate::governance::pua::TaskContext;
 use crate::intelligence::adaptive_selector::ContextFeatures;
 use crate::intelligence::token_cache::{estimate_token_count, ContextLengthClass};
-use crate::intelligence::{lock_guard, write_guard};
+use crate::intelligence::{lock_guard, read_guard, write_guard};
 use serde::Serialize;
 use std::env;
 use std::time::Instant;
@@ -487,19 +487,20 @@ impl CapabilityBus {
             agents
         };
 
-        // Step C2: Query QLearningAgent for learned routing preferences.
-        let q_learning_state = (task_type_str.clone(), "select_agent".to_string());
-        let q_preferred_action =
-            lock_guard(&self.q_learning).choose_action(&q_learning_state, &candidate_agents);
+        // Step C2: BLUE70: Query ReinforcementBus for learned routing preferences.
+        let q_preferred_action = {
+            let rb = read_guard(&self.reinforcement_bus);
+            rb.select_action(&task_type_str, &candidate_agents)
+        };
         if let Some(ref preferred) = q_preferred_action {
             self.record_event(
                 "decision",
                 None,
                 None,
-                "q_learning_preference",
+                "reinforcement_preference",
                 serde_json::json!({
                     "preferred_agent": preferred,
-                    "state": q_learning_state.0,
+                    "state": task_type_str,
                 }),
             );
         }

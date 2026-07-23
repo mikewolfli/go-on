@@ -608,6 +608,37 @@ pub trait Agent: Send + Sync {
             pua_report: None,
         })
     }
+
+    // ── BLUE70: Agent communication methods ────────────────────────
+
+    /// Receive an inter-agent message.
+    ///
+    /// Default implementation logs the message and returns None (no reply).
+    /// Agents that participate in tree-based communication override this
+    /// to handle Delegate, Cancel, StatusQuery, etc.
+    async fn on_message(
+        &self,
+        msg: &crate::agents::communication::message::AgentMessage,
+    ) -> AppResult<Option<crate::agents::communication::message::AgentMessage>> {
+        tracing::info!(from = %msg.from, kind = ?msg.kind, "agent received message (default handler)");
+        Ok(None)
+    }
+
+    /// Send a message to another agent via the CommunicationBus.
+    ///
+    /// Convenience wrapper that should be called from inside an agent's
+    /// chat() implementation when it needs to communicate with sibling
+    /// or child agents. The messenger reference is typically injected
+    /// via the agent's constructor or stored as a capability reference.
+    async fn send_message(
+        &self,
+        _messenger: &crate::agents::communication::bus::CommunicationBus,
+        _to: crate::agents::communication::message::AgentTarget,
+        _kind: crate::agents::communication::message::AgentMessageKind,
+        _payload: serde_json::Value,
+    ) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 /// Agent registry for managing and accessing agents
