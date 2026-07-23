@@ -18,6 +18,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.4.1-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![CI](https://github.com/mikeli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikeli/go-on/actions/workflows/build.yml)
 [![Tests](https://img.shields.io/badge/tests-2069-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-38-9cf)]()
@@ -57,6 +58,8 @@ cargo run -- --protocol-mode mcp_stdio
 First run opens an interactive setup wizard if no AI providers are configured.
 
 **Full documentation**: see the `cookbook/` directory (mdBook format with trilingual support) — `cd cookbook && mdbook serve --open`
+
+**[Contributing guide](CONTRIBUTING.md)** — commit conventions, PR workflow, and development setup.
 
 Default health endpoint: `http://127.0.0.1:8090/health`
 

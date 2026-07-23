@@ -61,6 +61,66 @@ pub enum AutoDegradePolicy {
     ConfirmRequired,
 }
 
+/// Approval posture — independent dimension orthogonal to ModeKind.
+///
+/// Decouples "what to do" (mode) from "how to approve" (posture):
+/// - `Suggest`:   show approval and wait (interactive, default for edit)
+/// - `Auto`:      auto-approve all low-risk operations (streamlined)
+/// - `Bypass`:    full access, no approval gates (dangerous, for trusted scenarios)
+/// - `Never`:     block all write/destructive operations (Plan/read-only)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ApprovalPosture {
+    /// Ask for user confirmation before executing tools (interactive).
+    #[default]
+    Suggest,
+    /// Auto-approve all low-risk tool calls; no user interaction needed.
+    Auto,
+    /// Full access — no approval gates at all (trusted/CI scenarios).
+    Bypass,
+    /// Block all write/destructive operations (read-only).
+    Never,
+}
+
+impl ApprovalPosture {
+    /// Whether this posture blocks tool execution outright (read-only).
+    pub fn is_read_only(&self) -> bool {
+        matches!(self, ApprovalPosture::Never)
+    }
+
+    /// Whether this posture should prompt the user for approval.
+    pub fn requires_approval(&self) -> bool {
+        matches!(self, ApprovalPosture::Suggest)
+    }
+
+    /// Whether this posture allows fully autonomous execution.
+    pub fn is_autonomous(&self) -> bool {
+        matches!(self, ApprovalPosture::Auto | ApprovalPosture::Bypass)
+    }
+}
+
+impl From<&str> for ApprovalPosture {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "suggest" | "interactive" => ApprovalPosture::Suggest,
+            "auto" | "autonomous" => ApprovalPosture::Auto,
+            "bypass" | "full" => ApprovalPosture::Bypass,
+            "never" | "read_only" => ApprovalPosture::Never,
+            _ => ApprovalPosture::Suggest,
+        }
+    }
+}
+
+impl std::fmt::Display for ApprovalPosture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApprovalPosture::Suggest => write!(f, "suggest"),
+            ApprovalPosture::Auto => write!(f, "auto"),
+            ApprovalPosture::Bypass => write!(f, "bypass"),
+            ApprovalPosture::Never => write!(f, "never"),
+        }
+    }
+}
+
 /// Mode runtime trait: each mode has its own orchestration, budget, and policy
 ///
 /// All implementations should instrument `run` for tracing and performance monitoring
@@ -69,6 +129,15 @@ pub enum AutoDegradePolicy {
 pub trait ModeRuntime: Send + Sync {
     /// Returns the mode kind.
     fn kind(&self) -> ModeKind;
+    /// Returns the approval posture for this mode.
+    fn posture(&self) -> ApprovalPosture {
+        // Default: derive from user_approval_required for backward compat.
+        if self.user_approval_required() {
+            ApprovalPosture::Suggest
+        } else {
+            ApprovalPosture::Auto
+        }
+    }
     /// Returns the allowed tools for this mode.
     fn allowed_tools(&self) -> Vec<String>;
     /// Returns the maximum number of tool calls allowed.
@@ -94,6 +163,19 @@ pub fn resolve_mode_runtime(
     registry: Option<Arc<AgentRegistry>>,
     agent_name: Option<String>,
 ) -> std::result::Result<Box<dyn ModeRuntime>, String> {
+    resolve_mode_runtime_with_posture(mode, None, registry, agent_name)
+}
+
+/// Like `resolve_mode_runtime` but allows overriding the approval posture.
+///
+/// When `posture` is `None`, the default posture for the mode is used.
+/// When `Some(p)`, the given posture overrides the mode default.
+pub fn resolve_mode_runtime_with_posture(
+    mode: &str,
+    posture: Option<ApprovalPosture>,
+    registry: Option<Arc<AgentRegistry>>,
+    agent_name: Option<String>,
+) -> std::result::Result<Box<dyn ModeRuntime>, String> {
     let kind = match mode.to_lowercase().as_str() {
         "ask" => ModeKind::Ask,
         "plan" => ModeKind::Plan,
@@ -108,9 +190,11 @@ pub fn resolve_mode_runtime(
         }
     };
     let registry = registry.ok_or_else(|| "ModeRuntime requires a registry".to_string())?;
-    Ok(Box::new(GenericModeRuntime::new(
-        kind, registry, agent_name,
-    )))
+    let mut runtime = GenericModeRuntime::new(kind, registry, agent_name);
+    if let Some(p) = posture {
+        runtime = runtime.with_posture(p);
+    }
+    Ok(Box::new(runtime))
 }
 
 /// Async helper to execute an agent chat without blocking.
@@ -372,6 +456,9 @@ pub struct GenericModeRuntime {
     pub auto_degrade: bool,
     /// The policy to apply when risk is elevated (SafeGuard only).
     pub degrade_policy: AutoDegradePolicy,
+    /// Approval posture — decoupled from mode kind (CodeWhale-compatible).
+    /// Controls how tool approval is handled independent of execution mode.
+    pub posture: ApprovalPosture,
 }
 
 // ── Backward-compat type aliases (A6: keep public API surface) ──────
@@ -395,9 +482,21 @@ pub type SafeGuardModeRuntime = GenericModeRuntime;
 pub type PlanModeRuntime = GenericModeRuntime;
 
 impl GenericModeRuntime {
+    /// Derive the default posture for a given mode kind.
+    fn default_posture_for(kind: &ModeKind) -> ApprovalPosture {
+        match kind {
+            ModeKind::Ask => ApprovalPosture::Auto,
+            ModeKind::Plan => ApprovalPosture::Never,
+            ModeKind::Edit => ApprovalPosture::Suggest,
+            ModeKind::FullAuto => ApprovalPosture::Auto,
+            ModeKind::SafeGuard => ApprovalPosture::Suggest,
+        }
+    }
+
     /// Create a new GenericModeRuntime with the given mode, registry, and agent.
     pub fn new(kind: ModeKind, registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
         Self {
+            posture: Self::default_posture_for(&kind),
             kind,
             agent_registry: Some(registry),
             agent_name,
@@ -406,9 +505,23 @@ impl GenericModeRuntime {
         }
     }
 
+    /// Override the default approval posture for this mode runtime.
+    ///
+    /// Mode and posture are independent dimensions:
+    /// - mode = "what to do" (ask/plan/edit/full_auto/safeguard)
+    /// - posture = "how to approve" (suggest/auto/bypass/never)
+    ///
+    /// This allows, for example, running FullAuto mode with `Suggest` posture
+    /// for interactive approval, or Ask mode with `Bypass` for fully trusted CI.
+    pub fn with_posture(mut self, posture: ApprovalPosture) -> Self {
+        self.posture = posture;
+        self
+    }
+
     /// Create a new SafeGuard-mode runtime with degradation enabled.
     pub fn new_safeguard(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
         Self {
+            posture: Self::default_posture_for(&ModeKind::SafeGuard),
             kind: ModeKind::SafeGuard,
             agent_registry: Some(registry),
             agent_name,
@@ -805,6 +918,10 @@ impl ModeStrategy for GenericModeRuntime {
 impl ModeRuntime for GenericModeRuntime {
     fn kind(&self) -> ModeKind {
         self.kind.clone()
+    }
+
+    fn posture(&self) -> ApprovalPosture {
+        self.posture
     }
 
     fn allowed_tools(&self) -> Vec<String> {

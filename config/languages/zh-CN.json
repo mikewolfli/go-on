@@ -723,6 +723,15 @@
         "cli.chat.conversation_long_warning": "对话太长 ({count} 条消息)。输入 /compact 进行摘要。",
         "cli.chat.tool_blocked_by_mode": "工具 '{tool_name}' 被模式约束阻止 (允许: {allowed:?})",
         "cli.chat.tool_call_blocked_by_mode": "{blocked} 次工具调用被模式 '{mode}' 阻止 (max_calls={max})",
-        "cli.chat.tip_compact": "提示: 使用 /compact 汇总旧消息以释放上下文。"
+        "cli.chat.tip_compact": "提示: 使用 /compact 汇总旧消息以释放上下文。",
+        "cli.chat.stats_header": "对话统计:",
+        "cli.chat.stats_messages": "  消息: 共 {total} 条 ({user} 条用户, {assistant} 条助手)",
+        "cli.chat.stats_total_chars": "  总字符数: {count}",
+        "cli.chat.stats_avg_length": "  平均长度: {count} 字符",
+        "cli.chat.context_header": "上下文窗口:",
+        "cli.chat.context_messages": "  消息: {total} 条 ({system} 条系统, {user} 条用户, {assistant} 条助手)",
+        "cli.chat.context_chars": "  字符: {count} (约 ~{tokens} token, 支持 CJK)",
+        "cli.chat.context_used_pct": "  上下文使用: {pct:.1}% (128K 窗口)",
+        "cli.chat.context_compact_tip": "  {open}提示: 使用 /compact 减少上下文占用。{close}  ({current}/{threshold} 条消息)"
       }
 }

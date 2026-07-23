@@ -16,7 +16,9 @@
 //! Once all call sites have migrated, `CoreDag<T>` will become the sole DAG type
 //! and the ExecutionGraph / TaskGraph types will be deprecated.
 
-#![allow(dead_code, reason = "generic DAG types for tool execution")]
+// F-GAP-06: per-item dead_code annotations below are precise per RULES/global.md §31.
+// These types are reserved for the ongoing DAG type consolidation.
+// Remove each annotation once ExecutionGraph/TaskGraph are fully migrated to CoreDag.
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -398,6 +400,7 @@ impl ExecutionGraph {
 // =========================================================================
 
 /// A generic directed acyclic graph (DAG) node.
+#[allow(dead_code, reason = "F-GAP-06: reserved for DAG type consolidation")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagNode<T> {
     /// Unique identifier for this node.
@@ -413,6 +416,7 @@ pub struct DagNode<T> {
 /// Stores nodes in a `HashMap` keyed by node ID, and maintains both
 /// forward edges (`edges: parent -> children`) and backward edges
 /// (`dependencies` stored on each node).
+#[allow(dead_code, reason = "F-GAP-06: reserved for DAG type consolidation")]
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CoreDag<T> {
     /// All nodes in the graph, keyed by their `id`.
@@ -438,6 +442,7 @@ impl<T> std::fmt::Debug for CoreDag<T> {
     }
 }
 
+#[allow(dead_code, reason = "F-GAP-06: reserved for DAG type consolidation")]
 impl<T> CoreDag<T> {
     /// Create a new, empty DAG.
     pub fn new() -> Self {
@@ -641,6 +646,7 @@ impl<T> Default for CoreDag<T> {
 // -- Metrics -----------------------------------------------------------------
 
 /// Metrics computed from a DAG.
+#[allow(dead_code, reason = "F-GAP-06: reserved for DAG type consolidation")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagMetrics {
     /// Maximum number of nodes at a single depth level.
@@ -757,6 +763,7 @@ impl TaskContext {
 // -- DagNodeResult / DagExecutionTrace ---------------------------------------
 
 /// Result of a single DAG node execution.
+#[allow(dead_code, reason = "F-GAP-06: reserved for DAG type consolidation")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagNodeResult {
     pub node_id: ExNodeId,
@@ -770,6 +777,7 @@ pub struct DagNodeResult {
 }
 
 /// Complete DAG execution trace.
+#[allow(dead_code, reason = "F-GAP-06: reserved for DAG type consolidation")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagExecutionTrace {
     pub nodes: Vec<DagNodeResult>,
@@ -779,6 +787,7 @@ pub struct DagExecutionTrace {
 }
 
 /// Convert DAG execution results into a governance.status-observable payload.
+#[allow(dead_code, reason = "F-GAP-06: reserved for DAG type consolidation")]
 pub fn dag_trace_to_observability(trace: &DagExecutionTrace) -> Value {
     let completed = trace
         .nodes

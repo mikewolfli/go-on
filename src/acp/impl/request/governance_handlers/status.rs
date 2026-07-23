@@ -172,7 +172,7 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         .filter(|item| item.state.eq_ignore_ascii_case("open"))
         .count();
 
-    let tool_registry = ToolRegistry::new();
+    let tool_registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
     let tool_matrix = tool_registry.capability_matrix();
     let (tool_total, high_risk_total, fallback_enabled_total) = tool_matrix
         .get("tools")

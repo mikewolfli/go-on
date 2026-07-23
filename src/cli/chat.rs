@@ -990,21 +990,39 @@ fn display_stats(messages: &[Message], token_tracker: &TokenTracker) {
     let agent_msgs = messages.iter().filter(|m| m.role == "assistant").count();
     let user_msgs = messages.iter().filter(|m| m.role == "user").count();
     let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-    eprintln!("Conversation stats:");
+    eprintln!("{}", t("cli.chat.stats_header"));
     eprintln!(
-        "  Messages: {} total ({} user, {} assistant)",
-        messages.len(),
-        user_msgs,
-        agent_msgs
+        "{}",
+        tf(
+            "cli.chat.stats_messages",
+            &[
+                ("total", &messages.len().to_string()),
+                ("user", &user_msgs.to_string()),
+                ("assistant", &agent_msgs.to_string()),
+            ]
+        )
     );
-    eprintln!("  Total characters: {}", total_chars);
     eprintln!(
-        "  Avg length: {} chars",
-        if !messages.is_empty() {
-            total_chars / messages.len()
-        } else {
-            0
-        }
+        "{}",
+        tf(
+            "cli.chat.stats_total_chars",
+            &[("count", &total_chars.to_string())]
+        )
+    );
+    eprintln!(
+        "{}",
+        tf(
+            "cli.chat.stats_avg_length",
+            &[(
+                "count",
+                &(if !messages.is_empty() {
+                    total_chars / messages.len()
+                } else {
+                    0
+                })
+                .to_string()
+            )]
+        )
     );
     eprint!("{}", token_tracker.display());
 }
@@ -1013,29 +1031,65 @@ fn display_context(messages: &[Message]) {
     let total_chars: usize = messages.iter().map(|m| m.content.len()).sum();
     let est_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
     let system_msgs = messages.iter().filter(|m| m.role == "system").count();
-    eprintln!("Context window:");
+    eprintln!("{}", t("cli.chat.context_header"));
     eprintln!(
-        "  Messages: {} ({} system, {} user, {} assistant)",
-        messages.len(),
-        system_msgs,
-        messages.iter().filter(|m| m.role == "user").count(),
-        messages.iter().filter(|m| m.role == "assistant").count()
+        "{}",
+        tf(
+            "cli.chat.context_messages",
+            &[
+                ("total", &messages.len().to_string()),
+                ("system", &system_msgs.to_string()),
+                (
+                    "user",
+                    &messages
+                        .iter()
+                        .filter(|m| m.role == "user")
+                        .count()
+                        .to_string()
+                ),
+                (
+                    "assistant",
+                    &messages
+                        .iter()
+                        .filter(|m| m.role == "assistant")
+                        .count()
+                        .to_string()
+                ),
+            ]
+        )
     );
     eprintln!(
-        "  Characters: {} (est. ~{} tokens, CJK-aware)",
-        total_chars, est_tokens
+        "{}",
+        tf(
+            "cli.chat.context_chars",
+            &[
+                ("count", &total_chars.to_string()),
+                ("tokens", &est_tokens.to_string()),
+            ]
+        )
     );
     eprintln!(
-        "  Est. context used: {:.1}% of 128K window",
-        (est_tokens as f64 / 128_000.0 * 100.0).min(100.0)
+        "{}",
+        tf(
+            "cli.chat.context_used_pct",
+            &[(
+                "pct",
+                &format!("{:.1}", (est_tokens as f64 / 128_000.0 * 100.0).min(100.0))
+            )]
+        )
     );
     if messages.len() >= COMPACT_PROMPT_THRESHOLD {
         eprintln!(
-            "  {}Tip: Use /compact to reduce context usage.{}  ({}/{} msgs)",
-            ansi!("33"),
-            ansi!("0"),
-            messages.len(),
-            COMPACT_PROMPT_THRESHOLD
+            "{}",
+            tf(
+                "cli.chat.context_compact_tip",
+                &[
+                    ("open", ansi!("33")),
+                    ("close", ansi!("0")),
+                    ("current", &messages.len().to_string()),
+                    ("threshold", &COMPACT_PROMPT_THRESHOLD.to_string()),
+                ]
+            )
         );
     }
 }
@@ -2030,6 +2084,11 @@ async fn run_agent_streaming_phase(
                             continue;
                         }
 
+                        // Skip finish_reason and usage telemetry tokens
+                        if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+                            continue;
+                        }
+
                         if in_reasoning {
                             eprint!("{}💭 {}{}", ansi!("90"), token, ansi!("0"));
                             _thinking_buffer.push_str(&token);
@@ -2487,8 +2546,17 @@ async fn run_followup_phase(
                                 eprintln!();
                                 continue;
                             }
+                            // Tool call notification (same as primary phase)
+                            if let Some((tool_name, _)) = parse_tool_call_token(&token) {
+                                eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
+                                continue;
+                            }
                             if let Some(think) = token.strip_prefix("__thinking__") {
                                 eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+                                continue;
+                            }
+                            // Skip finish_reason and usage telemetry tokens
+                            if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
                                 continue;
                             }
                             if in_reasoning2 {
@@ -2970,6 +3038,10 @@ async fn chat_simple(
         // Strip __thinking__ prefix from reasoning tokens
         if let Some(think) = token.strip_prefix("__thinking__") {
             eprintln!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
+            continue;
+        }
+        // Skip finish_reason and usage telemetry tokens
+        if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
             continue;
         }
         response.push_str(&token);

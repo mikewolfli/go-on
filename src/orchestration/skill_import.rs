@@ -46,6 +46,10 @@ pub struct SkillImportManifest {
     pub version: String,
     #[serde(default)]
     pub description: String,
+    /// Optional namespace for grouping skills (e.g., "community", "builtin", "custom").
+    /// Used for display and filtering; does not affect registry key.
+    #[serde(default)]
+    pub namespace: Option<String>,
     #[serde(default = "default_manifest_schema")]
     pub input_schema: Value,
     /// Optional MCP endpoint for remote skill invocation.
@@ -747,6 +751,7 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
         name,
         version,
         description,
+        namespace: None,
         input_schema: input_schema.unwrap_or_else(default_manifest_schema),
         endpoint: None,
         prompt_template: Some(full_text),
@@ -902,12 +907,12 @@ mod tests {
         assert!(!is_floating_ref("d34db33fd34db33fd34db33fd34db33fd34db33f"));
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg_attr(
         miri,
         ignore = "Miri on Windows does not support filesystem directory creation APIs"
     )]
-    fn local_import_requires_matching_sha_when_enabled() {
+    async fn local_import_requires_matching_sha_when_enabled() {
         let root = test_workspace("requires_sha");
         let manifest = json!({
             "name": "local.echo",
@@ -928,28 +933,25 @@ mod tests {
         let registry = Arc::new(RwLock::new(SkillRegistry::default()));
         let mut store = SkillImportStore::load(policy, registry).unwrap();
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .expect("build tokio runtime for test");
-        let err = runtime
-            .block_on(store.import_skill(SkillImportRequest {
+        let err = store
+            .import_skill(SkillImportRequest {
                 source: SkillImportSource::Local {
                     path: manifest_path.display().to_string(),
                     sha256: None,
                 },
-            }))
+            })
+            .await
             .unwrap_err();
 
         assert!(err.to_string().contains("error.missing_field"));
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg_attr(
         miri,
         ignore = "Miri on Windows does not support filesystem directory creation APIs"
     )]
-    fn local_import_succeeds_and_persists_disabled_record() {
+    async fn local_import_succeeds_and_persists_disabled_record() {
         let root = test_workspace("persist_record");
         let manifest = json!({
             "name": "local.echo",
@@ -971,17 +973,14 @@ mod tests {
         };
         let registry = Arc::new(RwLock::new(SkillRegistry::default()));
         let mut store = SkillImportStore::load(policy, registry.clone()).unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .expect("build tokio runtime for test");
-        let imported = runtime
-            .block_on(store.import_skill(SkillImportRequest {
+        let imported = store
+            .import_skill(SkillImportRequest {
                 source: SkillImportSource::Local {
                     path: manifest_path.display().to_string(),
                     sha256: Some(sha),
                 },
-            }))
+            })
+            .await
             .unwrap();
         assert_eq!(imported.name, "local.echo");
         assert!(!imported.enabled);

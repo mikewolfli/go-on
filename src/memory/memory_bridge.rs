@@ -157,6 +157,7 @@ mod tests {
     use crate::memory::memory::{MemoryClass, MemoryEntry, MemoryPolicy};
     use std::sync::Arc;
     use std::time::Duration;
+    use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
     fn make_canonical(id: &str, class: MemoryClass, usefulness: f32) -> CanonicalEntry {
@@ -193,49 +194,46 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_background_task_cancellation() {
-        let tmp = tempfile::tempdir().expect("create temp dir");
-        let db_path = tmp.path().join("warm.db");
+    #[tokio::test]
+    async fn test_background_task_cancellation() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
         let cold_path = tmp.path().join("cold");
         let persistence = Arc::new(
             MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence"),
         );
 
         let cancel = CancellationToken::new();
-        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
         let mut handle: Option<tokio::task::JoinHandle<()>> = None;
-        rt.block_on(async {
-            // Inlined equivalent of start_auto_migrate_task (which was removed
-            // as part of startup performance fix — the production version now
-            // lives in start_background_tasks() in src/acp/background.rs).
-            let mp = Arc::clone(&persistence);
-            let cancel_clone = cancel.clone();
-            let h = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(300));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                // First tick completes immediately per tokio docs
-                interval.tick().await;
-                loop {
-                    tokio::select! {
-                        _ = interval.tick() => {
-                            if cancel_clone.is_cancelled() {
-                                tracing::info!("auto_migrate task cancelled");
-                                break;
-                            }
-                            let _ = mp.auto_migrate();
-                        }
-                        _ = cancel_clone.cancelled() => {
-                            tracing::info!("auto_migrate task cancelled via token");
+        // Inlined equivalent of start_auto_migrate_task (which was removed
+        // as part of startup performance fix — the production version now
+        // lives in start_background_tasks() in src/acp/background.rs).
+        let mp = Arc::clone(&persistence);
+        let cancel_clone = cancel.clone();
+        let h = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // First tick completes immediately per tokio docs
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if cancel_clone.is_cancelled() {
+                            tracing::info!("auto_migrate task cancelled");
                             break;
                         }
+                        let _ = mp.auto_migrate();
+                    }
+                    _ = cancel_clone.cancelled() => {
+                        tracing::info!("auto_migrate task cancelled via token");
+                        break;
                     }
                 }
-            });
-            cancel.cancel();
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            handle = Some(h);
+            }
         });
+        cancel.cancel();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        handle = Some(h);
         let handle = handle.expect("handle should be set");
         assert!(
             handle.is_finished(),

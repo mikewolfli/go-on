@@ -842,25 +842,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_in_process_transport_no_callbacks() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let transport = InProcessTransport::new();
-            let peer = PeerInfo::new("test", "local", NodeRole::Worker);
-            let weights = ModelWeights {
-                q_table_snapshot: HashMap::new(),
-                policy_params: HashMap::new(),
-                version: 1,
-            };
+    #[tokio::test]
+    async fn test_in_process_transport_no_callbacks() {
+        let transport = InProcessTransport::new();
+        let peer = PeerInfo::new("test", "local", NodeRole::Worker);
+        let weights = ModelWeights {
+            q_table_snapshot: HashMap::new(),
+            policy_params: HashMap::new(),
+            version: 1,
+        };
 
-            let result = transport.submit_weights(&peer, &weights).await;
-            assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("no submit callback registered"));
-        });
+        let result = transport.submit_weights(&peer, &weights).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no submit callback registered"));
     }
 
     #[test]

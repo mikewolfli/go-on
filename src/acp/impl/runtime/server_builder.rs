@@ -415,8 +415,10 @@ pub async fn new_acp_server(
     crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_registry(registry.clone());
 
     // B51-26: Shared wiring extracted to wire_server()
+    #[cfg(debug_assertions)]
     eprintln!("DEBUG: about to call wire_server...");
     wire_server(&mut server, &registry).await;
+    #[cfg(debug_assertions)]
     eprintln!("DEBUG: wire_server completed");
 
     // GAP-B52-30: Register security advisor alert channel with the alert manager.

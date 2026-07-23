@@ -585,7 +585,7 @@ impl CapabilityBus {
             optimizer_registry: Arc::new(Mutex::new(OptimizerRegistry::new())),
             #[cfg(feature = "sub-bus-tool")]
             tool_bus: ToolBus::new(
-                Arc::new(Mutex::new(crate::orchestration::tool::ToolRegistry::new())),
+                crate::acp::r#impl::request::tools_pack::global_tool_registry(),
                 Arc::new(RwLock::new(
                     crate::orchestration::skill::SkillRegistry::default(),
                 )),

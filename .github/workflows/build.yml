@@ -49,6 +49,12 @@ jobs:
 
       - name: Check (all targets, locked)
         run: cargo check --all-targets --locked
+      - name: Check (simple-server profile)
+        run: cargo check --no-default-features --features simple-server --locked
+      - name: Check (multi-users-server profile)
+        run: cargo check --no-default-features --features multi-users-server --locked
+      - name: Check (full profile)
+        run: cargo check --no-default-features --features full --locked
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Cargo deny (advisories / licenses / bans)

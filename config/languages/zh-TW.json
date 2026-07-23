@@ -716,6 +716,15 @@
         "cli.chat.conversation_long_warning": "對話太長 ({count} 條消息)。輸入 /compact 進行摘要。",
         "cli.chat.tool_blocked_by_mode": "工具 '{tool_name}' 被模式約束阻止 (允許: {allowed:?})",
         "cli.chat.tool_call_blocked_by_mode": "{blocked} 次工具調用被模式 '{mode}' 阻止 (max_calls={max})",
-        "cli.chat.tip_compact": "提示：使用 /compact 彙總舊訊息以釋放上下文。"
+        "cli.chat.tip_compact": "提示：使用 /compact 彙總舊訊息以釋放上下文。",
+        "cli.chat.stats_header": "對話統計:",
+        "cli.chat.stats_messages": "  訊息: 共 {total} 條 ({user} 條用戶, {assistant} 條助手)",
+        "cli.chat.stats_total_chars": "  總字元數: {count}",
+        "cli.chat.stats_avg_length": "  平均長度: {count} 字元",
+        "cli.chat.context_header": "上下文視窗:",
+        "cli.chat.context_messages": "  訊息: {total} 條 ({system} 條系統, {user} 條用戶, {assistant} 條助手)",
+        "cli.chat.context_chars": "  字元: {count} (約 ~{tokens} token, 支援 CJK)",
+        "cli.chat.context_used_pct": "  上下文使用: {pct:.1}% (128K 視窗)",
+        "cli.chat.context_compact_tip": "  {open}提示: 使用 /compact 減少上下文佔用。{close}  ({current}/{threshold} 條訊息)"
       }
 }

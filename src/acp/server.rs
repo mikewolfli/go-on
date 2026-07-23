@@ -1667,7 +1667,7 @@ impl AcpServer {
         tool_name: &str,
         tool_args: &Value,
         mode: &str,
-        risk_score: f64,
+        _risk_score: f64,
         timeout_secs: u64,
     ) -> anyhow::Result<bool> {
         let request_id = format!(
@@ -1689,6 +1689,21 @@ impl AcpServer {
         self.emit_permission_request_notification(session_id, &message, tool_name, tool_args)
             .await;
 
+        // Build options using the PermissionOption schema (serde camelCase)
+        let options = vec![
+            PermissionOption::new(
+                PermissionOptionId::new("approve"),
+                "Approve",
+                PermissionOptionKind::AllowOnce,
+            ),
+            PermissionOption::new(
+                PermissionOptionId::new("deny"),
+                "Deny",
+                PermissionOptionKind::RejectOnce,
+            ),
+        ];
+        let options_val = serde_json::to_value(&options).unwrap_or(serde_json::Value::Null);
+
         let request_payload = serde_json::json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -1696,22 +1711,7 @@ impl AcpServer {
             "params": {
                 "sessionId": session_id,
                 "message": message,
-                "toolName": tool_name,
-                "toolArgs": tool_args,
-                "mode": mode,
-                "riskScore": risk_score,
-                "options": [
-                    PermissionOption::new(
-                        PermissionOptionId::new("approve"),
-                        "Approve",
-                        PermissionOptionKind::AllowOnce,
-                    ),
-                    PermissionOption::new(
-                        PermissionOptionId::new("deny"),
-                        "Deny",
-                        PermissionOptionKind::RejectOnce,
-                    )
-                ],
+                "options": options_val,
                 "timeoutSecs": timeout_secs,
             }
         });

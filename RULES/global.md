@@ -14,8 +14,10 @@ Compatibility bootstrap:
 
 - Default runtime workflow is `think -> act -> check -> done` (from `config.toml`).
 - Any non-trivial change must produce evidence for all four phases.
+- `think` must begin with fact-driven verification: verify each claim against codebase evidence (file reads, grep, logs) before defining scope. Speculative claims must be rejected or downgraded.
 - If validation fails in `check`, re-enter `think` with root-cause and remediation notes.
 - Do not mark completion in `done` without runnable verification evidence.
+- PUA Red Line 2 (fact-driven verification) is enforced in `think`. Quality Compass is enforced in `done`.
 
 ## Archive/index policy:
 - Historical or duplicate policy documents must be reduced to short index pages.

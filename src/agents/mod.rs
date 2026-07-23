@@ -710,12 +710,16 @@ pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
                         }
                     }
                 }
-                // Emit only when both name and id are known (same heuristic as Zed)
-                if !entry.name.is_empty() && !entry.id.is_empty() {
-                    let fixed = strip_trailing_incomplete_escape(&entry.arguments);
-                    tokens.push(build_tool_call_token(&entry.name, &fixed));
-                    entry.arguments.clear();
-                }
+                // NOTE: Tool call tokens are NOT emitted here during streaming.
+                // Emitting partial tool call tokens during streaming causes duplicates
+                // because each SSE chunk with tool_calls arrives with incremental
+                // arguments (delta). Emitting after each chunk would produce multiple
+                // partial/incomplete tokens, confusing downstream consumers.
+                //
+                // Instead, tool calls are only emitted once in step 5 (finish_reason)
+                // when finish_reason == "tool_calls", at which point all arguments
+                // have been fully accumulated. This matches the reliable behavior
+                // of Zed's tool call handling.
             }
         });
     }
@@ -820,10 +824,11 @@ mod tests {
     }
 
     #[test]
-    fn extract_all_tokens_preserves_zed_order() {
-        // When reasoning_content AND content AND tool_calls are in the same delta,
-        // the output order must be: thinking → thinking → content → tool_calls
-        let event = json!({
+    fn extract_all_tokens_accumulates_tool_calls_until_finish_reason() {
+        // When tool_calls arrive in a delta (streaming), they are ACCUMULATED
+        // but NOT emitted until finish_reason == "tool_calls". This prevents
+        // duplicate partial tool call emissions during streaming.
+        let stream_chunk = json!({
             "choices": [{
                 "delta": {
                     "reasoning": "anthropic-think",
@@ -840,16 +845,90 @@ mod tests {
                 }
             }]
         });
-        let tokens = extract_all_tokens(&event);
-        assert_eq!(tokens.len(), 4, "all 4 fields should produce tokens");
+        // Without finish_reason, tool calls should NOT be emitted
+        let tokens = extract_all_tokens(&stream_chunk);
+        assert_eq!(
+            tokens.len(),
+            3,
+            "only thinking/thinking/content, no tool_call yet"
+        );
         assert!(tokens[0].starts_with("__thinking__"), "reasoning first");
         assert!(
             tokens[1].starts_with("__thinking__"),
             "reasoning_content second"
         );
         assert_eq!(tokens[2], "hello world", "content third");
-        assert!(tokens[3].starts_with("__tool_call__"), "tool_calls last");
-        assert!(tokens[3].contains("search"), "tool name present");
+
+        // Second chunk: accumulated arguments should continue but not emit
+        let stream_chunk2 = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {
+                            "arguments": "_extended"
+                        }
+                    }]
+                }
+            }]
+        });
+        let tokens2 = extract_all_tokens(&stream_chunk2);
+        assert_eq!(
+            tokens2.len(),
+            0,
+            "no tokens emitted from delta-only tool_calls"
+        );
+
+        // Finish chunk: finish_reason="tool_calls" should emit the accumulated call
+        let finish_event = json!({
+            "choices": [{
+                "delta": {},
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let tokens3 = extract_all_tokens(&finish_event);
+        assert!(tokens3.len() >= 2, "should have finish_reason + tool_call");
+        assert!(
+            tokens3[0].starts_with("__finish_reason__"),
+            "finish_reason first"
+        );
+        assert!(
+            tokens3[1].starts_with("__tool_call__"),
+            "tool_call emitted after finish_reason"
+        );
+        assert!(tokens3[1].contains("search"), "tool name present");
+        assert!(tokens3[1].contains("_extended"), "accumulated args present");
+    }
+
+    #[test]
+    fn extract_all_tokens_emits_complete_tool_call_from_single_chunk() {
+        // A single chunk with both tool_calls AND finish_reason="tool_calls"
+        // should emit the tool call once (not duplicate).
+        let event = json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"a.txt\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let tokens = extract_all_tokens(&event);
+        // finish_reason token + exactly one tool_call token
+        let tool_tokens: Vec<&str> = tokens
+            .iter()
+            .filter(|t| t.starts_with("__tool_call__"))
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(tool_tokens.len(), 1, "should emit exactly ONE tool_call");
+        assert!(tool_tokens[0].contains("read_file"));
+        assert!(tool_tokens[0].contains("a.txt"));
     }
 
     #[test]

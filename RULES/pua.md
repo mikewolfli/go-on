@@ -13,6 +13,7 @@ Red line 1: Close the loop.
 Red line 2: Fact-driven verification.
 - Reject unverified attribution such as "probably environment issue".
 - Require file checks, grep evidence, logs, and exact root-cause references.
+- **Enforced at start of `think` phase**: before defining scope, verify each claim against codebase evidence. Claims that fail verification must be reported and excluded from scope.
 
 Red line 3: Exhaust approaches.
 - Reject early-exit responses after repeated failure.
@@ -45,6 +46,7 @@ All items must pass before completion:
 3. Pattern category scanned (iceberg rule).
 4. Root cause and prevention explained.
 5. Quality improved with explicit rationale.
+- **Enforced at `done` phase**: quality compass items must be explicitly confirmed in the delivery summary. See also `RULES/README.md` phase intent for `done`.
 
 ## Iceberg Rule
 

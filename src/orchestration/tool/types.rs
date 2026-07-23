@@ -13,6 +13,73 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+// ---------------------------------------------------------------------------
+// Tool lifecycle hooks — observer trait + registry
+// ---------------------------------------------------------------------------
+
+/// Observer for tool execution lifecycle events.
+///
+/// Hooks are invoked synchronously during tool dispatch. Implementations
+/// should be fast (no blocking I/O) to avoid delaying tool execution.
+/// All methods have default no-op implementations.
+pub trait ToolHook: Send + Sync {
+    /// Called immediately before a tool is executed, after governance checks.
+    fn pre_execute(&self, _tool_name: &str, _input: &ToolInput) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called immediately after a tool completes (success or failure).
+    fn post_execute(
+        &self,
+        _tool_name: &str,
+        _input: &ToolInput,
+        _output: &ToolOutput,
+        _duration_ms: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A thread-safe collection of `ToolHook` observers.
+///
+/// Registered hooks are invoked in insertion order. A failing hook logs
+/// a warning but does not abort the tool execution pipeline.
+#[derive(Default)]
+pub struct ToolHookRegistry {
+    hooks: Vec<Arc<dyn ToolHook>>,
+}
+
+impl ToolHookRegistry {
+    /// Register a new hook. Hooks are invoked in registration order.
+    pub fn register(&mut self, hook: Arc<dyn ToolHook>) {
+        self.hooks.push(hook);
+    }
+
+    /// Invoke all registered pre-execute hooks.
+    pub fn run_pre(&self, tool_name: &str, input: &ToolInput) {
+        for hook in &self.hooks {
+            if let Err(e) = hook.pre_execute(tool_name, input) {
+                tracing::warn!(tool = %tool_name, error = %e, "pre-execute hook failed");
+            }
+        }
+    }
+
+    /// Invoke all registered post-execute hooks.
+    pub fn run_post(
+        &self,
+        tool_name: &str,
+        input: &ToolInput,
+        output: &ToolOutput,
+        duration_ms: u64,
+    ) {
+        for hook in &self.hooks {
+            if let Err(e) = hook.post_execute(tool_name, input, output, duration_ms) {
+                tracing::warn!(tool = %tool_name, error = %e, "post-execute hook failed");
+            }
+        }
+    }
+}
+
 /// Tool input envelope
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInput {
@@ -129,4 +196,6 @@ pub struct ToolRegistry {
     /// Allows looking up tools by alternative names
     /// (e.g. "terminal" → "shell_exec").
     pub(crate) aliases: HashMap<&'static str, &'static str>,
+    /// Tool lifecycle hooks, invoked in registration order.
+    pub hooks: ToolHookRegistry,
 }

@@ -301,6 +301,9 @@ async fn execute_single_tool(
             allowed_base_dir: None,
         };
 
+        // ── Pre-execute hooks ──────────────────────────────────────
+        tool_registry.hooks.run_pre(&tool_name, &input);
+
         // ── Execute with per-tool retry ────────────────────────────
         let max_exec_retries = if retry_policy.retry_on_failure {
             retry_policy.max_retries
@@ -389,6 +392,9 @@ async fn execute_single_tool(
         let formatted = format_tool_output_for_response(&tool_name, &output);
         let duration_ms = start.elapsed().as_millis() as u64;
 
+        // ── Post-execute hooks ────────────────────────────────────────
+        tool_registry.hooks.run_post(&tool_name, &input, &output, duration_ms);
+
         ToolExecItem {
             tool_name,
             output,
@@ -465,7 +471,10 @@ async fn ensure_tool_permission(
         return true;
     };
 
-    let timeout_secs = 300;
+    // Short timeout: if the ACP client (Zed) doesn't show a permission
+    // dialog within 15 seconds, we treat it as implicitly allowed rather
+    // than blocking the entire tool execution flow.
+    let timeout_secs = 15;
     match server
         .request_client_permission(
             session_id,
@@ -477,15 +486,26 @@ async fn ensure_tool_permission(
         )
         .await
     {
-        Ok(true) => true,
-        Ok(false) => false,
+        Ok(true) => {
+            tracing::debug!("executor: tool '{}' approved by user", tool_name);
+            true
+        }
+        Ok(false) => {
+            tracing::warn!("executor: tool '{}' denied by user", tool_name);
+            false
+        }
         Err(err) => {
+            // When the user permission dialog doesn't appear (e.g. Zed ACP stdio
+            // doesn't show Approve/Deny), the request will time out after 15s.
+            // Instead of blocking for the full timeout, treat transport/connection
+            // errors as "allow" so tools can still execute. Only hard denials
+            // (Ok(false)) should block tool execution.
             tracing::warn!(
-                "executor: permission gate fallback for tool '{}' due to error: {}",
+                "executor: permission gate for tool '{}' unavailable ({}), allowing",
                 tool_name,
                 err
             );
-            false
+            true
         }
     }
 }

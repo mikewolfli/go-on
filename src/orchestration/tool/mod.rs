@@ -69,6 +69,7 @@ impl ToolRegistry {
             tools: Vec::new(),
             profiles: HashMap::new(),
             aliases: HashMap::new(),
+            hooks: ToolHookRegistry::default(),
         }
     }
 
@@ -1781,9 +1782,16 @@ impl ToolRegistry {
             anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
+        // ── Pre-execute hooks ──────────────────────────────────────────
+        self.hooks.run_pre(name, input);
+
         let mut last_result = primary.run(input)?;
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        // ── Post-execute hooks ─────────────────────────────────────────
+        self.hooks.run_post(name, input, &last_result, elapsed);
+
         if last_result.success {
-            let elapsed = start.elapsed().as_millis() as u64;
             record_tool_execution(
                 "tool_execution_total",
                 name,
@@ -1846,9 +1854,16 @@ impl ToolRegistry {
             anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
+        // ── Pre-execute hooks ──────────────────────────────────────────
+        self.hooks.run_pre(name, input);
+
         let mut last_result = primary.run_async(input.clone()).await?;
+        let elapsed = start.elapsed().as_millis() as u64;
+
+        // ── Post-execute hooks ─────────────────────────────────────────
+        self.hooks.run_post(name, input, &last_result, elapsed);
+
         if last_result.success {
-            let elapsed = start.elapsed().as_millis() as u64;
             record_tool_execution(
                 "tool_execution_total",
                 name,
@@ -2106,6 +2121,7 @@ mod tests {
             tools: Vec::new(),
             profiles: HashMap::new(),
             aliases: HashMap::new(),
+            hooks: Default::default(),
         };
         registry.register_with_profile(
             AlwaysFailTool,

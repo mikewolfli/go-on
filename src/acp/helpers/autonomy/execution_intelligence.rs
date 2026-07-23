@@ -2,10 +2,9 @@
 // Retained for future wiring when enable_execution_intelligence is active.
 // The entire module is a reserved public API — all items are intentionally
 // unused until the autonomy loop wires them in.
-#![allow(
-    dead_code,
-    reason = "reserved public API for future autonomy loop wiring"
-)]
+//
+// F-GAP-25: per-item dead_code annotations below are precise per RULES/global.md §31.
+// Remove each annotation once the corresponding item is wired in production code.
 
 // Fluff to force LS re-analysis
 use std::collections::HashMap;
@@ -18,8 +17,16 @@ use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::self_model::{SelfModelConfig, SelfModelCore};
 use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig};
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 pub(crate) static EXECUTION_INTELLIGENCE_RECORD_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 pub(crate) struct ExecutionPreCheck {
     pub should_degrade: bool,
     /// Reason for degradation (set by tests; reserved for future production use).
@@ -27,30 +34,62 @@ pub(crate) struct ExecutionPreCheck {
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 pub(crate) struct PostCheckOutcome {
     pub corrective_actions: Vec<String>,
 }
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 static WORLD_MODEL: OnceLock<WorldModel> = OnceLock::new();
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 static SELF_MODEL: OnceLock<SelfModelCore> = OnceLock::new();
 
 /// Returns the global shared MetacognitiveController singleton.
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 fn metacognitive() -> &'static MetacognitiveController {
     crate::intelligence::metacognitive::global_metacognitive_controller()
 }
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 fn world_model() -> &'static WorldModel {
     WORLD_MODEL.get_or_init(|| WorldModel::new(WorldModelConfig::default()))
 }
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 fn self_model() -> &'static SelfModelCore {
     SELF_MODEL.get_or_init(|| SelfModelCore::new(SelfModelConfig::default()))
 }
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 pub(crate) fn should_degrade(limitations_count: usize, consecutive_failures: u32) -> bool {
     limitations_count > 2000 || consecutive_failures >= 3
 }
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 pub(crate) fn pre_check(
     task_id: &str,
     agent: &str,
@@ -87,6 +126,10 @@ pub(crate) fn pre_check(
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 fn corrective_actions_for_summary(summary: &str) -> Vec<String> {
     let lower = summary.to_ascii_lowercase();
     let mut actions = Vec::new();
@@ -119,6 +162,10 @@ fn corrective_actions_for_summary(summary: &str) -> Vec<String> {
     actions
 }
 
+#[allow(
+    dead_code,
+    reason = "F-GAP-25: wired by enable_execution_intelligence flag"
+)]
 pub(crate) fn post_check(
     task_id: &str,
     agent: &str,

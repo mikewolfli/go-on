@@ -68,9 +68,15 @@ pub(crate) async fn collect_agent_responses(
         // Check for reasoning tokens (prefixed with __thinking__)
         if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
             reasoning_buffer.push_str(reasoning_token);
-        } else {
-            response.push_str(&token);
+            continue;
         }
+
+        // Skip finish_reason and usage telemetry control tokens
+        if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+            continue;
+        }
+
+        response.push_str(&token);
     }
 
     // If the agent produced only reasoning (no content), use the
@@ -173,6 +179,13 @@ pub(crate) async fn run_agent_collecting(
             // Thinking tokens (prefixed with __thinking__)
             if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                 reasoning_buffer.push_str(reasoning_token);
+                // Fall through to emit_stream_chunk — it will split
+                // the token into display_token="" and reasoning_token.
+            } else if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+                // Skip finish_reason and usage telemetry tokens.
+                // They should not be appended to the response text
+                // nor emitted as display tokens in the SSE stream.
+                continue;
             } else {
                 response.push_str(&token);
             }

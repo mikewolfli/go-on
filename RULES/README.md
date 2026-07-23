@@ -32,7 +32,9 @@ Default workflow baseline (from `config.toml`):
 - `think` -> `act` -> `check` -> `done`
 
 Phase intent and required outputs:
-- think: clarify scope, constraints, risks, affected files, and acceptance criteria before editing.
+- think:
+  1. Verify claims against codebase evidence (grep, file reads, logs) — reject speculation.
+  2. Clarify scope, constraints, risks, affected files, and acceptance criteria before editing.
 - act: implement optimal, high-quality, reviewable changes; keep behavior deterministic and documented.
 - check: run surface-specific verification (build/lint/tests/contracts) and collect evidence.
 - done: deliver concise change summary, validation result, and residual risk/rollback notes.
@@ -41,6 +43,7 @@ Control rules:
 - Do not skip `check` and `done` for non-trivial changes.
 - If `check` fails, loop back to `think` with concrete failure evidence and remediation plan.
 - Keep authority in `RULES/*.md`; avoid duplicating long policy text elsewhere.
+- Fact-driven verification (PUA Red Line 2) and Quality Compass (PUA §40) are enforced during `think` and `done` respectively.
 
 Authoritative source model:
 - Keep policy authority in `RULES/*.md` for editor-agnostic reuse.

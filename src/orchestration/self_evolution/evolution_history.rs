@@ -759,111 +759,117 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_evolution_history_find_by_trigger() {
+    #[tokio::test]
+    async fn test_evolution_history_find_by_trigger() {
         let tmp_dir = TempDir::new().unwrap();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let history = rt.block_on(EvolutionHistory::new(tmp_dir.path().to_path_buf()));
+        let history = EvolutionHistory::new(tmp_dir.path().to_path_buf()).await;
 
-        rt.block_on(history.record_entry(
-            EvolutionTrigger::ManualRequest {
-                instruction: "fix".to_string(),
-            },
-            vec![sample_patch()],
-            sample_approval(),
-            sample_build_result(),
-            None,
-            None,
-        ))
-        .unwrap();
+        history
+            .record_entry(
+                EvolutionTrigger::ManualRequest {
+                    instruction: "fix".to_string(),
+                },
+                vec![sample_patch()],
+                sample_approval(),
+                sample_build_result(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
 
-        rt.block_on(history.record_entry(
-            EvolutionTrigger::DeadCodeDetected {
-                module: "core".to_string(),
-                ratio: 0.3,
-            },
-            vec![sample_patch()],
-            sample_approval(),
-            sample_build_result(),
-            None,
-            None,
-        ))
-        .unwrap();
+        history
+            .record_entry(
+                EvolutionTrigger::DeadCodeDetected {
+                    module: "core".to_string(),
+                    ratio: 0.3,
+                },
+                vec![sample_patch()],
+                sample_approval(),
+                sample_build_result(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
 
-        let manual = rt.block_on(history.find_by_trigger("manual_request"));
+        let manual = history.find_by_trigger("manual_request").await;
         assert_eq!(manual.len(), 1);
 
-        let dead_code = rt.block_on(history.find_by_trigger("dead_code_detected"));
+        let dead_code = history.find_by_trigger("dead_code_detected").await;
         assert_eq!(dead_code.len(), 1);
     }
 
-    #[test]
-    fn test_evolution_history_failed_entries() {
+    #[tokio::test]
+    async fn test_evolution_history_failed_entries() {
         let tmp_dir = TempDir::new().unwrap();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let history = rt.block_on(EvolutionHistory::new(tmp_dir.path().to_path_buf()));
+        let history = EvolutionHistory::new(tmp_dir.path().to_path_buf()).await;
 
-        rt.block_on(history.record_entry(
-            sample_trigger(),
-            vec![sample_patch()],
-            sample_approval(),
-            BuildResult::CompileError {
-                errors: 2,
-                lines: vec!["error: type mismatch".to_string()],
-            },
-            None,
-            None,
-        ))
-        .unwrap();
+        history
+            .record_entry(
+                sample_trigger(),
+                vec![sample_patch()],
+                sample_approval(),
+                BuildResult::CompileError {
+                    errors: 2,
+                    lines: vec!["error: type mismatch".to_string()],
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
 
-        assert_eq!(rt.block_on(history.failed_entries()).len(), 1);
+        assert_eq!(history.failed_entries().await.len(), 1);
     }
 
-    #[test]
-    fn test_get_metrics_trend() {
+    #[tokio::test]
+    async fn test_get_metrics_trend() {
         let tmp_dir = TempDir::new().unwrap();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let history = rt.block_on(EvolutionHistory::new(tmp_dir.path().to_path_buf()));
+        let history = EvolutionHistory::new(tmp_dir.path().to_path_buf()).await;
 
-        rt.block_on(history.record_entry(
-            sample_trigger(),
-            vec![sample_patch()],
-            sample_approval(),
-            sample_build_result(),
-            Some(MetricsSnapshot::new(
-                100.0, 1000.0, 0.01, 1_000_000, 0.5, 10,
-            )),
-            Some(MetricsSnapshot::new(95.0, 1050.0, 0.008, 950_000, 0.45, 9)),
-        ))
-        .unwrap();
+        history
+            .record_entry(
+                sample_trigger(),
+                vec![sample_patch()],
+                sample_approval(),
+                sample_build_result(),
+                Some(MetricsSnapshot::new(
+                    100.0, 1000.0, 0.01, 1_000_000, 0.5, 10,
+                )),
+                Some(MetricsSnapshot::new(95.0, 1050.0, 0.008, 950_000, 0.45, 9)),
+            )
+            .await
+            .unwrap();
 
-        let trend = rt.block_on(history.get_metrics_trend()).unwrap();
+        let trend = history.get_metrics_trend().await.unwrap();
         assert!(!trend.is_empty());
         assert!(trend.iter().any(|p| p.label.contains("latency")));
         assert!(trend.iter().any(|p| p.label.contains("throughput")));
     }
 
-    #[test]
-    fn test_rolled_back_entries() {
+    #[tokio::test]
+    async fn test_rolled_back_entries() {
         let tmp_dir = TempDir::new().unwrap();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let history = rt.block_on(EvolutionHistory::new(tmp_dir.path().to_path_buf()));
+        let history = EvolutionHistory::new(tmp_dir.path().to_path_buf()).await;
 
-        rt.block_on(history.record_entry(
-            sample_trigger(),
-            vec![sample_patch()],
-            sample_approval(),
-            sample_build_result(),
-            None,
-            None,
-        ))
-        .unwrap();
+        history
+            .record_entry(
+                sample_trigger(),
+                vec![sample_patch()],
+                sample_approval(),
+                sample_build_result(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
 
         // Manually mark as rolled back
-        if let Some(mut entry) = rt.block_on(history.latest()) {
+        if let Some(mut entry) = history.latest().await {
             entry.set_rollback("abc".to_string(), "def".to_string());
         }
 
-        assert!(rt.block_on(history.rolled_back_entries()).is_empty());
+        assert!(history.rolled_back_entries().await.is_empty());
     }
 }

@@ -203,13 +203,53 @@ impl SkillMarketRegistry {
         cache_dir: PathBuf,
         skill_registry: Arc<StdRwLock<SkillRegistry>>,
     ) -> Result<Self> {
-        Ok(Self {
+        let registry = Self {
             registry_url: registry_url.to_string(),
             skills: Arc::new(RwLock::new(Vec::new())),
             cache_dir,
             installations: Arc::new(RwLock::new(Vec::new())),
             skill_registry,
-        })
+        };
+        // Try to restore persisted installations from disk.
+        if let Err(e) = registry.restore_installations() {
+            tracing::warn!(error = %e, "failed to restore marketplace installations");
+        }
+        Ok(registry)
+    }
+
+    /// Path to the installations persistence file.
+    fn installations_path(&self) -> PathBuf {
+        self.cache_dir.join("marketplace-installations.json")
+    }
+
+    /// Persist all installation records to disk.
+    async fn save_installations(&self) -> Result<()> {
+        let path = self.installations_path();
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let installations = self.installations.read().await;
+        let data = serde_json::to_string_pretty(&*installations)?;
+        tokio::fs::write(&path, data).await?;
+        Ok(())
+    }
+
+    /// Restore installation records from disk (called once at construction).
+    fn restore_installations(&self) -> Result<()> {
+        let path = self.installations_path();
+        if !path.exists() {
+            return Ok(()); // First start — nothing to restore.
+        }
+        let data = std::fs::read_to_string(&path)?;
+        let restored: Vec<SkillInstallation> = serde_json::from_str(&data)?;
+        let mut installations = self.installations.blocking_write();
+        *installations = restored;
+        tracing::info!(
+            count = installations.len(),
+            path = %path.display(),
+            "marketplace installations restored from disk"
+        );
+        Ok(())
     }
 
     /// Fetch the latest skill listings from the remote registry.
@@ -373,6 +413,11 @@ impl SkillMarketRegistry {
             }
         }
 
+        // Persist installation records to disk so they survive restarts.
+        if let Err(e) = self.save_installations().await {
+            tracing::warn!(error = %e, "failed to persist marketplace installations");
+        }
+
         info!(
             "Skill '{}' v{} installed successfully",
             item.name, item.version
@@ -451,6 +496,11 @@ impl SkillMarketRegistry {
                 .context("failed to remove skill directory")?;
         }
 
+        // Persist the removal so it survives restarts.
+        if let Err(e) = self.save_installations().await {
+            tracing::warn!(error = %e, "failed to persist marketplace installations");
+        }
+
         info!("Skill '{}' uninstalled", name);
         Ok(())
     }
@@ -474,6 +524,12 @@ impl SkillMarketRegistry {
             .find(|i| i.name == name)
             .ok_or_else(|| anyhow::anyhow!("Skill '{}' is not installed", name))?;
         installation.enabled = enabled;
+
+        // Persist the enabled/disabled state so it survives restarts.
+        if let Err(e) = self.save_installations().await {
+            tracing::warn!(error = %e, "failed to persist marketplace installations");
+        }
+
         info!(
             "Skill '{}' {}",
             name,

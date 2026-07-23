@@ -112,7 +112,7 @@ struct ToolBusInner {
 /// capability-lookup, agent-tool-matching, execution, and statistics-gathering
 /// to it.
 pub struct ToolBus {
-    tool_registry: Arc<Mutex<ToolRegistry>>,
+    tool_registry: &'static ToolRegistry,
     skill_registry: Arc<RwLock<SkillRegistry>>,
     inner: Mutex<ToolBusInner>,
 }
@@ -124,23 +124,14 @@ impl ToolBus {
 
     /// Create a new `ToolBus` wrapping the given registries.
     pub fn new(
-        tool_registry: Arc<Mutex<ToolRegistry>>,
+        tool_registry: &'static ToolRegistry,
         skill_registry: Arc<RwLock<SkillRegistry>>,
     ) -> Self {
         let mut stats = HashMap::new();
 
         // Pre-populate stats entries for every known tool.
-        {
-            let reg = match tool_registry.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("[B48] tool_registry lock poisoned, recovering");
-                    poisoned.into_inner()
-                }
-            };
-            for name in reg.names() {
-                stats.entry(name.to_string()).or_default();
-            }
+        for name in tool_registry.names() {
+            stats.entry(name.to_string()).or_default();
         }
         // Pre-populate stats entries for every known skill.
         {
@@ -180,12 +171,8 @@ impl ToolBus {
         let mut descriptors: Vec<ToolDescriptor> = Vec::new();
 
         // Tools
-        let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        for name in reg.names() {
-            let profile = reg.profile(name);
+        for name in self.tool_registry.names() {
+            let profile = self.tool_registry.profile(name);
             descriptors.push(ToolDescriptor {
                 name: name.to_string(),
                 capability: profile
@@ -251,10 +238,7 @@ impl ToolBus {
         let task_lower = task_type.to_lowercase();
 
         // Match tools by capability field.
-        let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let reg = self.tool_registry;
         for name in reg.names() {
             let profile = reg.profile(name);
             if let Some(prof) = profile {
@@ -339,33 +323,14 @@ impl ToolBus {
     /// Inner dispatch — separate from the stats-recording wrapper.
     async fn dispatch_tool(&self, tool_name: &str, input: &ToolInput) -> Result<ToolOutput> {
         // Check if it is a built-in tool.
-        // Lock scope: dropped before any await point.
-        {
-            // Check if tool exists (lock scope dropped before any await point)
-            let has_tool = self
-                .tool_registry
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    tracing::warn!("lock poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .get(tool_name)
-                .is_some();
-            if has_tool {
-                // Offload to blocking pool to avoid holding std::sync::Mutex across .await
-                // and to prevent blocking the tokio worker thread.
-                let reg = self.tool_registry.clone();
-                let input = input.clone();
-                let tool_name = tool_name.to_string();
-                return tokio::task::spawn_blocking(move || {
-                    let reg = reg.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
-                    reg.run_with_fallback(&tool_name, &input)
-                })
+        let has_tool = self.tool_registry.get(tool_name).is_some();
+        if has_tool {
+            // Offload to blocking pool to avoid blocking the tokio worker thread.
+            let reg: &'static ToolRegistry = self.tool_registry;
+            let input = input.clone();
+            let tool_name = tool_name.to_string();
+            return tokio::task::spawn_blocking(move || reg.run_with_fallback(&tool_name, &input))
                 .await?;
-            }
         }
 
         // Check if it is a registered skill.
@@ -439,11 +404,7 @@ impl ToolBus {
 
     /// Produce a high-level profile snapshot of the ToolBus.
     pub fn profile(&self) -> ToolBusProfile {
-        let total_tools = self
-            .tool_registry
-            .lock()
-            .map(|reg| reg.names().len() as u32)
-            .unwrap_or(0);
+        let total_tools = self.tool_registry.names().len() as u32;
 
         let total_skills = self
             .skill_registry
@@ -523,20 +484,28 @@ mod tests {
         }
     }
 
-    fn make_bus() -> ToolBus {
-        let tool_registry = Arc::new(Mutex::new(ToolRegistry::new()));
+    fn make_bus_with_registry(reg: &'static ToolRegistry) -> ToolBus {
         let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
-        let bus = ToolBus::new(tool_registry, skill_registry);
+        ToolBus::new(reg, skill_registry)
+    }
 
+    fn make_bus_with_skill(reg: &'static ToolRegistry) -> ToolBus {
+        let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
         // Register the builtin echo skill for testing.
-        let mut reg = bus.skill_registry.write().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let _ = reg.register(Arc::new(EchoSkill));
-        drop(reg);
+        {
+            let mut skill_guard = skill_registry.write().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let _ = skill_guard.register(Arc::new(EchoSkill));
+        }
+        ToolBus::new(reg, skill_registry)
+    }
 
-        bus
+    fn make_bus() -> ToolBus {
+        let tool_registry = ToolRegistry::new();
+        let tool_registry: &'static ToolRegistry = Box::leak(Box::new(tool_registry));
+        make_bus_with_skill(tool_registry)
     }
 
     #[test]
@@ -650,14 +619,10 @@ mod tests {
 
     #[tokio::test]
     async fn execute_tool_ok_but_logical_failure_tracks_failure_stats() {
-        let bus = make_bus();
-        {
-            let mut reg = bus.tool_registry.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            reg.register(LogicalFailureTool);
-        }
+        let mut reg = ToolRegistry::new();
+        reg.register(LogicalFailureTool);
+        let reg: &'static ToolRegistry = Box::leak(Box::new(reg));
+        let bus = make_bus_with_registry(reg);
 
         let input = ToolInput {
             task_id: "test-003".to_string(),

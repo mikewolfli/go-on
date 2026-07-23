@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::time::interval;
 use tracing::{info, warn};
 
@@ -77,6 +78,12 @@ pub struct SkillRegistry {
     /// Tracks file modification timestamps for local SKILL.md files.
     /// Used by hot-reload to skip re-parsing unchanged files.
     skill_file_mtimes: HashMap<PathBuf, SystemTime>,
+    /// Provenance records keyed by skill name.
+    /// Populated by `register_with_provenance` and `discover_and_register_local_skills`.
+    provenances: HashMap<String, SkillProvenance>,
+    /// Namespace records keyed by skill name (e.g., "community", "builtin", "custom").
+    /// Set during registration; exposed via `list()` and `descriptor()`.
+    namespaces: HashMap<String, String>,
 }
 
 impl std::fmt::Debug for SkillRegistry {
@@ -91,15 +98,30 @@ impl std::fmt::Debug for SkillRegistry {
     }
 }
 
+/// Tracking provenance for a skill — where it was installed from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillProvenance {
+    /// URI or file path the skill was installed from.
+    pub source: String,
+    /// Content digest (SHA-256 of SKILL.md contents) for integrity verification.
+    pub content_digest: Option<String>,
+    /// Timestamp (Unix ms) when the skill was installed.
+    pub installed_at_ms: u64,
+}
+
 pub struct SkillDescriptor {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    /// Optional namespace for grouping (e.g., "community", "builtin", "custom").
+    pub namespace: Option<String>,
     pub score: f64,
     pub total_calls: u64,
     pub success_calls: u64,
     pub failure_calls: u64,
     pub average_latency_ms: f64,
+    /// Provenance tracking — where this skill was installed from.
+    pub provenance: Option<SkillProvenance>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -142,6 +164,19 @@ impl SkillRuntimeStats {
 }
 
 impl SkillRegistry {
+    /// Register a skill with optional provenance tracking.
+    ///
+    /// If `provenance` is provided, the skill  record will carry
+    /// the installation source and a content digest for integrity checks.
+    pub fn register_with_provenance(
+        &mut self,
+        skill: Arc<dyn super::Skill>,
+        provenance: Option<SkillProvenance>,
+    ) -> Result<()> {
+        self.validate_and_insert(skill, provenance)?;
+        Ok(())
+    }
+
     /// Register a skill, returning an error if the name is invalid or already registered.
     ///
     /// Name rules:
@@ -149,6 +184,25 @@ impl SkillRegistry {
     /// - Only ASCII: lowercase letters, digits, `.`, `_`, `-`
     /// - Must be unique (duplicates are rejected)
     pub fn register(&mut self, skill: Arc<dyn super::Skill>) -> Result<()> {
+        self.validate_and_insert(skill, None)
+    }
+
+    /// Set the namespace for an already-registered skill.
+    ///
+    /// Namespace is display/filter metadata (e.g., "community", "builtin", "custom")
+    /// that does not affect the registry lookup key. Has no effect if the skill
+    /// name is not registered.
+    pub fn set_namespace(&mut self, name: &str, namespace: String) {
+        if self.skills.contains_key(name) {
+            self.namespaces.insert(name.to_string(), namespace);
+        }
+    }
+
+    fn validate_and_insert(
+        &mut self,
+        skill: Arc<dyn super::Skill>,
+        provenance: Option<SkillProvenance>,
+    ) -> Result<()> {
         let name = skill.name().to_string();
         if name.is_empty() || name.len() > 64 {
             anyhow::bail!(
@@ -193,7 +247,17 @@ impl SkillRegistry {
             ),
         }
         self.skills.insert(name.clone(), skill);
-        self.stats.entry(name).or_default();
+        self.stats.entry(name.clone()).or_default();
+        // Store provenance if provided (also exposed via list() and descriptor())
+        if let Some(p) = provenance {
+            tracing::info!(
+                skill = %name,
+                source = %p.source,
+                digest = ?p.content_digest,
+                "skill registered with provenance"
+            );
+            self.provenances.insert(name.clone(), p);
+        }
         Ok(())
     }
 
@@ -201,12 +265,22 @@ impl SkillRegistry {
         self.skills.get(name).cloned()
     }
 
+    /// Unregister a skill by name and persist the change if persistence is enabled.
+    ///
+    /// Returns `true` if the skill was found and removed, `false` if it did not exist.
+    /// Persists prompt-skill data to disk after removal when a persistence path is set.
     pub fn unregister(&mut self, name: &str) -> bool {
         let removed = self.skills.remove(name).is_some();
         if removed {
             self.stats.remove(name);
             self.evolution_history.remove(name); // Clean up history too
             self.prompt_skill_data.remove(name);
+            self.provenances.remove(name);
+            self.namespaces.remove(name);
+            // Persist the change if prompt skill persistence is enabled.
+            if self.persistence_path.is_some() {
+                let _ = self.save_prompt_skills_to_disk();
+            }
         }
         removed
     }
@@ -222,11 +296,13 @@ impl SkillRegistry {
                     name: skill.name().to_string(),
                     description: skill.description().to_string(),
                     input_schema: skill.input_schema(),
+                    namespace: self.namespaces.get(name).cloned(),
                     score: stats.score(),
                     total_calls: stats.total_calls,
                     success_calls: stats.success_calls,
                     failure_calls: stats.failure_calls,
                     average_latency_ms: stats.average_latency_ms(),
+                    provenance: self.provenances.get(name).cloned(),
                 }
             })
             .collect::<Vec<_>>();
@@ -259,16 +335,14 @@ impl SkillRegistry {
             name: skill.name().to_string(),
             description: skill.description().to_string(),
             input_schema: skill.input_schema(),
+            namespace: self.namespaces.get(name).cloned(),
             score: stats.score(),
             total_calls: stats.total_calls,
             success_calls: stats.success_calls,
             failure_calls: stats.failure_calls,
             average_latency_ms: stats.average_latency_ms(),
+            provenance: self.provenances.get(name).cloned(),
         })
-    }
-
-    pub fn best_match(&self, requested: &str) -> Option<String> {
-        self.best_match_with_input(requested, &Value::Null)
     }
 
     pub fn best_match_with_input(&self, requested: &str, input: &Value) -> Option<String> {
@@ -376,14 +450,6 @@ impl SkillRegistry {
         Ok(())
     }
 
-    /// Get evolution history for a skill.
-    pub fn skill_evolution(&self, name: &str) -> Vec<SkillVersionRecord> {
-        self.evolution_history
-            .get(name)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     // -----------------------------------------------------------------------
     // Disk persistence for prompt-based skills
     // -----------------------------------------------------------------------
@@ -455,15 +521,6 @@ impl SkillRegistry {
         Ok(())
     }
 
-    /// Remove a prompt-based skill from the registry and persist the change.
-    pub fn remove_prompt_skill(&mut self, name: &str) -> Result<()> {
-        self.skills.remove(name);
-        self.stats.remove(name);
-        self.evolution_history.remove(name);
-        self.prompt_skill_data.remove(name);
-        self.save_prompt_skills_to_disk()
-    }
-
     /// Shared helper: register a single [`ParsedSkillFile`] as a `PromptBasedSkill`.
     ///
     /// Handles hot-reload (unregister old), registration, mtime tracking, and
@@ -496,7 +553,39 @@ impl SkillRegistry {
             max_retries: 2,
         };
 
-        self.register(Arc::new(skill))?;
+        // Compute content digest from the raw SKILL.md bytes for provenance tracking
+        let content_digest = {
+            let content = fs::read(&pf.md_path).unwrap_or_default();
+            let hash = Sha256::digest(&content);
+            Some(
+                hash.iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>(),
+            )
+        };
+
+        let provenance = Some(SkillProvenance {
+            source: pf.md_path.to_string_lossy().to_string(),
+            content_digest,
+            installed_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        });
+
+        self.register_with_provenance(Arc::new(skill), provenance)?;
+
+        // Set namespace from manifest (YAML frontmatter) or derive from parent directory
+        let namespace = pf.manifest.namespace.clone().or_else(|| {
+            pf.md_path
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+        });
+        if let Some(ref ns) = namespace {
+            self.set_namespace(&pf.manifest.name, ns.clone());
+        }
 
         // Record the mtime so subsequent refresh ticks skip this file
         self.skill_file_mtimes.insert(pf.md_path, pf.current_mtime);

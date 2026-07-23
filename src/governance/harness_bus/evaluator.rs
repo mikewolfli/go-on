@@ -69,6 +69,11 @@ pub struct PolicyEvaluator {
     /// Tools that the user has explicitly approved (bypasses require_review).
     pub user_approved_tools: Mutex<std::collections::HashSet<String>>,
 
+    /// Protected invariants — file patterns that block write/destructive operations.
+    /// Once set, these are checked before every write tool call and cannot be
+    /// bypassed by mode or posture changes (Constitution-level enforcement).
+    pub protected_invariants: RwLock<Vec<String>>,
+
     /// Set to true when the most recent `evaluate()` call was blocked by
     /// the self-rationalization guard. Consumed by `HarnessBus::evaluate()`
     /// to record a rationalization block counter on the governance profile.
@@ -119,6 +124,7 @@ impl PolicyEvaluator {
                 ..Default::default()
             })),
             user_approved_tools: Mutex::new(std::collections::HashSet::new()),
+            protected_invariants: RwLock::new(Vec::new()),
             rationalization_block_occurred: AtomicBool::new(false),
             review_override_occurred: AtomicBool::new(false),
         }
@@ -480,6 +486,42 @@ impl PolicyEvaluator {
         PolicyVerdict::Allow
     }
 
+    /// Register a protected file pattern. Write/destructive operations that
+    /// touch files matching this pattern will be blocked regardless of mode.
+    /// Uses simple substring matching on tool arguments (e.g. "Cargo.lock").
+    pub fn register_protected_invariant(&self, pattern: &str) {
+        if let Ok(mut invariants) = self.protected_invariants.write() {
+            if !invariants.iter().any(|p| p == pattern) {
+                invariants.push(pattern.to_string());
+                tracing::info!(pattern = %pattern, "protected_invariant registered");
+            }
+        }
+    }
+
+    /// Check if any argument value matches a protected invariant pattern.
+    fn protected_path_blocked(&self, args: &Value) -> Option<String> {
+        let invariants = match self.protected_invariants.read() {
+            Ok(g) => g.clone(),
+            Err(_) => return None,
+        };
+        if invariants.is_empty() {
+            return None;
+        }
+        let mut values: Vec<String> = Vec::new();
+        collect_string_values(args, &mut values);
+        for pattern in &invariants {
+            for value in &values {
+                if value.contains(pattern.as_str()) {
+                    return Some(format!(
+                        "protected invariant '{}' blocks operation on '{}'",
+                        pattern, value
+                    ));
+                }
+            }
+        }
+        None
+    }
+
     /// Pre-tool-call validation.
     /// Approve a tool for the current session — bypasses sandbox require_review.
     pub fn approve_tool(&self, tool: &str) {
@@ -677,6 +719,24 @@ impl PolicyEvaluator {
             })
             .record_tool_call()
             .is_ok();
+
+        // Check protected invariants before allowing any operation.
+        // This is a mechanical write-hold — it cannot be bypassed by mode/posture.
+        if let Some(reason) = self.protected_path_blocked(_args) {
+            tracing::warn!(
+                target: "harness_bus",
+                reason = %reason,
+                "protected invariant blocked tool call"
+            );
+            return ToolVerdict {
+                allowed: false,
+                require_review: false,
+                idempotent,
+                budget_ok,
+                permitted: false,
+            };
+        }
+
         let permitted = self.check_permission(tool, _args);
         ToolVerdict {
             allowed,
@@ -972,5 +1032,25 @@ impl PolicyEvaluator {
     /// Resolve a raw response string into a governance-level review verdict.
     fn resolve_review_policy(response: &str, min_response_chars: usize) -> ReviewVerdict {
         review_verdict(response, min_response_chars)
+    }
+}
+
+/// Recursively collect all string values from a JSON Value tree.
+/// Used by `PolicyEvaluator::protected_path_blocked` to scan tool arguments
+/// for protected file patterns.
+fn collect_string_values(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(s) => output.push(s.clone()),
+        Value::Object(map) => {
+            for v in map.values() {
+                collect_string_values(v, output);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                collect_string_values(v, output);
+            }
+        }
+        _ => {}
     }
 }

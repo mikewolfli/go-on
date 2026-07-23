@@ -723,6 +723,15 @@
         "cli.chat.tool_blocked_by_mode": "Tool '{tool_name}' blocked by mode constraints (allowed: {allowed:?})",
         "cli.chat.tool_call_blocked_by_mode": "{blocked} tool call(s) blocked by mode '{mode}' constraints (max_calls={max})",
         "cli.chat.tip_compact": "Tip: Use /compact to summarize old messages and free context.",
+        "cli.chat.stats_header": "Conversation stats:",
+        "cli.chat.stats_messages": "  Messages: {total} total ({user} user, {assistant} assistant)",
+        "cli.chat.stats_total_chars": "  Total characters: {count}",
+        "cli.chat.stats_avg_length": "  Avg length: {count} chars",
+        "cli.chat.context_header": "Context window:",
+        "cli.chat.context_messages": "  Messages: {total} ({system} system, {user} user, {assistant} assistant)",
+        "cli.chat.context_chars": "  Characters: {count} (est. ~{tokens} tokens, CJK-aware)",
+        "cli.chat.context_used_pct": "  Est. context used: {pct:.1}% of 128K window",
+        "cli.chat.context_compact_tip": "  {open}Tip: Use /compact to reduce context usage.{close}  ({current}/{threshold} msgs)",
         "acp.error.stream_error": "stream error",
         "acp.error.tool_approval_required": "Tool '{tool_name}' requires approval (mode: {mode}, risk: {risk:.2})"
       }

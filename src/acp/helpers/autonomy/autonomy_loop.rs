@@ -177,6 +177,9 @@ pub async fn run_autonomy_loop(
     let tool_registry = params
         .tool_registry
         .unwrap_or_else(|| Arc::new(ToolRegistry::new()));
+    // Note: ToolRegistry::new() in the fallback is called only when
+    // no registry is provided via params, which is the exceptional case.
+    // The normal path passes a shared registry from the caller.
 
     tracing::debug!(
         target: "autonomy_loop",

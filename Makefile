@@ -96,7 +96,19 @@ vscode-install: ## Install VS Code extension dependencies
 count: ## Count lines of Rust code
 	@find src -name '*.rs' -type f | xargs wc -l | tail -1
 
+tag-version: ## Verify git tag matches Cargo.toml version
+	@CARGO_VER=$$(grep '^version ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/'); \
+	GIT_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || echo "none"); \
+	if [ "$$GIT_TAG" = "none" ]; then \
+		echo "⚠️  No git tag found. Create one: git tag v$$CARGO_VER"; \
+	elif [ "v$$CARGO_VER" != "$$GIT_TAG" ]; then \
+		echo "⚠️  Mismatch: Cargo.toml version=$$CARGO_VER, latest tag=$$GIT_TAG"; \
+		echo "   Run: git tag v$$CARGO_VER"; \
+	else \
+		echo "✅ Tag v$$CARGO_VER matches Cargo.toml"; \
+	fi
+
 .PHONY: help build build-simple build-multi build-full build-release
 .PHONY: check clippy clippy-fix test test-lib test-all-profiles
 .PHONY: fmt clean lint doc audit deny bench ci dev-container
-.PHONY: gui-check gui-test vscode-install count
+.PHONY: gui-check gui-test vscode-install count tag-version

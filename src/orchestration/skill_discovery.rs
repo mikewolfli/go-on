@@ -411,11 +411,13 @@ mod tests {
             name: name.to_string(),
             description: desc.to_string(),
             input_schema: Value::Object(serde_json::Map::new()),
+            namespace: None,
             score: 0.5,
             total_calls: 10,
             success_calls: 8,
             failure_calls: 2,
             average_latency_ms: 100.0,
+            provenance: None,
         }
     }
 
