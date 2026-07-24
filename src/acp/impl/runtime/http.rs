@@ -240,7 +240,8 @@ async fn route_http_get(
                 serde_json::json!({
                     "supported_versions": versions,
                     "latest": ProtocolVersion::LATEST.as_u16(),
-                    "server": "go-on"
+                    "server": "go-on",
+                    "server_version": env!("CARGO_PKG_VERSION"),
                 }),
                 "protocol.version",
                 cors_headers,

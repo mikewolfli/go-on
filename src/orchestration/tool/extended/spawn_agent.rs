@@ -667,6 +667,7 @@ mod tests {
     use serde_json::json;
 
     /// A minimal echo agent for testing.
+    #[allow(dead_code)]
     struct EchoAgent;
 
     #[async_trait]

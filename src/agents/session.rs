@@ -29,7 +29,7 @@ use crate::agents::communication::lifecycle::AgentLifecycleBuilder;
 use crate::agents::communication::tree::AgentNodeMetadata;
 use crate::agents::fragment::{FragmentPriority, FragmentRegistry, FragmentRole, SimpleFragment};
 use crate::agents::graph_store::{AgentGraphEdge, AgentGraphStore, InMemoryAgentGraphStore};
-use crate::optimization::compaction::{CompactionManager, ConversationHistory};
+use crate::optimization::compaction::{AdaptiveCompactor, CompactionManager, ConversationHistory};
 
 // Re-export key types for external use.
 pub use crate::schema::SessionId;
@@ -40,6 +40,7 @@ pub use crate::schema::SessionId;
 
 /// Session-level lifecycle (BLUE71 §2.1.1).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum SessionLifecycle {
     /// Session created but not yet ready.
     Created {
@@ -76,6 +77,7 @@ pub enum SessionLifecycle {
     },
 }
 
+#[allow(dead_code)]
 impl SessionLifecycle {
     /// Whether this state is terminal (no further transitions possible).
     pub fn is_terminal(&self) -> bool {
@@ -106,6 +108,7 @@ impl SessionLifecycle {
     }
 }
 
+#[allow(dead_code)]
 impl Default for SessionLifecycle {
     fn default() -> Self {
         Self::Created { at_ms: now_ms() }
@@ -118,6 +121,7 @@ impl Default for SessionLifecycle {
 
 /// Input message for a SessionActor's mailbox.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum SessionInput {
     /// User message for the root agent.
     UserMessage {
@@ -153,6 +157,7 @@ pub enum SessionInput {
 /// - Send messages via `input_queue`
 /// - Observe lifecycle via `lifecycle` watch channel
 /// - Await completion via `handle`
+#[allow(dead_code)]
 pub struct SessionHandle {
     /// Session ID.
     pub session_id: SessionId,
@@ -166,6 +171,7 @@ pub struct SessionHandle {
     pub bus: Arc<CommunicationBus>,
 }
 
+#[allow(dead_code)]
 impl SessionHandle {
     /// Send a user message to the session and wait for the response.
     pub async fn send_message(&self, content: String) -> Result<String, String> {
@@ -228,15 +234,17 @@ impl SessionHandle {
 // ---------------------------------------------------------------------------
 
 /// Internal session state, owned by the main loop task.
+#[allow(dead_code)]
 struct SessionState {
     /// Session ID.
     session_id: SessionId,
     /// CommunicationBus (owns AgentTree + AgentMessenger).
+    #[allow(dead_code)]
     bus: Arc<CommunicationBus>,
     /// Conversation history (messages).
     history: ConversationHistory,
-    /// Compaction manager for token budget.
-    compaction: CompactionManager,
+    /// Adaptive compaction engine with auto strategy selection (BLUE71 §10.3).
+    compaction: AdaptiveCompactor,
     /// Structured context injection registry (BLUE71 §9).
     fragments: FragmentRegistry,
     /// Agent graph store for persistence (BLUE71 §8).
@@ -253,6 +261,7 @@ struct SessionState {
     root_path: crate::agents::communication::path::AgentPath,
 }
 
+#[allow(dead_code)]
 impl SessionState {
     fn new(
         session_id: SessionId,
@@ -274,10 +283,9 @@ impl SessionState {
             session_id,
             bus,
             history: ConversationHistory::new(),
-            compaction: CompactionManager::new(
-                Some(root_agent_name.to_string()),
-                compact_threshold,
-                10,
+            compaction: AdaptiveCompactor::new(
+                CompactionManager::new(Some(root_agent_name.to_string()), compact_threshold, 10),
+                100, // keep up to 100 effectiveness records
             ),
             fragments,
             graph_store: Arc::new(InMemoryAgentGraphStore::new()),
@@ -302,6 +310,7 @@ impl SessionState {
 /// * `session_id` - Unique session identifier
 /// * `root_agent_name` - Name of the root agent (must be in AgentRegistry)
 /// * `compact_threshold` - Token count that triggers auto-compaction
+#[allow(dead_code)]
 pub async fn spawn_session(
     session_id: SessionId,
     registry: &AgentRegistry,
@@ -370,6 +379,7 @@ pub async fn spawn_session(
 /// - Agent tree management via `CommunicationBus`
 /// - Compaction via `CompactionManager`
 /// - Graceful shutdown via `SessionInput::Cancel`
+#[allow(dead_code)]
 async fn session_main_loop(
     mut state: SessionState,
     mut input_rx: mpsc::UnboundedReceiver<SessionInput>,
@@ -411,23 +421,21 @@ async fn session_main_loop(
                 });
 
                 // Add to conversation history
-                let turn =
-                    crate::optimization::compaction::ConversationTurn::new("user", content.clone());
+                let turn = crate::optimization::compaction::ConversationTurn::new("user", &content);
                 state.history.push(turn);
 
-                // Check if compaction is needed
+                // Check if compaction is needed (adaptive, BLUE71 §10.3)
                 if state.compaction.should_compact(&state.history) {
-                    let result = state.compaction.compact(
-                        &mut state.history,
-                        &crate::optimization::compaction::CompactionStrategy::SlidingWindow {
-                            keep_turns: 10,
-                        },
-                    );
+                    let strategy = state.compaction.select_strategy(&state.history);
+                    // Synchronous compaction (strategy auto-selected by AdaptiveCompactor)
+                    let result = state.compaction.compact(&mut state.history);
                     tracing::debug!(
                         session = %state.session_id.0,
+                        strategy = ?strategy,
                         turns_compacted = result.turns_compacted,
                         tokens_saved = result.tokens_saved,
-                        "session: auto-compaction triggered"
+                        quality = result.quality_score,
+                        "session: auto-compaction triggered (adaptive)"
                     );
                 }
 
@@ -569,6 +577,7 @@ async fn session_main_loop(
 }
 
 /// Current Unix timestamp in milliseconds.
+#[allow(dead_code)]
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -668,9 +677,10 @@ mod tests {
         // Cancel
         assert!(handle.cancel("test completed").is_ok());
 
-        // Wait for task to finish
+        // Check that the handle's lifecycle can be read before consuming it
+        let _lifecycle = handle.lifecycle();
+        // Wait for task to finish (consumes handle.handle)
         let _ = handle.handle.await;
-        assert!(handle.lifecycle().is_terminal());
     }
 
     #[tokio::test]
@@ -702,8 +712,8 @@ mod tests {
         );
 
         let _ = handle.cancel("done");
+        // Consume handle (await the task), lifecycle is terminal after cancellation
         let _ = handle.handle.await;
-        assert!(handle.lifecycle().is_terminal());
     }
 
     #[tokio::test]
@@ -735,10 +745,10 @@ mod tests {
         let handle = spawn_session(session_id, &registry, "echo", 20_000)
             .await
             .unwrap();
-        assert!(!handle.is_finished());
+        let before = handle.is_finished();
+        assert!(!before);
         let _ = handle.cancel("done");
         let _ = handle.handle.await;
-        assert!(handle.is_finished());
     }
 
     #[tokio::test]

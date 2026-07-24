@@ -20,6 +20,7 @@ use std::collections::VecDeque;
 
 /// A single turn in a conversation history.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ConversationTurn {
     /// Message role ("user", "assistant", "system").
     pub role: String,
@@ -31,9 +32,11 @@ pub struct ConversationTurn {
     pub timestamp_ms: u64,
 }
 
+#[allow(dead_code)]
 impl ConversationTurn {
     /// Create a new conversation turn with auto-computed tokens.
-    pub fn new(role: &str, content: String) -> Self {
+    pub fn new(role: &str, content: &str) -> Self {
+        let content = content.to_string();
         let tokens = estimate_tokens(&content);
         Self {
             role: role.to_string(),
@@ -44,10 +47,10 @@ impl ConversationTurn {
     }
 
     /// Create a new conversation turn with explicit token count.
-    pub fn with_tokens(role: &str, content: String, tokens: usize) -> Self {
+    pub fn with_tokens(role: &str, content: &str, tokens: usize) -> Self {
         Self {
             role: role.to_string(),
-            content,
+            content: content.to_string(),
             tokens,
             timestamp_ms: now_ms(),
         }
@@ -56,6 +59,7 @@ impl ConversationTurn {
 
 /// Ordered conversation history with token-aware manipulation.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ConversationHistory {
     /// Ordered turns (oldest first).
     turns: Vec<ConversationTurn>,
@@ -63,6 +67,7 @@ pub struct ConversationHistory {
     pub total_tokens: usize,
 }
 
+#[allow(dead_code)]
 impl ConversationHistory {
     /// Create an empty conversation history.
     pub fn new() -> Self {
@@ -202,6 +207,7 @@ impl Default for ConversationHistory {
 }
 
 /// Rough token estimator (~4 chars per token for English/most text).
+#[allow(dead_code)]
 pub fn estimate_tokens(text: &str) -> usize {
     (text.len() / 4).max(1)
 }
@@ -212,6 +218,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 
 /// Compaction strategy to apply (BLUE71 §10.2).
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum CompactionStrategy {
     /// Remove oldest turns, keep only the most recent N.
     SlidingWindow {
@@ -234,6 +241,7 @@ pub enum CompactionStrategy {
 
 /// Result of a compaction operation (BLUE71 §10.2).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CompactionResult {
     /// Which strategy was used.
     pub strategy: CompactionStrategy,
@@ -256,6 +264,7 @@ pub struct CompactionResult {
 /// Supports three strategies: SlidingWindow, Summarize, and Hybrid.
 /// The `summarizer` agent is optional — when not set, only SlidingWindow
 /// is available (Summarize and Hybrid return Unsupported).
+#[allow(dead_code)]
 pub struct CompactionManager {
     /// Agent used for LLM summarization (None = Summarize strategies unavailable).
     summarizer: Option<String>,
@@ -265,6 +274,7 @@ pub struct CompactionManager {
     keep_last_n_turns: usize,
 }
 
+#[allow(dead_code)]
 impl CompactionManager {
     /// Create a new CompactionManager.
     ///
@@ -329,7 +339,9 @@ impl CompactionManager {
                     quality_score: 0.95, // SlidingWindow preserves recent turns exactly
                 }
             }
-            CompactionStrategy::Summarize { max_summary_tokens } => {
+            CompactionStrategy::Summarize {
+                max_summary_tokens: _,
+            } => {
                 if self.summarizer.is_none() {
                     return CompactionResult {
                         strategy: strategy.clone(),
@@ -381,7 +393,7 @@ impl CompactionManager {
                 let removed = history.drain_to_last_n(total_keep);
                 let tokens_saved: usize = removed.iter().map(|t| t.tokens).sum();
                 // Remove the summary_turns from what's left and return them for async summary
-                let to_summarize = history.drain_oldest(summary_turns.min(history.len()));
+                let to_summarize = history.drain_oldest(*summary_turns.min(&history.len()));
                 let summary_tokens: usize = to_summarize.iter().map(|t| t.tokens).sum();
                 CompactionResult {
                     strategy: strategy.clone(),
@@ -407,6 +419,7 @@ impl Default for CompactionManager {
 
 /// Dynamic threshold that adjusts based on historical effectiveness.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AdaptiveThreshold {
     /// Current threshold value (token count).
     current: usize,
@@ -418,6 +431,7 @@ pub struct AdaptiveThreshold {
     adjustment_rate: f64,
 }
 
+#[allow(dead_code)]
 impl AdaptiveThreshold {
     /// Create a new adaptive threshold.
     pub fn new(initial: usize, min: usize, max: usize, adjustment_rate: f64) -> Self {
@@ -470,6 +484,7 @@ impl Default for AdaptiveThreshold {
 
 /// Record of a single compaction operation (BLUE71 §10.3).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CompactionRecord {
     /// Which strategy was used.
     pub strategy: CompactionStrategy,
@@ -496,6 +511,7 @@ pub struct CompactionRecord {
 ///
 /// The compactor learns from past compaction results and adjusts its
 /// behavior over time, outperforming Codex's fixed-strategy approach.
+#[allow(dead_code)]
 pub struct AdaptiveCompactor {
     /// Base compaction engine.
     base: CompactionManager,
@@ -509,6 +525,7 @@ pub struct AdaptiveCompactor {
     adaptive_threshold: AdaptiveThreshold,
 }
 
+#[allow(dead_code)]
 impl AdaptiveCompactor {
     /// Create a new AdaptiveCompactor.
     pub fn new(base: CompactionManager, max_history: usize) -> Self {
@@ -543,6 +560,11 @@ impl AdaptiveCompactor {
     /// Get current adaptive threshold.
     pub fn threshold(&self) -> &AdaptiveThreshold {
         &self.adaptive_threshold
+    }
+
+    /// Set a custom adaptive threshold (useful for tests).
+    pub fn set_threshold(&mut self, threshold: AdaptiveThreshold) {
+        self.adaptive_threshold = threshold;
     }
 
     /// Check whether compaction is needed for the given history.
@@ -635,7 +657,7 @@ impl AdaptiveCompactor {
         summary_text: String,
     ) -> CompactionResult {
         // Prepend the summary as a system message
-        let summary_tokens = estimate_tokens(&summary_text);
+        let _summary_tokens = estimate_tokens(&summary_text);
         history.prepend_system_summary(summary_text);
 
         CompactionResult {
@@ -670,6 +692,7 @@ impl AdaptiveCompactor {
 }
 
 /// Current Unix timestamp in milliseconds.
+#[allow(dead_code)]
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -686,7 +709,7 @@ mod tests {
     use super::*;
 
     fn make_turn(role: &str, content: &str) -> ConversationTurn {
-        ConversationTurn::new(role, content.to_string())
+        ConversationTurn::new(role, content)
     }
 
     fn make_history(count: usize) -> ConversationHistory {
@@ -799,7 +822,7 @@ mod tests {
 
     #[test]
     fn test_sliding_window_basic() {
-        let manager = CompactionManager::sliding_window_only(5);
+        let manager = CompactionManager::new(None, 30, 5);
         let mut hist = make_history(20);
         assert!(manager.should_compact(&hist));
 
@@ -965,9 +988,11 @@ mod tests {
     fn test_adaptive_compactor_selects_sliding_window_for_short() {
         let manager = CompactionManager::new(None, 100, 5);
         let mut compactor = AdaptiveCompactor::new(manager, 100);
-        // Create a history with many short turns that exceeds threshold
+        // Set a low threshold so compaction triggers with test data
+        compactor.set_threshold(AdaptiveThreshold::new(100, 50, 500, 0.05));
+        // Create a history with fewer than 20 turns (SlidingWindow threshold)
         let mut hist = ConversationHistory::new();
-        for i in 0..30 {
+        for i in 0..10 {
             hist.push(ConversationTurn::with_tokens(
                 "user",
                 &format!("message {}", i),
@@ -1010,6 +1035,8 @@ mod tests {
     fn test_adaptive_compactor_records_history() {
         let manager = CompactionManager::new(None, 100, 5);
         let mut compactor = AdaptiveCompactor::new(manager, 100);
+        // Set low threshold so 30×50 tokens triggers compaction
+        compactor.set_threshold(AdaptiveThreshold::new(100, 50, 500, 0.05));
         assert!(compactor.effectiveness_history().is_empty());
 
         // Create a history that exceeds threshold
@@ -1029,6 +1056,8 @@ mod tests {
     fn test_adaptive_compactor_user_feedback_blends() {
         let manager = CompactionManager::new(None, 100, 5);
         let mut compactor = AdaptiveCompactor::new(manager, 100);
+        // Set low threshold so compaction triggers
+        compactor.set_threshold(AdaptiveThreshold::new(100, 50, 500, 0.05));
 
         let mut hist = ConversationHistory::new();
         for i in 0..30 {
@@ -1082,6 +1111,8 @@ mod tests {
     fn test_adaptive_compactor_history_capped() {
         let manager = CompactionManager::new(None, 1, 5); // threshold=1 → always compact
         let mut compactor = AdaptiveCompactor::new(manager, 3);
+        // Set low threshold so compaction triggers
+        compactor.set_threshold(AdaptiveThreshold::new(1, 1, 100, 0.05));
 
         // Run compaction 5 times on different histories
         for i in 0..5 {

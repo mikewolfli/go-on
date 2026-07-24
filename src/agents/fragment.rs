@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 /// Role of a context fragment — determines where it appears in the prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
 pub enum FragmentRole {
     /// Injected as a system message.
     System,
@@ -35,6 +36,7 @@ pub enum FragmentRole {
 
 /// Priority of a context fragment — determines inclusion order under budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
 pub enum FragmentPriority {
     /// Low priority — may be dropped under token pressure.
     Low = 0,
@@ -55,6 +57,7 @@ pub enum FragmentPriority {
 /// Each fragment is role-tagged, priority-ranked, and produces text content
 /// via `body()`. The `FragmentRegistry` collects all fragments and builds
 /// the final context respecting priorities and token budget.
+#[allow(dead_code)]
 pub trait ContextFragment: Send + Sync {
     /// Role for this fragment (System, Developer, or User).
     fn role(&self) -> FragmentRole;
@@ -83,10 +86,12 @@ pub trait ContextFragment: Send + Sync {
 /// registry.register(Arc::new(MyFragment));
 /// let context = registry.build_context(2000); // 2000 char budget
 /// ```
+#[allow(dead_code)]
 pub struct FragmentRegistry {
     fragments: Vec<Arc<dyn ContextFragment>>,
 }
 
+#[allow(dead_code)]
 impl FragmentRegistry {
     /// Create an empty fragment registry.
     pub fn new() -> Self {
@@ -198,12 +203,14 @@ impl Default for FragmentRegistry {
 // ---------------------------------------------------------------------------
 
 /// A simple string-based fragment with fixed role and priority.
+#[allow(dead_code)]
 pub struct SimpleFragment {
     role: FragmentRole,
     priority: FragmentPriority,
     content: String,
 }
 
+#[allow(dead_code)]
 impl SimpleFragment {
     /// Create a new simple fragment.
     pub fn new(role: FragmentRole, priority: FragmentPriority, content: String) -> Self {
@@ -255,7 +262,11 @@ mod tests {
         }
     }
 
-    fn make_fragment(role: FragmentRole, priority: FragmentPriority, content: &str) -> Arc<dyn ContextFragment> {
+    fn make_fragment(
+        role: FragmentRole,
+        priority: FragmentPriority,
+        content: &str,
+    ) -> Arc<dyn ContextFragment> {
         Arc::new(TestFragment {
             role,
             priority,
@@ -275,7 +286,11 @@ mod tests {
     #[test]
     fn test_single_fragment() {
         let mut reg = FragmentRegistry::new();
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Normal, "Hello world"));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Normal,
+            "Hello world",
+        ));
         assert_eq!(reg.len(), 1);
 
         let context = reg.build_context(1000);
@@ -286,47 +301,91 @@ mod tests {
     #[test]
     fn test_priority_ordering() {
         let mut reg = FragmentRegistry::new();
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Low, "low priority"));
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Critical, "critical priority"));
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Normal, "normal priority"));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Low,
+            "low priority",
+        ));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Critical,
+            "critical priority",
+        ));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Normal,
+            "normal priority",
+        ));
 
         let context = reg.build_context(1000);
         // Critical should appear last (sorted ascending by priority)
         let critical_pos = context.find("critical").unwrap();
         let low_pos = context.find("low").unwrap();
-        assert!(low_pos < critical_pos, "Low priority should appear before Critical");
+        assert!(
+            low_pos < critical_pos,
+            "Low priority should appear before Critical"
+        );
     }
 
     #[test]
     fn test_budget_truncation() {
         let mut reg = FragmentRegistry::new();
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Normal, "short"));
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Normal, "very long content that should be excluded due to budget"));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Normal,
+            "short",
+        ));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Normal,
+            "very long content that should be excluded due to budget",
+        ));
 
         let context = reg.build_context(20);
         // "short" is 5 chars + tags, should fit in 20 chars
         assert!(context.contains("short"));
         // The long content should be excluded
-        assert!(!context.contains("very long"),
-            "long content should be excluded when budget is tight");
+        assert!(
+            !context.contains("very long"),
+            "long content should be excluded when budget is tight"
+        );
     }
 
     #[test]
     fn test_critical_always_included() {
         let mut reg = FragmentRegistry::new();
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Critical, "must include"));
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Low, "small"));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Critical,
+            "must include",
+        ));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Low,
+            "small",
+        ));
 
         // Tiny budget — only Critical should be included
         let context = reg.build_context(5);
-        assert!(context.contains("must include"), "Critical must be included even with tiny budget");
+        assert!(
+            context.contains("must include"),
+            "Critical must be included even with tiny budget"
+        );
     }
 
     #[test]
     fn test_build_context_pairs() {
         let mut reg = FragmentRegistry::new();
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Normal, "system content"));
-        reg.register(make_fragment(FragmentRole::User, FragmentPriority::Normal, "user content"));
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Normal,
+            "system content",
+        ));
+        reg.register(make_fragment(
+            FragmentRole::User,
+            FragmentPriority::Normal,
+            "user content",
+        ));
 
         let pairs = reg.build_context_pairs(1000);
         assert_eq!(pairs.len(), 2);
@@ -352,14 +411,26 @@ mod tests {
     #[test]
     fn test_in_use_fragment_with_pairs_respects_budget() {
         let mut reg = FragmentRegistry::new();
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Low, "aaaa")); // 4 chars
-        reg.register(make_fragment(FragmentRole::System, FragmentPriority::Critical, "bbbb")); // 4 chars, always included
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Low,
+            "aaaa",
+        )); // 4 chars
+        reg.register(make_fragment(
+            FragmentRole::System,
+            FragmentPriority::Critical,
+            "bbbb",
+        )); // 4 chars, always included
 
         // Budget of 10 should include Low (4 chars + tags) but not exceed
         let pairs = reg.build_context_pairs(10);
         // Critical is always included
         assert!(pairs.iter().any(|(_, c)| c == "bbbb"));
         // Low may or may not be included depending on exact cost calculation
-        assert_eq!(pairs.len(), 2, "Both fragments should fit in 10 char budget");
+        assert_eq!(
+            pairs.len(),
+            2,
+            "Both fragments should fit in 10 char budget"
+        );
     }
 }

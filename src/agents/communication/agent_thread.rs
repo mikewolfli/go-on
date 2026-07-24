@@ -18,9 +18,11 @@ use tokio::task::JoinHandle;
 use crate::agents::agent::{Agent, Message, StreamingSender};
 
 /// Unique thread ID counter.
+#[allow(dead_code)]
 static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a new unique thread ID.
+#[allow(dead_code)]
 pub fn new_thread_id() -> u64 {
     NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed)
 }
@@ -28,6 +30,7 @@ pub fn new_thread_id() -> u64 {
 // ── AgentStatus — lifecycle state visible via watch channel ────────────
 
 /// Observable status of an AgentThread (BLUE71 §4.3).
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentStatus {
     /// Thread created but not yet started.
@@ -42,6 +45,7 @@ pub enum AgentStatus {
     Cancelled { reason: String },
 }
 
+#[allow(dead_code)]
 impl AgentStatus {
     /// Whether this status represents a terminal state.
     pub fn is_terminal(&self) -> bool {
@@ -57,6 +61,7 @@ impl AgentStatus {
 // ── AgentInput — messages that can be sent to an AgentThread's queue ──
 
 /// Input message for an AgentThread's mailbox (BLUE71 §4.3).
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum AgentInput {
     /// User message with a oneshot reply channel.
@@ -80,6 +85,7 @@ pub enum AgentInput {
 // ── SpawnConfig — parameters for spawning an AgentThread ──────────────
 
 /// Configuration for spawning an AgentThread (BLUE71 §4.3).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SpawnConfig {
     /// Maximum depth in the agent tree.
@@ -92,6 +98,7 @@ pub struct SpawnConfig {
     pub timeout_secs: u64,
 }
 
+#[allow(dead_code)]
 impl Default for SpawnConfig {
     fn default() -> Self {
         Self {
@@ -114,6 +121,7 @@ impl Default for SpawnConfig {
 ///
 /// The parent is NOT blocked — it can continue processing while
 /// the child agent runs independently.
+#[allow(dead_code)]
 pub struct AgentThread {
     /// Unique thread ID.
     pub thread_id: u64,
@@ -129,6 +137,7 @@ pub struct AgentThread {
     pub handle: JoinHandle<()>,
 }
 
+#[allow(dead_code)]
 impl std::fmt::Debug for AgentThread {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentThread")
@@ -139,6 +148,7 @@ impl std::fmt::Debug for AgentThread {
     }
 }
 
+#[allow(dead_code)]
 impl AgentThread {
     /// Send a message to this agent's input queue.
     pub fn send_input(&self, input: AgentInput) -> Result<(), String> {
@@ -168,6 +178,7 @@ impl AgentThread {
 ///
 /// This prevents concurrency slot leaks when agent spawns fail
 /// partway through initialization.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct SpawnGuard {
     /// Shared atomic budget counter.
@@ -238,9 +249,11 @@ pub enum SpawnError {
         max: u64,
     },
     /// Agent not found in registry.
+    #[allow(dead_code)]
     #[error("agent not found: {0}")]
     AgentNotFound(String),
     /// General spawn failure.
+    #[allow(dead_code)]
     #[error("spawn failed: {0}")]
     Other(String),
 }
@@ -323,7 +336,7 @@ pub async fn spawn_agent_non_blocking(
 /// - A `Cancel` message terminates the loop.
 /// - Channel closure (all senders dropped) terminates the loop.
 async fn agent_main_loop(
-    thread_id: u64,
+    _thread_id: u64,
     agent: Arc<dyn Agent>,
     mut input_rx: mpsc::UnboundedReceiver<AgentInput>,
     status_tx: watch::Sender<AgentStatus>,
@@ -394,6 +407,7 @@ async fn agent_main_loop(
             }
             AgentInput::Cancel { reason } => {
                 status_tx.send_replace(AgentStatus::Cancelled { reason });
+                SpawnGuard::release_slot(&budget);
                 return;
             }
         }
@@ -425,6 +439,7 @@ async fn agent_main_loop(
 /// # Returns
 /// * `Ok(AgentStatus)` - The terminal status.
 /// * `Err(WaitError)` - If timeout or channel closed.
+#[allow(dead_code)]
 pub async fn wait_for_completion(
     rx: &mut watch::Receiver<AgentStatus>,
     timeout: std::time::Duration,
@@ -444,6 +459,7 @@ pub async fn wait_for_completion(
 
 /// Errors that can occur while waiting for agent completion.
 #[derive(Debug, Clone, thiserror::Error)]
+#[allow(dead_code)]
 pub enum WaitError {
     /// Timed out waiting for completion.
     #[error("timeout waiting for agent completion")]
@@ -456,6 +472,7 @@ pub enum WaitError {
 // ── AgentThreadManager — manages all running threads ──────────────────
 
 /// Manages all running AgentThreads with a global budget.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AgentThreadManager {
     /// Global concurrency budget (atomic for RAII).
@@ -464,6 +481,7 @@ pub struct AgentThreadManager {
     max_global_concurrency: u64,
 }
 
+#[allow(dead_code)]
 impl AgentThreadManager {
     /// Create a new AgentThreadManager.
     pub fn new(max_global_concurrency: u64) -> Self {

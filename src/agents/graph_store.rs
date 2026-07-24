@@ -10,17 +10,20 @@
 //! - `AgentGraphEdge` — a single edge in the agent relationship graph
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::agents::communication::path::AgentPath;
+
+#[cfg(feature = "backend-sqlite")]
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // AgentGraphEdge — a relationship between parent and child agents
 // ---------------------------------------------------------------------------
 
 /// A directed edge from a parent agent to a child agent in the tree.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AgentGraphEdge {
     /// Parent agent path.
@@ -43,6 +46,7 @@ pub struct AgentGraphEdge {
 ///
 /// Implementations can be in-memory (for testing/development) or
 /// SQLite-backed (for production persistence and recovery).
+#[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait AgentGraphStore: Send + Sync {
     /// Insert or update a parent→child edge.
@@ -66,11 +70,13 @@ pub trait AgentGraphStore: Send + Sync {
 ///
 /// Uses `Arc<RwLock<HashMap>>` for thread-safe concurrent access.
 /// Suitable for development and testing; replace with SQLite for production.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct InMemoryAgentGraphStore {
     edges: Arc<RwLock<HashMap<String, AgentGraphEdge>>>,
 }
 
+#[allow(dead_code)]
 impl InMemoryAgentGraphStore {
     /// Create an empty in-memory store.
     pub fn new() -> Self {
@@ -79,16 +85,19 @@ impl InMemoryAgentGraphStore {
         }
     }
 
+    #[allow(dead_code)]
     /// Number of edges currently stored.
     pub async fn len(&self) -> usize {
         self.edges.read().await.len()
     }
 
+    #[allow(dead_code)]
     /// Whether the store is empty.
     pub async fn is_empty(&self) -> bool {
         self.edges.read().await.is_empty()
     }
 
+    #[allow(dead_code)]
     /// Get a specific edge by child path.
     pub async fn get(&self, child_path: &AgentPath) -> Option<AgentGraphEdge> {
         self.edges
@@ -157,11 +166,13 @@ impl AgentGraphStore for InMemoryAgentGraphStore {
 /// Schema: `agent_graph_edges` table with parent/child/status/child_name/task columns.
 /// Checkpoint data is stored in the `task` column as JSON.
 #[cfg(feature = "backend-sqlite")]
+#[allow(dead_code)]
 pub struct SqliteAgentGraphStore {
     conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
 }
 
 #[cfg(feature = "backend-sqlite")]
+#[allow(dead_code)]
 impl SqliteAgentGraphStore {
     /// Open (or create) the agent graph database at `db_path`.
     pub async fn open(db_path: &Path) -> Result<Self, String> {

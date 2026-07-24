@@ -79,7 +79,9 @@ impl AgentLifecycle {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            AgentLifecycle::Completed { .. } | AgentLifecycle::Errored { .. } | AgentLifecycle::Cancelled { .. }
+            AgentLifecycle::Completed { .. }
+                | AgentLifecycle::Errored { .. }
+                | AgentLifecycle::Cancelled { .. }
         )
     }
 
@@ -108,14 +110,36 @@ impl AgentLifecycle {
         match self {
             AgentLifecycle::Registered { at_ms } => format!("registered at {}", at_ms),
             AgentLifecycle::Idle { since_ms } => format!("idle since {}", since_ms),
-            AgentLifecycle::Active { phase, started_at_ms, tokens_used } => {
-                format!("active ({:?}) since {}, tokens={}", phase, started_at_ms, tokens_used)
+            AgentLifecycle::Active {
+                phase,
+                started_at_ms,
+                tokens_used,
+            } => {
+                format!(
+                    "active ({:?}) since {}, tokens={}",
+                    phase, started_at_ms, tokens_used
+                )
             }
-            AgentLifecycle::Completed { result, tokens_used, wall_time_ms, .. } => {
-                format!("completed: {} ({} tokens, {}ms)", result, tokens_used, wall_time_ms)
+            AgentLifecycle::Completed {
+                result,
+                tokens_used,
+                wall_time_ms,
+                ..
+            } => {
+                format!(
+                    "completed: {} ({} tokens, {}ms)",
+                    result, tokens_used, wall_time_ms
+                )
             }
-            AgentLifecycle::Errored { error, tokens_used, wall_time_ms } => {
-                format!("errored: {} ({} tokens, {}ms)", error, tokens_used, wall_time_ms)
+            AgentLifecycle::Errored {
+                error,
+                tokens_used,
+                wall_time_ms,
+            } => {
+                format!(
+                    "errored: {} ({} tokens, {}ms)",
+                    error, tokens_used, wall_time_ms
+                )
             }
             AgentLifecycle::Cancelled { reason, .. } => {
                 format!("cancelled: {}", reason)
@@ -136,6 +160,7 @@ impl Default for AgentLifecycle {
 }
 
 /// Helper to get current timestamp in milliseconds.
+#[allow(dead_code)]
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -155,11 +180,13 @@ impl AgentLifecycleBuilder {
     }
 
     /// Create an Idle state.
+    #[allow(dead_code)]
     pub fn idle() -> AgentLifecycle {
         AgentLifecycle::Idle { since_ms: now_ms() }
     }
 
     /// Create an Active state.
+    #[allow(dead_code)]
     pub fn active(phase: AgentPhase) -> AgentLifecycle {
         AgentLifecycle::Active {
             phase,
@@ -169,6 +196,7 @@ impl AgentLifecycleBuilder {
     }
 
     /// Create a Completed state with automatic timing.
+    #[allow(dead_code)]
     pub fn completed(result: String, tokens_used: u64, started_at: u64) -> AgentLifecycle {
         let wall_time = now_ms().saturating_sub(started_at);
         AgentLifecycle::Completed {
@@ -180,6 +208,7 @@ impl AgentLifecycleBuilder {
     }
 
     /// Create an Errored state with automatic timing.
+    #[allow(dead_code)]
     pub fn errored(error: String, tokens_used: u64, started_at: u64) -> AgentLifecycle {
         let wall_time = now_ms().saturating_sub(started_at);
         AgentLifecycle::Errored {
@@ -190,8 +219,12 @@ impl AgentLifecycleBuilder {
     }
 
     /// Create a Cancelled state.
+    #[allow(dead_code)]
     pub fn cancelled(reason: String, tokens_used: u64) -> AgentLifecycle {
-        AgentLifecycle::Cancelled { reason, tokens_used }
+        AgentLifecycle::Cancelled {
+            reason,
+            tokens_used,
+        }
     }
 }
 
@@ -233,7 +266,8 @@ mod tests {
             phase: AgentPhase::Planning,
             started_at_ms: 0,
             tokens_used: 0,
-        }.is_terminal());
+        }
+        .is_terminal());
     }
 
     #[test]
@@ -286,7 +320,8 @@ mod tests {
             tokens_used: 100,
             wall_time_ms: 500,
             completed_at_ms: 1500,
-        }.summary();
+        }
+        .summary();
         assert!(summary.contains("completed"));
         assert!(summary.contains("done"));
     }

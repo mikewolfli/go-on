@@ -8,6 +8,7 @@
 
 use crate::governance::pua::PuaExecutionReport;
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,13 +25,20 @@ use crate::agents::communication::bus::CommunicationBus;
 
 /// Observer for tool execution lifecycle events.
 ///
-/// Hooks are invoked synchronously during tool dispatch. Implementations
-/// should be fast (no blocking I/O) to avoid delaying tool execution.
-/// All methods have default no-op implementations.
+/// Hooks are invoked during tool dispatch. Sync hooks run on both sync and async
+/// paths. Async hooks (`async_pre_execute`) only run on the async path
+/// (`run_with_fallback_async`). All methods have default no-op implementations.
+#[async_trait]
 pub trait ToolHook: Send + Sync {
     /// Called immediately before a tool is executed, after governance checks.
     fn pre_execute(&self, _tool_name: &str, _input: &ToolInput) -> Result<()> {
         Ok(())
+    }
+
+    /// Async variant of pre_execute — called by run_with_fallback_async.
+    /// Default implementation delegates to the sync pre_execute.
+    async fn async_pre_execute(&self, tool_name: &str, input: &ToolInput) -> Result<()> {
+        self.pre_execute(tool_name, input)
     }
 
     /// Called immediately after a tool completes (success or failure).
@@ -73,6 +81,41 @@ impl AgentCommunicationHook {
     }
 }
 
+// ── BLUE71 §11: GuardianHook — async model-based review ─────────────
+
+/// Tool hook that uses GuardianReviewer to review tool actions before execution.
+/// Only takes effect on the async tool path (run_with_fallback_async).
+pub struct GuardianHook {
+    reviewer: std::sync::Arc<crate::governance::guardian::GuardianReviewer>,
+}
+
+impl GuardianHook {
+    /// Create a new GuardianHook with the given reviewer.
+    pub fn new(reviewer: std::sync::Arc<crate::governance::guardian::GuardianReviewer>) -> Self {
+        Self { reviewer }
+    }
+}
+
+#[async_trait]
+impl ToolHook for GuardianHook {
+    async fn async_pre_execute(&self, tool_name: &str, input: &ToolInput) -> Result<()> {
+        let decision = self
+            .reviewer
+            .review_action(tool_name, input, "tool pre-execution review")
+            .await;
+        match decision {
+            crate::governance::guardian::GuardianDecision::Allow { .. } => Ok(()),
+            crate::governance::guardian::GuardianDecision::Deny { reason } => {
+                anyhow::bail!("guardian denied: {}", reason)
+            }
+            crate::governance::guardian::GuardianDecision::EscalateToUser { reason } => {
+                anyhow::bail!("guardian escalated: {}", reason)
+            }
+        }
+    }
+}
+
+#[async_trait]
 impl ToolHook for AgentCommunicationHook {
     fn pre_execute(&self, tool_name: &str, _input: &ToolInput) -> Result<()> {
         if tool_name == "spawn_agent" {
@@ -91,7 +134,8 @@ impl ToolHook for AgentCommunicationHook {
         duration_ms: u64,
     ) -> Result<()> {
         if tool_name == "spawn_agent" {
-            self.bus.record_metrics(tool_name, duration_ms, output.success);
+            self.bus
+                .record_metrics(tool_name, duration_ms, output.success);
         }
         Ok(())
     }
@@ -105,7 +149,7 @@ impl ToolHookRegistry {
         }
     }
 
-    /// Invoke all registered pre-execute hooks.
+    /// Invoke all registered pre-execute hooks (sync path).
     pub fn run_pre(&self, tool_name: &str, input: &ToolInput) {
         if let Ok(hooks) = self.hooks.lock() {
             for hook in hooks.iter() {
@@ -114,6 +158,21 @@ impl ToolHookRegistry {
                 }
             }
         }
+    }
+
+    /// Invoke all registered pre-execute hooks (async path — calls async_pre_execute).
+    /// Returns an error if ANY hook fails (fail-fast: first error stops execution).
+    pub async fn run_pre_async(&self, tool_name: &str, input: &ToolInput) -> Result<()> {
+        // Clone hooks under lock so we don't hold the lock across await points.
+        let hooks: Vec<Arc<dyn ToolHook>> = if let Ok(guard) = self.hooks.lock() {
+            guard.clone()
+        } else {
+            return Ok(());
+        };
+        for hook in hooks.iter() {
+            hook.async_pre_execute(tool_name, input).await?;
+        }
+        Ok(())
     }
 
     /// Invoke all registered post-execute hooks.

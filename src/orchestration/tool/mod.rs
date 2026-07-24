@@ -1854,8 +1854,8 @@ impl ToolRegistry {
             anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
-        // ── Pre-execute hooks ──────────────────────────────────────────
-        self.hooks.run_pre(name, input);
+        // ── Pre-execute hooks (async, supports GuardianReviewer) ───────
+        self.hooks.run_pre_async(name, &input).await?;
 
         let mut last_result = primary.run_async(input.clone()).await?;
         let elapsed = start.elapsed().as_millis() as u64;

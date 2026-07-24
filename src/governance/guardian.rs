@@ -111,6 +111,7 @@ impl GuardianCircuitBreaker {
     }
 
     /// Reset the circuit breaker (e.g., after configuration change).
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.consecutive_denials = 0;
         self.denials.clear();

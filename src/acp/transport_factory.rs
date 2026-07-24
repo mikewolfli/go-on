@@ -87,7 +87,7 @@ pub async fn initialize_cache(
 }
 
 /// Initialize the vector store.
-#[cfg_attr(not(feature = "backend-postgres"), allow(unused_variables))]
+#[allow(unused_variables)]
 pub async fn initialize_vector_store(
     config_path: &Path,
     vector_cfg: Option<VectorConfig>,

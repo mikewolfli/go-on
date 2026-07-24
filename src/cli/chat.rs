@@ -65,8 +65,11 @@ const SESSION_FILE: &str = ".goon/chat-session.json";
 /// Threshold at which we prompt the user to compact the conversation.
 const COMPACT_PROMPT_THRESHOLD: usize = 30;
 
-/// Threshold at which we automatically compact (requires user consent).
+/// Threshold at which we automatically compact.
 const AUTO_COMPACT_THRESHOLD: usize = 60;
+
+/// How many most recent messages to keep after auto-compaction.
+const AUTO_COMPACT_KEEP: usize = 40;
 
 /// Default pricing fallback: GPT-4o input cost per token ($0.15 per 1M tokens).
 /// Used when provider cost info is unavailable.
@@ -1895,21 +1898,30 @@ fn auto_save_turn(
     });
 }
 
-/// Check conversation length and suggest compact if needed.
-fn check_compact_threshold(messages: &[Message]) {
+/// Check conversation length and auto-compact if needed (SlidingWindow).
+/// Keeps the last AUTO_COMPACT_KEEP messages when threshold is exceeded.
+fn check_compact_threshold(messages: &mut Vec<Message>) {
     let msg_count = messages.len();
+    if msg_count >= COMPACT_PROMPT_THRESHOLD && msg_count < AUTO_COMPACT_THRESHOLD {
+        eprintln!("{}{}{}", ansi!("33"), t("cli.chat.tip_compact"), ansi!("0"));
+    }
     if msg_count >= AUTO_COMPACT_THRESHOLD {
+        let keep = AUTO_COMPACT_KEEP;
+        let remove_count = msg_count.saturating_sub(keep);
+        // Keep the most recent `keep` messages (drop oldest)
+        messages.drain(..remove_count);
         eprintln!(
             "{}{}{}",
-            ansi!("31"),
+            ansi!("32"),
             tf(
-                "cli.chat.conversation_long_warning",
-                &[("count", &msg_count.to_string())]
+                "cli.chat.conversation_auto_compacted",
+                &[
+                    ("removed", &remove_count.to_string()),
+                    ("remaining", &messages.len().to_string()),
+                ]
             ),
             ansi!("0")
         );
-    } else if msg_count >= COMPACT_PROMPT_THRESHOLD {
-        eprintln!("{}{}{}", ansi!("33"), t("cli.chat.tip_compact"), ansi!("0"));
     }
 }
 

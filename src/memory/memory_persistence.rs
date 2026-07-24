@@ -13,8 +13,9 @@ use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-#[cfg(feature = "backend-postgres")]
-use postgres::{Client as PgClient, NoTls as PgNoTls};
+// Postgres backend imports reserved for future use
+// #[cfg(feature = "backend-postgres")]
+// use postgres::{Client as PgClient, NoTls as PgNoTls};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

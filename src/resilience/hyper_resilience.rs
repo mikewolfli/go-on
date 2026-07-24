@@ -18,7 +18,8 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 #[cfg(feature = "chaos-testing")]
-use super::chaos::{ChaosEngine, FaultType};
+#[cfg(feature = "chaos-testing")]
+use super::chaos::ChaosEngine;
 
 // ---------------------------------------------------------------------------
 // Lock helpers

@@ -48,6 +48,49 @@ use crate::acp::r#impl::chat::{
     AutonomyOutcome, ChatParams, ChatRequestContext, FallbackExecutionResult, RiskAssessment,
     RiskVotePolicy, StreamEventMeta, StreamObserver, VectorContext,
 };
+
+/// Classify whether the user's last message is a "simple chat" (e.g. "你好", "hello").
+/// Simple messages skip expensive pre-processing steps (URL prefetch, multimodal,
+/// memory recall, capability bus) and go directly to the LLM — same philosophy
+/// as Codex's lean pre-processing pipeline.
+///
+/// A message is classified as "simple" when ALL conditions are met:
+/// - The last user message is short (< 200 chars)
+/// - Contains no HTTP/HTTPS URLs
+/// - Contains no file:// or data: URIs
+/// - Mode is "ask" or "chat" (not "edit"/"full_auto"/"safeguard")
+fn is_simple_chat(params: &ChatParams) -> bool {
+    // Mode check: only simple modes qualify
+    let mode = params.mode.to_ascii_lowercase();
+    if mode != "ask" && mode != "chat" && !mode.is_empty() {
+        return false;
+    }
+
+    // Find the last user message
+    let last_user = params.messages.iter().rev().find(|m| m.role == "user");
+    let Some(last) = last_user else {
+        return false;
+    };
+
+    let content = last.content.trim();
+
+    // Short message only
+    if content.len() > 200 {
+        return false;
+    }
+
+    // No URLs
+    if content.contains("http://") || content.contains("https://") {
+        return false;
+    }
+
+    // No file:// or data: URIs
+    if content.contains("file://") || content.contains("data:") {
+        return false;
+    }
+
+    true
+}
 use crate::acp::r#impl::request;
 use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
@@ -233,37 +276,43 @@ pub(crate) async fn observe_phase(
     }
 
     // ── Sub-step 2: Multimodal input detection ───────────────────
-    emit_status_event(
-        stream_observer,
-        "Processing multimodal input (images, files, audio)...",
-        "analyzing",
-    )
-    .await?;
-    let multimodal_context = detect_and_process_multimodal(server, params).await;
+    // Codex-style: skip for simple chat — no files/URIs to process
+    let is_simple = is_simple_chat(params);
+    let multimodal_context = if is_simple {
+        None
+    } else {
+        emit_status_event(
+            stream_observer,
+            "Processing multimodal input (images, files, audio)...",
+            "analyzing",
+        )
+        .await?;
+        detect_and_process_multimodal(server, params).await
+    };
 
     // ── Sub-step 3: URL auto-detection & pre-fetching ─────────────
-    emit_status_event(
-        stream_observer,
-        "Pre-fetching URLs and probing API endpoints...",
-        "analyzing",
-    )
-    .await?;
-    // ── URL auto-detection & pre-fetching ─────────────────────────
-    // When user messages contain HTTP/HTTPS URLs, pre-fetch their content
-    // automatically and try API endpoint probes for SPA pages.
-    // This ensures invitation links are always processed even if the LLM
-    // responds with text instead of calling http_request.
+    // NOTE: Only scans the LAST user message for URLs to avoid re-fetching
+    // URLs from conversation history on every turn. Timeouts are aggressive
+    // (3s) so a slow/unreachable URL does not block the chat pipeline.
     {
         let url_entries: Vec<(usize, String)> = params
             .messages
             .iter()
             .enumerate()
+            .rev()
+            .take(1)
             .filter(|(_, msg)| msg.role == "user")
             .filter_map(|(i, msg)| {
                 crate::orchestration::tool_extended::http::extract_url(&msg.content)
                     .map(|u| (i, u.to_string()))
             })
             .collect();
+
+        if url_entries.is_empty() {
+            // Fast path: no URLs to pre-fetch, skip immediately
+        } else {
+            emit_status_event(stream_observer, "Pre-fetching URLs...", "analyzing").await?;
+        }
 
         for (msg_idx, url) in url_entries {
             let url_lower = url.to_lowercase();
@@ -286,16 +335,16 @@ pub(crate) async fn observe_phase(
             tracing::info!("observe_phase: auto-detected URL, pre-fetching: {}", url);
             let fetch_url = url.split('#').next().unwrap_or(&url).to_string();
 
-            // Phase 1: Fetch the page HTML
+            // Phase 1: Fetch the page HTML (aggressive 3s timeout)
             let fetch_result: Option<(String, String)> = match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(3),
                 reqwest::get(&fetch_url),
             )
             .await
             {
                 Ok(Ok(resp)) => {
                     let status = resp.status().to_string();
-                    match tokio::time::timeout(std::time::Duration::from_secs(5), resp.text()).await
+                    match tokio::time::timeout(std::time::Duration::from_secs(2), resp.text()).await
                     {
                         Ok(Ok(body)) => Some((status, body)),
                         _ => None,
@@ -483,7 +532,9 @@ pub(crate) async fn observe_phase(
 
     // ── HarnessBus during-execute checkpoint ───────────────────────
     if let Some(ref harness) = server.governance_deps.harness_bus {
-        let verdict = harness.validate_action("chat.execute", &serde_json::Value::Null);
+        let verdict = harness
+            .validate_action("chat.execute", &serde_json::Value::Null)
+            .await;
         if !verdict.is_allowed() {
             anyhow::bail!(
                 "harness_bus during-execute denied: sandbox={} budget={} permitted={}",
@@ -677,15 +728,19 @@ pub(crate) async fn think_phase(
     }
 
     // AgentMemoryBus — inject relevant memories into context
-    inject_agent_memory_bus(
-        server,
-        resolve_out.user_id.as_deref(),
-        &resolve_out.phase_name,
-        agent_sel.capability_selected_agent.as_deref(),
-        &params.messages,
-        &mut agent_messages,
-    )
-    .await;
+    // Codex-style: skip for simple chat — no task context to recall
+    let is_simple = is_simple_chat(params);
+    if !is_simple {
+        inject_agent_memory_bus(
+            server,
+            resolve_out.user_id.as_deref(),
+            &resolve_out.phase_name,
+            agent_sel.capability_selected_agent.as_deref(),
+            &params.messages,
+            &mut agent_messages,
+        )
+        .await;
+    }
 
     Ok(ThinkOutput {
         capability_selected_agent: agent_sel.capability_selected_agent,
@@ -1621,16 +1676,19 @@ pub(crate) async fn reflect_phase(
     .await?;
 
     // Background skill/workflow generation
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        auto_create_skills_from_conversation(server, params, &exec_out.response_text),
-    )
-    .await;
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        auto_generate_workflow_from_conversation(server, params, &exec_out.response_text),
-    )
-    .await;
+    // Codex-style: skip for simple chat — no meaningful patterns to extract
+    if !is_simple_chat(params) {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            auto_create_skills_from_conversation(server, params, &exec_out.response_text),
+        )
+        .await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            auto_generate_workflow_from_conversation(server, params, &exec_out.response_text),
+        )
+        .await;
+    }
 
     // Rationalization
     let (justified, reason) = crate::intelligence::hub::rationalize_decision(

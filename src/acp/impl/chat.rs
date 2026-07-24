@@ -284,7 +284,7 @@ pub async fn should_escalate_approval_strategy(
             "message_count": messages.len(),
             "total_content_length": messages.iter().map(|m| m.content.len()).sum::<usize>(),
         });
-        let verdict = harness.validate_action("chat.escalate", &payload);
+        let verdict = harness.validate_action("chat.escalate", &payload).await;
         if !verdict.is_allowed() {
             return Ok(true);
         }
@@ -1232,16 +1232,18 @@ async fn check_phase_escalation_rules(
     // ── Governance policy evaluation ────────────────────────────────
     // Let the HarnessBus policy engine weigh in first
     if let Some(ref harness) = server.governance_deps.harness_bus {
-        let verdict = harness.validate_action(
-            &format!("phase.{}.execute", phase),
-            &serde_json::json!({
-                "phase": phase,
-                "options": options.as_ref().map(|o| serde_json::json!({
-                    "autopilot_complexity": o.autopilot_complexity,
-                    "full_auto_review_agents": o.full_auto_review_agents,
-                })),
-            }),
-        );
+        let verdict = harness
+            .validate_action(
+                &format!("phase.{}.execute", phase),
+                &serde_json::json!({
+                    "phase": phase,
+                    "options": options.as_ref().map(|o| serde_json::json!({
+                        "autopilot_complexity": o.autopilot_complexity,
+                        "full_auto_review_agents": o.full_auto_review_agents,
+                    })),
+                }),
+            )
+            .await;
         if !verdict.is_allowed() {
             return Ok(true);
         }
