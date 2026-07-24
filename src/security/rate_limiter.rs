@@ -1,12 +1,9 @@
 //! Global rate limiter — token bucket per-tenant.
 //!
 //! Provides per-tenant token bucket rate limiting (sliding window,
-//! configurable rate).
+//! configurable rate).  Delegates to `RateLimitMiddleware` internally.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-use crate::shared::token_bucket::TokenBucket;
+use crate::protocol::rate_limit::{RateLimitMiddleware, TenantRateLimit};
 
 /// Rate limiter configuration.
 #[derive(Debug, Clone)]
@@ -27,26 +24,26 @@ impl Default for RateLimitConfig {
 }
 
 /// Global rate limiter instance.
+///
+/// Wraps a `RateLimitMiddleware` internally so that all per-tenant token
+/// bucket logic is handled by the shared middleware implementation.
 pub struct GlobalRateLimiter {
-    config: RateLimitConfig,
-    tenants: Mutex<HashMap<String, TokenBucket>>,
+    inner: RateLimitMiddleware,
 }
 
 impl GlobalRateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
-            config,
-            tenants: Mutex::new(HashMap::new()),
+            inner: RateLimitMiddleware::new(TenantRateLimit {
+                rpm: config.tenant_rps.max(1.0) as u64,
+                burst: config.tenant_burst as u64,
+            }),
         }
     }
 
     /// Try to consume a token for the given tenant.
     /// Returns true if allowed, false if rate limited.
     pub fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
-        let mut tenants = self.tenants.lock().unwrap();
-        let bucket = tenants.entry(tenant_id.to_string()).or_insert_with(|| {
-            TokenBucket::new(self.config.tenant_burst as f64, self.config.tenant_rps)
-        });
-        bucket.try_consume(tokens)
+        self.inner.try_consume_tenant(tenant_id, tokens)
     }
 }

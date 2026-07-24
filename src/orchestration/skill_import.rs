@@ -759,7 +759,7 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
 }
 
 fn now_ts() -> i64 {
-    crate::acp::prelude::now_ts()
+    crate::shared::timestamps::now_ts()
 }
 
 /// A remote skill that wraps an MCP endpoint as a Skill trait implementation.

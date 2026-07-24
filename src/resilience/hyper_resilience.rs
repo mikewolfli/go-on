@@ -1238,7 +1238,9 @@ impl HyperResilienceEngine {
         // ── Chaos engine fault injection (P3-1) ────────────────────────────
         #[cfg(feature = "chaos-testing")]
         if let Some(ref chaos) = self.chaos_engine {
-            if chaos.should_inject_fault(crate::resilience::chaos::FaultType::NetworkTimeout) {
+            if let Some(crate::resilience::chaos::FaultType::NetworkTimeout) =
+                chaos.check_fault(breaker_name)
+            {
                 tracing::info!(
                     target: "resilience",
                     "[CHAOS] Injecting NetworkTimeout fault in execution '{}'",
@@ -1606,10 +1608,7 @@ impl RecoveryPlanStore {
 
 /// Return the current time in milliseconds since the Unix epoch.
 fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ---------------------------------------------------------------------------

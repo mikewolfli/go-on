@@ -20,15 +20,10 @@ use crate::orchestration::core_dag::{TaskGraph, TaskGraphCheckpointArtifact, Tas
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// Lock the Mutex, recovering from poison with a warning.
+/// Uses shared `crate::lock_or_recover!` macro.
 #[cfg(not(feature = "backend-postgres"))]
 fn lock_guard(conn: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
-    match conn.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("task_graph_store mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+    crate::lock_or_recover!(conn, "task_graph_store")
 }
 
 /// SQLite-backed persistent store for task graphs and checkpoints.
@@ -511,7 +506,7 @@ impl TaskGraphStore {
 // ─── Shared helpers (both backends) ─────────────────────────────────────────
 
 fn now_ts() -> i64 {
-    crate::acp::prelude::now_ts()
+    crate::shared::timestamps::now_ts()
 }
 
 // ─── Tests (SQLite only) ────────────────────────────────────────────────────

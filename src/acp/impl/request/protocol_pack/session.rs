@@ -703,7 +703,7 @@ pub async fn session_close_payload(server: &AcpServer, params: Value) -> Result<
 
         #[cfg(feature = "multi-users-server")]
         if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
-            limiter.evict_tenant(session_id).await;
+            limiter.evict_tenant(session_id);
         }
         #[cfg(feature = "backend-sqlite")]
         if let Some(ref store) = server.session_store {
@@ -896,7 +896,7 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
 
             #[cfg(feature = "multi-users-server")]
             if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
-                limiter.evict_tenant(session_id).await;
+                limiter.evict_tenant(session_id);
             }
 
             #[cfg(feature = "backend-sqlite")]

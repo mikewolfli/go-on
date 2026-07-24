@@ -715,7 +715,7 @@ impl MultiChannelTransport {
 
     /// Current time in milliseconds since Unix epoch.
     fn now_ms() -> u64 {
-        crate::acp::prelude::now_ts_ms() as u64
+        crate::shared::timestamps::now_ts_ms() as u64
     }
 
     /// Build a minimal TransportMessage with default QoS and auto-generated id.

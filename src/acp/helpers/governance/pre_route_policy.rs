@@ -109,7 +109,7 @@ pub(crate) async fn evaluate_pre_route_policies(
     #[cfg(feature = "multi-users-server")]
     {
         if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
-            if let Err(retry_after) = limiter.check(_tenant_id).await {
+            if let Err(retry_after) = limiter.check(_tenant_id) {
                 anyhow::bail!(
                     "rate limited for tenant '{}': retry after {}s",
                     _tenant_id,

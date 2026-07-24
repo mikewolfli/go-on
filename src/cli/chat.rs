@@ -1902,7 +1902,7 @@ fn auto_save_turn(
 /// Keeps the last AUTO_COMPACT_KEEP messages when threshold is exceeded.
 fn check_compact_threshold(messages: &mut Vec<Message>) {
     let msg_count = messages.len();
-    if msg_count >= COMPACT_PROMPT_THRESHOLD && msg_count < AUTO_COMPACT_THRESHOLD {
+    if (COMPACT_PROMPT_THRESHOLD..AUTO_COMPACT_THRESHOLD).contains(&msg_count) {
         eprintln!("{}{}{}", ansi!("33"), t("cli.chat.tip_compact"), ansi!("0"));
     }
     if msg_count >= AUTO_COMPACT_THRESHOLD {

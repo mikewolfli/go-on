@@ -13,8 +13,19 @@
 //! across runs, seed `fastrand::seed()` with a unique value (e.g. the current
 //! system time) at the start of each run.
 
+/// Re-export so that `crate::resilience::chaos::FaultType` continues to resolve.
+pub use crate::fault_tolerance::FaultType;
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+
+use tracing::{info, warn};
+
 /// Default probability of a simulated recovery failure during drills.
 /// Set to 0.1 (10%) to model real-world chaos where not all recoveries succeed.
+#[allow(dead_code)]
 pub const RECOVERY_FAILURE_RATE: f64 = 0.1;
 
 /// Returns the deterministic recovery failure rate for a given fault type.
@@ -28,75 +39,20 @@ pub const RECOVERY_FAILURE_RATE: f64 = 0.1;
 /// always produces the same recovery profile in repeated runs.
 pub fn recovery_failure_rate_for_fault(fault_type: FaultType) -> f64 {
     match fault_type {
-        // Network timeouts typically recover well — retry/backoff works
-        FaultType::NetworkTimeout => 0.05,
-        // Partitions may persist longer
+        FaultType::Crash => 0.80,
+        FaultType::Hang => 0.35,
+        FaultType::Oom => 0.65,
+        FaultType::NetworkSplit => 0.85,
+        FaultType::NetworkTimeout => 0.85,
         FaultType::NetworkPartition => 0.20,
-        // File I/O errors are stickier (disk full, permissions)
-        FaultType::FileIOError => 0.30,
-        // Process restarts usually succeed
-        FaultType::ProcessCrash => 0.15,
-        // Resource exhaustion can cascade
+        FaultType::FileIOError => 0.70,
+        FaultType::ProcessCrash => 0.80,
         FaultType::ResourceExhaustion => 0.40,
-        // Data corruption is hardest to recover from
         FaultType::DataCorruption => 0.50,
-        // Rate limiting resolves cleanly with backoff
-        FaultType::RateLimit => 0.08,
-        // Auth failures usually recover with token refresh
-        FaultType::AuthFailure => 0.12,
-    }
-}
-
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-
-use tracing::{info, warn};
-
-// ---------------------------------------------------------------------------
-// FaultType
-// ---------------------------------------------------------------------------
-
-/// Types of faults that can be injected during chaos drills.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FaultType {
-    /// Simulate a network timeout (tool call hangs for specified duration)
-    NetworkTimeout,
-    /// Simulate a network partition (tool call returns connection refused)
-    NetworkPartition,
-    /// Simulate file I/O error (permission denied, disk full)
-    FileIOError,
-    /// Simulate process crash (tool panics or exits unexpectedly)
-    ProcessCrash,
-    /// Simulate resource exhaustion (OOM, CPU spike)
-    ResourceExhaustion,
-    /// Simulate corrupt data response
-    DataCorruption,
-    /// Simulate rate limiting (429 response)
-    RateLimit,
-    /// Simulate authentication failure (401/403)
-    AuthFailure,
-    /// Simulate an unexpected large latency spike
-    LatencySpike { delay_ms: u64 },
-    /// Simulate a partial write (file written half-way then fails)
-    PartialWrite,
-}
-
-impl FaultType {
-    pub fn label(&self) -> &str {
-        match self {
-            FaultType::NetworkTimeout => "network_timeout",
-            FaultType::NetworkPartition => "network_partition",
-            FaultType::FileIOError => "file_io_error",
-            FaultType::ProcessCrash => "process_crash",
-            FaultType::ResourceExhaustion => "resource_exhaustion",
-            FaultType::DataCorruption => "data_corruption",
-            FaultType::RateLimit => "rate_limit",
-            FaultType::AuthFailure => "auth_failure",
-            FaultType::LatencySpike { .. } => "latency_spike",
-            FaultType::PartialWrite => "partial_write",
-        }
+        FaultType::RateLimit => 0.60,
+        FaultType::AuthFailure => 0.50,
+        FaultType::LatencySpike { .. } => 0.35,
+        FaultType::PartialWrite => 0.75,
     }
 }
 
@@ -376,6 +332,7 @@ impl Default for ChaosEngine {
 // Built-in scenarios
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub fn network_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "network_resilience".to_string(),
@@ -409,6 +366,7 @@ pub fn network_resilience_scenario() -> DrillScenario {
     }
 }
 
+#[allow(dead_code)]
 pub fn storage_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "storage_resilience".to_string(),
@@ -442,6 +400,7 @@ pub fn storage_resilience_scenario() -> DrillScenario {
     }
 }
 
+#[allow(dead_code)]
 pub fn resource_exhaustion_scenario() -> DrillScenario {
     DrillScenario {
         name: "resource_exhaustion".to_string(),

@@ -58,7 +58,6 @@ pub use crate::memory::memory_response_cache;
 pub use crate::memory::vector;
 pub use crate::observability::observability as observability_module;
 pub use crate::observability::performance;
-pub use crate::observability::telemetry;
 pub use crate::observability::telemetry_enhanced;
 
 pub use crate::optimization::failure_prevention;

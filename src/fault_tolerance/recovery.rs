@@ -111,14 +111,31 @@ impl FaultToleranceEngine {
                         actions.push(RecoveryAction::ScaleUp);
                     }
                 }
-                FaultType::NetworkSplit => {
+                FaultType::NetworkSplit
+                | FaultType::NetworkTimeout
+                | FaultType::NetworkPartition => {
                     if !actions.contains(&RecoveryAction::FailoverToBackup) {
                         actions.push(RecoveryAction::FailoverToBackup);
+                    }
+                }
+                FaultType::ProcessCrash => {
+                    if !actions.contains(&RecoveryAction::RestartNode) {
+                        actions.push(RecoveryAction::RestartNode);
+                    }
+                }
+                FaultType::RateLimit | FaultType::LatencySpike { .. } => {
+                    if !actions.contains(&RecoveryAction::ScaleUp) {
+                        actions.push(RecoveryAction::ScaleUp);
                     }
                 }
                 FaultType::DataCorruption => {
                     if !actions.contains(&RecoveryAction::Rebalance) {
                         actions.push(RecoveryAction::Rebalance);
+                    }
+                }
+                FaultType::FileIOError | FaultType::AuthFailure | FaultType::PartialWrite => {
+                    if !actions.contains(&RecoveryAction::NotifyOperator) {
+                        actions.push(RecoveryAction::NotifyOperator);
                     }
                 }
             }

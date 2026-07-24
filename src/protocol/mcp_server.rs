@@ -863,7 +863,7 @@ async fn handle_http_connection(
             .and_then(|u| u.tenant_id)
             .unwrap_or_else(|| "default".to_string());
 
-        if let Err(retry_after) = limiter.check(&tenant_id).await {
+        if let Err(retry_after) = limiter.check(&tenant_id) {
             warn!(
                 tenant = %tenant_id,
                 retry_after = retry_after,

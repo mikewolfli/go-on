@@ -12,14 +12,44 @@ pub enum NodeStatus {
 }
 
 /// The type of fault detected on a node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FaultType {
     Crash,
     Hang,
     Oom,
     NetworkSplit,
+    NetworkTimeout,
+    NetworkPartition,
+    FileIOError,
+    ProcessCrash,
     DataCorruption,
     ResourceExhaustion,
+    RateLimit,
+    AuthFailure,
+    LatencySpike { delay_ms: u64 },
+    PartialWrite,
+}
+
+impl FaultType {
+    /// Human-readable label for a fault type.
+    pub fn label(&self) -> &str {
+        match self {
+            FaultType::Crash => "crash",
+            FaultType::Hang => "hang",
+            FaultType::Oom => "oom",
+            FaultType::NetworkSplit => "network_split",
+            FaultType::NetworkTimeout => "network_timeout",
+            FaultType::NetworkPartition => "network_partition",
+            FaultType::FileIOError => "file_io_error",
+            FaultType::ProcessCrash => "process_crash",
+            FaultType::ResourceExhaustion => "resource_exhaustion",
+            FaultType::DataCorruption => "data_corruption",
+            FaultType::RateLimit => "rate_limit",
+            FaultType::AuthFailure => "auth_failure",
+            FaultType::LatencySpike { .. } => "latency_spike",
+            FaultType::PartialWrite => "partial_write",
+        }
+    }
 }
 
 /// A recorded fault event.

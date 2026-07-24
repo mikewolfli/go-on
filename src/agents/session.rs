@@ -579,10 +579,7 @@ async fn session_main_loop(
 /// Current Unix timestamp in milliseconds.
 #[allow(dead_code)]
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ---------------------------------------------------------------------------

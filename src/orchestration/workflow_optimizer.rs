@@ -9,14 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Lock a Mutex, recovering from poison with a log.
+/// Uses shared `crate::lock_or_recover!` macro.
 fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("workflow_optimizer mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+    crate::lock_or_recover!(mtx, "workflow_optimizer")
 }
 
 /// A single execution record for a phase in a workflow.

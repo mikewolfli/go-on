@@ -20,36 +20,24 @@ pub fn now_ms() -> u64 {
 }
 
 /// Acquire a lock on a `Mutex`, recovering from a poisoned state with a warning.
+///
+/// Delegates to the shared `lock_or_recover!` macro from `crate::shared::lock_utils`.
 pub fn lock_guard<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("intelligence mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+    crate::lock_or_recover!(mtx, "intelligence")
 }
 
 /// Acquire a read lock on an `RwLock`, recovering from a poisoned state with a warning.
+///
+/// Delegates to the shared `read_or_recover!` macro from `crate::shared::lock_utils`.
 pub fn read_guard<T>(rw: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
-    match rw.read() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("intelligence RwLock poisoned (read), recovering");
-            poisoned.into_inner()
-        }
-    }
+    crate::read_or_recover!(rw, "intelligence")
 }
 
 /// Acquire a write lock on an `RwLock`, recovering from a poisoned state with a warning.
+///
+/// Delegates to the shared `write_or_recover!` macro from `crate::shared::lock_utils`.
 pub fn write_guard<T>(rw: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
-    match rw.write() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("intelligence RwLock poisoned (write), recovering");
-            poisoned.into_inner()
-        }
-    }
+    crate::write_or_recover!(rw, "intelligence")
 }
 
 pub mod adaptive_selector;

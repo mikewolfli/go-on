@@ -18,7 +18,7 @@ pub async fn logout_payload(_server: &AcpServer, _params: Value) -> Result<Value
         if let Some(session_id) = _params.get("sessionId").and_then(Value::as_str) {
             if !session_id.is_empty() {
                 if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
-                    limiter.evict_tenant(session_id).await;
+                    limiter.evict_tenant(session_id);
                 }
             }
         }

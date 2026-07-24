@@ -422,5 +422,5 @@ fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
 }
 
 pub fn now_ts() -> i64 {
-    crate::acp::prelude::now_ts()
+    crate::shared::timestamps::now_ts()
 }

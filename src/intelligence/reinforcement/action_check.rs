@@ -283,5 +283,5 @@ fn check_json_artifact(
 }
 
 fn now_ts() -> i64 {
-    crate::acp::prelude::now_ts()
+    crate::shared::timestamps::now_ts()
 }

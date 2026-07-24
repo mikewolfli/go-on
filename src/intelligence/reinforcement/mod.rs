@@ -93,7 +93,7 @@ impl ArtifactLedger {
 }
 
 fn now_ts() -> i64 {
-    crate::acp::prelude::now_ts()
+    crate::shared::timestamps::now_ts()
 }
 
 // ── Re-exports ────────────────────────────────────────────────────────────

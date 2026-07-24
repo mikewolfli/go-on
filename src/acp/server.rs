@@ -36,7 +36,7 @@ use crate::memory::semantic_cache::SemanticResponseCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::alert_manager::AlertManager;
-use crate::observability::telemetry::TelemetryRuntime;
+use crate::observability::telemetry_enhanced::TelemetryRuntime;
 use crate::orchestration::fork_registry::{ForkConfig, ForkRegistry};
 use crate::orchestration::promotion_plugin::PromotionRegistry;
 use crate::orchestration::prompt_layers::PromptAssembler;

@@ -10,26 +10,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
-fn read_guard<'a, T>(lock: &'a RwLock<T>, label: &str) -> RwLockReadGuard<'a, T> {
-    match lock.read() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            error!("{} poisoned during read; recovering state", label);
-            poisoned.into_inner()
-        }
-    }
+fn read_guard<'a, T>(lock: &'a RwLock<T>, _label: &str) -> RwLockReadGuard<'a, T> {
+    crate::read_or_recover!(lock)
 }
 
-fn write_guard<'a, T>(lock: &'a RwLock<T>, label: &str) -> RwLockWriteGuard<'a, T> {
-    match lock.write() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            error!("{} poisoned during write; recovering state", label);
-            poisoned.into_inner()
-        }
-    }
+fn write_guard<'a, T>(lock: &'a RwLock<T>, _label: &str) -> RwLockWriteGuard<'a, T> {
+    crate::write_or_recover!(lock)
 }
 
 /// Sentinel used during brace-escaping in formatted messages.

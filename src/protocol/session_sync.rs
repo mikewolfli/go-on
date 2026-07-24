@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -694,10 +694,7 @@ impl SessionRegistry {
 /// Returns the current system time in milliseconds since the Unix epoch.
 // activated, formerly F-GAP-51
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ---------------------------------------------------------------------------

@@ -25,11 +25,9 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Lock a std::sync::Mutex with poison recovery.
+/// Uses shared `crate::lock_or_recover!` macro.
 fn lock_guard<T>(mtx: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mtx.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("continuous_learning state lock poisoned, recovering");
-        poisoned.into_inner()
-    })
+    crate::lock_or_recover!(mtx, "continuous_learning")
 }
 
 // ---------------------------------------------------------------------------
