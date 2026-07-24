@@ -3,7 +3,7 @@ members = [".", "gui", "sdk/rust", "test_i18n", "crates/mermaid-render", "crates
 resolver = "2"
 
 [workspace.package]
-version = "1.4.2"
+version = "1.4.3"
 edition = "2021"
 license = "MIT"
 

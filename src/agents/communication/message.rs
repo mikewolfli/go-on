@@ -34,7 +34,10 @@ pub enum AgentTarget {
     /// Send to the parent agent.
     ToParent,
     /// Simplified wildcard pattern: root/*/coder.
-    Pattern { prefix: Vec<String>, suffix: Vec<String> },
+    Pattern {
+        prefix: Vec<String>,
+        suffix: Vec<String>,
+    },
 }
 
 impl fmt::Display for AgentTarget {
@@ -218,14 +221,9 @@ pub enum AgentMessageKind {
         actual_tokens: u64,
     },
     /// Progress update: child → parent (streaming intermediate results).
-    Progress {
-        tokens: String,
-        partial: bool,
-    },
+    Progress { tokens: String, partial: bool },
     /// Cancel request: parent → child.
-    Cancel {
-        reason: String,
-    },
+    Cancel { reason: String },
     /// Status query: any → any.
     StatusQuery,
     /// Status response.
@@ -235,18 +233,7 @@ pub enum AgentMessageKind {
         tokens_used: u64,
     },
     /// Custom event.
-    Custom {
-        event: String,
-    },
-}
-
-/// Delivery guarantee level — used internally by AgentMessenger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeliveryGuarantee {
-    /// At most once (fire-and-forget).
-    AtMostOnce,
-    /// At least once (acknowledgement + retry, up to 3 attempts).
-    AtLeastOnce,
+    Custom { event: String },
 }
 
 #[cfg(test)]
@@ -275,7 +262,13 @@ mod tests {
             300,
         );
         assert!(msg.is_delegate());
-        if let AgentMessageKind::Delegate { task, role, token_budget, timeout_secs } = &msg.kind {
+        if let AgentMessageKind::Delegate {
+            task,
+            role,
+            token_budget,
+            timeout_secs,
+        } = &msg.kind
+        {
             assert_eq!(task, "implement feature");
             assert_eq!(role.as_deref(), Some("engineer"));
             assert_eq!(*token_budget, Some(10000));
@@ -292,12 +285,22 @@ mod tests {
             AgentTarget::ToParent,
             true,
             Some("task completed".to_string()),
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
             "detailed response".to_string(),
             5000,
         );
         assert!(msg.is_result());
-        if let AgentMessageKind::Result { success, summary, response, actual_tokens, .. } = &msg.kind {
+        if let AgentMessageKind::Result {
+            success,
+            summary,
+            response,
+            actual_tokens,
+            ..
+        } = &msg.kind
+        {
             assert!(*success);
             assert_eq!(summary.as_deref(), Some("task completed"));
             assert_eq!(response, "detailed response");
@@ -338,8 +341,11 @@ mod tests {
         let msg = AgentMessage::new(
             AgentPath::parse("root").unwrap(),
             AgentTarget::ToParent,
-            AgentMessageKind::Custom { event: "test".to_string() },
-        ).with_payload(serde_json::json!({"key": "value"}));
+            AgentMessageKind::Custom {
+                event: "test".to_string(),
+            },
+        )
+        .with_payload(serde_json::json!({"key": "value"}));
         assert_eq!(msg.payload["key"], "value");
     }
 
@@ -349,21 +355,23 @@ mod tests {
         let msg = AgentMessage::status_query(
             AgentPath::parse("root/child").unwrap(),
             AgentTarget::ToParent,
-        ).in_reply_to(parent_id.clone());
+        )
+        .in_reply_to(parent_id.clone());
         assert_eq!(msg.in_reply_to, Some(parent_id));
     }
 
     #[test]
     fn test_target_display() {
         let path = AgentPath::parse("root/coder").unwrap();
-        assert_eq!(
-            AgentTarget::Direct(path).to_string(),
-            "direct:root/coder"
-        );
+        assert_eq!(AgentTarget::Direct(path).to_string(), "direct:root/coder");
         assert_eq!(AgentTarget::Broadcast.to_string(), "broadcast");
         assert_eq!(AgentTarget::ToParent.to_string(), "to_parent");
         assert_eq!(
-            AgentTarget::Pattern { prefix: vec!["root".to_string()], suffix: vec!["coder".to_string()] }.to_string(),
+            AgentTarget::Pattern {
+                prefix: vec!["root".to_string()],
+                suffix: vec!["coder".to_string()]
+            }
+            .to_string(),
             "pattern:root/*/coder"
         );
     }

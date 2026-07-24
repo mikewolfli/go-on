@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.4.2
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.4.3
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.4.2-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.4.3-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/mikeli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikeli/go-on/actions/workflows/build.yml)
 [![Tests](https://img.shields.io/badge/tests-2164-brightgreen)]()

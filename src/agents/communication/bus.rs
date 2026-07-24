@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::sync::RwLock as SyncRwLock;
 use tokio::sync::RwLock as AsyncRwLock;
 
+use crate::agents::communication::forker::ContextForker;
+use crate::agents::communication::governor::ExecutionGovernor;
 use crate::agents::communication::message::AgentMessage;
 use crate::agents::communication::messenger::AgentMessenger;
 use crate::agents::communication::path::AgentPath;
@@ -58,6 +60,8 @@ pub struct CommunicationHealth {
 ///
 /// Design:
 /// - Owns AgentTree (hierarchical index) and AgentMessenger (message routing).
+/// - ContextForker for parent-to-child context inheritance (§6).
+/// - ExecutionGovernor for budget-aware execution control (§7).
 /// - Thread-safe via Arc<RwLock<>>.
 /// - Profile for governance.status integration.
 /// - Health endpoint for system monitoring.
@@ -65,7 +69,11 @@ pub struct CommunicationBus {
     /// Agent tree — hierarchical agent index.
     tree: Arc<AsyncRwLock<AgentTree>>,
     /// Agent messenger — message routing and delivery.
-    messenger: AgentMessenger,
+    messenger: Arc<AgentMessenger>,
+    /// Context forker — parent-to-child context inheritance (BLUE70 §6).
+    forker: ContextForker,
+    /// Execution governor — budget-aware execution control (BLUE70 §7).
+    governor: ExecutionGovernor,
     /// Metrics counters.
     metrics: Arc<SyncRwLock<CommunicationMetrics>>,
 }
@@ -86,10 +94,14 @@ impl CommunicationBus {
     /// Create a new CommunicationBus.
     pub fn new() -> Self {
         let tree = Arc::new(AsyncRwLock::new(AgentTree::new()));
-        let messenger = AgentMessenger::new(tree.clone());
+        let messenger_inner = AgentMessenger::new(tree.clone());
+        let messenger = Arc::new(messenger_inner);
+        let governor = ExecutionGovernor::new(tree.clone()).with_messenger(messenger.clone());
         Self {
             tree,
             messenger,
+            forker: ContextForker::new(),
+            governor,
             metrics: Arc::new(SyncRwLock::new(CommunicationMetrics::default())),
         }
     }
@@ -102,6 +114,16 @@ impl CommunicationBus {
     /// Get a reference to the agent messenger.
     pub fn messenger(&self) -> &AgentMessenger {
         &self.messenger
+    }
+
+    /// Get a reference to the context forker (BLUE70 §6).
+    pub fn forker(&self) -> &ContextForker {
+        &self.forker
+    }
+
+    /// Get a reference to the execution governor (BLUE70 §7).
+    pub fn governor(&self) -> &ExecutionGovernor {
+        &self.governor
     }
 
     /// Register an agent in the tree.
@@ -191,7 +213,12 @@ impl CommunicationBus {
                     poisoned.into_inner()
                 }
             };
-            (m.messages_sent, m.messages_received, m.forks_created, m.cancellations)
+            (
+                m.messages_sent,
+                m.messages_received,
+                m.forks_created,
+                m.cancellations,
+            )
         };
         let registered_agents = self.tree.read().await.len();
         CommunicationBusProfile {
@@ -262,10 +289,7 @@ mod tests {
             .await
             .unwrap();
 
-        let msg = AgentMessage::status_query(
-            make_path("root/a"),
-            AgentTarget::ToParent,
-        );
+        let msg = AgentMessage::status_query(make_path("root/a"), AgentTarget::ToParent);
         bus.send_message(msg).await.unwrap();
 
         let received = bus.messenger().recv(&make_path("root")).await;

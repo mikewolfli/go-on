@@ -5,8 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tokio::sync::watch;
 
 use crate::agents::communication::budget::AgentExecutionBudget;
+use crate::agents::communication::lifecycle::{AgentLifecycle, AgentLifecycleBuilder};
 use crate::agents::communication::message::AgentTarget;
 use crate::agents::communication::path::AgentPath;
 
@@ -69,6 +71,7 @@ impl Default for AgentNodeMetadata {
 /// - Uses `Vec<AgentPath>` for children instead of recursive HashMap.
 /// - The flat `AgentTree.nodes` map contains ALL nodes; `children` is just an index.
 /// - Clone is O(1) since AgentPath is a small Vec<String>.
+/// - `lifecycle_tx` is a watch channel sender for event-driven status propagation (BLUE71 §7).
 #[derive(Debug, Clone)]
 pub struct AgentNode {
     /// Path in the agent tree.
@@ -83,11 +86,14 @@ pub struct AgentNode {
     pub metadata: AgentNodeMetadata,
     /// Execution budget for this sub-tree.
     pub budget: AgentExecutionBudget,
+    /// Lifecycle state watch channel sender (BLUE71 §7).
+    pub lifecycle_tx: watch::Sender<AgentLifecycle>,
 }
 
 impl AgentNode {
-    /// Create a new agent node.
+    /// Create a new agent node with default lifecycle (Registered).
     pub fn new(path: AgentPath, agent_name: String, metadata: AgentNodeMetadata) -> Self {
+        let (lifecycle_tx, _) = watch::channel(AgentLifecycleBuilder::registered());
         Self {
             path,
             agent_name,
@@ -95,12 +101,28 @@ impl AgentNode {
             children: Vec::new(),
             metadata,
             budget: AgentExecutionBudget::new(),
+            lifecycle_tx,
         }
     }
 
     /// Whether this node is a leaf (no children).
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
+    }
+
+    /// Get the current lifecycle state.
+    pub fn lifecycle(&self) -> AgentLifecycle {
+        self.lifecycle_tx.borrow().clone()
+    }
+
+    /// Subscribe to lifecycle changes (watch receiver for event-driven waiting).
+    pub fn subscribe_lifecycle(&self) -> watch::Receiver<AgentLifecycle> {
+        self.lifecycle_tx.subscribe()
+    }
+
+    /// Update the lifecycle state and notify all watchers.
+    pub fn set_lifecycle(&self, new_state: AgentLifecycle) {
+        self.lifecycle_tx.send_replace(new_state);
     }
 }
 
@@ -180,9 +202,7 @@ impl AgentTree {
     /// Resolve multiple nodes matching a pattern target.
     pub fn resolve_target(&self, target: &AgentTarget) -> Vec<&AgentNode> {
         match target {
-            AgentTarget::Direct(path) => {
-                self.nodes.get(path).into_iter().collect()
-            }
+            AgentTarget::Direct(path) => self.nodes.get(path).into_iter().collect(),
             AgentTarget::Broadcast => {
                 // For broadcast from root, return all nodes
                 self.nodes.values().collect()
@@ -329,7 +349,8 @@ mod tests {
     fn test_register_and_resolve() {
         let mut tree = AgentTree::new();
         let path = make_path("root");
-        tree.register(&path, "main", AgentNodeMetadata::new()).unwrap();
+        tree.register(&path, "main", AgentNodeMetadata::new())
+            .unwrap();
         assert!(tree.resolve(&path).is_some());
         assert_eq!(tree.resolve(&path).unwrap().agent_name, "main");
     }
@@ -338,8 +359,11 @@ mod tests {
     fn test_register_duplicate_fails() {
         let mut tree = AgentTree::new();
         let path = make_path("root");
-        tree.register(&path, "main", AgentNodeMetadata::new()).unwrap();
-        assert!(tree.register(&path, "main2", AgentNodeMetadata::new()).is_err());
+        tree.register(&path, "main", AgentNodeMetadata::new())
+            .unwrap();
+        assert!(tree
+            .register(&path, "main2", AgentNodeMetadata::new())
+            .is_err());
     }
 
     #[test]
@@ -348,8 +372,10 @@ mod tests {
         let root = make_path("root");
         let child = make_path("root/research");
 
-        tree.register(&root, "main", AgentNodeMetadata::new()).unwrap();
-        tree.register(&child, "researcher", AgentNodeMetadata::new()).unwrap();
+        tree.register(&root, "main", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&child, "researcher", AgentNodeMetadata::new())
+            .unwrap();
 
         let child_node = tree.resolve(&child).unwrap();
         assert_eq!(child_node.parent_path, Some(root.clone()));
@@ -382,9 +408,12 @@ mod tests {
     #[test]
     fn test_ancestors() {
         let mut tree = AgentTree::new();
-        tree.register(&make_path("root"), "main", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/a"), "a", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/a/a1"), "a1", AgentNodeMetadata::new()).unwrap();
+        tree.register(&make_path("root"), "main", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/a"), "a", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/a/a1"), "a1", AgentNodeMetadata::new())
+            .unwrap();
 
         let ancestors = tree.ancestors(&make_path("root/a/a1"));
         assert_eq!(ancestors.len(), 2);
@@ -395,10 +424,14 @@ mod tests {
     #[test]
     fn test_remove_subtree() {
         let mut tree = AgentTree::new();
-        tree.register(&make_path("root"), "main", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/a"), "a", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/a/a1"), "a1", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/b"), "b", AgentNodeMetadata::new()).unwrap();
+        tree.register(&make_path("root"), "main", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/a"), "a", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/a/a1"), "a1", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/b"), "b", AgentNodeMetadata::new())
+            .unwrap();
 
         let removed = tree.remove_subtree(&make_path("root/a"));
         assert_eq!(removed.len(), 2); // a + a1
@@ -410,7 +443,8 @@ mod tests {
     #[test]
     fn test_resolve_target_direct() {
         let mut tree = AgentTree::new();
-        tree.register(&make_path("root"), "main", AgentNodeMetadata::new()).unwrap();
+        tree.register(&make_path("root"), "main", AgentNodeMetadata::new())
+            .unwrap();
         let target = AgentTarget::Direct(make_path("root"));
         let results = tree.resolve_target(&target);
         assert_eq!(results.len(), 1);
@@ -419,8 +453,10 @@ mod tests {
     #[test]
     fn test_resolve_target_broadcast() {
         let mut tree = AgentTree::new();
-        tree.register(&make_path("root"), "main", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/a"), "a", AgentNodeMetadata::new()).unwrap();
+        tree.register(&make_path("root"), "main", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/a"), "a", AgentNodeMetadata::new())
+            .unwrap();
         let target = AgentTarget::Broadcast;
         let results = tree.resolve_target(&target);
         assert_eq!(results.len(), 2);
@@ -428,7 +464,11 @@ mod tests {
 
     #[test]
     fn test_agent_node_leaf() {
-        let node = AgentNode::new(make_path("root/leaf"), "leaf".to_string(), AgentNodeMetadata::new());
+        let node = AgentNode::new(
+            make_path("root/leaf"),
+            "leaf".to_string(),
+            AgentNodeMetadata::new(),
+        );
         assert!(node.is_leaf());
     }
 
@@ -437,7 +477,8 @@ mod tests {
         let mut tree = AgentTree::new();
         assert!(tree.is_empty());
         assert_eq!(tree.len(), 0);
-        tree.register(&make_path("root"), "main", AgentNodeMetadata::new()).unwrap();
+        tree.register(&make_path("root"), "main", AgentNodeMetadata::new())
+            .unwrap();
         assert!(!tree.is_empty());
         assert_eq!(tree.len(), 1);
     }

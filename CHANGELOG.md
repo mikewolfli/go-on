@@ -1,5 +1,109 @@
 # Changelog
 
+## [1.4.3] - 2026-07-24
+
+### BLUE71 — Cross-System Deep Analysis & High-Impact Improvements
+
+This release implements all 9 improvement plans from BLUE71, closing the architectural gaps identified through deep comparison with Codex and Harness Gitness. Total completion rate: 100%.
+
+#### SessionActor — Tree-based Session Architecture (§2.1.1)
+
+- **SessionLifecycle**: Finite state machine — Created → Ready → Active → Draining → Archived with watch channel propagation.
+- **SessionInput**: Actor-model message queue (mpsc) with UserMessage, Cancel, and Steer variants.
+- **SessionHandle**: External interaction handle with send_message(), cancel(), steer(), lifecycle subscription.
+- **SessionState**: Owns CommunicationBus, ConversationHistory, CompactionManager, FragmentRegistry, AgentGraphStore.
+- **session_main_loop**: Persistent tokio task that processes SessionInput, manages lifecycle transitions, and triggers auto-compaction.
+- **Integration with AgentThread**: SessionActor spawns one AgentThread at startup, reuses it across all UserMessages via ChatRequest.
+- **Graceful Drain**: Cancel → send Cancel to AgentThread → lifecycle: Draining → Archived.
+
+#### AgentThread — Non-blocking Agent Spawn with Persistent Loop (§4)
+
+- **AgentThread**: Non-blocking agent execution handle with input queue, status watch channel, and JoinHandle.
+- **spawn_agent_non_blocking()**: Returns immediately with AgentThread handle. Agent runs as independent tokio task.
+- **agent_main_loop**: True persistent Actor loop — no `break` after single message. Processes UserMessage, ChatRequest, Cancel continuously.
+- **ChatRequest variant**: Accepts full message list with system prompt + options + oneshot reply channel, enabling SpawnAgentTool integration.
+- **SpawnConfig**: Configurable max_depth, max_concurrency, token_ceiling, timeout_secs.
+
+#### SpawnGuard — RAII Concurrency Slot Protection (§5)
+
+- **SpawnGuard**: Atomic counter with try_reserve/commit/release_slot/Drop. Auto-releases on panic (no leaks).
+- **Commit pattern**: Ownership transfers from caller to spawned task. Spawned task releases on completion.
+- **Integration**: SpawnGuard replaces static Semaphore in SpawnAgentTool. Also used by SessionActor for AgentThread budget.
+- **Current usage tracking**: `SpawnGuard::current_usage()` for observability.
+
+#### Event-driven State Propagation — Zero Polling (§6)
+
+- **AgentMessenger.notify**: Watch channel incremented on each message delivery.
+- **wait_for()**: Uses `notify_rx.changed().await` instead of `tokio::time::sleep` polling.
+- **AgentNode.lifecycle_tx**: Watch channel sender for lifecycle state — subscribers notified on each transition.
+
+#### AgentLifecycle — Finite State Machine (§7)
+
+- **AgentLifecycle enum**: 6 states — Registered, Idle, Active (with phase: Planning/Executing/Reflecting/Waiting), Completed, Errored, Cancelled.
+- **AgentLifecycleBuilder**: Convenient construction with automatic timing.
+- **Integration**: Every AgentNode in the tree carries `lifecycle_tx: watch::Sender<AgentLifecycle>`.
+- **Summary method**: Human-readable state description for logging and debugging.
+
+#### AgentGraphStore — Persistence Abstraction (§8)
+
+- **AgentGraphStore trait**: upsert_edge / set_edge_status / list_descendants / remove_subtree.
+- **InMemoryAgentGraphStore**: HashMap-based default — thread-safe via Arc<RwLock>.
+- **SqliteAgentGraphStore**: SQLite-backed (feature: backend-sqlite) — rusqlite + spawn_blocking pattern.
+- **Checkpoint serialization**: ConversationHistory.to_checkpoint_json() / from_checkpoint_json() — full JSON roundtrip.
+- **Integration**: SessionState holds `graph_store: Arc<dyn AgentGraphStore>`. Checkpoint stores serialized history as an edge.
+
+#### ContextFragment — Structured Context Injection (§9)
+
+- **ContextFragment trait**: role() / priority() / body() / weight() for injectable context pieces.
+- **FragmentRole**: System, Developer, User — controls where fragment appears in prompt.
+- **FragmentPriority**: Low, Normal, High, Critical — Critical always included regardless of token budget.
+- **FragmentRegistry**: register() + build_context(budget) + build_context_pairs(budget) with priority sorting and budget-aware truncation.
+- **SimpleFragment**: Built-in implementation for static string-based fragments.
+- **Integration**: SessionState.fragments populates system prompt in UserMessage handler.
+
+#### AdaptiveCompactor — Self-learning Conversation Compaction (§10)
+
+- **ConversationTurn / ConversationHistory**: Token-aware conversation tracking with drain, prepend, to_text operations.
+- **CompactionStrategy**: SlidingWindow (keep N turns), Summarize (LLM summary), Hybrid (summary + keep recent).
+- **CompactionManager**: Synchronous compaction engine — works in any context without tokio runtime.
+- **AdaptiveCompactor**: Self-learning — auto-selects strategy based on conversation length and historical quality scores.
+- **AdaptiveThreshold**: Dynamic threshold — raises on high quality (compact less), lowers on low quality (compact more aggressively).
+- **User feedback integration**: quality * 0.6 + feedback * 0.4 blended score.
+- **30 tests**: ConversationTurn, ConversationHistory, CompactionManager, AdaptiveThreshold, AdaptiveCompactor.
+
+#### GuardianReviewer — Independent Model Review (§11)
+
+- **GuardianReviewer**: Uses a separate agent instance to review tool actions before execution.
+- **GuardianDecision**: Allow / Deny / EscalateToUser — fail-closed (error/timeout/parse-failure → Deny).
+- **GuardianCircuitBreaker**: Dual-threshold — max consecutive denials (3) + max recent denials (10/50).
+- **from_registry()**: Look up review agent from AgentRegistry — returns None for graceful fallback.
+- **16 tests**: Circuit breaker, decision parsing, allow/deny/invalid/trips.
+
+#### Cross-module Refactoring & Cleanup
+
+- **agent_main_loop break removed**: Both UserMessage and ChatRequest handlers continue the loop — persistent agent.
+- **InterAgentComms stub removed**: Variant had empty handler (only logging) — removed per principle §9.
+- **SessionActor async**: spawn_session changed from sync (with block_on) to async fn.
+- **panic! elimination**: spawn_session returns Result<SessionHandle, String> instead of panicking on path parse.
+- **Root path caching**: AgentPath::parse("root") parsed once, cached in SessionState.
+- **Code cleanup**: Zero #[allow(dead_code)] or #[expect(dead_code)] in production code. Zero unused imports.
+
+#### New Files
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `src/agents/session.rs` | ~700 | SessionActor tree architecture |
+| `src/agents/graph_store.rs` | ~280 | AgentGraphStore trait + InMemory + SQLite |
+| `src/agents/fragment.rs` | ~300 | ContextFragment trait + FragmentRegistry |
+| `src/governance/guardian.rs` | ~600 | GuardianReviewer + circuit breaker |
+| `src/optimization/compaction.rs` | ~1000 | AdaptiveCompactor + conversation types |
+
+### Validation
+
+- **New tests**: ~70 new tests across all new modules.
+- **All profiles**: local, simple-server, multi-users-server, full compile cleanly.
+- **Blueprint compliance**: 100% of BLUE71 P0/P1/P2 improvements implemented.
+
 ## [1.4.2] - 2026-07-23
 
 ### BLUE70 — Multi-Agent Communication System + Architecture Consolidation

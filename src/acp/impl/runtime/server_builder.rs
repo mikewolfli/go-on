@@ -422,10 +422,12 @@ pub async fn new_acp_server(
         communication_bus.clone(),
     );
 
+    // ── BLUE71 §5: Initialise SpawnAgentTool's SpawnGuard budget ──
+    crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_budget();
+
     // Register the AgentCommunicationHook for spawn lifecycle events
-    let communication_hook = Arc::new(
-        crate::orchestration::tool::types::AgentCommunicationHook::new(communication_bus),
-    );
+    let communication_hook =
+        Arc::new(crate::orchestration::tool::types::AgentCommunicationHook::new(communication_bus));
     // Register hook with the global ToolHookRegistry so it fires on every tool execution.
     // The global tool registry is lazily initialized; this call ensures it's ready.
     let tool_registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();

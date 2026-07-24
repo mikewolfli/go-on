@@ -115,10 +115,9 @@ pub use health::{
     ComponentReport, RuntimeHealthcheckReport,
 };
 pub use learning::{
-    persist_knowledge_insight_event, persist_workflow_learning_event, ExperienceKnowledgeBase,
-    FailurePattern, KnowledgeBusArtifact, KnowledgeInsightArtifact, LearningFeedbackSystem,
-    LearningPattern, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
-    WorkflowLearningBusArtifact, WorkflowLearningEvent,
+    persist_knowledge_insight_event, persist_workflow_learning_event, KnowledgeBusArtifact,
+    KnowledgeInsightArtifact, LearningFeedbackSystem, LearningPattern, RewardFunction,
+    RlTaskExecutionMetrics, WorkflowLearningBusArtifact, WorkflowLearningEvent,
 };
 
 pub use task_plan::{

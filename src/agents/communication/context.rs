@@ -9,6 +9,40 @@ use std::path::PathBuf;
 
 use crate::agents::communication::path::AgentPath;
 
+// ── BLUE70 §6.2: Generic KV cache provider interface ───────────────
+
+/// Generic KV cache provider for prefix-based cache reuse across models.
+///
+/// Each model provider implements this trait to advertise cache fingerprints
+/// and attempt to attach cached prefixes:
+/// - DeepSeekProvider → native prefix caching
+/// - AnthropicProvider → Prompt Caching API
+/// - CacheBlendProvider → CacheBlend technique
+pub trait KvCacheProvider: Send + Sync {
+    /// Return the current cache fingerprint, if available.
+    fn cache_fingerprint(&self) -> Option<String>;
+    /// Try to attach a previously computed cache by fingerprint.
+    /// Returns true if the cache was successfully attached.
+    fn try_attach_cache(&self, fingerprint: &str) -> bool;
+}
+
+/// No-op KV cache provider that always returns None / false.
+/// Used as a default when no model-specific provider is configured.
+#[cfg(test)]
+pub struct NoOpKvCacheProvider;
+
+#[cfg(test)]
+impl KvCacheProvider for NoOpKvCacheProvider {
+    fn cache_fingerprint(&self) -> Option<String> {
+        None
+    }
+    fn try_attach_cache(&self, _fingerprint: &str) -> bool {
+        false
+    }
+}
+
+// ── ForkContext ───────────────────────────────────────────────────
+
 /// Context snapshot: child agents inherit the parent agent's runtime state.
 ///
 /// Design notes:
@@ -83,21 +117,6 @@ impl ForkContext {
     }
 }
 
-/// Generic trait for KV cache providers.
-///
-/// Allows any model provider to participate in cache reuse:
-/// - DeepSeekProvider → native prefix caching
-/// - AnthropicProvider → Prompt Caching API
-/// - CacheBlendProvider → CacheBlend technique
-pub trait KvCacheProvider: Send + Sync {
-    /// Get the current KV cache fingerprint, if available.
-    fn cache_fingerprint(&self) -> Option<String>;
-
-    /// Try to attach to a cached prefix by fingerprint.
-    /// Returns true if the cache was successfully attached.
-    fn try_attach_cache(&self, fingerprint: &str) -> bool;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,17 +139,12 @@ mod tests {
             .with_kv_cache_fingerprint("fp_abc123".to_string());
 
         assert!(!ctx.is_empty());
-        assert_eq!(ctx.conversation_summary.as_deref(), Some("Research completed"));
+        assert_eq!(
+            ctx.conversation_summary.as_deref(),
+            Some("Research completed")
+        );
         assert_eq!(ctx.principles.len(), 2);
         assert_eq!(ctx.inherited_memories.len(), 1);
         assert_eq!(ctx.kv_cache_fingerprint.as_deref(), Some("fp_abc123"));
-    }
-
-    #[test]
-    fn test_kv_cache_provider_trait_object() {
-        // Compile-time check: KvCacheProvider can be used as a trait object.
-        fn accepts_provider(_p: &dyn KvCacheProvider) {}
-        // This test passes if it compiles.
-        assert!(true);
     }
 }

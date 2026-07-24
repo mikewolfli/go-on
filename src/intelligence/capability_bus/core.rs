@@ -11,8 +11,13 @@
 //!   3. LearningOptimizationBus (merged WorkflowLearningBus + OptimizationBus)
 //!   4. CapabilityGraph       (existing)
 //!   5. HarnessBus            (existing)
-//!   6-12. ToolBus, ObservabilityBus, OptimizationBus, MemoryBus,
-//!          ProtocolBus, OrchestrationBus, DistributedMemoryBus
+//!   6.  ToolBus
+//!   7.  ObservabilityBus
+//!   8.  OptimizationBus
+//!   9.  MemoryBus
+//!  10.  ProtocolBus
+//!  11.  OrchestrationBus
+//!  12.  DistributedMemoryBus
 //!
 //! # Module structure
 //!
@@ -56,9 +61,9 @@ use crate::intelligence::discovery::DiscoveryCenter;
 use crate::intelligence::evolution_graph::EvolutionGraph;
 
 // BLUE70: Consolidated buses
-use crate::intelligence::capability_bus::unified_knowledge_bus::UnifiedKnowledgeBus;
-use crate::intelligence::capability_bus::reinforcement_bus::ReinforcementBus;
 use crate::intelligence::capability_bus::learning_optimization_bus::LearningOptimizationBus;
+use crate::intelligence::capability_bus::reinforcement_bus::ReinforcementBus;
+use crate::intelligence::capability_bus::unified_knowledge_bus::UnifiedKnowledgeBus;
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::intelligence::hot_failover::HotFailover;
@@ -135,21 +140,7 @@ pub struct WorkflowLearningEvent {
     pub timestamp_ms: u64,
 }
 
-/// Builder
-// ---------------------------------------------------------------------------
-// KnowledgeInsight — reusable insight type (preserved for external consumers)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct KnowledgeInsight {
-    pub id: String,
-    pub pattern: String,
-    pub solution_summary: String,
-    pub applicability_tags: Vec<String>,
-    pub confidence: f64,
-    pub created_ms: u64,
-}
-
+// (Builder section below)
 // ---------------------------------------------------------------------------
 // CapabilityBus — the top-level scheduling coordinator
 // ---------------------------------------------------------------------------
@@ -1567,8 +1558,9 @@ pub(crate) mod tests {
             .unified_knowledge_bus
             .read()
             .map(|ukb| {
-                ukb.all_reputations().into_iter().map(|r| {
-                    crate::intelligence::reputation::ReputationRecord {
+                ukb.all_reputations()
+                    .into_iter()
+                    .map(|r| crate::intelligence::reputation::ReputationRecord {
                         agent: r.agent.clone(),
                         score: r.score,
                         total_tasks: r.total_tasks,
@@ -1576,8 +1568,8 @@ pub(crate) mod tests {
                         failure_count: r.total_tasks.saturating_sub(r.successful_tasks),
                         consecutive_failures: 0,
                         last_updated_ms: 0,
-                    }
-                }).collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         super::SensingOutput {

@@ -204,13 +204,9 @@ mod tests {
         );
 
         let cancel = CancellationToken::new();
-        let mut handle: Option<tokio::task::JoinHandle<()>> = None;
-        // Inlined equivalent of start_auto_migrate_task (which was removed
-        // as part of startup performance fix — the production version now
-        // lives in start_background_tasks() in src/acp/background.rs).
         let mp = Arc::clone(&persistence);
         let cancel_clone = cancel.clone();
-        let h = tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(300));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             // First tick completes immediately per tokio docs
@@ -233,8 +229,6 @@ mod tests {
         });
         cancel.cancel();
         tokio::time::sleep(Duration::from_millis(50)).await;
-        handle = Some(h);
-        let handle = handle.expect("handle should be set");
         assert!(
             handle.is_finished(),
             "task should finish promptly after cancellation"

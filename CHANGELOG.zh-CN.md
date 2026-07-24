@@ -1,5 +1,109 @@
 # 更新日志
 
+## [1.4.3] - 2026-07-24
+
+### BLUE71 — 三系统深度对比分析与高收益改进
+
+本版本实现了 BLUE71 全部 9 个改进方案，补齐了与 Codex 和 Harness Gitness 深度对比发现的架构差距。总完成率：100%。
+
+#### SessionActor — 树状会话架构（§2.1.1）
+
+- **SessionLifecycle**：有限状态机 — Created → Ready → Active → Draining → Archived，通过 watch channel 传播。
+- **SessionInput**：Actor 模型消息队列 (mpsc)，支持 UserMessage、Cancel、Steer 三种变体。
+- **SessionHandle**：外部交互句柄，提供 send_message()、cancel()、steer()、生命周期订阅。
+- **SessionState**：持有 CommunicationBus、ConversationHistory、CompactionManager、FragmentRegistry、AgentGraphStore。
+- **session_main_loop**：持久 tokio 任务，处理 SessionInput、管理生命周期转换、触发自动压缩。
+- **AgentThread 集成**：会话启动时创建 1 个 AgentThread，所有 UserMessage 通过 ChatRequest 复用。
+- **优雅排空**：Cancel → 发送 Cancel 给 AgentThread → 生命周期：Draining → Archived。
+
+#### AgentThread — 非阻塞 Agent 生成 + 持久循环（§4）
+
+- **AgentThread**：非阻塞 Agent 执行句柄，含输入队列、状态 watch channel、JoinHandle。
+- **spawn_agent_non_blocking()**：立即返回 AgentThread 句柄，Agent 作为独立 tokio 任务运行。
+- **agent_main_loop**：真正的持久 Actor 循环 — 单条消息后不 break。连续处理 UserMessage、ChatRequest、Cancel。
+- **ChatRequest 变体**：接受完整消息列表（含 system prompt）+ 选项 + oneshot 回复通道，为 SpawnAgentTool 集成铺路。
+- **SpawnConfig**：可配置 max_depth、max_concurrency、token_ceiling、timeout_secs。
+
+#### SpawnGuard — RAII 并发槽位保护（§5）
+
+- **SpawnGuard**：原子计数器，支持 try_reserve/commit/release_slot/Drop。panic 时自动释放（无泄漏）。
+- **提交模式**：所有权从调用者转移给生成的线程，线程完成时释放。
+- **集成**：SpawnGuard 替换了 SpawnAgentTool 中的静态 Semaphore，也被 SessionActor 用于 AgentThread 预算。
+- **当前使用量追踪**：`SpawnGuard::current_usage()` 用于可观测性。
+
+#### 事件驱动状态传播 — 零轮询（§6）
+
+- **AgentMessenger.notify**：每条消息投递时递增的 watch channel。
+- **wait_for()**：使用 `notify_rx.changed().await` 替代 `tokio::time::sleep` 轮询。
+- **AgentNode.lifecycle_tx**：生命周期状态的 watch channel 发送端 — 订阅者在每次状态转换时收到通知。
+
+#### AgentLifecycle — 有限状态机（§7）
+
+- **AgentLifecycle**：6 种状态 — Registered、Idle、Active（含 Planning/Executing/Reflecting/Waiting 阶段）、Completed、Errored、Cancelled。
+- **AgentLifecycleBuilder**：便捷构造器，自动计时。
+- **集成**：AgentTree 中的每个 AgentNode 都携带 `lifecycle_tx: watch::Sender<AgentLifecycle>`。
+- **摘要方法**：人类可读的状态描述，用于日志和调试。
+
+#### AgentGraphStore — 持久化抽象（§8）
+
+- **AgentGraphStore trait**：upsert_edge / set_edge_status / list_descendants / remove_subtree。
+- **InMemoryAgentGraphStore**：基于 HashMap 的默认实现 — 通过 Arc<RwLock> 线程安全。
+- **SqliteAgentGraphStore**：SQLite 实现（feature: backend-sqlite）— rusqlite + spawn_blocking 模式。
+- **Checkpoint 序列化**：ConversationHistory.to_checkpoint_json() / from_checkpoint_json() — 完整 JSON 往返。
+- **集成**：SessionState 持有 `graph_store: Arc<dyn AgentGraphStore>`。Checkpoint 将序列化历史作为边存储。
+
+#### ContextFragment — 结构化上下文注入（§9）
+
+- **ContextFragment trait**：role() / priority() / body() / weight() 用于可注入的上下文片段。
+- **FragmentRole**：System, Developer, User — 控制片段在提示中的位置。
+- **FragmentPriority**：Low, Normal, High, Critical — Critical 总是包含，不受 token 预算限制。
+- **FragmentRegistry**：register() + build_context(budget) + build_context_pairs(budget)，支持优先级排序和预算感知截断。
+- **SimpleFragment**：基于静态字符串的片段内置实现。
+- **集成**：SessionState.fragments 在 UserMessage handler 中填充 system prompt。
+
+#### AdaptiveCompactor — 自适应对话压缩（§10）
+
+- **ConversationTurn / ConversationHistory**：Token 感知的对话追踪，支持 drain、prepend、to_text 操作。
+- **CompactionStrategy**：SlidingWindow（保留 N 轮）、Summarize（LLM 摘要）、Hybrid（摘要 + 保留最近）。
+- **CompactionManager**：同步压缩引擎 — 无需 tokio runtime，可在任何上下文中使用。
+- **AdaptiveCompactor**：自适应学习 — 基于对话长度和历史质量评分自动选择策略。
+- **AdaptiveThreshold**：动态阈值 — 高质量时提高（少压缩），低质量时降低（更积极压缩）。
+- **用户反馈融合**：quality * 0.6 + feedback * 0.4 混合评分。
+- **30 个测试**：ConversationTurn、ConversationHistory、CompactionManager、AdaptiveThreshold、AdaptiveCompactor。
+
+#### GuardianReviewer — 独立模型审查（§11）
+
+- **GuardianReviewer**：使用独立 Agent 实例在执行前审查工具操作。
+- **GuardianDecision**：Allow / Deny / EscalateToUser — 故障关闭（错误/超时/解析失败 → Deny）。
+- **GuardianCircuitBreaker**：双阈值 — 最大连续拒绝（3）+ 最大近期拒绝（10/50）。
+- **from_registry()**：从 AgentRegistry 查找审查 agent — 返回 None 用于优雅降级。
+- **16 个测试**：熔断器、决策解析、允许/拒绝/无效/触发。
+
+#### 跨模块重构与清理
+
+- **agent_main_loop break 移除**：UserMessage 和 ChatRequest handler 现继续循环 — 持久 agent。
+- **InterAgentComms 占位移除**：该变体只有空 handler（仅日志）— 按原则 §9 移除。
+- **SessionActor 异步化**：spawn_session 从 sync（含 block_on）改为 async fn。
+- **panic! 消除**：spawn_session 返回 Result<SessionHandle, String> 而非在路径解析时 panic。
+- **根路径缓存**：AgentPath::parse("root") 只解析一次，缓存在 SessionState 中。
+- **代码清理**：生产代码中零 #[allow(dead_code)] 或 #[expect(dead_code)]。零未使用导入。
+
+#### 新增文件
+
+| 文件 | 行数 | 描述 |
+|------|------|------|
+| `src/agents/session.rs` | ~700 | SessionActor 树状架构 |
+| `src/agents/graph_store.rs` | ~280 | AgentGraphStore trait + 内存 + SQLite |
+| `src/agents/fragment.rs` | ~300 | ContextFragment trait + FragmentRegistry |
+| `src/governance/guardian.rs` | ~600 | GuardianReviewer + 熔断器 |
+| `src/optimization/compaction.rs` | ~1000 | AdaptiveCompactor + 对话类型 |
+
+### 验证
+
+- **新测试**：所有新增模块约 70 个新测试。
+- **所有 Profile**：local、simple-server、multi-users-server、full 全部编译通过。
+- **蓝本符合性**：BLUE71 的 P0/P1/P2 改进 100% 实现。
+
 ## [1.4.1] - 2026-07-21
 
 ### 架构 — Transport Trait 第四阶段完成 + i18n 统一

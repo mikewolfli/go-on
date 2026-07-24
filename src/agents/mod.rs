@@ -24,8 +24,10 @@ pub mod factory;
     feature = "multi-users-server"
 ))]
 pub mod fireworks;
+pub mod fragment; // BLUE71 §9: ContextFragment injection
 pub mod gemini;
 pub mod glm;
+pub mod graph_store; // BLUE71 §8: AgentGraphStore persistence
 pub mod groq;
 pub mod hunyuan;
 pub mod kimi;
@@ -43,6 +45,7 @@ pub mod progress_reporter;
 pub mod qianfan;
 pub mod replicate;
 pub mod self_evolution_agent; // GAP-B52-03: Self-Evolution Agent
+pub mod session; // GAP-BLUE71: SessionActor tree architecture
 pub mod siliconflow;
 pub mod skywork;
 pub mod sse_compressor;

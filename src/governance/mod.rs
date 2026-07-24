@@ -7,6 +7,7 @@ pub mod approval_engine;
 pub mod approval_learning;
 pub mod audit;
 pub mod drift;
+pub mod guardian;
 pub mod hardening;
 pub mod harness_bus;
 pub mod pua;

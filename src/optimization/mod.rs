@@ -4,5 +4,7 @@
 //! of the ACP proxy system, including:
 //!
 //! - **Failure Prevention**: Proactive measures to prevent system failures
+//! - **Conversation Compaction**: Token-efficient history management (BLUE71 §10)
 
+pub mod compaction;
 pub mod failure_prevention;

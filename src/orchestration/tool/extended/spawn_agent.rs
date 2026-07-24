@@ -8,7 +8,7 @@
 //! - Agent name is restricted to known agents from the registry (no arbitrary code injection).
 //! - Model override is passed as a chat option, not as arbitrary command execution.
 //! - The tool has a hard-coded maximum timeout of 300 seconds.
-//! - Global concurrency semaphore prevents unbounded sub-agent spawning.
+//! - Global SpawnGuard budget prevents unbounded sub-agent spawning (RAII).
 //!
 //! # Sub-agent lifecycle
 //! - role classification (7 types, CodeWhale-compatible)
@@ -16,7 +16,7 @@
 //! - structured output (SUMMARY/CHANGES/EVIDENCE/RISKS/BLOCKERS)
 //! - timeout guard with heartbeat-style cancellation
 //! - transient-failure retry with backoff (up to 2 retries)
-//! - global concurrency cap (SEMAPHORE: max 128 concurrent)
+//! - global concurrency cap (SpawnGuard: max 128 concurrent)
 //!
 //! # BLUE70 CommunicationBus integration
 //! - Each spawn is registered in the CommunicationBus AgentTree for observability.
@@ -26,13 +26,16 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::mpsc;
 use tracing::{info, warn};
+
+use crate::agents::communication::agent_thread::SpawnGuard;
 
 use crate::agent::{AgentRegistry, Message, StreamingSender};
 use crate::agents::communication::bus::CommunicationBus;
@@ -43,7 +46,7 @@ use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 
 // ---------------------------------------------------------------------------
-// Global registry + CommunicationBus + semaphore — initialised at server startup
+// Global registry + CommunicationBus + SpawnGuard budget — initialised at server startup
 // ---------------------------------------------------------------------------
 
 static SPAWN_AGENT_REGISTRY: OnceLock<Arc<AgentRegistry>> = OnceLock::new();
@@ -54,9 +57,12 @@ static SPAWN_COMMUNICATION_BUS: OnceLock<Arc<CommunicationBus>> = OnceLock::new(
 /// Monotonically increasing sequence counter for fork IDs.
 static SPAWN_FORK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Global concurrency semaphore — limits total in-flight sub-agent spawns.
-/// Set to 128 max concurrent (matching CodeWhale's concurrency ceiling).
-static SPAWN_SEMAPHORE: Semaphore = Semaphore::const_new(128);
+/// Global concurrency budget counter — tracks current in-flight spawns (0 = none).
+/// Paired with SPAWN_MAX_CONCURRENCY for the hard limit.
+static SPAWN_BUDGET: OnceLock<Arc<AtomicU64>> = OnceLock::new();
+
+/// Maximum concurrent sub-agent spawns. Default 128.
+const DEFAULT_MAX_CONCURRENCY: u64 = 128;
 
 /// Initialise the global `AgentRegistry` reference used by `SpawnAgentTool`.
 pub fn init_spawn_agent_registry(registry: Arc<AgentRegistry>) {
@@ -69,6 +75,17 @@ pub fn init_spawn_agent_registry(registry: Arc<AgentRegistry>) {
 /// built but before any tool invocations.
 pub fn init_spawn_agent_communication_bus(bus: Arc<CommunicationBus>) {
     SPAWN_COMMUNICATION_BUS.set(bus).ok();
+}
+
+/// Initialise the global concurrency budget for SpawnGuard (BLUE71 §5).
+/// Budget starts at 0; each SpawnGuard::try_reserve increments atomically.
+pub fn init_spawn_agent_budget() {
+    SPAWN_BUDGET.set(Arc::new(AtomicU64::new(0))).ok();
+}
+
+/// Get the global SpawnGuard budget, if initialised.
+fn spawn_budget() -> Option<&'static Arc<AtomicU64>> {
+    SPAWN_BUDGET.get()
 }
 
 fn agent_registry() -> Result<&'static Arc<AgentRegistry>> {
@@ -99,10 +116,9 @@ impl Tool for SpawnAgentTool {
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // This tool is inherently async (agent chat is async). The sync `run()`
-        // uses try_current() per principle.md rule 24 — direct
-        // Handle::current().block_on() is forbidden in production hot paths.
-        // Validate parameters FIRST so bad-input tests get a proper error
-        // before attempting to access the global registry.
+        // uses a dedicated blocking runtime to avoid block_on on an async
+        // runtime (principle #23/#24). Async callers should always use run_async.
+        // Validate parameters FIRST so bad-input tests get a proper error.
         let task = input.payload["task"]
             .as_str()
             .map(|s| s.to_string())
@@ -130,30 +146,19 @@ impl Tool for SpawnAgentTool {
         let role = input.payload["role"].as_str().map(|s| s.to_string());
         let token_budget = input.payload["token_budget"].as_u64();
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(execute_spawn(
-                registry,
-                task,
-                agent_name,
-                model_override,
-                timeout_secs,
-                role,
-                token_budget,
-            )),
-            Err(_) => {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow::anyhow!("failed to create temp runtime: {}", e))?;
-                rt.block_on(execute_spawn(
-                    registry,
-                    task,
-                    agent_name,
-                    model_override,
-                    timeout_secs,
-                    role,
-                    token_budget,
-                ))
-            }
-        }
+        // Use a dedicated blocking runtime to avoid
+        // Handle::current().block_on() on an async runtime thread.
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| anyhow::anyhow!("failed to create temp runtime: {}", e))?;
+        rt.block_on(execute_spawn(
+            registry,
+            task,
+            agent_name,
+            model_override,
+            timeout_secs,
+            role,
+            token_budget,
+        ))
     }
 
     fn run_async(
@@ -252,11 +257,35 @@ async fn execute_spawn(
         fork_seq,
     );
 
-    // Acquire concurrency permit (release on drop).
-    let _permit = SPAWN_SEMAPHORE
-        .acquire()
-        .await
-        .map_err(|_| anyhow::anyhow!("failed to acquire sub-agent concurrency permit"))?;
+    // ── BLUE70: ExecutionGovernor limit check ──────────────────────
+    // Check limits via the CommunicationBus ExecutionGovernor before spawning.
+    if let Some(bus) = communication_bus() {
+        let budget = crate::agents::communication::budget::AgentExecutionBudget::new()
+            .with_max_depth(10)
+            .with_max_concurrency(128);
+        let limit_check = bus
+            .governor()
+            .check_limits(
+                &AgentPath::parse(&format!("spawn/{}", fork_id))
+                    .unwrap_or_else(|_| AgentPath::parse("spawn").unwrap()),
+                &budget,
+            )
+            .await;
+        if let crate::agents::communication::governor::LimitCheckResult::Denied(ref reason) =
+            limit_check
+        {
+            anyhow::bail!("spawn denied by ExecutionGovernor: {}", reason);
+        }
+    }
+    // ────────────────────────────────────────────────────────────────────
+
+    // Acquire RAII concurrency slot via SpawnGuard (BLUE71 §5).
+    // Auto-releases on drop (even during panic). Uses global budget counter.
+    let budget_arc = spawn_budget()
+        .ok_or_else(|| anyhow::anyhow!("SpawnGuard budget not initialised"))?
+        .clone();
+    let _guard = SpawnGuard::try_reserve(budget_arc, DEFAULT_MAX_CONCURRENCY)
+        .map_err(|e| anyhow::anyhow!("sub-agent concurrency limit: {}", e))?;
 
     // 1. Resolve agent from registry.
     let agent = registry
@@ -267,17 +296,18 @@ async fn execute_spawn(
     // Register the spawn in the agent tree for observability and future
     // tree-based routing. Uses fork_id as the agent path segment.
     let agent_path_str = format!("spawn/{}", fork_id);
-    if let Ok(child_path) = AgentPath::parse(&agent_path_str) {
+    let child_path = AgentPath::parse(&agent_path_str).ok();
+    if let Some(ref cp) = child_path {
         if let Some(bus) = communication_bus() {
             let metadata = AgentNodeMetadata::new()
                 .with_role(role.as_deref().unwrap_or("general"))
                 .with_model(model_override.as_deref().unwrap_or(&agent_name));
-            let _ = bus.register_agent(&child_path, &agent_name, metadata).await;
+            let _ = bus.register_agent(cp, &agent_name, metadata).await;
 
             // Send a Delegate message for observability tracing
             let delegate_msg = AgentMessage::delegate(
-                AgentPath::parse("root").unwrap_or_else(|_| child_path.clone()),
-                AgentTarget::Direct(child_path),
+                AgentPath::parse("root").unwrap_or_else(|_| cp.clone()),
+                AgentTarget::Direct(cp.clone()),
                 task.clone(),
                 role.clone(),
                 token_budget,
@@ -289,8 +319,56 @@ async fn execute_spawn(
     }
     // ────────────────────────────────────────────────────────────────────
 
+    // ── BLUE70: Use ContextForker for context inheritance ───────────
+    // Use the CommunicationBus ContextForker to create the ForkContext,
+    // which provides proper parent-to-child context inheritance with
+    // KV cache fingerprint support.
+    let fork_context = child_path.as_ref().and_then(|cp| {
+        let bus = communication_bus()?;
+        let parent_path = AgentPath::parse("root").ok()?;
+        Some(bus.forker().fork(
+            &parent_path,
+            cp,
+            |_| crate::agents::communication::forker::ParentContext {
+                conversation_summary: None,
+                principles: vec![
+                    "Follow the principles defined in docs/blueprints/principle.md".to_string(),
+                    "Complete the assigned task thoroughly with structured output".to_string(),
+                ],
+                allowed_base_dir: None,
+                memories: Vec::new(),
+            },
+            None,
+        ))
+    });
+    // ────────────────────────────────────────────────────────────────────
+
     // 2. Build messages with role-specific system prompt.
-    let system_prompt = build_role_prompt(role.as_deref());
+    //    Include ForkContext summary/principles when available.
+    let system_prompt = {
+        let base = build_role_prompt(role.as_deref());
+        if let Some(ref ctx) = fork_context {
+            let mut extra = String::new();
+            if !ctx.principles.is_empty() {
+                extra.push_str("\n\nInherited principles:");
+                for p in &ctx.principles {
+                    extra.push_str("\n- ");
+                    extra.push_str(p);
+                }
+            }
+            if let Some(ref summary) = ctx.conversation_summary {
+                extra.push_str("\n\nParent conversation summary:\n");
+                extra.push_str(summary);
+            }
+            if extra.is_empty() {
+                base
+            } else {
+                format!("{}{}", base, extra)
+            }
+        } else {
+            base
+        }
+    };
     let messages = vec![
         Message {
             role: "system".to_string(),
@@ -589,7 +667,6 @@ mod tests {
     use serde_json::json;
 
     /// A minimal echo agent for testing.
-    #[expect(dead_code, reason = "used as Agent trait impl in spawn tests")]
     struct EchoAgent;
 
     #[async_trait]
@@ -672,13 +749,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_agent_concurrency_permit_acquires_and_releases() {
-        let permit = SPAWN_SEMAPHORE.acquire().await;
-        assert!(permit.is_ok());
-        drop(permit);
+    async fn spawn_agent_guard_reserves_and_releases() {
+        let budget = Arc::new(AtomicU64::new(0));
 
-        let permit = SPAWN_SEMAPHORE.acquire().await;
-        assert!(permit.is_ok());
+        let guard = SpawnGuard::try_reserve(budget.clone(), 128).unwrap();
+        assert_eq!(SpawnGuard::current_usage(&budget), 1);
+        // Drop guard releases the slot automatically
+        drop(guard);
+        assert_eq!(SpawnGuard::current_usage(&budget), 0);
+
+        let guard = SpawnGuard::try_reserve(budget.clone(), 128).unwrap();
+        assert_eq!(SpawnGuard::current_usage(&budget), 1);
+        drop(guard);
     }
 
     #[test]
