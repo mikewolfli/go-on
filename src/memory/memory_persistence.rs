@@ -606,7 +606,7 @@ fn query_all(
     params: &[&dyn rusqlite::types::ToSql],
 ) -> Result<Vec<MemoryEntry>> {
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query(params)?;
+    let mut rows = stmt.query(params)?;
     let mut results = Vec::new();
     while let Some(row) = rows.next()? {
         results.push(row_to_memory_entry(row)?);
@@ -750,7 +750,8 @@ impl WarmStore {
             .embedding
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default());
-        #[cfg(feature = "backend-sqlite")] {
+        #[cfg(feature = "backend-sqlite")]
+        {
             let entry_id = entry.id.clone();
             let tier_label = entry.tier.label().to_string();
             let class = entry.class.clone();
@@ -779,7 +780,8 @@ impl WarmStore {
                         access_count = excluded.access_count,
                         session_id = excluded.session_id,
                         user_id = excluded.user_id",
-                    columns = WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+                    columns = WARM_MEMORY_COLUMNS,
+                    p = PARAM_PREFIX
                 );
                 conn.execute(
                     &sql,
@@ -798,10 +800,13 @@ impl WarmStore {
                     ],
                 )?;
                 conn.execute(
-                    &format!("DELETE FROM warm_memory WHERE id IN (
+                    &format!(
+                        "DELETE FROM warm_memory WHERE id IN (
                         SELECT id FROM warm_memory ORDER BY accessed_at ASC \
                         LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - {p}1)
-                    )", p = PARAM_PREFIX),
+                    )",
+                        p = PARAM_PREFIX
+                    ),
                     rusqlite::params![max_entries as i64],
                 )?;
                 Ok(())
@@ -809,7 +814,8 @@ impl WarmStore {
             .await
             .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
         }
-        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+        {
             let tier_label = entry.tier.label().to_string();
             let session_id = entry.session_id.clone();
             let user_id = entry.user_id.clone();
@@ -831,7 +837,8 @@ impl WarmStore {
                         access_count = EXCLUDED.access_count,
                         session_id = EXCLUDED.session_id,
                         user_id = EXCLUDED.user_id",
-                    columns = WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+                    columns = WARM_MEMORY_COLUMNS,
+                    p = PARAM_PREFIX
                 );
                 conn.execute(
                     &sql,
@@ -850,10 +857,13 @@ impl WarmStore {
                     ],
                 )?;
                 conn.execute(
-                    &format!("DELETE FROM warm_memory WHERE id IN (
+                    &format!(
+                        "DELETE FROM warm_memory WHERE id IN (
                         SELECT id FROM warm_memory ORDER BY accessed_at ASC \
                         LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - {p}1)
-                    )", p = PARAM_PREFIX),
+                    )",
+                        p = PARAM_PREFIX
+                    ),
                     &[&(max_entries as i64)],
                 )?;
                 Ok(())
@@ -875,9 +885,11 @@ impl WarmStore {
             });
             let sql = format!(
                 "SELECT {} FROM warm_memory WHERE id = {p}1",
-                WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+                WARM_MEMORY_COLUMNS,
+                p = PARAM_PREFIX
             );
-            #[cfg(feature = "backend-sqlite")] {
+            #[cfg(feature = "backend-sqlite")]
+            {
                 let mut stmt = conn.prepare(&sql)?;
                 let mut rows = stmt.query(rusqlite::params![id])?;
                 match rows.next()? {
@@ -885,7 +897,8 @@ impl WarmStore {
                     None => Ok(None),
                 }
             }
-            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            {
                 let rows = conn.query(&sql, &[&id])?;
                 match rows.first() {
                     Some(row) => Ok(Some(row_to_memory_entry(row))),
@@ -908,11 +921,13 @@ impl WarmStore {
                 poisoned.into_inner()
             });
             let sql = format!("DELETE FROM warm_memory WHERE id = {p}1", p = PARAM_PREFIX);
-            #[cfg(feature = "backend-sqlite")] {
+            #[cfg(feature = "backend-sqlite")]
+            {
                 let affected = conn.execute(&sql, rusqlite::params![id])?;
                 Ok(affected > 0)
             }
-            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            {
                 let affected = conn.execute(&sql, &[&id])?;
                 Ok(affected > 0)
             }
@@ -935,7 +950,8 @@ impl WarmStore {
             let sql = format!(
                 "SELECT {} FROM warm_memory WHERE usefulness >= {p}1 \
                  ORDER BY usefulness DESC LIMIT {p}2",
-                WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+                WARM_MEMORY_COLUMNS,
+                p = PARAM_PREFIX
             );
             query_all(&conn, &sql, &[&min_usefulness, &(limit as i64)])
         })
@@ -952,11 +968,14 @@ impl WarmStore {
                 tracing::warn!("warm store mutex poisoned, recovering");
                 poisoned.into_inner()
             });
-            #[cfg(feature = "backend-sqlite")] {
-                let count: i64 = conn.query_row("SELECT COUNT(*) FROM warm_memory", [], |row| row.get(0))?;
+            #[cfg(feature = "backend-sqlite")]
+            {
+                let count: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM warm_memory", [], |row| row.get(0))?;
                 Ok(count as usize)
             }
-            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            {
                 let row = conn.query_one("SELECT COUNT(*) FROM warm_memory", &[])?;
                 let count: i64 = row.get(0);
                 Ok(count as usize)
@@ -975,11 +994,13 @@ impl WarmStore {
                 .lock()
                 .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
             let sql = format!("SELECT {} FROM warm_memory", WARM_MEMORY_COLUMNS);
-            #[cfg(feature = "backend-sqlite")] {
+            #[cfg(feature = "backend-sqlite")]
+            {
                 let empty_params: [&dyn rusqlite::types::ToSql; 0] = [];
                 query_all(&conn, &sql, &empty_params)
             }
-            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            {
                 let empty_params: [&(dyn postgres::types::ToSql + Sync); 0] = [];
                 query_all(&conn, &sql, &empty_params)
             }
@@ -1002,7 +1023,8 @@ impl WarmStore {
             let sql = format!(
                 "SELECT {} FROM warm_memory WHERE session_id = {p}1 \
                  ORDER BY accessed_at DESC LIMIT {p}2",
-                WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+                WARM_MEMORY_COLUMNS,
+                p = PARAM_PREFIX
             );
             query_all(&conn, &sql, &[&session_id, &(limit as i64)])
         })

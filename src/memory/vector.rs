@@ -19,6 +19,15 @@ use std::sync::Mutex as StdMutex;
 use std::sync::Once;
 use tokio::task::spawn_blocking;
 
+/// Parameter placeholder prefix for the active backend.
+#[cfg(not(feature = "backend-postgres"))]
+const PARAM_PREFIX: &str = "?";
+#[cfg(feature = "backend-postgres")]
+const PARAM_PREFIX: &str = "$";
+
+/// Column list for `phase_summary` (shared between backends).
+const PHASE_SUMMARY_COLUMNS: &str = "phase, summary_text, updated_at";
+
 #[cfg(not(feature = "backend-postgres"))]
 use crate::memory::embedding_provider::{
     local_hash_embed, ConfigurableEmbeddingProvider, EmbeddingProvider,
@@ -733,7 +742,7 @@ impl VectorStore {
 
         // Collect results within a locked scope, then release the lock
         // before doing sorting/processing (minimizes lock duration).
-        let mut scored = {
+        let scored = {
             let conn = self.conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'search', recovering");
                 poisoned.into_inner()
@@ -833,18 +842,7 @@ impl VectorStore {
             scored
         }; // conn is dropped here, releasing the lock
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(top_k);
-
-        let hits: Vec<VectorHit> = scored
-            .into_iter()
-            .map(|(_, blended_score, response_text)| VectorHit {
-                similarity: blended_score,
-                response_snippet: trim_chars(&response_text, max_snippet_chars),
-            })
-            .collect();
-
-        let feedback = VectorPrecisionFeedback::new(&hits);
+        let (hits, feedback) = scored_to_hits(scored, top_k, max_snippet_chars);
         Ok((hits, feedback))
         })
         .await
@@ -869,7 +867,10 @@ impl VectorStore {
 
             let summary = conn
                 .query_row(
-                    "SELECT summary_text FROM phase_summary WHERE phase = ?1",
+                    &format!(
+                        "SELECT summary_text FROM phase_summary WHERE phase = {p}1",
+                        p = PARAM_PREFIX
+                    ),
                     params![phase],
                     |row| row.get::<_, String>(0),
                 )
@@ -905,13 +906,15 @@ impl VectorStore {
             });
 
             conn.execute(
-                "
-            INSERT INTO phase_summary(phase, summary_text, updated_at)
-            VALUES(?1, ?2, ?3)
-            ON CONFLICT(phase) DO UPDATE SET
-                summary_text = excluded.summary_text,
-                updated_at = excluded.updated_at
-                ",
+                &format!(
+                    "INSERT INTO phase_summary({cols})
+                     VALUES({p}1, {p}2, {p}3)
+                     ON CONFLICT(phase) DO UPDATE SET
+                         summary_text = excluded.summary_text,
+                         updated_at    = excluded.updated_at",
+                    cols = PHASE_SUMMARY_COLUMNS,
+                    p = PARAM_PREFIX,
+                ),
                 params![phase, text, now],
             )?;
 
@@ -1283,6 +1286,26 @@ fn trim_chars(input: &str, max_chars: usize) -> String {
     input.chars().take(max_chars).collect()
 }
 
+/// Convert `(memory_key, blended_score, response_text)` tuples into sorted,
+/// truncated hits with precision feedback.
+fn scored_to_hits(
+    mut scored: Vec<(String, f32, String)>,
+    top_k: usize,
+    max_snippet_chars: usize,
+) -> (Vec<VectorHit>, VectorPrecisionFeedback) {
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(top_k);
+    let hits: Vec<VectorHit> = scored
+        .into_iter()
+        .map(|(_, blended_score, text)| VectorHit {
+            similarity: blended_score,
+            response_snippet: trim_chars(&text, max_snippet_chars),
+        })
+        .collect();
+    let feedback = VectorPrecisionFeedback::new(&hits);
+    (hits, feedback)
+}
+
 fn build_memory_key(phase: &str, query_text: &str) -> String {
     let payload = format!("{}|{}", phase, query_text.trim());
     let mut hasher = Sha256::new();
@@ -1558,7 +1581,7 @@ use crate::memory::embedding_provider::{
 
 #[cfg(feature = "backend-postgres")]
 pub struct VectorStore {
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
     dimensions: usize,
     max_entries: usize,
     /// Optional embedding provider — overrides the built-in `embed_text()`.
@@ -1630,7 +1653,7 @@ impl VectorStore {
         client.batch_execute(&schema_sql)?;
 
         Ok(Self {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             dimensions,
             max_entries,
             embedding_provider: None,
@@ -1647,210 +1670,257 @@ impl VectorStore {
         self
     }
 
-    pub fn upsert(&self, phase: &str, query_text: &str, response_text: &str) -> Result<()> {
-        let query = query_text.trim();
-        let response = response_text.trim();
-        if query.is_empty() || response.is_empty() {
-            return Ok(());
-        }
-        let embedding_vec = if let Some(ref provider) = self.embedding_provider {
-            let vec = provider.embed(query);
-            if vec.len() != self.dimensions {
-                anyhow::bail!(
-                    "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
-                    vec.len(),
-                    self.dimensions,
-                );
+    pub async fn upsert(
+        self: Arc<Self>,
+        phase: &str,
+        query_text: &str,
+        response_text: &str,
+    ) -> Result<()> {
+        let phase = phase.to_string();
+        let query_text = query_text.to_string();
+        let response_text = response_text.to_string();
+        spawn_blocking(move || {
+            let query = query_text.trim();
+            let response = response_text.trim();
+            if query.is_empty() || response.is_empty() {
+                return Ok(());
             }
-            vec
-        } else {
-            embed_text(query, self.dimensions)
-        };
-        let embedding = Vector::from(embedding_vec);
-        let memory_key = build_memory_key(phase, query);
-        let now = now_ts();
-        let max_entries = self.max_entries as i64;
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'upsert', recovering");
-            poisoned.into_inner()
-        });
-        client.execute(
-            "INSERT INTO vector_memory
-                (memory_key, phase, query_text, response_text, embedding,
-                 created_at, updated_at, hit_count)
-             VALUES ($1, $2, $3, $4, $5, $6, $6, 0)
-             ON CONFLICT (memory_key) DO UPDATE SET
-                response_text  = EXCLUDED.response_text,
-                embedding      = EXCLUDED.embedding,
-                updated_at     = EXCLUDED.updated_at",
-            &[
-                &memory_key,
-                &phase,
-                &query,
-                &response_text,
-                &embedding,
-                &now,
-            ],
-        )?;
+            let embedding_vec = if let Some(ref provider) = self.embedding_provider {
+                let vec = provider.embed(query);
+                if vec.len() != self.dimensions {
+                    anyhow::bail!(
+                        "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
+                        vec.len(),
+                        self.dimensions,
+                    );
+                }
+                vec
+            } else {
+                embed_text(query, self.dimensions)
+            };
+            let embedding = Vector::from(embedding_vec);
+            let memory_key = build_memory_key(&phase, query);
+            let now = now_ts();
+            let max_entries = self.max_entries as i64;
+            let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'upsert', recovering");
+                poisoned.into_inner()
+            });
+            client.execute(
+                "INSERT INTO vector_memory
+                    (memory_key, phase, query_text, response_text, embedding,
+                     created_at, updated_at, hit_count)
+                 VALUES ($1, $2, $3, $4, $5, $6, $6, 0)
+                 ON CONFLICT (memory_key) DO UPDATE SET
+                    response_text  = EXCLUDED.response_text,
+                    embedding      = EXCLUDED.embedding,
+                    updated_at     = EXCLUDED.updated_at",
+                &[
+                    &memory_key,
+                    &phase,
+                    &query,
+                    &response_text,
+                    &embedding,
+                    &now,
+                ],
+            )?;
 
-        client.execute(
-            "DELETE FROM vector_memory
-             WHERE memory_key NOT IN (
-                 SELECT memory_key FROM vector_memory
-                 ORDER BY updated_at DESC LIMIT $1
-             )",
-            &[&max_entries],
-        )?;
+            client.execute(
+                "DELETE FROM vector_memory
+                 WHERE memory_key NOT IN (
+                     SELECT memory_key FROM vector_memory
+                     ORDER BY updated_at DESC LIMIT $1
+                 )",
+                &[&max_entries],
+            )?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn search(
-        &self,
+    pub async fn search(
+        self: Arc<Self>,
         phase: &str,
         query_text: &str,
         top_k: usize,
         min_similarity: f32,
         max_snippet_chars: usize,
     ) -> Result<(Vec<VectorHit>, VectorPrecisionFeedback)> {
-        if top_k == 0 {
-            return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
-        }
-        let query = query_text.trim();
-        if query.is_empty() {
-            return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
-        }
-
-        let query_vec = if let Some(ref provider) = self.embedding_provider {
-            let vec = provider.embed(query);
-            if vec.len() != self.dimensions {
-                anyhow::bail!(
-                    "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
-                    vec.len(),
-                    self.dimensions,
-                );
+        let phase = phase.to_string();
+        let query_text = query_text.to_string();
+        spawn_blocking(move || {
+            if top_k == 0 {
+                return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
-            vec
-        } else {
-            embed_text(query, self.dimensions)
-        };
-        let query_embedding = Vector::from(query_vec);
-        let now = now_ts();
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'search', recovering");
-            poisoned.into_inner()
-        });
-        let rows = client.query(
-            "SELECT memory_key, response_text, updated_at,
-                    1 - (embedding <=> $2) AS similarity
-             FROM vector_memory
-             WHERE phase = $1
-             ORDER BY embedding <=> $2
-             LIMIT 300",
-            &[&phase, &query_embedding],
-        )?;
-
-        let mut scored: Vec<(String, f32, String)> = Vec::new();
-        for row in rows {
-            let memory_key: String = row.get(0);
-            let response_text: String = row.get(1);
-            let updated_at: i64 = row.get(2);
-            let similarity = (row.get::<_, f64>(3) as f32).clamp(0.0, 1.0);
-            if similarity < min_similarity {
-                continue;
+            let query = query_text.trim();
+            if query.is_empty() {
+                return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
-            let blended = blend_similarity_with_recency(similarity, now, updated_at);
-            scored.push((memory_key, blended, response_text));
-        }
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(top_k);
+            let query_vec = if let Some(ref provider) = self.embedding_provider {
+                let vec = provider.embed(query);
+                if vec.len() != self.dimensions {
+                    anyhow::bail!(
+                        "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
+                        vec.len(),
+                        self.dimensions,
+                    );
+                }
+                vec
+            } else {
+                embed_text(query, self.dimensions)
+            };
+            let query_embedding = Vector::from(query_vec);
+            let now = now_ts();
+            let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'search', recovering");
+                poisoned.into_inner()
+            });
+            let rows = client.query(
+                &format!(
+                    "SELECT memory_key, response_text, updated_at,
+                            1 - (embedding <=> {p}2) AS similarity
+                     FROM vector_memory
+                     WHERE phase = {p}1
+                     ORDER BY embedding <=> {p}2
+                     LIMIT 300",
+                    p = PARAM_PREFIX,
+                ),
+                &[&phase, &query_embedding],
+            )?;
 
-        if !scored.is_empty() {
-            for (key, _, _) in &scored {
-                let _ = client.execute(
-                    "UPDATE vector_memory
-                     SET hit_count = hit_count + 1, last_hit_at = $2
-                     WHERE memory_key = $1",
-                    &[key, &now],
-                );
+            let mut scored: Vec<(String, f32, String)> = Vec::new();
+            for row in rows {
+                let memory_key: String = row.get(0);
+                let response_text: String = row.get(1);
+                let updated_at: i64 = row.get(2);
+                let similarity = (row.get::<_, f64>(3) as f32).clamp(0.0, 1.0);
+                if similarity < min_similarity {
+                    continue;
+                }
+                let blended = blend_similarity_with_recency(similarity, now, updated_at);
+                scored.push((memory_key, blended, response_text));
             }
-        }
 
-        let hits: Vec<VectorHit> = scored
-            .into_iter()
-            .map(|(_, score, text)| VectorHit {
-                similarity: score,
-                response_snippet: trim_chars(&text, max_snippet_chars),
-            })
-            .collect();
+            if !scored.is_empty() {
+                for (key, _, _) in &scored {
+                    let _ = client.execute(
+                        &format!(
+                            "UPDATE vector_memory
+                             SET hit_count = hit_count + 1, last_hit_at = {p}2
+                             WHERE memory_key = {p}1",
+                            p = PARAM_PREFIX,
+                        ),
+                        &[key, &now],
+                    );
+                }
+            }
 
-        let feedback = VectorPrecisionFeedback::new(&hits);
-        Ok((hits, feedback))
+            let (hits, feedback) = scored_to_hits(scored, top_k, max_snippet_chars);
+            Ok((hits, feedback))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
-            poisoned.into_inner()
-        });
-        Ok(client
-            .query_opt(
-                "SELECT summary_text FROM phase_summary WHERE phase = $1",
-                &[&phase],
-            )?
-            .map(|row| row.get(0)))
+    pub async fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
+        let client = self.client.clone();
+        let phase = phase.to_string();
+        spawn_blocking(move || {
+            let mut client = client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
+                poisoned.into_inner()
+            });
+            Ok(client
+                .query_opt(
+                    &format!(
+                        "SELECT summary_text FROM phase_summary WHERE phase = {p}1",
+                        p = PARAM_PREFIX
+                    ),
+                    &[&phase],
+                )?
+                .map(|row| row.get(0)))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn upsert_phase_summary(&self, phase: &str, summary_text: &str) -> Result<()> {
-        let text = summary_text.trim();
-        if text.is_empty() {
-            return Ok(());
-        }
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'upsert_phase_summary', recovering");
-            poisoned.into_inner()
-        });
-        let now = now_ts();
-        client.execute(
-            "INSERT INTO phase_summary (phase, summary_text, updated_at)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (phase) DO UPDATE SET
-                 summary_text = EXCLUDED.summary_text,
-                 updated_at   = EXCLUDED.updated_at",
-            &[&phase, &text, &now],
-        )?;
-        Ok(())
+    pub async fn upsert_phase_summary(&self, phase: &str, summary_text: &str) -> Result<()> {
+        let client = self.client.clone();
+        let phase = phase.to_string();
+        let text = summary_text.trim().to_string();
+        spawn_blocking(move || {
+            if text.is_empty() {
+                return Ok(());
+            }
+            let mut client = client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'upsert_phase_summary', recovering");
+                poisoned.into_inner()
+            });
+            let now = now_ts();
+            client.execute(
+                &format!(
+                    "INSERT INTO phase_summary ({cols})
+                     VALUES ({p}1, {p}2, {p}3)
+                     ON CONFLICT (phase) DO UPDATE SET
+                         summary_text = EXCLUDED.summary_text,
+                         updated_at   = EXCLUDED.updated_at",
+                    cols = PHASE_SUMMARY_COLUMNS,
+                    p = PARAM_PREFIX,
+                ),
+                &[&phase, &text, &now],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn memory_entry_count(&self) -> Result<u64> {
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
-            poisoned.into_inner()
-        });
-        let row = client.query_one("SELECT COUNT(*) FROM vector_memory", &[])?;
-        let count: i64 = row.get(0);
-        Ok(count.max(0) as u64)
+    pub async fn memory_entry_count(&self) -> Result<u64> {
+        let client = self.client.clone();
+        spawn_blocking(move || {
+            let mut client = client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
+                poisoned.into_inner()
+            });
+            let row = client.query_one("SELECT COUNT(*) FROM vector_memory", &[])?;
+            let count: i64 = row.get(0);
+            Ok(count.max(0) as u64)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn summary_entry_count(&self) -> Result<u64> {
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
-            poisoned.into_inner()
-        });
-        let row = client.query_one("SELECT COUNT(*) FROM phase_summary", &[])?;
-        let count: i64 = row.get(0);
-        Ok(count.max(0) as u64)
+    pub async fn summary_entry_count(&self) -> Result<u64> {
+        let client = self.client.clone();
+        spawn_blocking(move || {
+            let mut client = client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
+                poisoned.into_inner()
+            });
+            let row = client.query_one("SELECT COUNT(*) FROM phase_summary", &[])?;
+            let count: i64 = row.get(0);
+            Ok(count.max(0) as u64)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn clear_all(&self) -> Result<(usize, usize)> {
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'clear_all', recovering");
-            poisoned.into_inner()
-        });
-        let memory_deleted = client.execute("DELETE FROM vector_memory", &[])? as usize;
-        let summaries_deleted = client.execute("DELETE FROM phase_summary", &[])? as usize;
-        Ok((memory_deleted, summaries_deleted))
+    pub async fn clear_all(&self) -> Result<(usize, usize)> {
+        let client = self.client.clone();
+        spawn_blocking(move || {
+            let mut client = client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'clear_all', recovering");
+                poisoned.into_inner()
+            });
+            let memory_deleted = client.execute("DELETE FROM vector_memory", &[])? as usize;
+            let summaries_deleted = client.execute("DELETE FROM phase_summary", &[])? as usize;
+            Ok((memory_deleted, summaries_deleted))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Reclaim PostgreSQL storage after retention cleanup.
@@ -1860,12 +1930,17 @@ impl VectorStore {
     /// PostgreSQL autovacuum handles routine maintenance automatically, issuing
     /// an explicit `VACUUM ANALYZE` after large deletions ensures immediate
     /// space reclamation and consistent test/benchmark behaviour.
-    pub fn vacuum(&self) -> Result<()> {
-        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
-            poisoned.into_inner()
-        });
-        client.batch_execute("VACUUM ANALYZE")?;
-        Ok(())
+    pub async fn vacuum(&self) -> Result<()> {
+        let client = self.client.clone();
+        spawn_blocking(move || {
+            let mut client = client.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
+                poisoned.into_inner()
+            });
+            client.batch_execute("VACUUM ANALYZE")?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 }
