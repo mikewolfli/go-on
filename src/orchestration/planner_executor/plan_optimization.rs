@@ -13,10 +13,10 @@ impl Planner {
     ///
     /// Uses EmbeddingTaskClassifier for semantic task complexity detection,
     /// falling back to keyword heuristics (analyze_task) when embedding unavailable.
-    pub fn plan(task: &AgentTaskEnvelope) -> ExecutionPlan {
+    pub async fn plan(task: &AgentTaskEnvelope) -> ExecutionPlan {
         // Classify task via embedding-based classifier
         let classifier = EmbeddingTaskClassifier::default();
-        let task_category = classifier.classify_task(&task.objective);
+        let task_category = classifier.classify_task(&task.objective).await;
         info!(
             "EmbeddingTaskClassifier: task_category={:?}, complexity_score={:.2}",
             task_category,

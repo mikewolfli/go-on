@@ -3,7 +3,7 @@
 //! Uses the `go-on-web-search` crate under the hood, defaulting to the
 //! DuckDuckGo Instant Answer API (free, no API key required).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use go_on_web_search::{SearchProvider, WebSearchClient, WebSearchConfig};
@@ -11,6 +11,18 @@ use serde_json::Value;
 
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
+
+/// Shared tokio runtime for web search operations.
+static WEB_SEARCH_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn web_search_runtime() -> &'static tokio::runtime::Runtime {
+    WEB_SEARCH_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build shared web_search runtime")
+    })
+}
 
 // ---------------------------------------------------------------------------
 // WebSearchTool
@@ -64,15 +76,9 @@ impl Tool for WebSearchTool {
             .unwrap_or(5)
             .clamp(1, 20) as usize;
 
-        // Use tokio runtime to run the async search synchronously
-        let result = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(async { self.search_impl(&query, max_results).await })?,
-            Err(_) => {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow::anyhow!("failed to create temp runtime: {}", e))?;
-                rt.block_on(self.search_impl(&query, max_results))?
-            }
-        };
+        // Use the shared blocking runtime to run the async search synchronously.
+        // Always uses the dedicated runtime to avoid block_on on an async thread.
+        let result = web_search_runtime().block_on(self.search_impl(&query, max_results))?;
 
         Ok(ToolOutput {
             success: true,

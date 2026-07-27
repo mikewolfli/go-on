@@ -510,7 +510,8 @@ pub(crate) async fn handle_workflow_execute(
         phase_name.unwrap_or("execute"),
         task_text.clone(),
         &params,
-    );
+    )
+    .await;
 
     if params
         .get("consultation_required")

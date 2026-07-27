@@ -13,7 +13,6 @@ use crate::i18n::runtime::tf;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Verdict returned when validating an escalation token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,10 +386,7 @@ impl Default for OmnipotentMode {
 
 /// Return the current Unix time in milliseconds.
 fn now_epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 /// Count the number of tokens in `tokens` that are not revoked and not expired

@@ -1329,13 +1329,11 @@ impl ChatView {
         }
 
         let mut had_events = false;
-        let mut event_count = 0u32;
         loop {
             let Ok(pending) = self.stream_state.pending_rx.try_recv() else {
                 break;
             };
             had_events = true;
-            event_count += 1;
             match pending {
                 PendingResponse::Phases(list) => {
                     self.phases = list;
@@ -1937,14 +1935,28 @@ impl ChatView {
                 }
             }
 
-            // Request repaint every ~5 events to keep UI responsive
-            // under high token throughput without excessive per-event overhead.
-            if event_count.is_multiple_of(5) {
+            // Throttled repaint: only request a repaint if enough time has
+            // elapsed since the last one (governed by stream_repaint_interval).
+            // This prevents excessive repaint calls during high-frequency token
+            // streaming that would cause visible flickering.
+            let now = std::time::Instant::now();
+            let interval = self.stream_state.stream_repaint_interval;
+            if now.duration_since(self.stream_state.last_repaint) >= interval {
+                self.stream_state.last_repaint = now;
                 ctx.request_repaint();
             }
         }
+        // Final catch-up repaint if events were processed but none triggered
+        // the throttled path above (e.g. a single event arrived well after the
+        // last repaint).
         if had_events {
-            ctx.request_repaint();
+            let now = std::time::Instant::now();
+            if now.duration_since(self.stream_state.last_repaint)
+                >= self.stream_state.stream_repaint_interval
+            {
+                self.stream_state.last_repaint = now;
+                ctx.request_repaint();
+            }
         }
     }
 }

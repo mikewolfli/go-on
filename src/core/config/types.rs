@@ -240,6 +240,24 @@ pub struct AppConfig {
     /// Reputation tracking configuration (S13)
     #[serde(default)]
     pub reputation: Option<ReputationConfig>,
+    /// Protocol configuration (S15) — supports `[protocol]` TOML section
+    /// for protocol mode selection and transport configuration.
+    #[serde(default)]
+    pub protocol: Option<ProtocolConfig>,
+}
+
+/// Protocol configuration (S15).
+///
+/// Example TOML:
+/// ```toml
+/// [protocol]
+/// mode = "acp http"
+/// ```
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProtocolConfig {
+    /// Protocol mode: auto / acp / mcp / acp_stdio / mcp_stdio
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 /// Simplified adaptive configuration for AI-driven setup

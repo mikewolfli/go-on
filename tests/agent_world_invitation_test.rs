@@ -12,7 +12,24 @@
 
 use go_on::orchestration::tool_extended;
 
+/// Server availability timeout for CI skip check.
+const SERVER_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 const TEST_INVITE_URL: &str = "https://agent-world-test.chuanshuo.com.cn/agent-invite/invite_8486d728a28f4c54a8188b8bebc0db3c#task_access_token=task_d2add96d25fd4a007a83cdff2134c8da3c6a7e4e235589bc";
+
+/// Check if the Agent World server is reachable. Skips test when unreachable.
+fn check_server_available() -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let addr = match "agent-world-test.chuanshuo.com.cn:443"
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+    {
+        Some(a) => a,
+        None => return false,
+    };
+    TcpStream::connect_timeout(&addr, SERVER_CHECK_TIMEOUT).is_ok()
+}
 
 // ============================================================================
 // Phase 1: URL extraction from user messages (mimics observe_phase logic)
@@ -160,6 +177,11 @@ fn test_api_url_construction() {
 
 #[tokio::test]
 async fn test_live_task_package_fetch() {
+    // Gracefully skip when the external server is unreachable (CI, no network).
+    if !check_server_available() {
+        eprintln!("SKIP: Agent World test server not reachable");
+        return;
+    }
     let api_url = "https://agent-world-test.chuanshuo.com.cn/api/v1/agent-binding/invitations/invite_8486d728a28f4c54a8188b8bebc0db3c/agent-task";
     let api_body = serde_json::json!({
         "task_access_token": "task_d2add96d25fd4a007a83cdff2134c8da3c6a7e4e235589bc",

@@ -455,6 +455,17 @@ pub fn known_tool_names() -> BTreeSet<&'static str> {
         "image_analyze",
         "qrcode_generate",
         "sqlite_query",
+        "docker_logs",
+        "code_metrics",
+        "encode_decode",
+        "file_watch",
+        "hash_file",
+        "lint_run",
+        "random_token",
+        "search_packages",
+        "security_scan",
+        "template_render",
+        "uuid_gen",
     ] {
         set.insert(name);
     }
@@ -503,6 +514,10 @@ pub fn known_tool_names() -> BTreeSet<&'static str> {
         "goon_workflow_run_resume",
         "goon_skill_update",
         "goon_skill_version_rollback",
+        "edit_file",
+        "apply_code_action",
+        "dependency_add",
+        "format_code",
     ] {
         set.insert(name);
     }
@@ -524,6 +539,12 @@ pub fn known_tool_names() -> BTreeSet<&'static str> {
         "game_online_status",
         "goon_provider_test_completion",
         "goon_provider_test_connection",
+        "build_run",
+        "docker_build",
+        "docker_compose",
+        "docker_exec",
+        "docker_push",
+        "spawn_agent",
     ] {
         set.insert(name);
     }

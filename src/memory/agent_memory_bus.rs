@@ -191,7 +191,11 @@ impl AgentMemoryBus {
 
         // Fast path: vector similarity search via VectorStore
         if let Some(ref vs) = self.vector_store {
-            match vs.search("agent_memory", query, limit, 0.0, 512) {
+            match vs
+                .clone()
+                .search("agent_memory", query, limit, 0.0, 512)
+                .await
+            {
                 Ok((hits, _)) => {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

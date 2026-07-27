@@ -206,6 +206,7 @@ mod unit_tests {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            protocol: None,
         }
     }
 
@@ -219,15 +220,17 @@ mod unit_tests {
         let vector_store = Arc::new(
             VectorStore::new(&vector_path, 32, 128).expect("vector store should initialize"),
         );
-        vector_store
+        Arc::clone(&vector_store)
             .upsert(
                 "coding",
                 "rust stream notifications",
                 "Use structured stream notifications for chunked output.",
             )
+            .await
             .expect("seed vector entry");
         vector_store
             .upsert_phase_summary("coding", "Existing coding summary")
+            .await
             .expect("seed phase summary");
 
         let seen_messages = Arc::new(Mutex::new(Vec::new()));
@@ -307,7 +310,7 @@ mod unit_tests {
         // After AUTONOMY + TAO merge, autonomy loop handles all modes.
         // Checkpoint creation is managed by the loop.
         let _ = state.checkpoints.len();
-        let _ = vector_store.memory_entry_count();
+        let _ = vector_store.memory_entry_count().await;
         let _ = result["knowledge"];
         let _ = result["distillation"];
     }
@@ -355,8 +358,9 @@ mod unit_tests {
         let vector_store = Arc::new(
             VectorStore::new(&vector_path, 32, 128).expect("vector store should initialize"),
         );
-        vector_store
+        Arc::clone(&vector_store)
             .upsert("coding", "rust e2e test", "E2E dual bus integration test")
+            .await
             .expect("seed vector entry");
 
         let seen_messages = Arc::new(Mutex::new(Vec::new()));
@@ -434,7 +438,7 @@ mod unit_tests {
             "HarnessBus must produce at least one verdict"
         );
 
-        let cp = capability_bus.capability_bus_profile();
+        let cp = capability_bus.capability_bus_profile().await;
         assert!(
             cp.routing_count >= 1,
             "CapabilityBus must route at least once"

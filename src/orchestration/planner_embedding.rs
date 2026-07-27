@@ -24,21 +24,21 @@ pub struct EmbeddingTaskClassifier {
 
 impl EmbeddingTaskClassifier {
     /// Resolve the active vector store: instance field or None.
-    fn resolve_store(&self) -> Option<&crate::memory::vector::VectorStore> {
-        self.vector_store.as_deref()
+    fn resolve_store(&self) -> Option<Arc<crate::memory::vector::VectorStore>> {
+        self.vector_store.clone()
     }
 
     /// Classify a task objective into a `TaskComplexity` level.
     ///
     /// Uses embedding-based similarity when a vector store is available,
     /// otherwise falls back to keyword heuristics.
-    pub fn classify_task(&self, objective: &str) -> TaskComplexity {
+    pub async fn classify_task(&self, objective: &str) -> TaskComplexity {
         // Pre-check: if the global store is available, we prefer embedding-based
         // classification. Falls back to keyword-based heuristic classification when the
         // store is unavailable (F-GAP-49).
 
         if let Some(store) = self.resolve_store() {
-            if let Some(complexity) = self.classify_with_embedding(store, objective) {
+            if let Some(complexity) = self.classify_with_embedding(store, objective).await {
                 return complexity;
             }
         }
@@ -49,16 +49,18 @@ impl EmbeddingTaskClassifier {
     /// Attempt embedding-based classification by searching the vector store
     /// for semantically similar task descriptions and using their associated
     /// metadata to infer complexity.
-    fn classify_with_embedding(
+    async fn classify_with_embedding(
         &self,
-        store: &crate::memory::vector::VectorStore,
+        store: Arc<crate::memory::vector::VectorStore>,
         objective: &str,
     ) -> Option<TaskComplexity> {
         // Search the vector store for entries that resemble the objective.
         // We search across a generic "task-classification" phase with a low
         // similarity threshold to cast a wide net.
+        let objective = objective.to_string();
         let (hits, _feedback) = store
-            .search("task-classification", objective, 5, 0.15, 200)
+            .search("task-classification", &objective, 5, 0.15, 200)
+            .await
             .ok()?;
 
         if hits.is_empty() {
@@ -132,13 +134,13 @@ impl EmbeddingTaskClassifier {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_classifier_defaults_to_keyword_fallback() {
+    #[tokio::test]
+    async fn test_classifier_defaults_to_keyword_fallback() {
         let classifier = EmbeddingTaskClassifier::default();
 
         // Simple task
         assert_eq!(
-            classifier.classify_task("Greet the user"),
+            classifier.classify_task("Greet the user").await,
             TaskComplexity::Simple
         );
 
@@ -146,43 +148,45 @@ mod tests {
         assert_eq!(
             classifier.classify_task(
                 "Fix the bug in the authentication module and verify everything works correctly"
-            ),
+            ).await,
             TaskComplexity::Medium
         );
 
         // Complex task
         assert_eq!(
-            classifier.classify_task("Research the authentication module, refactor to use JWT, build a middleware chain, and write comprehensive unit tests for all modified components"),
+            classifier.classify_task("Research the authentication module, refactor to use JWT, build a middleware chain, and write comprehensive unit tests for all modified components").await,
             TaskComplexity::Complex
         );
     }
 
-    #[test]
-    fn test_classifier_without_vector_store_falls_back() {
+    #[tokio::test]
+    async fn test_classifier_without_vector_store_falls_back() {
         let classifier = EmbeddingTaskClassifier::default();
 
         assert_eq!(
-            classifier.classify_task("Hello world"),
+            classifier.classify_task("Hello world").await,
             TaskComplexity::Simple
         );
         assert_eq!(
-            classifier.classify_task("Implement a feature"),
+            classifier.classify_task("Implement a feature").await,
             TaskComplexity::Medium
         );
     }
 
-    #[test]
-    fn test_classifier_short_objective_is_simple() {
+    #[tokio::test]
+    async fn test_classifier_short_objective_is_simple() {
         let classifier = EmbeddingTaskClassifier::default();
-        assert_eq!(classifier.classify_task("Hi"), TaskComplexity::Simple);
-        assert_eq!(classifier.classify_task(""), TaskComplexity::Simple);
+        assert_eq!(classifier.classify_task("Hi").await, TaskComplexity::Simple);
+        assert_eq!(classifier.classify_task("").await, TaskComplexity::Simple);
     }
 
-    #[test]
-    fn test_keyword_classify_with_code_indicators() {
+    #[tokio::test]
+    async fn test_keyword_classify_with_code_indicators() {
         let classifier = EmbeddingTaskClassifier::default();
         assert_eq!(
-            classifier.classify_task("write a function to calculate fibonacci"),
+            classifier
+                .classify_task("write a function to calculate fibonacci")
+                .await,
             TaskComplexity::Medium
         );
     }

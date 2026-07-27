@@ -8,7 +8,6 @@
 //! execution policies.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
 
 use crate::agent::{AgentRegistry, AgentTaskEnvelope, AgentTaskResult};
 use crate::i18n::runtime::tf;
@@ -71,37 +70,10 @@ pub struct ExecutionPlan {
 
 /// Configuration for the Planner-Executor pipeline.
 ///
-/// Controls timeouts for each task complexity level.
-#[derive(Debug, Clone)]
-pub struct PlannerExecutorConfig {
-    /// Timeout for tasks classified as `Simple`.
-    pub simple_task_timeout: Duration,
-    /// Timeout for tasks classified as `Medium`.
-    pub medium_task_timeout: Duration,
-    /// Timeout for tasks classified as `Complex`.
-    pub complex_task_timeout: Duration,
-}
-
-impl Default for PlannerExecutorConfig {
-    fn default() -> Self {
-        Self {
-            simple_task_timeout: Duration::from_secs(120),
-            medium_task_timeout: Duration::from_secs(300),
-            complex_task_timeout: Duration::from_secs(600),
-        }
-    }
-}
-
-impl PlannerExecutorConfig {
-    /// Returns the timeout appropriate for the given complexity level.
-    pub fn timeout_for(&self, complexity: &TaskComplexity) -> Duration {
-        match complexity {
-            TaskComplexity::Simple => self.simple_task_timeout,
-            TaskComplexity::Medium => self.medium_task_timeout,
-            TaskComplexity::Complex => self.complex_task_timeout,
-        }
-    }
-}
+/// Carried in OrchestrationServerDeps for future wiring of
+/// task execution timeouts.
+#[derive(Debug, Clone, Default)]
+pub struct PlannerExecutorConfig;
 
 /// Task complexity level for adaptive planning
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -138,8 +110,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_plan_creates_variable_steps_by_complexity() {
+    #[tokio::test]
+    async fn test_plan_complexity_variation() {
         // Simple task -> 2 steps
         let simple_task = AgentTaskEnvelope {
             task_id: "simple-1".to_string(),
@@ -150,7 +122,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let simple_plan = Planner::plan(&simple_task);
+        let simple_plan = Planner::plan(&simple_task).await;
         assert_eq!(
             simple_plan.steps.len(),
             2,
@@ -174,7 +146,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let medium_plan = Planner::plan(&medium_task);
+        let medium_plan = Planner::plan(&medium_task).await;
         assert_eq!(
             medium_plan.steps.len(),
             3,
@@ -191,7 +163,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let complex_plan = Planner::plan(&complex_task);
+        let complex_plan = Planner::plan(&complex_task).await;
         assert!(
             complex_plan.steps.len() >= 3,
             "Complex task should produce >= 3 steps"
@@ -231,10 +203,10 @@ mod tests {
         assert!(!complex.parallel_groups.is_empty());
     }
 
-    #[test]
-    fn test_dag_metrics_expose_width_and_depth() {
+    #[tokio::test]
+    async fn test_dag_metrics_expose_width_and_depth() {
         let task = make_task();
-        let plan = Planner::plan(&task);
+        let plan = Planner::plan(&task).await;
         let metrics = plan.dag_metrics.unwrap();
         assert!(metrics.width >= 1);
         assert!(metrics.depth >= 1);
@@ -244,8 +216,8 @@ mod tests {
 
     /// BLUE44: Verify DAG metrics are populated with non-zero values when a plan
     /// is created, confirming the metrics flow through governance integration.
-    #[test]
-    fn test_dag_metrics_populated_with_non_zero_values() {
+    #[tokio::test]
+    async fn test_dag_metrics_populated_with_non_zero_values() {
         // Test with a complex task to ensure non-trivial metrics
         let task = AgentTaskEnvelope {
             task_id: "complex-verify".to_string(),
@@ -257,7 +229,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({"priority": "high", "team_size": 5}),
         };
-        let plan = Planner::plan(&task);
+        let plan = Planner::plan(&task).await;
         let metrics = plan
             .dag_metrics
             .expect("DAG metrics must be present when a plan is created");
@@ -313,16 +285,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_plan_creates_three_steps_legacy_compat() {
+    #[tokio::test]
+    async fn test_plan_creates_three_steps_legacy_compat() {
         let task = make_task();
-        let plan = Planner::plan(&task);
+        let plan = Planner::plan(&task).await;
         assert!(!plan.plan_id.is_empty());
         assert!(plan.steps.len() >= 2);
     }
 
-    #[test]
-    fn test_plan_steps_have_correct_dependency_order() {
+    #[tokio::test]
+    async fn test_plan_steps_have_correct_dependency_order() {
         // Use a Simple task to test linear dependency order
         let task = AgentTaskEnvelope {
             task_id: "simple-1".to_string(),
@@ -333,7 +305,7 @@ mod tests {
             evidence: None,
             input: serde_json::json!({}),
         };
-        let plan = Planner::plan(&task);
+        let plan = Planner::plan(&task).await;
         assert_eq!(plan.steps.len(), 2, "Simple task should produce 2 steps");
         // exec-1 has no deps (no plan phase for simple)
         assert!(plan.steps[0].depends_on.is_empty());
@@ -413,7 +385,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_returns_results_for_all_steps() {
         let task = make_task();
-        let plan = Planner::plan(&task);
+        let plan = Planner::plan(&task).await;
         let registry = AgentRegistry::default();
         let results = Executor::execute(&plan, &registry, &[]).await;
         // With no runtimes:
@@ -431,7 +403,7 @@ mod tests {
         // Create a plan where exec-1 depends on plan-1, but plan-1 will fail
         // because there's no runtime. The dependency should still be tracked.
         let task = make_task();
-        let plan = Planner::plan(&task);
+        let plan = Planner::plan(&task).await;
         let registry = AgentRegistry::default();
         let results = Executor::execute(&plan, &registry, &[]).await;
         // First step (plan-1) fails with "no runtime found"

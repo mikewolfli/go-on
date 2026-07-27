@@ -222,7 +222,7 @@ impl MemoryRetrievalEngine {
     ///
     /// # Returns
     /// A vector of deduplicated `MemoryEntry` values.
-    pub fn retrieve_relevant_memories(
+    pub async fn retrieve_relevant_memories(
         &self,
         query: &str,
         limit: usize,
@@ -258,6 +258,7 @@ impl MemoryRetrievalEngine {
                 .persistence
                 .warm_store()
                 .search_by_usefulness(0.0, limit * 2)
+                .await
                 .unwrap_or_default();
             for mut entry in warm_entries {
                 if seen.contains(&entry.id) {
@@ -280,7 +281,7 @@ impl MemoryRetrievalEngine {
             let embedding = self.embedding_provider.embed(query);
             let query_vec: Vec<f64> = embedding.iter().map(|v| *v as f64).collect();
 
-            let ann_results = self.search_vector_index(&query_vec, limit);
+            let ann_results = self.search_vector_index(&query_vec, limit).await;
             for mut entry in ann_results {
                 if seen.contains(&entry.id) {
                     continue;
@@ -325,27 +326,26 @@ impl MemoryRetrievalEngine {
     ///
     /// Checks the session index first, then falls back to scanning
     /// the warm store for matching session_id.
-    pub fn retrieve_related_sessions(&self, session_id: &str) -> Result<Vec<MemoryEntry>> {
+    pub async fn retrieve_related_sessions(&self, session_id: &str) -> Result<Vec<MemoryEntry>> {
         let mut results: Vec<MemoryEntry> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Check in-memory session index.
-        {
+        // Check in-memory session index (collect IDs first to avoid holding lock across await).
+        let mem_ids: Vec<String> = {
             let idx = self
                 .session_index
                 .lock()
                 .map_err(|e| anyhow::anyhow!("session index mutex poisoned: {}", e))?;
-            if let Some(ids) = idx.get(session_id) {
-                for mem_id in ids {
-                    if seen.contains(mem_id) {
-                        continue;
-                    }
-                    seen.insert(mem_id.clone());
-                    // Try to retrieve the full entry.
-                    if let Ok(Some(entry)) = self.persistence.retrieve(None, mem_id) {
-                        results.push(entry);
-                    }
-                }
+            idx.get(session_id).cloned().unwrap_or_default()
+        };
+        for mem_id in &mem_ids {
+            if seen.contains(mem_id) {
+                continue;
+            }
+            seen.insert(mem_id.clone());
+            // Try to retrieve the full entry.
+            if let Ok(Some(entry)) = self.persistence.retrieve(None, mem_id).await {
+                results.push(entry);
             }
         }
 
@@ -356,6 +356,7 @@ impl MemoryRetrievalEngine {
                 .persistence
                 .warm_store()
                 .search_by_session(session_id, 100)
+                .await
                 .unwrap_or_default();
             for entry in warm_entries {
                 if seen.contains(&entry.id) {
@@ -454,13 +455,14 @@ impl MemoryRetrievalEngine {
     /// first embedding found; entries with a mismatched dimension are skipped.
     ///
     /// Returns `true` when at least one entry was indexed.
-    pub fn build_vector_index_from_warm_store(&mut self) -> Result<bool> {
+    pub async fn build_vector_index_from_warm_store(&mut self) -> Result<bool> {
         let dimension = self.embedding_provider.dimensions();
 
         let warm_entries = self
             .persistence
             .warm_store()
             .search_by_usefulness(0.0, 10_000)
+            .await
             .unwrap_or_default();
 
         let idx = VectorIndex::from_entries(&warm_entries, dimension);
@@ -472,7 +474,7 @@ impl MemoryRetrievalEngine {
     /// Search the vector index with a query embedding, returning scored memory
     /// entries.  Returns an empty vec when no index is configured or the index
     /// is empty.
-    pub fn search_vector_index(&self, query_embedding: &[f64], k: usize) -> Vec<MemoryEntry> {
+    pub async fn search_vector_index(&self, query_embedding: &[f64], k: usize) -> Vec<MemoryEntry> {
         let Some(ref idx) = self.vector_index else {
             return Vec::new();
         };
@@ -484,23 +486,17 @@ impl MemoryRetrievalEngine {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        idx.search(query_embedding, k)
-            .into_iter()
-            .filter_map(|(id, sim, _content)| {
-                // Try to hydrate the full MemoryEntry from persistence.
-                self.persistence
-                    .retrieve(None, &id)
-                    .ok()
-                    .flatten()
-                    .map(|mut entry| {
-                        // Boost usefulness by the similarity score so that
-                        // vector-matched entries rank higher in the final sort.
-                        entry.usefulness = entry.usefulness.max(sim as f32 * 0.9);
-                        entry.accessed_at = entry.accessed_at.max(now_secs);
-                        entry
-                    })
-            })
-            .collect()
+        let mut results = Vec::new();
+        for (id, sim, _content) in idx.search(query_embedding, k) {
+            if let Ok(Some(mut entry)) = self.persistence.retrieve(None, &id).await {
+                // Boost usefulness by the similarity score so that
+                // vector-matched entries rank higher in the final sort.
+                entry.usefulness = entry.usefulness.max(sim as f32 * 0.9);
+                entry.accessed_at = entry.accessed_at.max(now_secs);
+                results.push(entry);
+            }
+        }
+        results
     }
 
     /// Simple token-overlap matching. Returns true if any query token
@@ -547,38 +543,41 @@ mod tests {
         (dir, engine)
     }
 
-    fn seed_entry(engine: &MemoryRetrievalEngine, id: &str, content: &str, usefulness: f32) {
+    async fn seed_entry(engine: &MemoryRetrievalEngine, id: &str, content: &str, usefulness: f32) {
         let entry = MemoryEntry::new_hot(id, "test", content, usefulness);
         engine
             .persistence()
             .store(entry)
+            .await
             .expect("store should succeed");
     }
 
-    #[test]
-    fn test_retrieve_relevant_memories_empty_query() {
+    #[tokio::test]
+    async fn test_retrieve_relevant_memories_empty_query() {
         let (_dir, engine) = setup_engine();
         let results = engine
             .retrieve_relevant_memories("", 10)
+            .await
             .expect("retrieve relevant memories should succeed for empty query");
         assert!(results.is_empty());
     }
 
-    #[test]
-    fn test_retrieve_relevant_memories_zero_limit() {
+    #[tokio::test]
+    async fn test_retrieve_relevant_memories_zero_limit() {
         let (_dir, engine) = setup_engine();
         let results = engine
             .retrieve_relevant_memories("hello", 0)
+            .await
             .expect("retrieve relevant memories should succeed for zero limit");
         assert!(results.is_empty());
     }
 
-    #[test]
-    fn test_link_memories_roundtrip() {
+    #[tokio::test]
+    async fn test_link_memories_roundtrip() {
         let (_dir, engine) = setup_engine();
 
-        seed_entry(&engine, "m1", "first memory", 0.8);
-        seed_entry(&engine, "m2", "second memory", 0.6);
+        seed_entry(&engine, "m1", "first memory", 0.8).await;
+        seed_entry(&engine, "m2", "second memory", 0.6).await;
 
         engine
             .link_memories("m1", "m2", LinkType::Similar)
@@ -590,18 +589,18 @@ mod tests {
         assert_eq!(links[0].link_type, LinkType::Similar);
     }
 
-    #[test]
-    fn test_link_memories_self_link_fails() {
+    #[tokio::test]
+    async fn test_link_memories_self_link_fails() {
         let (_dir, engine) = setup_engine();
         let result = engine.link_memories("m1", "m1", LinkType::Similar);
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_are_linked() {
+    #[tokio::test]
+    async fn test_are_linked() {
         let (_dir, engine) = setup_engine();
-        seed_entry(&engine, "a", "content a", 0.5);
-        seed_entry(&engine, "b", "content b", 0.5);
+        seed_entry(&engine, "a", "content a", 0.5).await;
+        seed_entry(&engine, "b", "content b", 0.5).await;
 
         assert!(!engine
             .are_linked("a", "b")
@@ -614,12 +613,12 @@ mod tests {
             .expect("are linked should succeed"));
     }
 
-    #[test]
-    fn test_link_count() {
+    #[tokio::test]
+    async fn test_link_count() {
         let (_dir, engine) = setup_engine();
-        seed_entry(&engine, "x", "x", 0.5);
-        seed_entry(&engine, "y", "y", 0.5);
-        seed_entry(&engine, "z", "z", 0.5);
+        seed_entry(&engine, "x", "x", 0.5).await;
+        seed_entry(&engine, "y", "y", 0.5).await;
+        seed_entry(&engine, "z", "z", 0.5).await;
 
         engine
             .link_memories("x", "y", LinkType::Similar)
@@ -631,10 +630,10 @@ mod tests {
         assert_eq!(engine.link_count().expect("link count should succeed"), 2);
     }
 
-    #[test]
-    fn test_index_session_memory() {
+    #[tokio::test]
+    async fn test_index_session_memory() {
         let (_dir, engine) = setup_engine();
-        seed_entry(&engine, "mem1", "session content", 0.7);
+        seed_entry(&engine, "mem1", "session content", 0.7).await;
 
         engine
             .index_session_memory("session-123", "mem1")
@@ -642,25 +641,27 @@ mod tests {
 
         let entries = engine
             .retrieve_related_sessions("session-123")
+            .await
             .expect("retrieve related sessions should succeed");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "mem1");
     }
 
-    #[test]
-    fn test_retrieve_related_sessions_empty() {
+    #[tokio::test]
+    async fn test_retrieve_related_sessions_empty() {
         let (_dir, engine) = setup_engine();
         let entries = engine
             .retrieve_related_sessions("nonexistent-session")
+            .await
             .expect("retrieve related sessions should succeed");
         assert!(entries.is_empty());
     }
 
-    #[test]
-    fn test_get_links_reverse() {
+    #[tokio::test]
+    async fn test_get_links_reverse() {
         let (_dir, engine) = setup_engine();
-        seed_entry(&engine, "a", "alpha", 0.5);
-        seed_entry(&engine, "b", "beta", 0.5);
+        seed_entry(&engine, "a", "alpha", 0.5).await;
+        seed_entry(&engine, "b", "beta", 0.5).await;
 
         engine
             .link_memories("a", "b", LinkType::Similar)
@@ -679,8 +680,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_vector_index_search_returns_results() {
+    #[tokio::test]
+    async fn test_vector_index_search_returns_results() {
         let (_dir, engine) = setup_engine();
 
         // Seed entries with distinct content that won't match the query via
@@ -705,17 +706,20 @@ mod tests {
         engine
             .persistence()
             .store(entry)
+            .await
             .expect("store should succeed");
         // Promote from hot → warm so the vector index can find it
         // (auto_migrate only evicts expired entries, but this entry is fresh)
         let stored = engine
             .persistence()
             .retrieve(None, "vec-1")
+            .await
             .expect("retrieve should succeed")
             .expect("retrieved entry should be present");
         engine
             .persistence()
             .promote(&stored)
+            .await
             .expect("promote should succeed");
 
         // Build vector index from warm store
@@ -723,6 +727,7 @@ mod tests {
         assert!(
             mut_engine
                 .build_vector_index_from_warm_store()
+                .await
                 .expect("build vector index should succeed"),
             "expected at least one indexed entry"
         );
@@ -733,7 +738,7 @@ mod tests {
                 .iter()
                 .map(|v| *v as f64)
                 .collect();
-        let results = mut_engine.search_vector_index(&query_embedding, 5);
+        let results = mut_engine.search_vector_index(&query_embedding, 5).await;
         assert!(
             !results.is_empty(),
             "vector index should return the seeded entry"
@@ -743,6 +748,7 @@ mod tests {
         // Full retrieve_relevant_memories should also pick it up via L3
         let memories = mut_engine
             .retrieve_relevant_memories("cat", 10)
+            .await
             .expect("retrieve relevant memories should succeed");
         assert!(
             memories.iter().any(|m| m.id == "vec-1"),
@@ -750,19 +756,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_vector_index_empty_no_embeddings() {
+    #[tokio::test]
+    async fn test_vector_index_empty_no_embeddings() {
         let (_dir, mut engine) = setup_engine();
         // Seed an entry without an embedding
-        seed_entry(&engine, "no-emb", "plain text", 0.5);
+        seed_entry(&engine, "no-emb", "plain text", 0.5).await;
 
         let indexed = engine
             .build_vector_index_from_warm_store()
+            .await
             .expect("build vector index should succeed");
         assert!(!indexed, "no entries should be indexed without embeddings");
 
         let query_embedding = vec![0.0_f64; 128];
-        let results = engine.search_vector_index(&query_embedding, 5);
+        let results = engine.search_vector_index(&query_embedding, 5).await;
         assert!(results.is_empty(), "empty index should return no results");
     }
 }

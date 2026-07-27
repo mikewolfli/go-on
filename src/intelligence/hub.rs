@@ -21,7 +21,6 @@ use crate::config::AgentConfig;
 use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::intelligence::capability_bus::core::CapabilityBus;
-use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, NodeRole};
 use crate::intelligence::voter_impls::{
     CapabilityBusVoter, DeepSeekVoter, LocalAgentVoter, LocalVoter, RationalizationGuardVoter,
 };
@@ -44,9 +43,6 @@ pub static AUDIT_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
 static USE_DELPHI_DEBATE: AtomicBool = AtomicBool::new(true);
 
 // ── Global instances ──────────────────────────────────────────────────────
-
-static GLOBAL_CONSENSUS: LazyLock<Mutex<ConsensusEngine>> =
-    LazyLock::new(|| Mutex::new(ConsensusEngine::new(Default::default())));
 
 static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
     LazyLock::new(|| Mutex::new(SelfRationalizationGuard::new(0.3)));
@@ -112,40 +108,17 @@ pub fn init_intel_hub(enable_delphi_debate: bool) {
 /// Initialize intelligence hub with configurable consensus node addresses.
 ///
 /// `local_agent_address` — address for the local agent consensus node.
-/// `capability_bus_address` — address for the capability bus consensus node.
+/// Initialise the intelligence hub modules.
 pub fn init_intel_hub_with_addrs(
     enable_delphi_debate: bool,
-    local_agent_address: &str,
-    capability_bus_address: &str,
+    _local_agent_address: &str,
+    _capability_bus_address: &str,
 ) {
-    let consensus = match GLOBAL_CONSENSUS.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("[B48] GLOBAL_CONSENSUS lock poisoned, recovering");
-            poisoned.into_inner()
-        }
-    };
-    let _ = consensus.register_node(ConsensusNode {
-        id: "local-agent".to_string(),
-        address: local_agent_address.to_string(),
-        weight: 1,
-        role: NodeRole::Leader,
-        is_online: true,
-        last_heartbeat_ms: crate::intelligence::now_ms(),
-    });
-    let _ = consensus.register_node(ConsensusNode {
-        id: "capability-bus".to_string(),
-        address: capability_bus_address.to_string(),
-        weight: 1,
-        role: NodeRole::Follower,
-        is_online: true,
-        last_heartbeat_ms: crate::intelligence::now_ms(),
-    });
     USE_DELPHI_DEBATE.store(enable_delphi_debate, Ordering::Relaxed);
     if enable_delphi_debate {
         tracing::info!("intel_hub: Delphi debate voting enabled");
     }
-    tracing::info!("intel_hub: initialized consensus, rationalization, audit");
+    tracing::info!("intel_hub: initialized rationalization, audit");
 }
 
 /// Initialise the 3 internal voters (CapabilityBusVoter, LocalAgentVoter,

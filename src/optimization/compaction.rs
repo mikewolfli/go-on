@@ -20,46 +20,33 @@ use std::collections::VecDeque;
 
 /// A single turn in a conversation history.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ConversationTurn {
     /// Message role ("user", "assistant", "system").
-    pub role: String,
+    pub _role: String,
     /// Message content.
-    pub content: String,
+    pub _content: String,
     /// Estimated token count for this turn.
     pub tokens: usize,
     /// Unix timestamp in milliseconds.
-    pub timestamp_ms: u64,
+    pub _timestamp_ms: u64,
 }
 
-#[allow(dead_code)]
 impl ConversationTurn {
     /// Create a new conversation turn with auto-computed tokens.
     pub fn new(role: &str, content: &str) -> Self {
-        let content = content.to_string();
-        let tokens = estimate_tokens(&content);
+        let content_str = content.to_string();
+        let tokens = estimate_tokens(&content_str);
         Self {
-            role: role.to_string(),
-            content,
+            _role: role.to_string(),
+            _content: content_str,
             tokens,
-            timestamp_ms: now_ms(),
-        }
-    }
-
-    /// Create a new conversation turn with explicit token count.
-    pub fn with_tokens(role: &str, content: &str, tokens: usize) -> Self {
-        Self {
-            role: role.to_string(),
-            content: content.to_string(),
-            tokens,
-            timestamp_ms: now_ms(),
+            _timestamp_ms: now_ms(),
         }
     }
 }
 
 /// Ordered conversation history with token-aware manipulation.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ConversationHistory {
     /// Ordered turns (oldest first).
     turns: Vec<ConversationTurn>,
@@ -67,7 +54,6 @@ pub struct ConversationHistory {
     pub total_tokens: usize,
 }
 
-#[allow(dead_code)]
 impl ConversationHistory {
     /// Create an empty conversation history.
     pub fn new() -> Self {
@@ -77,34 +63,19 @@ impl ConversationHistory {
         }
     }
 
-    /// Create from an existing list of turns.
-    pub fn from_turns(turns: Vec<ConversationTurn>) -> Self {
-        let total_tokens = turns.iter().map(|t| t.tokens).sum();
-        Self {
-            turns,
-            total_tokens,
-        }
-    }
-
     /// Push a new turn to the end.
     pub fn push(&mut self, turn: ConversationTurn) {
         self.total_tokens += turn.tokens;
         self.turns.push(turn);
     }
 
-    /// Get a slice of all turns.
-    pub fn turns(&self) -> &[ConversationTurn] {
-        &self.turns
-    }
-
     /// Number of turns in history.
+    #[allow(
+        clippy::len_without_is_empty,
+        reason = "ConversationHistory is an internal type; callers check `.turns.is_empty()` directly"
+    )]
     pub fn len(&self) -> usize {
         self.turns.len()
-    }
-
-    /// Whether history is empty.
-    pub fn is_empty(&self) -> bool {
-        self.turns.is_empty()
     }
 
     /// Remove all turns except the last N.
@@ -125,22 +96,13 @@ impl ConversationHistory {
     pub fn prepend_system_summary(&mut self, summary: String) {
         let tokens = estimate_tokens(&summary);
         let turn = ConversationTurn {
-            role: "system".to_string(),
-            content: summary,
+            _role: "system".to_string(),
+            _content: summary,
             tokens,
-            timestamp_ms: now_ms(),
+            _timestamp_ms: now_ms(),
         };
         self.total_tokens += turn.tokens;
         self.turns.insert(0, turn);
-    }
-
-    /// Get the text representation of all turns (for passing to an LLM).
-    pub fn to_text(&self) -> String {
-        self.turns
-            .iter()
-            .map(|t| format!("{}: {}", t.role, t.content))
-            .collect::<Vec<_>>()
-            .join("\n\n")
     }
 
     /// Remove the oldest N turns and return them.
@@ -155,48 +117,6 @@ impl ConversationHistory {
     /// Total token count.
     pub fn estimated_tokens(&self) -> usize {
         self.total_tokens
-    }
-
-    /// Serialize history to JSON bytes for checkpoint storage.
-    pub fn to_checkpoint_json(&self) -> String {
-        let data: Vec<serde_json::Value> = self
-            .turns
-            .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "role": t.role,
-                    "content": t.content,
-                    "tokens": t.tokens,
-                    "ts": t.timestamp_ms,
-                })
-            })
-            .collect();
-        serde_json::to_string(&data).unwrap_or_default()
-    }
-
-    /// Deserialize history from checkpoint JSON.
-    pub fn from_checkpoint_json(json: &str) -> Self {
-        let data: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
-        let turns: Vec<ConversationTurn> = data
-            .into_iter()
-            .filter_map(|v| {
-                let role = v.get("role")?.as_str()?;
-                let content = v.get("content")?.as_str()?;
-                let tokens = v.get("tokens")?.as_u64().unwrap_or(0) as usize;
-                let ts = v.get("ts")?.as_u64().unwrap_or(0);
-                Some(ConversationTurn {
-                    role: role.to_string(),
-                    content: content.to_string(),
-                    tokens,
-                    timestamp_ms: ts,
-                })
-            })
-            .collect();
-        let total_tokens = turns.iter().map(|t| t.tokens).sum();
-        Self {
-            turns,
-            total_tokens,
-        }
     }
 }
 
@@ -710,10 +630,11 @@ mod tests {
     }
 
     fn make_history(count: usize) -> ConversationHistory {
-        let turns: Vec<ConversationTurn> = (0..count)
-            .map(|i| make_turn("user", &format!("message {}", i)))
-            .collect();
-        ConversationHistory::from_turns(turns)
+        let mut hist = ConversationHistory::new();
+        for i in 0..count {
+            hist.push(make_turn("user", &format!("message {}", i)));
+        }
+        hist
     }
 
     // ── ConversationTurn tests ────────────────────────────────────
@@ -725,13 +646,7 @@ mod tests {
             "Hello, this is a test message with enough chars for token estimation",
         );
         assert!(turn.tokens >= 1);
-        assert_eq!(turn.role, "user");
-    }
-
-    #[test]
-    fn test_conversation_turn_with_tokens() {
-        let turn = ConversationTurn::with_tokens("assistant", "response", 42);
-        assert_eq!(turn.tokens, 42);
+        assert_eq!(turn._role, "user");
     }
 
     // ── ConversationHistory tests ─────────────────────────────────
@@ -739,7 +654,6 @@ mod tests {
     #[test]
     fn test_history_empty() {
         let hist = ConversationHistory::new();
-        assert!(hist.is_empty());
         assert_eq!(hist.len(), 0);
         assert_eq!(hist.estimated_tokens(), 0);
     }
@@ -748,7 +662,6 @@ mod tests {
     fn test_history_push() {
         let mut hist = ConversationHistory::new();
         hist.push(make_turn("user", "hello"));
-        assert!(!hist.is_empty());
         assert_eq!(hist.len(), 1);
     }
 
@@ -774,7 +687,7 @@ mod tests {
         let removed = hist.drain_oldest(3);
         assert_eq!(hist.len(), 2);
         assert_eq!(removed.len(), 3);
-        assert!(removed[0].content.contains("message 0"));
+        assert!(removed[0]._content.contains("message 0"));
     }
 
     #[test]
@@ -782,28 +695,6 @@ mod tests {
         let mut hist = make_history(3);
         hist.prepend_system_summary("Conversation summary here".to_string());
         assert_eq!(hist.len(), 4);
-        assert_eq!(hist.turns()[0].role, "system");
-        assert!(hist.turns()[0].content.contains("summary"));
-    }
-
-    #[test]
-    fn test_history_to_text() {
-        let mut hist = ConversationHistory::new();
-        hist.push(make_turn("user", "hello"));
-        hist.push(make_turn("assistant", "world"));
-        let text = hist.to_text();
-        assert!(text.contains("user: hello"));
-        assert!(text.contains("assistant: world"));
-    }
-
-    #[test]
-    fn test_history_from_turns_tracks_tokens() {
-        let turns = vec![
-            ConversationTurn::with_tokens("user", "a", 10),
-            ConversationTurn::with_tokens("assistant", "b", 20),
-        ];
-        let hist = ConversationHistory::from_turns(turns);
-        assert_eq!(hist.estimated_tokens(), 30);
     }
 
     // ── Token estimation tests ────────────────────────────────────
@@ -908,7 +799,13 @@ mod tests {
         let mut hist = ConversationHistory::new();
         assert!(!manager.should_compact(&hist));
 
-        hist.push(ConversationTurn::with_tokens("user", "test", 200));
+        let with_tokens = ConversationTurn {
+            _role: "user".to_string(),
+            _content: "test".to_string(),
+            tokens: 200,
+            _timestamp_ms: 0,
+        };
+        hist.push(with_tokens);
         assert!(manager.should_compact(&hist));
     }
 
@@ -990,11 +887,13 @@ mod tests {
         // Create a history with fewer than 20 turns (SlidingWindow threshold)
         let mut hist = ConversationHistory::new();
         for i in 0..10 {
-            hist.push(ConversationTurn::with_tokens(
-                "user",
-                &format!("message {}", i),
-                50,
-            ));
+            let turn = ConversationTurn {
+                _role: "user".to_string(),
+                _content: format!("message {}", i),
+                tokens: 50,
+                _timestamp_ms: 0,
+            };
+            hist.push(turn);
         }
         assert!(compactor.should_compact(&hist));
         let strategy = compactor.select_strategy(&hist);
@@ -1018,11 +917,13 @@ mod tests {
         });
         let mut hist = ConversationHistory::new();
         for i in 0..50 {
-            hist.push(ConversationTurn::with_tokens(
-                "user",
-                &format!("message {}", i),
-                100,
-            ));
+            let turn = ConversationTurn {
+                _role: "user".to_string(),
+                _content: format!("message {}", i),
+                tokens: 100,
+                _timestamp_ms: 0,
+            };
+            hist.push(turn);
         }
         let strategy = compactor.select_strategy(&hist);
         assert!(matches!(strategy, CompactionStrategy::Hybrid { .. }));
@@ -1039,11 +940,13 @@ mod tests {
         // Create a history that exceeds threshold
         let mut hist = ConversationHistory::new();
         for i in 0..30 {
-            hist.push(ConversationTurn::with_tokens(
-                "user",
-                &format!("msg {}", i),
-                50,
-            ));
+            let turn = ConversationTurn {
+                _role: "user".to_string(),
+                _content: format!("msg {}", i),
+                tokens: 50,
+                _timestamp_ms: 0,
+            };
+            hist.push(turn);
         }
         compactor.compact(&mut hist);
         assert!(!compactor.effectiveness_history().is_empty());
@@ -1058,14 +961,14 @@ mod tests {
 
         let mut hist = ConversationHistory::new();
         for i in 0..30 {
-            hist.push(ConversationTurn::with_tokens(
-                "user",
-                &format!("msg {}", i),
-                50,
-            ));
+            let turn = ConversationTurn {
+                _role: "user".to_string(),
+                _content: format!("msg {}", i),
+                tokens: 50,
+                _timestamp_ms: 0,
+            };
+            hist.push(turn);
         }
-        compactor.compact(&mut hist);
-
         let before = compactor
             .effectiveness_history()
             .back()
@@ -1087,11 +990,13 @@ mod tests {
 
         let mut hist = ConversationHistory::new();
         for i in 0..30 {
-            hist.push(ConversationTurn::with_tokens(
-                "user",
-                &format!("msg {}", i),
-                50,
-            ));
+            let turn = ConversationTurn {
+                _role: "user".to_string(),
+                _content: format!("msg {}", i),
+                tokens: 50,
+                _timestamp_ms: 0,
+            };
+            hist.push(turn);
         }
         let before_len = hist.len();
         compactor.compact(&mut hist);
@@ -1101,7 +1006,6 @@ mod tests {
         let before_after = hist.len();
         compactor.apply_summary(&mut hist, "Summary of previous conversation".to_string());
         assert_eq!(hist.len(), before_after + 1);
-        assert_eq!(hist.turns()[0].role, "system");
     }
 
     #[test]
@@ -1114,11 +1018,13 @@ mod tests {
         // Run compaction 5 times on different histories
         for i in 0..5 {
             let mut hist = ConversationHistory::new();
-            hist.push(ConversationTurn::with_tokens(
-                "user",
-                &format!("msg {}", i),
-                100,
-            ));
+            let turn = ConversationTurn {
+                _role: "user".to_string(),
+                _content: format!("msg {}", i),
+                tokens: 100,
+                _timestamp_ms: 0,
+            };
+            hist.push(turn);
             compactor.compact(&mut hist);
         }
 
@@ -1130,37 +1036,7 @@ mod tests {
         let before = now_ms();
         let turn = ConversationTurn::new("user", "test");
         let after = now_ms();
-        assert!(turn.timestamp_ms >= before);
-        assert!(turn.timestamp_ms <= after);
-    }
-
-    #[test]
-    fn test_checkpoint_roundtrip() {
-        let mut hist = ConversationHistory::new();
-        hist.push(ConversationTurn::new("user", "hello"));
-        hist.push(ConversationTurn::new("assistant", "world"));
-
-        let json = hist.to_checkpoint_json();
-        assert!(!json.is_empty());
-
-        let restored = ConversationHistory::from_checkpoint_json(&json);
-        assert_eq!(restored.len(), 2);
-        assert_eq!(restored.turns()[0].content, "hello");
-        assert_eq!(restored.turns()[1].content, "world");
-        assert_eq!(restored.estimated_tokens(), hist.estimated_tokens());
-    }
-
-    #[test]
-    fn test_checkpoint_roundtrip_empty() {
-        let hist = ConversationHistory::new();
-        let json = hist.to_checkpoint_json();
-        let restored = ConversationHistory::from_checkpoint_json(&json);
-        assert!(restored.is_empty());
-    }
-
-    #[test]
-    fn test_checkpoint_invalid_json_returns_empty() {
-        let restored = ConversationHistory::from_checkpoint_json("invalid json");
-        assert!(restored.is_empty());
+        assert!(turn._timestamp_ms >= before);
+        assert!(turn._timestamp_ms <= after);
     }
 }

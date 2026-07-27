@@ -4,7 +4,7 @@
 //! `new_acp_server` constructor and the shared `wire_server` helper.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use tracing::info;
 
@@ -13,6 +13,7 @@ use crate::agent::AgentRegistry;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
 use crate::flow::FlowManager;
 use crate::observability::live_performance::LivePerformanceFeed;
+use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
 
@@ -33,11 +34,18 @@ pub async fn new_acp_server(
     runtime_config: RuntimeConfig,
 
     app_config: Option<Arc<crate::config::AppConfig>>,
+    skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
 ) -> AcpServer {
     // Use ServerBuilder to create the server with correct field names and types
     use crate::acp::server::ServerBuilder;
 
     let mut builder = ServerBuilder::new();
+
+    // If a pre-loaded skill registry was provided by bootstrap, inject it
+    // so that ServerBuilder::build() skips the redundant disk scan.
+    if let Some(registry) = skill_registry {
+        builder = builder.with_pre_loaded_skill_registry(registry);
+    }
 
     // Set the components that ServerBuilder supports
     builder = builder.with_flow_manager(flow.clone());

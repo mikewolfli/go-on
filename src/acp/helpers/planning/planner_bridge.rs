@@ -13,7 +13,7 @@ use crate::orchestration::planner_execution_graph::PlannerExecutionBridge;
 use crate::reinforcement::WorkflowGeneratedArtifact;
 
 /// Build PlannerExecutionBridge from request context.
-pub fn build_planner_bridge(
+pub async fn build_planner_bridge(
     task_id: impl Into<String>,
     phase: impl Into<String>,
     objective: impl Into<String>,
@@ -29,7 +29,7 @@ pub fn build_planner_bridge(
         input: json!({"params": params}),
     };
 
-    PlannerExecutionBridge::from_task(&envelope)
+    PlannerExecutionBridge::from_task(&envelope).await
 }
 
 /// Apply DAG phased execution order to workflow artifact.
@@ -71,16 +71,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build_planner_bridge_returns_valid_bridge() {
-        let bridge = build_planner_bridge("task-1", "execution", "Fix the bug", &json!({}));
+    #[tokio::test]
+    async fn test_build_planner_bridge_returns_valid_bridge() {
+        let bridge = build_planner_bridge("task-1", "execution", "Fix the bug", &json!({})).await;
         // Bridge should be constructed without panicking
         assert!(bridge.total_steps > 0, "planner should produce steps");
     }
 
-    #[test]
-    fn test_apply_dag_order_to_empty_workflow() {
-        let bridge = PlannerExecutionBridge::from_task(&make_task_envelope());
+    #[tokio::test]
+    async fn test_apply_dag_order_to_empty_workflow() {
+        let bridge = PlannerExecutionBridge::from_task(&make_task_envelope()).await;
         let mut workflow = crate::reinforcement::WorkflowGeneratedArtifact {
             generated_at: 0,
             task: "test".to_string(),
@@ -105,9 +105,9 @@ mod tests {
         assert!(updated, "DAG order should be applied");
     }
 
-    #[test]
-    fn test_planner_execution_graph_payload_returns_expected_keys() {
-        let bridge = PlannerExecutionBridge::from_task(&make_task_envelope());
+    #[tokio::test]
+    async fn test_planner_execution_graph_payload_returns_expected_keys() {
+        let bridge = PlannerExecutionBridge::from_task(&make_task_envelope()).await;
         let payload = planner_execution_graph_payload(&bridge);
 
         assert!(

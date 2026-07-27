@@ -1334,7 +1334,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        lifecycle_handlers::build_health_probes_payload(server),
+                        lifecycle_handlers::build_health_probes_payload(server).await,
                     )
                     .await
                 }
@@ -1351,7 +1351,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        lifecycle_handlers::build_runtime_self_model_payload(server, &params),
+                        lifecycle_handlers::build_runtime_self_model_payload(server, &params).await,
                     )
                     .await
                 }
@@ -1359,7 +1359,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        lifecycle_handlers::build_provider_status_payload(server),
+                        lifecycle_handlers::build_provider_status_payload(server).await,
                     )
                     .await
                 }
@@ -1375,7 +1375,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        lifecycle_handlers::build_runtime_stability_payload(server),
+                        lifecycle_handlers::build_runtime_stability_payload(server).await,
                     )
                     .await
                 }
@@ -1854,7 +1854,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        lifecycle_handlers::capabilities_list_payload(server),
+                        lifecycle_handlers::capabilities_list_payload(server).await,
                     )
                     .await
                 }
@@ -2126,6 +2126,7 @@ pub async fn handle_request(
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
+    use std::sync::Arc;
 
     #[cfg(not(feature = "backend-postgres"))]
     use super::collect_vector_context_snippets;
@@ -2241,25 +2242,32 @@ mod tests {
     }
 
     #[cfg(not(feature = "backend-postgres"))]
-    #[test]
-    fn collect_vector_context_snippets_searches_execution_and_semantic_phase() {
+    #[tokio::test]
+    async fn collect_vector_context_snippets_searches_execution_and_semantic_phase() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("request-vector-dual-phase.sqlite3");
-        let store = VectorStore::new(&db_path, 64, 256).expect("vector store should initialize");
+        let store =
+            Arc::new(VectorStore::new(&db_path, 64, 256).expect("vector store should initialize"));
 
-        store
+        Arc::clone(&store)
             .upsert(
                 "coding",
                 "fix retrieval alignment",
                 "semantic-phase knowledge",
             )
+            .await
             .expect("semantic phase upsert should succeed");
 
         // No entries under execution phase key; this verifies we still retrieve
         // by semantic phase fallback and avoid false miss caused by key mismatch.
         let phases = vec!["phase-1".to_string(), "coding".to_string()];
-        let snippets =
-            collect_vector_context_snippets(&store, &phases, "fix retrieval alignment", 3);
+        let snippets = collect_vector_context_snippets(
+            Arc::clone(&store),
+            &phases,
+            "fix retrieval alignment",
+            3,
+        )
+        .await;
 
         assert!(!snippets.is_empty());
         assert!(snippets

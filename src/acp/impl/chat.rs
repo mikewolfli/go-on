@@ -1074,6 +1074,7 @@ pub(crate) async fn apply_review_gate_assemble(
                 memory_promotion_result.as_ref(),
                 started.elapsed().as_millis() as u64,
             )
+            .await
         } else {
             (None, None, None)
         };
@@ -1161,7 +1162,8 @@ pub(crate) async fn apply_review_gate_assemble(
             .first()
             .map(|m| m.content.as_str())
             .unwrap_or(""),
-    );
+    )
+    .await;
 
     Ok(result)
 }

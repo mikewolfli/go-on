@@ -10,9 +10,26 @@
 
 use std::io::Write;
 
+/// Server availability timeout for CI skip check.
+const SERVER_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 const INVITE_URL: &str = "https://agent-world-test.chuanshuo.com.cn/agent-invite/invite_451568779c4b4af3b64f4119a3daca55#task_access_token=task_f963e58b8413fabc1e1a0a62368ffb127c463d336033a730";
 const WORLD_API_BASE: &str = "https://agent-world-test.chuanshuo.com.cn/api/v1";
 const SUBMIT_ENDPOINT: &str = "/agent-binding/requests";
+
+/// Check if the Agent World server is reachable. Skips test when unreachable.
+fn check_server_available() -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let addr = match "agent-world-test.chuanshuo.com.cn:443"
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+    {
+        Some(a) => a,
+        None => return false,
+    };
+    TcpStream::connect_timeout(&addr, SERVER_CHECK_TIMEOUT).is_ok()
+}
 
 fn gen_id_dir() -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -95,6 +112,13 @@ fn sign_base64(sk_pem: &str, payload: &str) -> String {
 
 #[tokio::test]
 async fn test_full_binding_flow() {
+    // Gracefully skip when the external server is unreachable (CI, no network).
+    if !check_server_available() {
+        eprintln!(
+            "SKIP: Agent World test server not reachable (agent-world-test.chuanshuo.com.cn:443)"
+        );
+        return;
+    }
     // ── Step 0: 解析 URL ─────────────────────────────────────
     let host = "agent-world-test.chuanshuo.com.cn";
     let path_segments: Vec<&str> = INVITE_URL

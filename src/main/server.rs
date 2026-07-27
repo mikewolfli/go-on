@@ -31,11 +31,15 @@ use super::report::{emit_config_warnings, print_completeness_report, print_runti
 /// is injected into the `ContinuousLearningCenter` for LLM-based semantic
 /// distillation (replacing the TF-IDF fallback).  Pass `None` or an empty handle
 /// to skip injection.
+///
+/// `skill_registry` — an optional pre-populated skill registry from bootstrap,
+/// avoiding a redundant scan of `~/.agents/skills/` on server startup.
 pub(crate) async fn start_server(
     config: Arc<AppConfig>,
     cli: &Cli,
     config_path: &Path,
     cl_agent_handle: Option<AgentInjector>,
+    skill_registry: Option<Arc<std::sync::RwLock<crate::orchestration::skill::SkillRegistry>>>,
 ) -> Result<()> {
     // Create HTTP client with timeout
     // Use HTTP/1.1 only to avoid HTTP/2 'unknown stream error' issues with
@@ -175,7 +179,8 @@ pub(crate) async fn start_server(
             Some(config_path),
             cache.as_deref(),
             vector_store.as_deref(),
-        )?;
+        )
+        .await?;
         let path = persist_runtime_healthcheck(&ledger, &report)?;
         println!(
             "healthcheck: {:?} -> {}",
@@ -190,7 +195,8 @@ pub(crate) async fn start_server(
             Some(config_path),
             cache.as_deref(),
             vector_store.as_deref(),
-        )?;
+        )
+        .await?;
         print_runtime_status(config_path, &report);
         print_completeness_report(config.as_ref(), &report);
         return Ok(());
@@ -211,18 +217,10 @@ pub(crate) async fn start_server(
         return Ok(());
     }
 
-    // Get runtime configuration
+    // Get runtime configuration.
+    // protocol.mode is already synced into runtime.protocol_mode during
+    // AppConfig::load() (parser.rs), so no manual TOML re-read is needed.
     let mut runtime_config = config.runtime.clone().unwrap_or_default();
-    // Read [protocol].mode (supports 5 options with adaptive default)
-    if let Ok(config_str) = std::fs::read_to_string(config_path) {
-        if let Ok(toml_value) = config_str.parse::<toml::Value>() {
-            if let Some(protocol_section) = toml_value.get("protocol") {
-                if let Some(mode) = protocol_section.get("mode").and_then(|v| v.as_str()) {
-                    runtime_config.protocol_mode = Some(mode.to_string());
-                }
-            }
-        }
-    }
 
     // CLI override has higher priority than config file protocol section.
     if let Some(mode) = validate_cli_protocol_mode(cli.protocol_mode.as_deref())? {
@@ -265,6 +263,7 @@ pub(crate) async fn start_server(
         autotune_config,
         autotune_state_path,
         http_client,
+        skill_registry,
     )
     .await
 }
@@ -358,7 +357,7 @@ pub(crate) fn handle_secret_commands(cli: &Cli, config_path: &Path) -> Result<bo
 ///
 /// Returns `Some(config)` if validation passed and the server should start,
 /// or `None` if a validation-only command was handled and `run()` should return.
-pub(crate) fn handle_validation_mode(
+pub(crate) async fn handle_validation_mode(
     cli: &Cli,
     config_path: &Path,
 ) -> Result<Option<Arc<AppConfig>>> {
@@ -435,14 +434,14 @@ pub(crate) fn handle_validation_mode(
     }
 
     if cli.status {
-        let report = build_runtime_healthcheck_report(Some(config_path), None, None)?;
+        let report = build_runtime_healthcheck_report(Some(config_path), None, None).await?;
         print_runtime_status(config_path, &report);
         print_completeness_report(&config, &report);
         return Ok(None);
     }
 
     if cli.diagnose {
-        let report = build_runtime_healthcheck_report(Some(config_path), None, None)?;
+        let report = build_runtime_healthcheck_report(Some(config_path), None, None).await?;
         let error_count = report
             .components
             .iter()

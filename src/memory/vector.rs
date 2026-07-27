@@ -11,11 +11,13 @@ compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabl
 use crate::acp::prelude::now_ts;
 #[cfg(not(feature = "backend-postgres"))]
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(not(feature = "backend-postgres"))]
 use std::sync::Mutex as StdMutex;
 #[cfg(not(feature = "backend-postgres"))]
 use std::sync::Once;
+use tokio::task::spawn_blocking;
 
 #[cfg(not(feature = "backend-postgres"))]
 use crate::memory::embedding_provider::{
@@ -406,7 +408,7 @@ enum SqliteVectorMode {
 #[derive(Debug)]
 pub struct VectorStore {
     /// SQLite connection (mutex-protected)
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     /// Embedding dimensions
     dimensions: usize,
     /// Maximum number of entries to keep
@@ -421,7 +423,7 @@ pub struct VectorStore {
     embedding_provider: Option<ConfigurableEmbeddingProvider>,
     /// Optional in-memory HNSW index for approximate nearest neighbor search.
     /// Built lazily on first search; updated on upsert when present.
-    hnsw: StdMutex<Option<HnswIndex>>,
+    hnsw: Arc<StdMutex<Option<HnswIndex>>>,
 }
 
 #[cfg(not(feature = "backend-postgres"))]
@@ -507,12 +509,12 @@ impl VectorStore {
         let mode = resolve_sqlite_vector_mode(&conn)?;
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             dimensions,
             max_entries,
             mode,
             embedding_provider: None,
-            hnsw: StdMutex::new(None),
+            hnsw: Arc::new(StdMutex::new(None)),
         })
     }
 
@@ -548,42 +550,51 @@ impl VectorStore {
     ///
     /// # Returns
     /// * `Result<()>` - Returns Ok(()) if the entry is upserted successfully, or an error if something goes wrong
-    pub fn upsert(&self, phase: &str, query_text: &str, response_text: &str) -> Result<()> {
-        let query = query_text.trim();
-        let response = response_text.trim();
-        if query.is_empty() || response.is_empty() {
-            return Ok(());
-        }
-        let embedding = if let Some(ref provider) = self.embedding_provider {
-            let vec = provider.embed(query);
-            if vec.len() != self.dimensions {
-                anyhow::bail!(
-                    "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
-                    vec.len(),
-                    self.dimensions,
-                );
+    pub async fn upsert(
+        self: Arc<Self>,
+        phase: &str,
+        query_text: &str,
+        response_text: &str,
+    ) -> Result<()> {
+        let phase = phase.to_string();
+        let query_text = query_text.to_string();
+        let response_text = response_text.to_string();
+        spawn_blocking(move || {
+            let query = query_text.trim();
+            let response = response_text.trim();
+            if query.is_empty() || response.is_empty() {
+                return Ok(());
             }
-            vec
-        } else {
-            embed_text(query, self.dimensions)
-        };
-        let embedding_json = serde_json::to_string(&embedding)?;
-        let embedding_blob = embedding_blob(&embedding);
-        let memory_key = build_memory_key(phase, query);
-        let now = now_ts();
+            let embedding = if let Some(ref provider) = self.embedding_provider {
+                let vec = provider.embed(query);
+                if vec.len() != self.dimensions {
+                    anyhow::bail!(
+                        "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
+                        vec.len(),
+                        self.dimensions,
+                    );
+                }
+                vec
+            } else {
+                embed_text(query, self.dimensions)
+            };
+            let embedding_json = serde_json::to_string(&embedding)?;
+            let embedding_blob = embedding_blob(&embedding);
+            let memory_key = build_memory_key(&phase, query);
+            let now = now_ts();
 
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'upsert', recovering");
-            poisoned.into_inner()
-        });
+            let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'upsert', recovering");
+                poisoned.into_inner()
+            });
 
-        let (json_value, blob_value): (Option<String>, Option<Vec<u8>>) = match self.mode {
-            SqliteVectorMode::SqliteVec => (None, Some(embedding_blob)),
-            SqliteVectorMode::JsonFallback => (Some(embedding_json), None),
-        };
+            let (json_value, blob_value): (Option<String>, Option<Vec<u8>>) = match self.mode {
+                SqliteVectorMode::SqliteVec => (None, Some(embedding_blob)),
+                SqliteVectorMode::JsonFallback => (Some(embedding_json), None),
+            };
 
-        conn.execute(
-            "
+            conn.execute(
+                "
             INSERT INTO vector_memory(
                 memory_key,
                 phase,
@@ -602,27 +613,24 @@ impl VectorStore {
                 embedding_json = excluded.embedding_json,
                 embedding_blob = excluded.embedding_blob,
                 updated_at = excluded.updated_at
-            ",
-            params![memory_key, phase, query, response, json_value, blob_value, now,],
-        )?;
-
-        const SENTINEL_LIMIT: i64 = i64::MAX; // portable replacement for SQLite's LIMIT -1
-
-        // Collect evicted memory keys before deleting from SQLite.
-        // NOTE: `conn` is already locked above — reuse it to avoid deadlock
-        // on std::sync::Mutex (non-reentrant).
-        let evicted_keys: Vec<String> = {
-            let mut stmt = conn.prepare(
-                "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT ?2 OFFSET ?1",
+                ",
+                params![memory_key, phase, query, response, json_value, blob_value, now,],
             )?;
-            let rows = stmt.query_map(params![self.max_entries as i64, SENTINEL_LIMIT], |row| {
-                row.get::<_, String>(0)
-            })?;
-            rows.filter_map(|r| r.ok()).collect()
-        };
 
-        conn.execute(
-            "
+            const SENTINEL_LIMIT: i64 = i64::MAX;
+
+            let evicted_keys: Vec<String> = {
+                let mut stmt = conn.prepare(
+                    "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT ?2 OFFSET ?1",
+                )?;
+                let rows = stmt.query_map(params![self.max_entries as i64, SENTINEL_LIMIT], |row| {
+                    row.get::<_, String>(0)
+                })?;
+                rows.filter_map(|r| r.ok()).collect()
+            };
+
+            conn.execute(
+                "
             DELETE FROM vector_memory
             WHERE memory_key IN (
                 SELECT memory_key
@@ -630,28 +638,31 @@ impl VectorStore {
                 ORDER BY updated_at DESC
                 LIMIT ?2 OFFSET ?1
             )
-            ",
-            params![self.max_entries as i64, SENTINEL_LIMIT],
-        )?;
+                ",
+                params![self.max_entries as i64, SENTINEL_LIMIT],
+            )?;
 
-        // Update HNSW index if it exists (single lock acquisition)
-        if let Ok(mut hnsw_guard) = self.hnsw.lock() {
-            if let Some(ref mut hnsw) = *hnsw_guard {
-                for key in &evicted_keys {
-                    hnsw.remove(key);
+            // Update HNSW index if it exists
+            if let Ok(mut hnsw_guard) = self.hnsw.lock() {
+                if let Some(ref mut hnsw) = *hnsw_guard {
+                    for key in &evicted_keys {
+                        hnsw.remove(key);
+                    }
+                    hnsw.insert(
+                        embedding,
+                        HnswNodeMeta {
+                            memory_key,
+                            response_text: response.to_string(),
+                            updated_at: now,
+                        },
+                    );
                 }
-                hnsw.insert(
-                    embedding,
-                    HnswNodeMeta {
-                        memory_key,
-                        response_text: response.to_string(),
-                        updated_at: now,
-                    },
-                );
             }
-        }
 
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Search for similar entries
@@ -665,58 +676,60 @@ impl VectorStore {
     ///
     /// # Returns
     /// * `Result<(Vec<VectorHit>, VectorPrecisionFeedback)>` - Returns `Ok((Vec<VectorHit>, VectorPrecisionFeedback))` with the search results and precision feedback, or an error if something goes wrong
-    pub fn search(
-        &self,
+    pub async fn search(
+        self: Arc<Self>,
         phase: &str,
         query_text: &str,
         top_k: usize,
         min_similarity: f32,
         max_snippet_chars: usize,
     ) -> Result<(Vec<VectorHit>, VectorPrecisionFeedback)> {
-        if top_k == 0 {
-            return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
-        }
-
-        let query = query_text.trim();
-        if query.is_empty() {
-            return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
-        }
-
-        let query_embedding = if let Some(ref provider) = self.embedding_provider {
-            let vec = provider.embed(query);
-            if vec.len() != self.dimensions {
-                anyhow::bail!(
-                    "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
-                    vec.len(),
-                    self.dimensions,
-                );
+        let phase = phase.to_string();
+        let query_text = query_text.to_string();
+        spawn_blocking(move || {
+            if top_k == 0 {
+                return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
-            vec
-        } else {
-            embed_text(query, self.dimensions)
-        };
-        let now = now_ts();
-        let limit = self.max_entries.max(top_k);
 
-        // Try HNSW fast path — build index lazily if needed, then use it
-        if self.ensure_hnsw_index().is_ok() {
-            let hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector hnsw mutex poisoned in 'search', recovering");
-                poisoned.into_inner()
-            });
-            if hnsw_guard.is_some() {
-                // Drop lock before calling hnsw_search which will re-acquire it
-                drop(hnsw_guard);
-                return self.hnsw_search(
-                    &query_embedding,
-                    phase,
-                    top_k,
-                    min_similarity,
-                    max_snippet_chars,
-                    now,
-                );
+            let query = query_text.trim();
+            if query.is_empty() {
+                return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
-        }
+
+            let query_embedding = if let Some(ref provider) = self.embedding_provider {
+                let vec = provider.embed(query);
+                if vec.len() != self.dimensions {
+                    anyhow::bail!(
+                        "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
+                        vec.len(),
+                        self.dimensions,
+                    );
+                }
+                vec
+            } else {
+                embed_text(query, self.dimensions)
+            };
+            let now = now_ts();
+            let limit = self.max_entries.max(top_k);
+
+            // Try HNSW fast path
+            if self.ensure_hnsw_index().is_ok() {
+                let hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("vector hnsw mutex poisoned in 'search', recovering");
+                    poisoned.into_inner()
+                });
+                if hnsw_guard.is_some() {
+                    drop(hnsw_guard);
+                    return self.hnsw_search(
+                        &query_embedding,
+                        &phase,
+                        top_k,
+                        min_similarity,
+                        max_snippet_chars,
+                        now,
+                    );
+                }
+            }
 
         // Collect results within a locked scope, then release the lock
         // before doing sorting/processing (minimizes lock duration).
@@ -833,6 +846,9 @@ impl VectorStore {
 
         let feedback = VectorPrecisionFeedback::new(&hits);
         Ok((hits, feedback))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get phase summary
@@ -842,21 +858,27 @@ impl VectorStore {
     ///
     /// # Returns
     /// * `Result<Option<String>>` - Returns Ok(Some(String)) if a summary exists, Ok(None) if not, or an error if something goes wrong
-    pub fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
-            poisoned.into_inner()
-        });
+    pub async fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
+        let conn = self.conn.clone();
+        let phase = phase.to_string();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
+                poisoned.into_inner()
+            });
 
-        let summary = conn
-            .query_row(
-                "SELECT summary_text FROM phase_summary WHERE phase = ?1",
-                params![phase],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
+            let summary = conn
+                .query_row(
+                    "SELECT summary_text FROM phase_summary WHERE phase = ?1",
+                    params![phase],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
 
-        Ok(summary)
+            Ok(summary)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Upsert phase summary
@@ -867,84 +889,110 @@ impl VectorStore {
     ///
     /// # Returns
     /// * `Result<()>` - Returns Ok(()) if the summary is upserted successfully, or an error if something goes wrong
-    pub fn upsert_phase_summary(&self, phase: &str, summary_text: &str) -> Result<()> {
-        let text = summary_text.trim();
-        if text.is_empty() {
-            return Ok(());
-        }
+    pub async fn upsert_phase_summary(&self, phase: &str, summary_text: &str) -> Result<()> {
+        let conn = self.conn.clone();
+        let phase = phase.to_string();
+        let text = summary_text.trim().to_string();
+        spawn_blocking(move || {
+            if text.is_empty() {
+                return Ok(());
+            }
 
-        let now = now_ts();
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'upsert_phase_summary', recovering");
-            poisoned.into_inner()
-        });
+            let now = now_ts();
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'upsert_phase_summary', recovering");
+                poisoned.into_inner()
+            });
 
-        conn.execute(
-            "
+            conn.execute(
+                "
             INSERT INTO phase_summary(phase, summary_text, updated_at)
             VALUES(?1, ?2, ?3)
             ON CONFLICT(phase) DO UPDATE SET
                 summary_text = excluded.summary_text,
                 updated_at = excluded.updated_at
-            ",
-            params![phase, text, now],
-        )?;
+                ",
+                params![phase, text, now],
+            )?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get memory entry count
     ///
     /// # Returns
     /// * `Result<u64>` - Returns Ok(u64) with the number of memory entries, or an error if something goes wrong
-    pub fn memory_entry_count(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
-            poisoned.into_inner()
-        });
-        let count = conn.query_row("SELECT COUNT(*) FROM vector_memory", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        Ok(count.max(0) as u64)
+    pub async fn memory_entry_count(&self) -> Result<u64> {
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
+                poisoned.into_inner()
+            });
+            let count = conn.query_row("SELECT COUNT(*) FROM vector_memory", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+            Ok(count.max(0) as u64)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get summary entry count
     ///
     /// # Returns
     /// * `Result<u64>` - Returns Ok(u64) with the number of summary entries, or an error if something goes wrong
-    pub fn summary_entry_count(&self) -> Result<u64> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
-            poisoned.into_inner()
-        });
-        let count = conn.query_row("SELECT COUNT(*) FROM phase_summary", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        Ok(count.max(0) as u64)
+    pub async fn summary_entry_count(&self) -> Result<u64> {
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
+                poisoned.into_inner()
+            });
+            let count = conn.query_row("SELECT COUNT(*) FROM phase_summary", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+            Ok(count.max(0) as u64)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Clear all entries
     ///
     /// # Returns
     /// * `Result<(usize, usize)>` - Returns Ok((usize, usize)) with the number of memory entries and summary entries deleted, or an error if something goes wrong
-    pub fn clear_all(&self) -> Result<(usize, usize)> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'clear', recovering");
-            poisoned.into_inner()
-        });
-        let memory_deleted = conn.execute("DELETE FROM vector_memory", [])?;
-        let summaries_deleted = conn.execute("DELETE FROM phase_summary", [])?;
-        Ok((memory_deleted, summaries_deleted))
+    pub async fn clear_all(&self) -> Result<(usize, usize)> {
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'clear', recovering");
+                poisoned.into_inner()
+            });
+            let memory_deleted = conn.execute("DELETE FROM vector_memory", [])?;
+            let summaries_deleted = conn.execute("DELETE FROM phase_summary", [])?;
+            Ok((memory_deleted, summaries_deleted))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Reclaim SQLite free pages after retention cleanup.
-    pub fn vacuum(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
-            poisoned.into_inner()
-        });
-        conn.execute_batch("VACUUM;")?;
-        Ok(())
+    pub async fn vacuum(&self) -> Result<()> {
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
+                poisoned.into_inner()
+            });
+            conn.execute_batch("VACUUM;")?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Ensure the in-memory HNSW index is built from SQLite data.
@@ -1031,7 +1079,7 @@ impl VectorStore {
     fn hnsw_search(
         &self,
         query_embedding: &[f32],
-        phase: &str,
+        _phase: &str,
         top_k: usize,
         min_similarity: f32,
         max_snippet_chars: usize,
@@ -1043,8 +1091,7 @@ impl VectorStore {
         });
 
         let Some(ref hnsw) = *hnsw_guard else {
-            // Fallback: no HNSW index
-            return self.search(phase, "", top_k, min_similarity, max_snippet_chars);
+            anyhow::bail!("HNSW index not available");
         };
 
         // Prefetch more candidates than top_k because recency blending may re-rank
@@ -1247,41 +1294,48 @@ fn build_memory_key(phase: &str, query_text: &str) -> String {
 #[cfg(all(test, not(feature = "backend-postgres")))]
 mod tests {
     use super::{VectorPrecisionFeedback, VectorStore};
+    use std::sync::Arc;
 
-    #[test]
-    fn vector_store_upsert_and_search() {
+    #[tokio::test]
+    async fn vector_store_upsert_and_search() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("vector.sqlite3");
 
-        let store = VectorStore::new(&db_path, 64, 200).expect("vector store init should work");
-        store
+        let store =
+            Arc::new(VectorStore::new(&db_path, 64, 200).expect("vector store init should work"));
+        Arc::clone(&store)
             .upsert(
                 "coding",
                 "optimize rust async cache",
                 "Use sqlite cache and tune ttl for repeated requests.",
             )
+            .await
             .expect("upsert should work");
 
-        let (hits, feedback) = store
+        let (hits, feedback) = Arc::clone(&store)
             .search("coding", "how to optimize async cache", 2, 0.1, 200)
+            .await
             .expect("search should work");
         assert!(!hits.is_empty());
         assert!(feedback.hit_count > 0);
         assert!(feedback.avg_similarity > 0.0);
     }
 
-    #[test]
-    fn vector_store_phase_summary_roundtrip() {
+    #[tokio::test]
+    async fn vector_store_phase_summary_roundtrip() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("vector.sqlite3");
 
-        let store = VectorStore::new(&db_path, 64, 200).expect("vector store init should work");
+        let store =
+            Arc::new(VectorStore::new(&db_path, 64, 200).expect("vector store init should work"));
         store
             .upsert_phase_summary("coding", "short summary")
+            .await
             .expect("upsert summary should work");
 
         let summary = store
             .get_phase_summary("coding")
+            .await
             .expect("get summary should work");
         assert_eq!(summary.as_deref(), Some("short summary"));
     }
@@ -1318,19 +1372,21 @@ mod tests {
         assert!((feedback.avg_similarity - 0.0).abs() < f32::EPSILON);
     }
 
-    #[test]
-    fn vector_search_time_decay_demotes_stale_entry() {
+    #[tokio::test]
+    async fn vector_search_time_decay_demotes_stale_entry() {
         #[cfg(not(feature = "backend-postgres"))]
         use rusqlite::{params, Connection};
 
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("vector_decay.sqlite3");
 
-        let store = VectorStore::new(&db_path, 64, 200).expect("vector store init should work");
+        let store =
+            Arc::new(VectorStore::new(&db_path, 64, 200).expect("vector store init should work"));
 
         // Insert a fresh entry with an identical query to get identical embeddings.
-        store
+        Arc::clone(&store)
             .upsert("coding", "rust async performance", "fresh answer")
+            .await
             .expect("fresh upsert should work");
 
         // Back-date an entry to 180 days ago directly in SQLite to simulate stale knowledge.
@@ -1366,8 +1422,9 @@ mod tests {
         }
 
         // The fresh entry should rank higher than the stale one despite similar embeddings.
-        let (hits, _) = store
+        let (hits, _) = Arc::clone(&store)
             .search("coding", "rust async performance", 5, 0.0, 200)
+            .await
             .expect("search should work");
 
         // Verify fresh entry ranked first (highest blended score).
@@ -1381,25 +1438,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hnsw_index_insert_and_search_basic() {
+    #[tokio::test]
+    async fn hnsw_index_insert_and_search_basic() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("hnsw_basic.sqlite3");
-        let store = VectorStore::new(&db_path, 64, 200).expect("vector store init");
+        let store = Arc::new(VectorStore::new(&db_path, 64, 200).expect("vector store init"));
 
         // Insert enough entries to trigger HNSW construction
         for i in 0..50 {
             let query = format!("rust feature number {i}");
             let response = format!("response for feature {i}");
-            store.upsert("test", &query, &response).expect("upsert");
+            Arc::clone(&store)
+                .upsert("test", &query, &response)
+                .await
+                .expect("upsert");
         }
 
         // Trigger HNSW build by calling ensure_hnsw_index
         store.ensure_hnsw_index().expect("ensure_hnsw_index");
 
         // Search via HNSW path
-        let (hits, feedback) = store
+        let (hits, feedback) = Arc::clone(&store)
             .search("test", "rust feature number 5", 5, 0.0, 200)
+            .await
             .expect("hnsw search");
         assert!(!hits.is_empty(), "HNSW search should return hits");
         assert!(
@@ -1413,19 +1474,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hnsw_index_functional_test() {
+    #[tokio::test]
+    async fn hnsw_index_functional_test() {
         // Functional test: validates HNSW build + search with a moderate dataset.
         // Uses 100 vectors (not 10K) for fast execution in CI.
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("hnsw_func.sqlite3");
-        let store = VectorStore::new(&db_path, 128, 500).expect("vector store init");
+        let store = Arc::new(VectorStore::new(&db_path, 128, 500).expect("vector store init"));
 
         // Insert 100 vectors - enough to validate the HNSW index works
         for i in 0..100 {
             let query = format!("functional test query number {i}");
             let response = format!("functional test response {i}");
-            store.upsert("bench", &query, &response).expect("upsert");
+            Arc::clone(&store)
+                .upsert("bench", &query, &response)
+                .await
+                .expect("upsert");
         }
 
         // Build the HNSW index
@@ -1439,8 +1503,9 @@ mod tests {
         // 2. At least one of the top-10 results matches each query index
         for query_idx in [0, 25, 50, 99] {
             let query = format!("functional test query number {query_idx}");
-            let (hits, _) = store
+            let (hits, _) = Arc::clone(&store)
                 .search("bench", &query, 10, 0.0, 200)
+                .await
                 .expect("search should succeed");
             assert!(
                 !hits.is_empty(),
@@ -1458,19 +1523,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hnsw_insert_empty_and_build() {
+    #[tokio::test]
+    async fn hnsw_insert_empty_and_build() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("hnsw_empty.sqlite3");
-        let store = VectorStore::new(&db_path, 64, 100).expect("vector store init");
+        let store = Arc::new(VectorStore::new(&db_path, 64, 100).expect("vector store init"));
 
         // Build HNSW with empty DB
         let built = store.ensure_hnsw_index().expect("ensure_hnsw_index empty");
         assert!(built, "should build empty index");
 
         // Search on empty index should return no results
-        let (hits, feedback) = store
+        let (hits, feedback) = Arc::clone(&store)
             .search("test", "something", 5, 0.0, 200)
+            .await
             .expect("search on empty");
         assert!(hits.is_empty());
         assert_eq!(feedback.hit_count, 0);

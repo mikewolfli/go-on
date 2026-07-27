@@ -1,7 +1,7 @@
 //! Cache implementation
 //!
 //! Conditionally compiled:
-//! - `backend-sqlite` (local, simple-server): rusqlite-backed, sync API
+//! - `backend-sqlite` (local, simple-server): rusqlite-backed, async API via spawn_blocking
 //! - `backend-postgres` (multi-users-server): postgres-backed sync API
 
 // Ensure exactly one backend feature is enabled.
@@ -10,11 +10,12 @@ compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabl
 #[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
 compile_error!("one of 'backend-sqlite' or 'backend-postgres' must be enabled");
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::acp::prelude::now_ts;
 
 use anyhow::Result;
+use tokio::task::spawn_blocking;
 
 // ─── Shared types (both backends) ────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ use std::path::Path;
 #[derive(Debug)]
 pub struct ResponseCache {
     /// SQLite connection (rwlock-protected)
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     /// Default time-to-live for cache entries in seconds
     default_ttl_seconds: u64,
     /// Maximum number of entries to keep in the cache
@@ -98,7 +99,7 @@ impl ResponseCache {
         )?;
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             default_ttl_seconds,
             max_entries,
         })
@@ -111,48 +112,52 @@ impl ResponseCache {
     ///
     /// # Returns
     /// * `Result<Option<CachedResponse>>` - Returns Ok(Some(CachedResponse)) if the key is found and not expired, Ok(None) if not found, or an error if something goes wrong
-    pub fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
-        let now = now_ts();
-        let conn = self
-            .conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pub async fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let cache_key = cache_key.to_string();
+        spawn_blocking(move || {
+            let now = now_ts();
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        conn.execute(
-            "DELETE FROM response_cache WHERE expires_at <= ?1",
-            params![now],
-        )?;
+            conn.execute(
+                "DELETE FROM response_cache WHERE expires_at <= ?1",
+                params![now],
+            )?;
 
-        let found = conn
-            .query_row(
-                "
+            let found = conn
+                .query_row(
+                    "
                 SELECT response_text, agent_name
                 FROM response_cache
                 WHERE cache_key = ?1 AND expires_at > ?2
-                ",
-                params![cache_key, now],
-                |row| {
-                    Ok(CachedResponse {
-                        response_text: row.get::<_, String>(0)?,
-                        agent_name: row.get::<_, Option<String>>(1)?,
-                    })
-                },
-            )
-            .optional()?;
+                    ",
+                    params![cache_key, now],
+                    |row| {
+                        Ok(CachedResponse {
+                            response_text: row.get::<_, String>(0)?,
+                            agent_name: row.get::<_, Option<String>>(1)?,
+                        })
+                    },
+                )
+                .optional()?;
 
-        if found.is_some() {
-            conn.execute(
-                "
+            if found.is_some() {
+                conn.execute(
+                    "
                 UPDATE response_cache
                 SET hit_count = hit_count + 1,
                     last_hit_at = ?2
                 WHERE cache_key = ?1
-                ",
-                params![cache_key, now],
-            )?;
-        }
+                    ",
+                    params![cache_key, now],
+                )?;
+            }
 
-        Ok(found)
+            Ok(found)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Put a response into the cache
@@ -165,32 +170,37 @@ impl ResponseCache {
     ///
     /// # Returns
     /// * `Result<()>` - Returns Ok(()) if the entry is cached successfully, or an error if something goes wrong
-    pub fn put(
+    pub async fn put(
         &self,
         cache_key: &str,
         response_text: &str,
         agent_name: &str,
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
-        if response_text.trim().is_empty() {
-            return Ok(());
-        }
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let cache_key = cache_key.to_string();
+        let response_text = response_text.to_string();
+        let agent_name = agent_name.to_string();
+        let default_ttl_seconds = self.default_ttl_seconds;
+        let max_entries = self.max_entries;
+        spawn_blocking(move || {
+            if response_text.trim().is_empty() {
+                return Ok(());
+            }
 
-        let ttl = ttl_seconds.unwrap_or(self.default_ttl_seconds);
-        if ttl == 0 {
-            return Ok(());
-        }
+            let ttl = ttl_seconds.unwrap_or(default_ttl_seconds);
+            if ttl == 0 {
+                return Ok(());
+            }
 
-        let now = now_ts();
-        let expires_at = now + ttl as i64;
+            let now = now_ts();
+            let expires_at = now + ttl as i64;
 
-        let conn = self
-            .conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        conn.execute(
-            "
+            conn.execute(
+                "
             INSERT INTO response_cache(
                 cache_key,
                 response_text,
@@ -207,13 +217,13 @@ impl ResponseCache {
                 agent_name = excluded.agent_name,
                 updated_at = excluded.updated_at,
                 expires_at = excluded.expires_at
-            ",
-            params![cache_key, response_text, agent_name, now, expires_at],
-        )?;
+                ",
+                params![cache_key, response_text, agent_name, now, expires_at],
+            )?;
 
-        const SENTINEL_LIMIT: i64 = 2_147_483_647; // max INT32 — portable replacement for SQLite's LIMIT -1
-        conn.execute(
-            "
+            const SENTINEL_LIMIT: i64 = 2_147_483_647; // max INT32 — portable replacement for SQLite's LIMIT -1
+            conn.execute(
+                "
             DELETE FROM response_cache
             WHERE cache_key IN (
                 SELECT cache_key
@@ -221,95 +231,114 @@ impl ResponseCache {
                 ORDER BY updated_at DESC
                 LIMIT ?1 OFFSET ?2
             )
-            ",
-            params![SENTINEL_LIMIT, self.max_entries as i64],
-        )?;
+                ",
+                params![SENTINEL_LIMIT, max_entries as i64],
+            )?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Purge expired entries from the cache
     ///
     /// # Returns
     /// * `Result<usize>` - Returns Ok(usize) with the number of entries purged, or an error if something goes wrong
-    pub fn purge_expired(&self) -> Result<usize> {
-        let now = now_ts();
-        let conn = self
-            .conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let affected = conn.execute(
-            "DELETE FROM response_cache WHERE expires_at <= ?1",
-            params![now],
-        )?;
-        Ok(affected)
+    pub async fn purge_expired(&self) -> Result<usize> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let now = now_ts();
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let affected = conn.execute(
+                "DELETE FROM response_cache WHERE expires_at <= ?1",
+                params![now],
+            )?;
+            Ok(affected)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Clear all entries from the cache
     ///
     /// # Returns
     /// * `Result<usize>` - Returns Ok(usize) with the number of entries cleared, or an error if something goes wrong
-    pub fn clear_all(&self) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let affected = conn.execute("DELETE FROM response_cache", [])?;
-        Ok(affected)
+    pub async fn clear_all(&self) -> Result<usize> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let affected = conn.execute("DELETE FROM response_cache", [])?;
+            Ok(affected)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Reclaim SQLite free pages after cleanup-heavy maintenance cycles.
-    pub fn vacuum(&self) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        conn.execute_batch("VACUUM;")?;
-        Ok(())
+    pub async fn vacuum(&self) -> Result<()> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            conn.execute_batch("VACUUM;")?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get the number of entries in the cache
     ///
     /// # Returns
     /// * `Result<u64>` - Returns Ok(u64) with the number of entries, or an error if something goes wrong
-    pub fn entry_count(&self) -> Result<u64> {
-        let conn = self
-            .conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let count = conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        Ok(count.max(0) as u64)
+    pub async fn entry_count(&self) -> Result<u64> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let count = conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+            Ok(count.max(0) as u64)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get aggregate cache statistics used by ACP cache observability APIs.
-    pub fn stats(&self) -> Result<ResponseCacheStats> {
-        let conn = self
-            .conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pub async fn stats(&self) -> Result<ResponseCacheStats> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let max_entries = self.max_entries;
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        let (entry_count_raw, total_hits_raw) = conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
-            [],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        )?;
+            let (entry_count_raw, total_hits_raw) = conn.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )?;
 
-        let entry_count = entry_count_raw.max(0) as u64;
-        let total_hits = total_hits_raw.max(0) as u64;
-        let avg_hits_per_entry = if entry_count == 0 {
-            0.0
-        } else {
-            total_hits as f64 / entry_count as f64
-        };
+            let entry_count = entry_count_raw.max(0) as u64;
+            let total_hits = total_hits_raw.max(0) as u64;
+            let avg_hits_per_entry = if entry_count == 0 {
+                0.0
+            } else {
+                total_hits as f64 / entry_count as f64
+            };
 
-        Ok(ResponseCacheStats {
-            entry_count,
-            max_entries: self.max_entries,
-            total_hits,
-            avg_hits_per_entry,
+            Ok(ResponseCacheStats {
+                entry_count,
+                max_entries,
+                total_hits,
+                avg_hits_per_entry,
+            })
         })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 }
 
@@ -317,17 +346,18 @@ impl ResponseCache {
 mod tests {
     use super::ResponseCache;
 
-    #[test]
-    fn cache_put_and_get_roundtrip() {
+    #[tokio::test]
+    async fn cache_put_and_get_roundtrip() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("cache.sqlite3");
 
         let cache = ResponseCache::new(&db_path, 60, 10).expect("cache should initialize");
         cache
             .put("k1", "cached response", "deepseek", None)
+            .await
             .expect("cache put should succeed");
 
-        let hit = cache.get("k1").expect("cache get should succeed");
+        let hit = cache.get("k1").await.expect("cache get should succeed");
         assert!(hit.is_some());
 
         let entry = hit.expect("cache entry should exist");
@@ -335,24 +365,26 @@ mod tests {
         assert_eq!(entry.agent_name.as_deref(), Some("deepseek"));
     }
 
-    #[test]
-    fn cache_stats_reports_entries_and_hits() {
+    #[tokio::test]
+    async fn cache_stats_reports_entries_and_hits() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("cache.sqlite3");
 
         let cache = ResponseCache::new(&db_path, 60, 10).expect("cache should initialize");
         cache
             .put("k1", "r1", "agent", None)
+            .await
             .expect("cache put should succeed");
         cache
             .put("k2", "r2", "agent", None)
+            .await
             .expect("cache put should succeed");
 
-        let _ = cache.get("k1").expect("cache get should succeed");
-        let _ = cache.get("k1").expect("cache get should succeed");
-        let _ = cache.get("k2").expect("cache get should succeed");
+        let _ = cache.get("k1").await.expect("cache get should succeed");
+        let _ = cache.get("k1").await.expect("cache get should succeed");
+        let _ = cache.get("k2").await.expect("cache get should succeed");
 
-        let stats = cache.stats().expect("cache stats should succeed");
+        let stats = cache.stats().await.expect("cache stats should succeed");
         assert_eq!(stats.entry_count, 2);
         assert_eq!(stats.max_entries, 10);
         assert_eq!(stats.total_hits, 3);
@@ -371,7 +403,7 @@ use postgres::{Client, NoTls};
 
 #[cfg(feature = "backend-postgres")]
 pub struct ResponseCache {
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
     default_ttl_seconds: u64,
     max_entries: usize,
 }
@@ -411,65 +443,78 @@ impl ResponseCache {
         )?;
 
         Ok(Self {
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
             default_ttl_seconds,
             max_entries,
         })
     }
 
-    pub fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
-        let mut client = self
-            .client
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let now = now_ts();
-        client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?;
+    pub async fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let client = self.client.clone();
+        let cache_key = cache_key.to_string();
+        spawn_blocking(move || {
+            let mut client = client
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let now = now_ts();
+            client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?;
 
-        let row = client.query_opt(
-            "SELECT response_text, agent_name FROM response_cache
-             WHERE cache_key = $1 AND expires_at > $2",
-            &[&cache_key, &now],
-        )?;
-
-        if let Some(row) = row {
-            client.execute(
-                "UPDATE response_cache SET hit_count = hit_count + 1, last_hit_at = $2
-                 WHERE cache_key = $1",
+            let row = client.query_opt(
+                "SELECT response_text, agent_name FROM response_cache
+                 WHERE cache_key = $1 AND expires_at > $2",
                 &[&cache_key, &now],
             )?;
 
-            Ok(Some(CachedResponse {
-                response_text: row.get(0),
-                agent_name: row.get(1),
-            }))
-        } else {
-            Ok(None)
-        }
+            if let Some(row) = row {
+                client.execute(
+                    "UPDATE response_cache SET hit_count = hit_count + 1, last_hit_at = $2
+                     WHERE cache_key = $1",
+                    &[&cache_key, &now],
+                )?;
+
+                Ok(Some(CachedResponse {
+                    response_text: row.get(0),
+                    agent_name: row.get(1),
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn put(
+    pub async fn put(
         &self,
         cache_key: &str,
         response_text: &str,
         agent_name: &str,
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
-        if response_text.trim().is_empty() {
-            return Ok(());
-        }
-        let ttl = ttl_seconds.unwrap_or(self.default_ttl_seconds);
-        if ttl == 0 {
-            return Ok(());
-        }
-        let mut client = self
-            .client
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let max_entries = self.max_entries as i64;
-        let now = now_ts();
-        let expires_at = now + ttl as i64;
-        client.execute(
-            "INSERT INTO response_cache
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let client = self.client.clone();
+        let cache_key = cache_key.to_string();
+        let response_text = response_text.to_string();
+        let agent_name = agent_name.to_string();
+        let default_ttl_seconds = self.default_ttl_seconds;
+        let max_entries = self.max_entries;
+        spawn_blocking(move || {
+            if response_text.trim().is_empty() {
+                return Ok(());
+            }
+            let ttl = ttl_seconds.unwrap_or(default_ttl_seconds);
+            if ttl == 0 {
+                return Ok(());
+            }
+            let mut client = client
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let max_entries = max_entries as i64;
+            let now = now_ts();
+            let expires_at = now + ttl as i64;
+            client.execute(
+                "INSERT INTO response_cache
                 (cache_key, response_text, agent_name, created_at, updated_at, expires_at, hit_count)
              VALUES ($1, $2, $3, $4, $4, $5, 0)
              ON CONFLICT (cache_key) DO UPDATE SET
@@ -477,36 +522,52 @@ impl ResponseCache {
                 agent_name    = EXCLUDED.agent_name,
                 updated_at    = EXCLUDED.updated_at,
                 expires_at    = EXCLUDED.expires_at",
-            &[&cache_key, &response_text, &agent_name, &now, &expires_at],
-        )?;
+                &[&cache_key, &response_text, &agent_name, &now, &expires_at],
+            )?;
 
-        client.execute(
-            "DELETE FROM response_cache
+            client.execute(
+                "DELETE FROM response_cache
              WHERE cache_key NOT IN (
                  SELECT cache_key FROM response_cache
                  ORDER BY updated_at DESC LIMIT $1
              )",
-            &[&max_entries],
-        )?;
+                &[&max_entries],
+            )?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn purge_expired(&self) -> Result<usize> {
-        let mut client = self
-            .client
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let now = now_ts();
-        Ok(client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])? as usize)
+    pub async fn purge_expired(&self) -> Result<usize> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let client = self.client.clone();
+        spawn_blocking(move || {
+            let mut client = client
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let now = now_ts();
+            Ok(
+                client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?
+                    as usize,
+            )
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn clear_all(&self) -> Result<usize> {
-        let mut client = self
-            .client
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        Ok(client.execute("DELETE FROM response_cache", &[])? as usize)
+    pub async fn clear_all(&self) -> Result<usize> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let client = self.client.clone();
+        spawn_blocking(move || {
+            let mut client = client
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Ok(client.execute("DELETE FROM response_cache", &[])? as usize)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// No-op on PostgreSQL — VACUUM is managed by autovacuum.
@@ -514,39 +575,50 @@ impl ResponseCache {
         Ok(())
     }
 
-    pub fn entry_count(&self) -> Result<u64> {
-        let mut client = self
-            .client
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let row = client.query_one("SELECT COUNT(*) FROM response_cache", &[])?;
-        let count: i64 = row.get(0);
-        Ok(count.max(0) as u64)
+    pub async fn entry_count(&self) -> Result<u64> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let client = self.client.clone();
+        spawn_blocking(move || {
+            let mut client = client
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let row = client.query_one("SELECT COUNT(*) FROM response_cache", &[])?;
+            let count: i64 = row.get(0);
+            Ok(count.max(0) as u64)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn stats(&self) -> Result<ResponseCacheStats> {
-        let mut client = self
-            .client
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let row = client.query_one(
-            "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
-            &[],
-        )?;
-        let entry_count_raw: i64 = row.get(0);
-        let total_hits_raw: i64 = row.get(1);
-        let entry_count = entry_count_raw.max(0) as u64;
-        let total_hits = total_hits_raw.max(0) as u64;
-        let avg_hits_per_entry = if entry_count == 0 {
-            0.0
-        } else {
-            total_hits as f64 / entry_count as f64
-        };
-        Ok(ResponseCacheStats {
-            entry_count,
-            max_entries: self.max_entries,
-            total_hits,
-            avg_hits_per_entry,
+    pub async fn stats(&self) -> Result<ResponseCacheStats> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let client = self.client.clone();
+        let max_entries = self.max_entries;
+        spawn_blocking(move || {
+            let mut client = client
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let row = client.query_one(
+                "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
+                &[],
+            )?;
+            let entry_count_raw: i64 = row.get(0);
+            let total_hits_raw: i64 = row.get(1);
+            let entry_count = entry_count_raw.max(0) as u64;
+            let total_hits = total_hits_raw.max(0) as u64;
+            let avg_hits_per_entry = if entry_count == 0 {
+                0.0
+            } else {
+                total_hits as f64 / entry_count as f64
+            };
+            Ok(ResponseCacheStats {
+                entry_count,
+                max_entries,
+                total_hits,
+                avg_hits_per_entry,
+            })
         })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 }

@@ -348,6 +348,7 @@ mod tests {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            protocol: None,
         }
     }
 

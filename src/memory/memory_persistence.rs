@@ -9,20 +9,20 @@
 //! metadata indexing on startup.
 
 use anyhow::{Context, Result};
+use tokio::task::spawn_blocking;
 
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-// Postgres backend imports reserved for future use
-// #[cfg(feature = "backend-postgres")]
-// use postgres::{Client as PgClient, NoTls as PgNoTls};
+#[cfg(feature = "backend-postgres")]
+use postgres::{Client as PgClient, NoTls as PgNoTls};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::Once;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::memory::summarization::{MemorySummarizer, SummarizedMemory};
@@ -545,22 +545,114 @@ impl ColdStorage {
 }
 
 // ===========================================================================
-// L2: Warm Tier — SQLite-backed persistence
+// L2: Warm Tier — SQLite/PostgreSQL-backed persistence
 // ===========================================================================
 
-/// Wrapper around the SQLite warm store.
+/// Shared column list for warm_memory queries.
+const WARM_MEMORY_COLUMNS: &str = "id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id";
+
+#[cfg(feature = "backend-sqlite")]
+const PARAM_PREFIX: &str = "?";
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+const PARAM_PREFIX: &str = "$";
+
+// ---- Shared row-to-entry mapping -------------------------------------------
+
+#[cfg(feature = "backend-sqlite")]
+fn row_to_memory_entry(row: &rusqlite::Row) -> rusqlite::Result<MemoryEntry> {
+    let embedding_json: Option<String> = row.get(7)?;
+    let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
+    Ok(MemoryEntry {
+        id: row.get(0)?,
+        tier: MemoryTier::Warm,
+        class: row.get(2)?,
+        content: row.get(3)?,
+        created_at: row.get(4)?,
+        accessed_at: row.get(5)?,
+        usefulness: row.get(6)?,
+        embedding,
+        access_count: row.get(8)?,
+        session_id: row.get(9)?,
+        user_id: row.get(10)?,
+    })
+}
+
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+fn row_to_memory_entry(row: &postgres::Row) -> MemoryEntry {
+    let embedding_json: Option<String> = row.get(7);
+    let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
+    MemoryEntry {
+        id: row.get(0),
+        tier: MemoryTier::Warm,
+        class: row.get(2),
+        content: row.get(3),
+        created_at: row.get(4),
+        accessed_at: row.get(5),
+        usefulness: row.get(6),
+        embedding,
+        access_count: row.get(8),
+        session_id: row.get(9),
+        user_id: row.get(10),
+    }
+}
+
+// ---- Shared query helper ----------------------------------------------------
+
+/// Run a query that returns rows, mapping each row through `row_to_memory_entry`.
+#[cfg(feature = "backend-sqlite")]
+fn query_all(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    params: &[&dyn rusqlite::types::ToSql],
+) -> Result<Vec<MemoryEntry>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query(params)?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next()? {
+        results.push(row_to_memory_entry(row)?);
+    }
+    Ok(results)
+}
+
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+fn query_all(
+    conn: &postgres::Client,
+    sql: &str,
+    params: &[&(dyn postgres::types::ToSql + Sync)],
+) -> Result<Vec<MemoryEntry>> {
+    let rows = conn.query(sql, params)?;
+    Ok(rows.iter().map(|row| row_to_memory_entry(row)).collect())
+}
+
+/// Wrapper around the warm store (SQLite or PostgreSQL).
 ///
 /// Uses the same schema patterns as `crate::memory::vector::VectorStore`
 /// but with a dedicated table for memory tier persistence.
 #[cfg(feature = "backend-sqlite")]
 #[derive(Debug)]
 pub struct WarmStore {
-    conn: Mutex<rusqlite::Connection>,
+    conn: Arc<Mutex<rusqlite::Connection>>,
     max_entries: usize,
 }
 
-#[cfg(feature = "backend-sqlite")]
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+pub struct WarmStore {
+    conn: Arc<Mutex<PgClient>>,
+    max_entries: usize,
+}
+
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+impl std::fmt::Debug for WarmStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WarmStore")
+            .field("max_entries", &self.max_entries)
+            .field("conn", &"<Mutex<PgClient>>")
+            .finish()
+    }
+}
+
 impl WarmStore {
+    #[cfg(feature = "backend-sqlite")]
     fn new(path: &Path, max_entries: usize) -> Result<Self> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -601,242 +693,12 @@ impl WarmStore {
             ",
         )?;
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             max_entries,
         })
     }
 
-    fn upsert(&self, entry: &MemoryEntry) -> Result<()> {
-        let embedding_json = entry
-            .embedding
-            .as_ref()
-            .map(|v| serde_json::to_string(v).unwrap_or_default());
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        conn.execute(
-            "INSERT INTO warm_memory(id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-             ON CONFLICT(id) DO UPDATE SET
-                tier = excluded.tier,
-                class = excluded.class,
-                content = excluded.content,
-                accessed_at = excluded.accessed_at,
-                usefulness = excluded.usefulness,
-                embedding_json = excluded.embedding_json,
-                access_count = excluded.access_count,
-                session_id = excluded.session_id,
-                user_id = excluded.user_id",
-            rusqlite::params![
-                entry.id,
-                entry.tier.label(),
-                entry.class,
-                entry.content,
-                entry.created_at,
-                entry.accessed_at,
-                entry.usefulness,
-                embedding_json,
-                entry.access_count,
-                entry.session_id,
-                entry.user_id,
-            ],
-        )?;
-        // Enforce max entries (evict oldest by accessed_at)
-        conn.execute(
-            "DELETE FROM warm_memory WHERE id IN (
-                SELECT id FROM warm_memory ORDER BY accessed_at ASC LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - ?1)
-            )",
-            rusqlite::params![self.max_entries as i64],
-        )?;
-        Ok(())
-    }
-
-    fn get(&self, id: &str) -> Result<Option<MemoryEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query(rusqlite::params![id])?;
-        match rows.next()? {
-            Some(row) => {
-                let embedding_json: Option<String> = row.get(7)?;
-                let embedding =
-                    embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-                Ok(Some(MemoryEntry {
-                    id: row.get(0)?,
-                    tier: MemoryTier::Warm,
-                    class: row.get(2)?,
-                    content: row.get(3)?,
-                    created_at: row.get(4)?,
-                    accessed_at: row.get(5)?,
-                    usefulness: row.get(6)?,
-                    embedding,
-                    access_count: row.get(8)?,
-                    session_id: row.get(9)?,
-                    user_id: row.get(10)?,
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn remove(&self, id: &str) -> Result<bool> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let affected = conn.execute(
-            "DELETE FROM warm_memory WHERE id = ?1",
-            rusqlite::params![id],
-        )?;
-        Ok(affected > 0)
-    }
-
-    pub fn search_by_usefulness(
-        &self,
-        min_usefulness: f32,
-        limit: usize,
-    ) -> Result<Vec<MemoryEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory WHERE usefulness >= ?1 ORDER BY usefulness DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![min_usefulness, limit as i64], |row| {
-            let embedding_json: Option<String> = row.get(7)?;
-            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-            Ok(MemoryEntry {
-                id: row.get(0)?,
-                tier: MemoryTier::Warm,
-                class: row.get(2)?,
-                content: row.get(3)?,
-                created_at: row.get(4)?,
-                accessed_at: row.get(5)?,
-                usefulness: row.get(6)?,
-                embedding,
-                access_count: row.get(8)?,
-                session_id: row.get(9)?,
-                user_id: row.get(10)?,
-            })
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
-    fn count(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM warm_memory", [], |row| row.get(0))?;
-        Ok(count as usize)
-    }
-
-    fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let embedding_json: Option<String> = row.get(7)?;
-            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-            Ok(MemoryEntry {
-                id: row.get(0)?,
-                tier: MemoryTier::Warm,
-                class: row.get(2)?,
-                content: row.get(3)?,
-                created_at: row.get(4)?,
-                accessed_at: row.get(5)?,
-                usefulness: row.get(6)?,
-                embedding,
-                access_count: row.get(8)?,
-                session_id: row.get(9)?,
-                user_id: row.get(10)?,
-            })
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
-    pub fn search_by_session(&self, session_id: &str, limit: usize) -> Result<Vec<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
-        let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory WHERE session_id = ?1 ORDER BY accessed_at DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![session_id, limit as i64], |row| {
-            let embedding_json: Option<String> = row.get(7)?;
-            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-            Ok(MemoryEntry {
-                id: row.get(0)?,
-                tier: MemoryTier::Warm,
-                class: row.get(2)?,
-                content: row.get(3)?,
-                created_at: row.get(4)?,
-                accessed_at: row.get(5)?,
-                usefulness: row.get(6)?,
-                embedding,
-                access_count: row.get(8)?,
-                session_id: row.get(9)?,
-                user_id: row.get(10)?,
-            })
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-}
-
-// ===========================================================================
-// Memory Persistence Manager (tier orchestration)
-// ===========================================================================
-
-/// PostgreSQL-backed WarmStore for multi-user deployments.
-///
-/// Uses `postgres::Client` with a `warm_memory` table that mirrors
-/// the SQLite schema, including pgvector support for future use.
-#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-pub struct WarmStore {
-    conn: Mutex<PgClient>,
-    max_entries: usize,
-}
-
-#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-impl std::fmt::Debug for WarmStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WarmStore")
-            .field("max_entries", &self.max_entries)
-            .field("conn", &"<Mutex<PgClient>>")
-            .finish()
-    }
-}
-
-#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-impl WarmStore {
+    #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
     fn new(db_conn_str: &Path, max_entries: usize) -> Result<Self> {
         let conn_str = db_conn_str.to_string_lossy();
         let mut client = PgClient::connect(&conn_str, PgNoTls)?;
@@ -872,205 +734,280 @@ impl WarmStore {
         )?;
 
         Ok(Self {
-            conn: Mutex::new(client),
+            conn: Arc::new(Mutex::new(client)),
             max_entries,
         })
     }
 
-    fn upsert(&self, entry: &MemoryEntry) -> Result<()> {
+    // ---- Unified business methods --------------------------------------------
+
+    async fn upsert(&self, entry: &MemoryEntry) -> Result<()> {
+        #[cfg(feature = "backend-sqlite")]
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let max_entries = self.max_entries;
         let embedding_json = entry
             .embedding
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default());
-        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        conn.execute(
-            "INSERT INTO warm_memory(id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id)
-             VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             ON CONFLICT(id) DO UPDATE SET
-                tier = EXCLUDED.tier,
-                class = EXCLUDED.class,
-                content = EXCLUDED.content,
-                accessed_at = EXCLUDED.accessed_at,
-                usefulness = EXCLUDED.usefulness,
-                embedding_json = EXCLUDED.embedding_json,
-                access_count = EXCLUDED.access_count,
-                session_id = EXCLUDED.session_id,
-                user_id = EXCLUDED.user_id",
-            &[
-                &entry.id,
-                &entry.tier.label().to_string(),
-                &entry.class,
-                &entry.content,
-                &entry.created_at,
-                &entry.accessed_at,
-                &entry.usefulness,
-                &embedding_json,
-                &entry.access_count,
-                &entry.session_id,
-                &entry.user_id,
-            ],
-        )?;
-
-        // Enforce max entries (evict oldest by accessed_at)
-        conn.execute(
-            "DELETE FROM warm_memory WHERE id IN (
-                SELECT id FROM warm_memory ORDER BY accessed_at ASC LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - $1)
-            )",
-            &[&(self.max_entries as i64)],
-        )?;
-        Ok(())
-    }
-
-    fn get(&self, id: &str) -> Result<Option<MemoryEntry>> {
-        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let rows = conn.query(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory WHERE id = $1",
-            &[&id],
-        )?;
-        match rows.first() {
-            Some(row) => {
-                let embedding_json: Option<String> = row.get(7);
-                let embedding =
-                    embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-                Ok(Some(MemoryEntry {
-                    id: row.get(0),
-                    tier: MemoryTier::Warm,
-                    class: row.get(2),
-                    content: row.get(3),
-                    created_at: row.get(4),
-                    accessed_at: row.get(5),
-                    usefulness: row.get(6),
-                    embedding,
-                    access_count: row.get(8),
-                    session_id: row.get(9),
-                    user_id: row.get(10),
-                }))
-            }
-            None => Ok(None),
+        #[cfg(feature = "backend-sqlite")] {
+            let entry_id = entry.id.clone();
+            let tier_label = entry.tier.label().to_string();
+            let class = entry.class.clone();
+            let content = entry.content.clone();
+            let created_at = entry.created_at;
+            let accessed_at = entry.accessed_at;
+            let usefulness = entry.usefulness;
+            let access_count = entry.access_count;
+            let session_id = entry.session_id.clone();
+            let user_id = entry.user_id.clone();
+            spawn_blocking(move || {
+                let conn = conn.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("warm store mutex poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                let sql = format!(
+                    "INSERT INTO warm_memory({columns})
+                     VALUES({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10, {p}11)
+                     ON CONFLICT(id) DO UPDATE SET
+                        tier = excluded.tier,
+                        class = excluded.class,
+                        content = excluded.content,
+                        accessed_at = excluded.accessed_at,
+                        usefulness = excluded.usefulness,
+                        embedding_json = excluded.embedding_json,
+                        access_count = excluded.access_count,
+                        session_id = excluded.session_id,
+                        user_id = excluded.user_id",
+                    columns = WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+                );
+                conn.execute(
+                    &sql,
+                    rusqlite::params![
+                        &entry_id,
+                        &tier_label,
+                        &class,
+                        &content,
+                        created_at,
+                        accessed_at,
+                        usefulness,
+                        &embedding_json,
+                        access_count,
+                        &session_id,
+                        &user_id,
+                    ],
+                )?;
+                conn.execute(
+                    &format!("DELETE FROM warm_memory WHERE id IN (
+                        SELECT id FROM warm_memory ORDER BY accessed_at ASC \
+                        LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - {p}1)
+                    )", p = PARAM_PREFIX),
+                    rusqlite::params![max_entries as i64],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
+        }
+        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+            let tier_label = entry.tier.label().to_string();
+            let session_id = entry.session_id.clone();
+            let user_id = entry.user_id.clone();
+            spawn_blocking(move || {
+                let conn = conn.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("warm store mutex poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                let sql = format!(
+                    "INSERT INTO warm_memory({columns})
+                     VALUES({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10, {p}11)
+                     ON CONFLICT(id) DO UPDATE SET
+                        tier = EXCLUDED.tier,
+                        class = EXCLUDED.class,
+                        content = EXCLUDED.content,
+                        accessed_at = EXCLUDED.accessed_at,
+                        usefulness = EXCLUDED.usefulness,
+                        embedding_json = EXCLUDED.embedding_json,
+                        access_count = EXCLUDED.access_count,
+                        session_id = EXCLUDED.session_id,
+                        user_id = EXCLUDED.user_id",
+                    columns = WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+                );
+                conn.execute(
+                    &sql,
+                    &[
+                        &entry.id,
+                        &tier_label,
+                        &entry.class,
+                        &entry.content,
+                        &entry.created_at,
+                        &entry.accessed_at,
+                        &entry.usefulness,
+                        &embedding_json,
+                        &entry.access_count,
+                        &session_id,
+                        &user_id,
+                    ],
+                )?;
+                conn.execute(
+                    &format!("DELETE FROM warm_memory WHERE id IN (
+                        SELECT id FROM warm_memory ORDER BY accessed_at ASC \
+                        LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - {p}1)
+                    )", p = PARAM_PREFIX),
+                    &[&(max_entries as i64)],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
         }
     }
 
-    pub fn search_by_usefulness(
+    async fn get(&self, id: &str) -> Result<Option<MemoryEntry>> {
+        #[cfg(feature = "backend-sqlite")]
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let id = id.to_string();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let sql = format!(
+                "SELECT {} FROM warm_memory WHERE id = {p}1",
+                WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+            );
+            #[cfg(feature = "backend-sqlite")] {
+                let mut stmt = conn.prepare(&sql)?;
+                let mut rows = stmt.query(rusqlite::params![id])?;
+                match rows.next()? {
+                    Some(row) => Ok(Some(row_to_memory_entry(row)?)),
+                    None => Ok(None),
+                }
+            }
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+                let rows = conn.query(&sql, &[&id])?;
+                match rows.first() {
+                    Some(row) => Ok(Some(row_to_memory_entry(row))),
+                    None => Ok(None),
+                }
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
+    }
+
+    async fn remove(&self, id: &str) -> Result<bool> {
+        #[cfg(feature = "backend-sqlite")]
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let id = id.to_string();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let sql = format!("DELETE FROM warm_memory WHERE id = {p}1", p = PARAM_PREFIX);
+            #[cfg(feature = "backend-sqlite")] {
+                let affected = conn.execute(&sql, rusqlite::params![id])?;
+                Ok(affected > 0)
+            }
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+                let affected = conn.execute(&sql, &[&id])?;
+                Ok(affected > 0)
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
+    }
+
+    pub async fn search_by_usefulness(
         &self,
         min_usefulness: f32,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
-        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let rows = conn.query(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory WHERE usefulness >= $1 ORDER BY usefulness DESC LIMIT $2",
-            &[&min_usefulness, &(limit as i64)],
-        )?;
-        let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            let embedding_json: Option<String> = row.get(7);
-            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-            results.push(MemoryEntry {
-                id: row.get(0),
-                tier: MemoryTier::Warm,
-                class: row.get(2),
-                content: row.get(3),
-                created_at: row.get(4),
-                accessed_at: row.get(5),
-                usefulness: row.get(6),
-                embedding,
-                access_count: row.get(8),
-                session_id: row.get(9),
-                user_id: row.get(10),
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
             });
-        }
-        Ok(results)
+            let sql = format!(
+                "SELECT {} FROM warm_memory WHERE usefulness >= {p}1 \
+                 ORDER BY usefulness DESC LIMIT {p}2",
+                WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+            );
+            query_all(&conn, &sql, &[&min_usefulness, &(limit as i64)])
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    fn remove(&self, id: &str) -> Result<bool> {
-        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let affected = conn.execute("DELETE FROM warm_memory WHERE id = $1", &[&id])?;
-        Ok(affected > 0)
-    }
-
-    fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
-        let rows = conn.query(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory",
-            &[],
-        )?;
-        let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            let embedding_json: Option<String> = row.get(7);
-            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-            results.push(MemoryEntry {
-                id: row.get(0),
-                tier: MemoryTier::Warm,
-                class: row.get(2),
-                content: row.get(3),
-                created_at: row.get(4),
-                accessed_at: row.get(5),
-                usefulness: row.get(6),
-                embedding,
-                access_count: row.get(8),
-                session_id: row.get(9),
-                user_id: row.get(10),
+    async fn count(&self) -> Result<usize> {
+        #[cfg(feature = "backend-sqlite")]
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
             });
-        }
-        Ok(results)
+            #[cfg(feature = "backend-sqlite")] {
+                let count: i64 = conn.query_row("SELECT COUNT(*) FROM warm_memory", [], |row| row.get(0))?;
+                Ok(count as usize)
+            }
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+                let row = conn.query_one("SELECT COUNT(*) FROM warm_memory", &[])?;
+                let count: i64 = row.get(0);
+                Ok(count as usize)
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    pub fn search_by_session(&self, session_id: &str, limit: usize) -> Result<Vec<MemoryEntry>> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
-        let rows = conn.query(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
-             FROM warm_memory WHERE session_id = $1 ORDER BY accessed_at DESC LIMIT $2",
-            &[&session_id, &(limit as i64)],
-        )?;
-        let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            let embedding_json: Option<String> = row.get(7);
-            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
-            results.push(MemoryEntry {
-                id: row.get(0),
-                tier: MemoryTier::Warm,
-                class: row.get(2),
-                content: row.get(3),
-                created_at: row.get(4),
-                accessed_at: row.get(5),
-                usefulness: row.get(6),
-                embedding,
-                access_count: row.get(8),
-                session_id: row.get(9),
-                user_id: row.get(10),
-            });
-        }
-        Ok(results)
+    async fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
+        #[cfg(feature = "backend-sqlite")]
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+            let sql = format!("SELECT {} FROM warm_memory", WARM_MEMORY_COLUMNS);
+            #[cfg(feature = "backend-sqlite")] {
+                let empty_params: [&dyn rusqlite::types::ToSql; 0] = [];
+                query_all(&conn, &sql, &empty_params)
+            }
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))] {
+                let empty_params: [&(dyn postgres::types::ToSql + Sync); 0] = [];
+                query_all(&conn, &sql, &empty_params)
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    fn count(&self) -> Result<usize> {
-        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("warm store mutex poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let row = conn.query_one("SELECT COUNT(*) FROM warm_memory", &[])?;
-        let count: i64 = row.get(0);
-        Ok(count as usize)
+    pub async fn search_by_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        let conn = self.conn.clone();
+        let session_id = session_id.to_string();
+        spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+            let sql = format!(
+                "SELECT {} FROM warm_memory WHERE session_id = {p}1 \
+                 ORDER BY accessed_at DESC LIMIT {p}2",
+                WARM_MEMORY_COLUMNS, p = PARAM_PREFIX
+            );
+            query_all(&conn, &sql, &[&session_id, &(limit as i64)])
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 }
 
@@ -1189,8 +1126,8 @@ impl MemoryPersistence {
     /// Load metadata index for all entries from L2 (warm) and L3 (cold) tiers.
     ///
     /// Returns a summary with counts per tier.
-    pub fn load_metadata_index(&self) -> Result<MetadataIndex> {
-        let warm_entries = self.warm.iterate_all()?;
+    pub async fn load_metadata_index(&self) -> Result<MetadataIndex> {
+        let warm_entries = self.warm.iterate_all().await?;
         let cold_entries = self.cold.read_all()?;
 
         Ok(MetadataIndex {
@@ -1204,7 +1141,7 @@ impl MemoryPersistence {
     ///
     /// The entry is placed in the hot tier by default and will be promoted
     /// according to the tiering policy.
-    pub fn store(&self, entry: MemoryEntry) -> Result<()> {
+    pub async fn store(&self, entry: MemoryEntry) -> Result<()> {
         let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("hot cache mutex poisoned in 'store', recovering");
             poisoned.into_inner()
@@ -1220,7 +1157,7 @@ impl MemoryPersistence {
     /// `user_id` is required for correct cold-storage index lookup; pass `None`
     /// only when the caller has no user context (entries stored without a user_id
     /// will still be found).
-    pub fn retrieve(&self, user_id: Option<&str>, id: &str) -> Result<Option<MemoryEntry>> {
+    pub async fn retrieve(&self, user_id: Option<&str>, id: &str) -> Result<Option<MemoryEntry>> {
         // Check hot first.
         {
             let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
@@ -1234,7 +1171,7 @@ impl MemoryPersistence {
         }
 
         // Check warm.
-        if let Some(mut entry) = self.warm.get(id)? {
+        if let Some(mut entry) = self.warm.get(id).await? {
             entry.touch();
             entry.tier = MemoryTier::Hot;
             // Promote back to hot on access.
@@ -1249,7 +1186,7 @@ impl MemoryPersistence {
             entry.touch();
             entry.tier = MemoryTier::Warm;
             // Promote back to warm on access.
-            self.promote_to_warm(entry.clone())?;
+            self.promote_to_warm(entry.clone()).await?;
             return Ok(Some(entry));
         }
 
@@ -1257,7 +1194,7 @@ impl MemoryPersistence {
     }
 
     /// Remove an entry from all tiers.
-    pub fn remove(&self, id: &str) -> Result<bool> {
+    pub async fn remove(&self, id: &str) -> Result<bool> {
         let mut removed = false;
         // Remove from hot.
         {
@@ -1270,7 +1207,7 @@ impl MemoryPersistence {
             }
         }
         // Remove from warm.
-        if self.warm.remove(id)? {
+        if self.warm.remove(id).await? {
             removed = true;
         }
         // Remove from cold is not supported (append-only archival).
@@ -1278,10 +1215,10 @@ impl MemoryPersistence {
     }
 
     /// Promote an entry from hot → warm tier.
-    pub fn promote_to_warm(&self, entry: MemoryEntry) -> Result<()> {
+    pub async fn promote_to_warm(&self, entry: MemoryEntry) -> Result<()> {
         let mut entry = entry;
         entry.tier = MemoryTier::Warm;
-        self.warm.upsert(&entry)?;
+        self.warm.upsert(&entry).await?;
 
         // Remove from hot.
         let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
@@ -1293,13 +1230,13 @@ impl MemoryPersistence {
     }
 
     /// Promote an entry from warm → cold (archival).
-    pub fn promote_to_cold(&self, entry: MemoryEntry) -> Result<()> {
+    pub async fn promote_to_cold(&self, entry: MemoryEntry) -> Result<()> {
         let mut entry = entry;
         entry.tier = MemoryTier::Cold;
         self.cold.append_entry(&entry)?;
 
         // Remove from warm.
-        self.warm.remove(&entry.id)?;
+        self.warm.remove(&entry.id).await?;
         Ok(())
     }
 
@@ -1321,7 +1258,7 @@ impl MemoryPersistence {
     ///
     /// 1. Evict expired hot entries → promote useful ones to warm, discard stale ones.
     /// 2. Check warm entries approaching TTL → promote useful ones to cold.
-    pub fn auto_migrate(&self) -> Result<MigrationReport> {
+    pub async fn auto_migrate(&self) -> Result<MigrationReport> {
         let mut report = MigrationReport::default();
 
         // ── Step 0: Summarize hot entries if summarizer is configured ──
@@ -1339,28 +1276,28 @@ impl MemoryPersistence {
         for entry in evicted {
             if entry.usefulness >= self.policy.hot_threshold {
                 // Promote to warm.
-                self.promote_to_warm(entry)?;
+                self.promote_to_warm(entry).await?;
                 report.promoted_hot_to_warm += 1;
             } else {
                 // Stale, demote to cold directly (or discard).
-                self.promote_to_cold(entry)?;
+                self.promote_to_cold(entry).await?;
                 report.demoted_hot_to_cold += 1;
             }
         }
 
         // ── Step 2: Check warm for TTL candidates ──
-        let warm_entries = self.warm.iterate_all()?;
+        let warm_entries = self.warm.iterate_all().await?;
         let now = now_secs();
         for entry in warm_entries {
             let idle = now.saturating_sub(entry.accessed_at);
             if idle >= self.policy.warm_ttl_secs {
                 if entry.usefulness >= self.policy.warm_threshold {
                     // Promote to cold (archival).
-                    self.promote_to_cold(entry)?;
+                    self.promote_to_cold(entry).await?;
                     report.promoted_warm_to_cold += 1;
                 } else {
                     // Low-usefulness warm entry: just remove.
-                    self.warm.remove(&entry.id)?;
+                    self.warm.remove(&entry.id).await?;
                     report.evicted_warm += 1;
                 }
             }
@@ -1370,12 +1307,12 @@ impl MemoryPersistence {
     }
 
     /// Explicitly promote a single entry up one tier.
-    pub fn promote(&self, entry: &MemoryEntry) -> Result<Option<MemoryEntry>> {
+    pub async fn promote(&self, entry: &MemoryEntry) -> Result<Option<MemoryEntry>> {
         match entry.tier {
             MemoryTier::Hot => {
                 let mut e = entry.clone();
                 e.tier = MemoryTier::Warm;
-                self.warm.upsert(&e)?;
+                self.warm.upsert(&e).await?;
                 {
                     let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
                         tracing::warn!("hot cache mutex poisoned in 'promote', recovering");
@@ -1389,7 +1326,7 @@ impl MemoryPersistence {
                 let mut e = entry.clone();
                 e.tier = MemoryTier::Cold;
                 self.cold.append_entry(&e)?;
-                self.warm.remove(&entry.id)?;
+                self.warm.remove(&entry.id).await?;
                 Ok(Some(e))
             }
             MemoryTier::Cold => {
@@ -1400,17 +1337,17 @@ impl MemoryPersistence {
     }
 
     /// Explicitly demote a single entry down one tier.
-    pub fn demote(&self, entry: &MemoryEntry) -> Result<Option<MemoryEntry>> {
+    pub async fn demote(&self, entry: &MemoryEntry) -> Result<Option<MemoryEntry>> {
         match entry.tier {
             MemoryTier::Hot => {
                 // Fall directly to warm (hot→cold would be too aggressive).
-                self.promote_to_warm(entry.clone())?;
+                self.promote_to_warm(entry.clone()).await?;
                 let mut e = entry.clone();
                 e.tier = MemoryTier::Warm;
                 Ok(Some(e))
             }
             MemoryTier::Warm => {
-                self.promote_to_cold(entry.clone())?;
+                self.promote_to_cold(entry.clone()).await?;
                 let mut e = entry.clone();
                 e.tier = MemoryTier::Cold;
                 Ok(Some(e))
@@ -1477,7 +1414,7 @@ impl MemoryPersistence {
     }
 
     /// Returns the count of entries in each tier.
-    pub fn tier_counts(&self) -> Result<TierCounts> {
+    pub async fn tier_counts(&self) -> Result<TierCounts> {
         static COLD_COUNT_WARN: Once = Once::new();
         COLD_COUNT_WARN.call_once(|| {
             tracing::warn!(
@@ -1494,7 +1431,7 @@ impl MemoryPersistence {
                 poisoned.into_inner()
             })
             .len();
-        let warm_count = self.warm.count().unwrap_or(0);
+        let warm_count = self.warm.count().await.unwrap_or(0);
         Ok(TierCounts {
             hot: hot_count,
             warm: warm_count,
@@ -1692,8 +1629,8 @@ mod tests {
         assert_eq!(all[0].id, "cold1");
     }
 
-    #[test]
-    fn test_persistence_store_and_retrieve() {
+    #[tokio::test]
+    async fn test_persistence_store_and_retrieve() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
@@ -1701,10 +1638,14 @@ mod tests {
         let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
             .expect("persistence should initialize");
         let entry = make_entry("p1", 0.8);
-        persistence.store(entry).expect("store should succeed");
+        persistence
+            .store(entry)
+            .await
+            .expect("store should succeed");
 
         let retrieved = persistence
             .retrieve(None, "p1")
+            .await
             .expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
         assert_eq!(
@@ -1713,8 +1654,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_promotion_hot_to_warm() {
+    #[tokio::test]
+    async fn test_promotion_hot_to_warm() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
@@ -1724,14 +1665,17 @@ mod tests {
         let entry = make_entry("promo1", 0.9);
         persistence
             .store(entry.clone())
+            .await
             .expect("store should succeed");
         persistence
             .promote_to_warm(entry)
+            .await
             .expect("promote to warm should succeed");
 
         // Should no longer be in hot (but still retrievable from warm).
         let retrieved = persistence
             .retrieve(None, "promo1")
+            .await
             .expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
         // Access brings it back to hot
@@ -1741,8 +1685,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_auto_migrate_evicts_expired_hot_entries() {
+    #[tokio::test]
+    async fn test_auto_migrate_evicts_expired_hot_entries() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
@@ -1760,22 +1704,25 @@ mod tests {
         // Entry with low usefulness → gets demoted to cold (not promoted to warm)
         persistence
             .store(make_entry("low", 0.1))
+            .await
             .expect("store should succeed");
 
         // Entry with high usefulness → promoted to warm
         persistence
             .store(make_entry("high", 0.8))
+            .await
             .expect("store should succeed");
 
         let report = persistence
             .auto_migrate()
+            .await
             .expect("auto migration should run");
         assert_eq!(report.promoted_hot_to_warm, 1);
         assert_eq!(report.demoted_hot_to_cold, 1);
     }
 
-    #[test]
-    fn test_metadata_index_load() {
+    #[tokio::test]
+    async fn test_metadata_index_load() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
@@ -1785,18 +1732,22 @@ mod tests {
 
         // Seed some entries
         let entry = make_entry("idx1", 0.5);
-        persistence.store(entry).expect("store should succeed");
+        persistence
+            .store(entry)
+            .await
+            .expect("store should succeed");
 
         let index = persistence
             .load_metadata_index()
+            .await
             .expect("load metadata index should succeed");
         // Hot-only entries don't appear in the index (only warm + cold).
         assert_eq!(index.warm_count, 0);
         assert_eq!(index.cold_count, 0);
     }
 
-    #[test]
-    fn test_demote_entry() {
+    #[tokio::test]
+    async fn test_demote_entry() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
@@ -1807,8 +1758,12 @@ mod tests {
         let entry = make_entry("dem1", 0.5);
         persistence
             .store(entry.clone())
+            .await
             .expect("store should succeed");
-        let demoted = persistence.demote(&entry).expect("demote should succeed");
+        let demoted = persistence
+            .demote(&entry)
+            .await
+            .expect("demote should succeed");
         assert!(demoted.is_some());
         assert_eq!(
             demoted.expect("demoted entry should be present").tier,
@@ -1816,8 +1771,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_promote_entry() {
+    #[tokio::test]
+    async fn test_promote_entry() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
@@ -1828,18 +1783,21 @@ mod tests {
         let entry = make_entry("prom2", 0.5);
         persistence
             .store(entry.clone())
+            .await
             .expect("store should succeed");
         // Move to warm first, then promote to cold.
         // retrieve() brings entries back to hot on access, so promote
         // a warm entry directly without going through retrieve.
         persistence
             .promote_to_warm(entry.clone())
+            .await
             .expect("promote to warm should succeed");
 
         let mut warm_entry = entry;
         warm_entry.tier = MemoryTier::Warm;
         let promoted = persistence
             .promote(&warm_entry)
+            .await
             .expect("promote should succeed");
         assert!(promoted.is_some());
         assert_eq!(

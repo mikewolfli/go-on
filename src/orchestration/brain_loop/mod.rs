@@ -56,8 +56,6 @@ use crate::agents::progress_reporter::ProgressReporter;
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::orchestration::core_dag::TaskContext;
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::i18n::runtime::tf;
 
 use serde::{Deserialize, Serialize};
@@ -317,13 +315,7 @@ impl BrainLoop {
 
 /// Return the current Unix time in milliseconds.
 pub(crate) fn now_epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|e| {
-            tracing::warn!("system time is before UNIX_EPOCH: {}", e);
-            Default::default()
-        })
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 /// Extract a coarse error type from an error message.

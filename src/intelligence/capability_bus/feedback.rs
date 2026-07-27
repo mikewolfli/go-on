@@ -35,7 +35,7 @@ impl CapabilityBus {
     // ------------------------------------------------------------------
 
     #[allow(clippy::too_many_arguments)]
-    pub fn feedback(
+    pub async fn feedback(
         &self,
         agent: &str,
         task_type: &str,
@@ -68,15 +68,17 @@ impl CapabilityBus {
         // 1. BLUE70: Write to LearningOptimizationBus (replaces legacy WorkflowLearningBus)
         {
             let mut lob = write_guard(&self.learning_optimization_bus);
-            lob.record_and_optimize(crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent {
-                task_type: task_type.to_string(),
-                agent: agent.to_string(),
-                success,
-                duration_ms,
-                token_cost,
-                quality_score,
-                timestamp_ms: now_ms,
-            });
+            lob.record_and_optimize(
+                crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent {
+                    task_type: task_type.to_string(),
+                    agent: agent.to_string(),
+                    success,
+                    duration_ms,
+                    token_cost,
+                    quality_score,
+                    timestamp_ms: now_ms,
+                },
+            );
         }
 
         // 2. BLUE70: Write to UnifiedKnowledgeBus + ReinforcementBus (replaces legacy ReputationStore + QLearningAgent + ExperienceKnowledgeBase)
@@ -133,11 +135,13 @@ impl CapabilityBus {
         .to_string()
         .into_bytes();
         #[cfg(feature = "sub-bus-memory")]
-        self.memory_bus.store(
-            &memory_key,
-            memory_value,
-            &crate::intelligence::capability_bus::memory_bus::CacheStrategy::default(),
-        );
+        self.memory_bus
+            .store(
+                &memory_key,
+                memory_value,
+                &crate::intelligence::capability_bus::memory_bus::CacheStrategy::default(),
+            )
+            .await;
 
         // 4d. Persist execution summary to DistributedMemoryBus and share.
         #[cfg(feature = "sub-bus-distributed-memory")]

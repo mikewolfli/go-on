@@ -33,27 +33,6 @@ impl Bulkhead {
         }
     }
 
-    /// Set the maximum number of concurrent operations for a provider.
-    ///
-    /// If a semaphore already exists for this provider it is replaced,
-    /// so in-flight permits obtained from the previous semaphore are
-    /// **not** affected.
-    ///
-    /// This method is a public API intended for runtime configuration.
-    /// The binary build does not invoke it yet; it is kept as a tested,
-    /// meaningful public method for future wiring.
-    #[allow(dead_code, reason = "public API reserved for runtime configuration")]
-    pub fn set_limit(&self, provider: &str, limit: usize) {
-        let mut map = match self.semaphores.write() {
-            Ok(map) => map,
-            Err(poisoned) => {
-                tracing::warn!("bulkhead write lock poisoned in set_limit");
-                poisoned.into_inner()
-            }
-        };
-        map.insert(provider.to_string(), Arc::new(Semaphore::new(limit)));
-    }
-
     /// Try to acquire a permit for the given provider without blocking.
     ///
     /// If no semaphore exists for this provider yet, one is created with the
@@ -121,26 +100,5 @@ mod tests {
         assert!(p3.is_some());
         assert!(bulkhead.try_acquire("new-provider").unwrap().is_none());
         drop((p1, p2, p3));
-    }
-
-    #[test]
-    fn test_set_limit_replaces_semaphore() {
-        let bulkhead = Bulkhead::new(1);
-        // Acquire the only permit.
-        let p1 = bulkhead.try_acquire("svc").unwrap().expect("first permit");
-        assert!(bulkhead.try_acquire("svc").unwrap().is_none());
-        drop(p1);
-
-        // Increase the limit and verify we can now acquire more.
-        bulkhead.set_limit("svc", 5);
-        let p2 = bulkhead
-            .try_acquire("svc")
-            .unwrap()
-            .expect("first after resize");
-        let p3 = bulkhead
-            .try_acquire("svc")
-            .unwrap()
-            .expect("second after resize");
-        drop((p2, p3));
     }
 }

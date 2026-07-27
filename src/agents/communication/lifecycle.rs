@@ -159,68 +159,27 @@ impl Default for AgentLifecycle {
     }
 }
 
-/// Helper to get current timestamp in milliseconds.
-#[allow(dead_code)]
-pub fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
 // ── AgentLifecycleBuilder — convenient construction ───────────────────
 
 /// Builder for constructing lifecycle states with automatic timing.
 pub struct AgentLifecycleBuilder;
 
 impl AgentLifecycleBuilder {
+    fn now_ms() -> u64 {
+        crate::shared::timestamps::now_ts_ms() as u64
+    }
+
     /// Create a Registered state.
     pub fn registered() -> AgentLifecycle {
-        AgentLifecycle::Registered { at_ms: now_ms() }
+        AgentLifecycle::Registered {
+            at_ms: Self::now_ms(),
+        }
     }
 
     /// Create an Idle state.
-    #[allow(dead_code)]
     pub fn idle() -> AgentLifecycle {
-        AgentLifecycle::Idle { since_ms: now_ms() }
-    }
-
-    /// Create an Active state.
-    #[allow(dead_code)]
-    pub fn active(phase: AgentPhase) -> AgentLifecycle {
-        AgentLifecycle::Active {
-            phase,
-            started_at_ms: now_ms(),
-            tokens_used: 0,
-        }
-    }
-
-    /// Create a Completed state with automatic timing.
-    #[allow(dead_code)]
-    pub fn completed(result: String, tokens_used: u64, started_at: u64) -> AgentLifecycle {
-        let wall_time = now_ms().saturating_sub(started_at);
-        AgentLifecycle::Completed {
-            result,
-            tokens_used,
-            wall_time_ms: wall_time,
-            completed_at_ms: now_ms(),
-        }
-    }
-
-    /// Create an Errored state with automatic timing.
-    #[allow(dead_code)]
-    pub fn errored(error: String, tokens_used: u64, started_at: u64) -> AgentLifecycle {
-        let wall_time = now_ms().saturating_sub(started_at);
-        AgentLifecycle::Errored {
-            error,
-            tokens_used,
-            wall_time_ms: wall_time,
-        }
-    }
-
-    /// Create a Cancelled state.
-    #[allow(dead_code)]
-    pub fn cancelled(reason: String, tokens_used: u64) -> AgentLifecycle {
-        AgentLifecycle::Cancelled {
-            reason,
-            tokens_used,
+        AgentLifecycle::Idle {
+            since_ms: Self::now_ms(),
         }
     }
 }
@@ -292,19 +251,6 @@ mod tests {
 
         let registered = AgentLifecycle::Registered { at_ms: 0 };
         assert_eq!(registered.tokens_used(), 0);
-    }
-
-    #[test]
-    fn test_builder() {
-        let completed = AgentLifecycleBuilder::completed("ok".into(), 100, now_ms());
-        assert!(completed.is_terminal());
-        assert!(completed.wall_time_ms().is_some());
-
-        let errored = AgentLifecycleBuilder::errored("fail".into(), 50, now_ms());
-        assert!(errored.is_terminal());
-
-        let cancelled = AgentLifecycleBuilder::cancelled("timeout".into(), 30);
-        assert!(cancelled.is_terminal());
     }
 
     #[test]

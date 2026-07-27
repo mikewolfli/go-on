@@ -7,6 +7,7 @@
 //! (BLUE38 ARCH-13)
 
 use super::core::CapabilityBus;
+
 use std::time::Instant;
 
 impl CapabilityBus {

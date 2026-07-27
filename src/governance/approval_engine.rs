@@ -315,7 +315,6 @@ impl ApprovalEngine {
     /// When set, the engine will create the `approval_queue` table on init
     /// and reload any pending approvals from the database.
     pub fn with_db_path(mut self, db_path: String) -> Self {
-        self.db_path = Some(db_path.clone());
         #[cfg(feature = "backend-sqlite")]
         {
             if let Err(e) = Self::init_sqlite(&db_path) {
@@ -327,6 +326,14 @@ impl ApprovalEngine {
                 );
                 self.queue = requests;
             }
+            self.db_path = Some(db_path);
+        }
+        #[cfg(not(feature = "backend-sqlite"))]
+        {
+            tracing::warn!(
+                "ApprovalEngine: db_path '{}' set but ignored without backend-sqlite feature",
+                db_path
+            );
         }
         self
     }
@@ -873,10 +880,7 @@ impl ApprovalEngine {
 // ---------------------------------------------------------------------------
 
 fn current_timestamp_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 fn apply_multiplier(base: Duration, multiplier: f64) -> Duration {

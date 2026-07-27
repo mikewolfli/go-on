@@ -23,6 +23,7 @@
 //! let value = get_secret("GITHUB_TOKEN");
 //! ```
 
+use crate::lock_or_recover;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -39,25 +40,14 @@ static SECRET_OVERRIDE_MAP: std::sync::LazyLock<Mutex<HashMap<String, String>>> 
 ///
 /// This is the thread-safe replacement for `std::env::set_var(key, value)`.
 pub fn set_secret_override(key: &str, value: &str) {
-    match SECRET_OVERRIDE_MAP.lock() {
-        Ok(mut map) => {
-            map.insert(key.to_string(), value.to_string());
-        }
-        Err(poisoned) => {
-            tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in set_secret_override");
-            let mut map = poisoned.into_inner();
-            map.insert(key.to_string(), value.to_string());
-        }
-    }
+    let mut map = lock_or_recover!(SECRET_OVERRIDE_MAP);
+    map.insert(key.to_string(), value.to_string());
 }
 
 /// Resolve a secret value: returns the in-memory override if set, otherwise
 /// falls back to `std::env::var(key)`.
 pub fn get_secret(key: &str) -> Option<String> {
-    let map = SECRET_OVERRIDE_MAP.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("lock poisoned, recovering");
-        poisoned.into_inner()
-    });
+    let map = lock_or_recover!(SECRET_OVERRIDE_MAP);
     if let Some(value) = map.get(key) {
         return Some(value.clone());
     }
@@ -92,10 +82,7 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
     let now = Instant::now();
 
     // Check cache first.
-    let cache = KEYRING_CACHE.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("lock poisoned, recovering");
-        poisoned.into_inner()
-    });
+    let cache = lock_or_recover!(KEYRING_CACHE);
     if let Some(entry) = cache.get(&key) {
         if now.duration_since(entry.fetched_at) < KEYRING_CACHE_TTL {
             return Some(entry.value.clone());
@@ -110,10 +97,7 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
 
     // Update cache (best-effort).
     if let Some(ref v) = value {
-        let mut cache = KEYRING_CACHE.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut cache = lock_or_recover!(KEYRING_CACHE);
         cache.insert(
             key,
             CachedEntry {

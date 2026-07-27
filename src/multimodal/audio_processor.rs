@@ -200,13 +200,24 @@ impl Transcription {
 }
 
 /// Supported speech-to-text backends.
+///
+/// - `OpenAIWhisper`: Fully production-ready. Calls the OpenAI Whisper REST API.
+///   Always available (no feature gate).
+/// - `WhisperLocal`: **PLACEHOLDER** — decodes PCM but returns simulated
+///   "(inaudible segment N)" text. Requires integration with whisper-rs or
+///   candle-whisper for real transcription.
+/// - `Vosk`: **PLACEHOLDER** — validates model path exists but returns an error.
+///   Requires vosk-rs integration for real recognition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SttBackend {
     /// Local Whisper model (requires `audio-whisper-openai` feature).
+    /// NOTE: Not production-ready — returns simulated placeholder transcription.
     WhisperLocal,
     /// OpenAI Whisper API (`POST https://api.openai.com/v1/audio/transcriptions`).
+    /// Fully implemented and production-ready.
     OpenAIWhisper,
     /// Vosk offline ASR engine (requires `audio-vosk` feature).
+    /// NOTE: Not production-ready — returns an error after path validation.
     Vosk,
 }
 
@@ -386,8 +397,12 @@ impl AudioProcessor {
     }
 
     // -----------------------------------------------------------------------
-    // Local Whisper backend  (feature = "audio-whisper-openai")
+    // Local Whisper backend — PLACEHOLDER (feature = "audio-whisper-openai")
     // -----------------------------------------------------------------------
+    //
+    // Decodes PCM samples and validates the model path, but does NOT load a
+    // real whisper model. Returns simulated "(inaudible segment N)" segments.
+    // Replace with whisper-rs or candle-whisper integration for production use.
 
     #[cfg(feature = "audio-whisper-openai")]
     fn transcribe_whisper_local(
@@ -401,9 +416,6 @@ impl AudioProcessor {
             )
         })?;
 
-        // Validate model path exists before proceeding.
-        // A real whisper-rs or candle backend would load the model here.
-
         if !std::path::Path::new(model_path).exists() {
             return Err(AudioProcessorError::Other(format!(
                 "Whisper model not found at: {model_path}"
@@ -411,8 +423,6 @@ impl AudioProcessor {
         }
 
         // Convert audio bytes to PCM f32 samples.
-        // This expects raw PCM data. For compressed formats, a decoder (e.g.
-        // Symphonia or minimp3) would be needed.
         let samples: Vec<f32> = if audio.len().is_multiple_of(2) {
             audio
                 .chunks_exact(2)
@@ -428,10 +438,8 @@ impl AudioProcessor {
                 .collect()
         };
 
-        // PCM samples are ready. Loading a real whisper-rs or candle model
-        // and calling state.full() would go here.
-        // For now, run a simulated pipeline that records processing stats
-        // but returns no transcribed text (since no real model is loaded).
+        // PLACEHOLDER: Returns simulated segments. Real whisper-rs/candle
+        // model loading and inference goes here.
 
         let language = self
             .config

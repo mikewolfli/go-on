@@ -169,19 +169,23 @@ impl MemoryBus {
     ///
     /// Returns the first hit found according to the provided `strategy`.
     /// If no tier is configured or no entry is found, returns `None`.
-    pub fn lookup(&self, key: &str, strategy: &CacheStrategy) -> Option<Vec<u8>> {
-        let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
-
+    pub async fn lookup(&self, key: &str, strategy: &CacheStrategy) -> Option<Vec<u8>> {
         // ---- L1: In-memory response cache ----
         if strategy.use_l1_memory {
             if let Some(ref mrc) = self.memory_response_cache {
-                let guard = mrc.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("memory_response_cache lock poisoned in lookup L1 – recovered");
-                    poisoned.into_inner()
-                });
-                let cached = guard.get(key);
-                drop(guard);
+                let cached = {
+                    let guard = mrc.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!(
+                            "memory_response_cache lock poisoned in lookup L1 – recovered"
+                        );
+                        poisoned.into_inner()
+                    });
+                    guard
+                        .get(key)
+                        .map(|entry| entry.response_text.clone().into_bytes())
+                };
                 if cached.is_some() {
+                    let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
                     profile.total_cache_hits += 1;
                     let total = profile.total_cache_hits + profile.total_cache_misses;
                     profile.cache_hit_rate = if total == 0 {
@@ -189,8 +193,7 @@ impl MemoryBus {
                     } else {
                         profile.total_cache_hits as f64 / total as f64
                     };
-                    // MemoryResponseCache stores String; convert to Vec<u8>.
-                    return cached.map(|entry| entry.response_text.into_bytes());
+                    return cached;
                 }
             }
         }
@@ -198,7 +201,8 @@ impl MemoryBus {
         // ---- L2: SQLite / Postgres response cache ----
         if strategy.use_l2_sqlite {
             if let Some(ref rc) = self.response_cache {
-                if let Ok(Some(cached)) = rc.get(key) {
+                if let Ok(Some(cached)) = rc.get(key).await {
+                    let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
                     profile.total_cache_hits += 1;
                     let total = profile.total_cache_hits + profile.total_cache_misses;
                     profile.cache_hit_rate = if total == 0 {
@@ -215,8 +219,9 @@ impl MemoryBus {
         if strategy.use_l3_vector {
             if let Some(ref vs) = self.vector_store {
                 // Use a broad phase wildcard so we search all phases.
-                if let Ok((hits, _)) = vs.search("*", key, 1, 0.0, 4096) {
+                if let Ok((hits, _)) = vs.clone().search("*", key, 1, 0.0, 4096).await {
                     if let Some(hit) = hits.into_iter().next() {
+                        let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
                         profile.total_cache_hits += 1;
                         let total = profile.total_cache_hits + profile.total_cache_misses;
                         profile.cache_hit_rate = if total == 0 {
@@ -231,6 +236,7 @@ impl MemoryBus {
         }
 
         // ---- Miss ----
+        let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
         profile.total_cache_misses += 1;
         let total = profile.total_cache_hits + profile.total_cache_misses;
         profile.cache_hit_rate = if total == 0 {
@@ -245,7 +251,7 @@ impl MemoryBus {
     ///
     /// The value is placed into each cache tier that is both available and
     /// enabled by `strategy`.
-    pub fn store(&self, key: &str, value: Vec<u8>, strategy: &CacheStrategy) {
+    pub async fn store(&self, key: &str, value: Vec<u8>, strategy: &CacheStrategy) {
         if strategy.ttl_seconds == 0 {
             return;
         }
@@ -267,7 +273,9 @@ impl MemoryBus {
         if strategy.use_l2_sqlite {
             if let Some(ref rc) = self.response_cache {
                 // Use a generic agent name; callers can refine when needed.
-                let _ = rc.put(key, &value_str, "memory_bus", Some(strategy.ttl_seconds));
+                let _ = rc
+                    .put(key, &value_str, "memory_bus", Some(strategy.ttl_seconds))
+                    .await;
             }
         }
 
@@ -275,7 +283,7 @@ impl MemoryBus {
         if strategy.use_l3_vector {
             if let Some(ref vs) = self.vector_store {
                 // Store under a "memory_bus" phase with the key as query text.
-                let _ = vs.upsert("memory_bus", key, &value_str);
+                let _ = vs.clone().upsert("memory_bus", key, &value_str).await;
             }
         }
 
@@ -299,13 +307,15 @@ impl MemoryBus {
     }
 
     /// Return a snapshot of the current bus profile / metrics.
-    pub fn profile(&self) -> MemoryBusProfile {
-        let p = self.profile.lock().unwrap_or_else(|e| e.into_inner());
-        let mut snapshot = p.clone();
+    pub async fn profile(&self) -> MemoryBusProfile {
+        let mut snapshot = {
+            let p = self.profile.lock().unwrap_or_else(|e| e.into_inner());
+            p.clone()
+        };
 
         // Enrich with live counts from available backends.
         if let Some(ref rc) = self.response_cache {
-            if let Ok(stats) = rc.stats() {
+            if let Ok(stats) = rc.stats().await {
                 snapshot.total_cache_hits = stats.total_hits.max(snapshot.total_cache_hits);
             }
         }
@@ -345,7 +355,7 @@ impl MemoryBus {
     }
 
     /// Clear expired entries across all available cache backends.
-    pub fn clear_expired(&self) {
+    pub async fn clear_expired(&self) {
         // L1: In-memory response cache — purge_expired does this inline.
         if let Some(ref mrc) = self.memory_response_cache {
             let guard = match mrc.lock() {
@@ -360,7 +370,7 @@ impl MemoryBus {
 
         // L2: SQLite / Postgres response cache.
         if let Some(ref rc) = self.response_cache {
-            let _ = rc.purge_expired();
+            let _ = rc.purge_expired().await;
         }
 
         // MemoryStore: run garbage collection.
@@ -452,8 +462,8 @@ mod tests {
         MemoryBus::new(None, None, Some(ms), Some(mrc))
     }
 
-    #[test]
-    fn lookup_miss_returns_none() {
+    #[tokio::test]
+    async fn lookup_miss_returns_none() {
         let bus = make_test_bus();
         let strategy = CacheStrategy {
             use_l1_memory: true,
@@ -461,16 +471,16 @@ mod tests {
             use_l3_vector: false,
             ttl_seconds: 60,
         };
-        let result = bus.lookup("nonexistent", &strategy);
+        let result = bus.lookup("nonexistent", &strategy).await;
         assert!(result.is_none());
 
-        let p = bus.profile();
+        let p = bus.profile().await;
         assert_eq!(p.total_cache_hits, 0);
         assert_eq!(p.total_cache_misses, 1);
     }
 
-    #[test]
-    fn store_and_lookup_l1_roundtrip() {
+    #[tokio::test]
+    async fn store_and_lookup_l1_roundtrip() {
         let bus = make_test_bus();
         let strategy = CacheStrategy {
             use_l1_memory: true,
@@ -479,17 +489,17 @@ mod tests {
             ttl_seconds: 60,
         };
 
-        bus.store("k1", b"hello world".to_vec(), &strategy);
-        let result = bus.lookup("k1", &strategy);
+        bus.store("k1", b"hello world".to_vec(), &strategy).await;
+        let result = bus.lookup("k1", &strategy).await;
         assert!(result.is_some());
         assert_eq!(result.expect("lookup should return value"), b"hello world");
 
-        let p = bus.profile();
+        let p = bus.profile().await;
         assert!(p.total_cache_hits >= 1);
     }
 
-    #[test]
-    fn strategy_disabled_l1_skips_cache() {
+    #[tokio::test]
+    async fn strategy_disabled_l1_skips_cache() {
         let bus = make_test_bus();
         let store_strategy = CacheStrategy {
             use_l1_memory: true,
@@ -497,7 +507,7 @@ mod tests {
             use_l3_vector: false,
             ttl_seconds: 60,
         };
-        bus.store("k2", b"data".to_vec(), &store_strategy);
+        bus.store("k2", b"data".to_vec(), &store_strategy).await;
 
         // Lookup with L1 disabled — should miss even though data exists.
         let lookup_strategy = CacheStrategy {
@@ -506,12 +516,12 @@ mod tests {
             use_l3_vector: false,
             ttl_seconds: 60,
         };
-        let result = bus.lookup("k2", &lookup_strategy);
+        let result = bus.lookup("k2", &lookup_strategy).await;
         assert!(result.is_none());
     }
 
-    #[test]
-    fn zero_ttl_skips_store() {
+    #[tokio::test]
+    async fn zero_ttl_skips_store() {
         let bus = make_test_bus();
         let strategy = CacheStrategy {
             use_l1_memory: true,
@@ -520,15 +530,16 @@ mod tests {
             ttl_seconds: 0,
         };
 
-        bus.store("k_zero", b"should not appear".to_vec(), &strategy);
-        let result = bus.lookup("k_zero", &strategy);
+        bus.store("k_zero", b"should not appear".to_vec(), &strategy)
+            .await;
+        let result = bus.lookup("k_zero", &strategy).await;
         assert!(result.is_none());
     }
 
-    #[test]
-    fn clear_expired_does_not_panic() {
+    #[tokio::test]
+    async fn clear_expired_does_not_panic() {
         let bus = make_test_bus();
         // Just verify that calling clear_expired on a minimal bus doesn't panic.
-        bus.clear_expired();
+        bus.clear_expired().await;
     }
 }

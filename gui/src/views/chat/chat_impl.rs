@@ -51,6 +51,10 @@ pub struct StreamState {
     pub stream_progress: TokenProgress,
     // stream_processor field removed: the spawned task creates its own
     // StreamProcessor per-stream, so this field was never read.
+    /// Last time `ctx.request_repaint()` was called (wall clock).
+    /// Used to throttle repaint frequency during streaming so we don't
+    /// exceed the configured `stream_repaint_interval`.
+    last_repaint: std::time::Instant,
 }
 
 /// Model and agent selection state.
@@ -488,6 +492,7 @@ impl ChatView {
                 }),
             abort_controller: None,
             stream_progress: TokenProgress::default(),
+            last_repaint: std::time::Instant::now(),
         };
         let model_state = ModelState {
             selected_agent: String::new(),
@@ -1118,6 +1123,7 @@ mod tests {
                 stream_client: reqwest::Client::new(),
                 abort_controller: None,
                 stream_progress: TokenProgress::default(),
+                last_repaint: std::time::Instant::now(),
             },
             model_state: ModelState {
                 selected_agent: String::new(),

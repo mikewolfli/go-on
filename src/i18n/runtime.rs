@@ -160,10 +160,12 @@ impl I18nManager {
             }),
         };
 
-        // Load all available translations
-        manager.load_all_languages()?;
-
+        // Load only the detected language at startup.
+        // Other languages are loaded on demand (via set_language / get_lang).
         let current = manager.current_language();
+        if let Err(e) = manager.load_language(current) {
+            warn!("Failed to load initial language {:?}: {}", current, e);
+        }
         info!("i18n initialized with language: {:?}", current);
 
         Ok(manager)
@@ -230,8 +232,21 @@ impl I18nManager {
         Ok(())
     }
 
-    /// Set current language
+    /// Set current language, lazily loading the translations if not yet loaded.
     pub fn set_language(&self, language: Language) {
+        // Ensure translations are loaded for the new language.
+        {
+            let state = read_guard(&self.inner.state, "i18n.state");
+            if !state.translations.contains_key(&language) {
+                drop(state);
+                if let Err(e) = self.load_language(language) {
+                    warn!(
+                        "Failed to load language {:?} in set_language: {}",
+                        language, e
+                    );
+                }
+            }
+        }
         let mut state = write_guard(&self.inner.state, "i18n.state");
         state.current_language = language;
         info!("Language changed to: {:?}", language);
@@ -245,37 +260,28 @@ impl I18nManager {
 
     /// Get translated message for the current language.
     ///
-    /// Performs a single lock acquisition by combining the language lookup
-    /// and translation lookup into one critical section.
-    ///
-    /// # Arguments
-    /// * `key` - Message key
-    ///
-    /// # Returns
-    /// Translated message or key if not found
+    /// Delegates to the shared `lookup()` which implements the canonical
+    /// lookup chain: requested language → English fallback → return key.
     pub fn get(&self, key: &str) -> String {
         let state = read_guard(&self.inner.state, "i18n.state");
-        let lang = state.current_language;
-        if let Some(msg) = state.translations.get(&lang).and_then(|m| m.get(key)) {
-            return msg.clone();
-        }
-
-        // Fallback to English
-        if lang != Language::EnUS {
-            if let Some(msg) = state
-                .translations
-                .get(&Language::EnUS)
-                .and_then(|m| m.get(key))
-            {
-                return msg.clone();
-            }
-        }
-
-        key.to_string()
+        Self::lookup(&state, key, state.current_language)
     }
 
     /// Get translated message for specific language
     pub fn get_lang(&self, key: &str, language: Language) -> String {
+        // Lazily load the language if not yet loaded.
+        {
+            let state = read_guard(&self.inner.state, "i18n.state");
+            if !state.translations.contains_key(&language) {
+                drop(state);
+                if let Err(e) = self.load_language(language) {
+                    warn!(
+                        "Failed to lazy-load language {:?} in get_lang: {}",
+                        language, e
+                    );
+                }
+            }
+        }
         let state = read_guard(&self.inner.state, "i18n.state");
         Self::lookup(&state, key, language)
     }

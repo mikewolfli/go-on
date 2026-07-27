@@ -68,7 +68,7 @@ where
 }
 
 /// Build a comprehensive runtime healthcheck report.
-pub fn build_runtime_healthcheck_report(
+pub async fn build_runtime_healthcheck_report(
     config_path: Option<&Path>,
     cache: Option<&ResponseCache>,
     vector_store: Option<&VectorStore>,
@@ -167,7 +167,7 @@ pub fn build_runtime_healthcheck_report(
     }
 
     if let Some(cache) = cache {
-        match cache.entry_count() {
+        match cache.entry_count().await {
             Ok(entries) => components.push(ComponentReport {
                 name: "cache".to_string(),
                 status: CheckStatus::Healthy,
@@ -192,8 +192,8 @@ pub fn build_runtime_healthcheck_report(
 
     if let Some(vector_store) = vector_store {
         match (
-            vector_store.memory_entry_count(),
-            vector_store.summary_entry_count(),
+            vector_store.memory_entry_count().await,
+            vector_store.summary_entry_count().await,
         ) {
             (Ok(memory_entries), Ok(summary_entries)) => components.push(ComponentReport {
                 name: "vector".to_string(),

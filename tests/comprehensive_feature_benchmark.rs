@@ -275,7 +275,9 @@ fn measure_planner_dag_reality() -> DimensionScore {
         input: serde_json::json!({}),
     };
 
-    let plan = Planner::plan(&envelope);
+    let plan = tokio::runtime::Runtime::new()
+        .expect("create runtime")
+        .block_on(Planner::plan(&envelope));
     let steps_ok = !plan.steps.is_empty();
     let plan_id_ok = !plan.plan_id.is_empty();
 
@@ -698,14 +700,14 @@ fn measure_audit_replay() -> DimensionScore {
 }
 
 /// Build a qualitative score for dimensions that cannot be measured at test time.
-/// Returns a DimensionScore with a conservative default of 7.0 for qualitative
-/// dimensions that cannot be measured automatically. These scores contribute to
-/// the weighted total at a reasonable default, avoiding penalizing features that
-/// require external measurement infrastructure.
+/// Qualitative dimensions receive score 0.0 and ARE still included in the
+/// weighted total denominator, which pulls the aggregate toward zero for
+/// dimensions not yet measurable in CI. This provides a conservative floor
+/// without over-crediting unmeasured capabilities.
 fn qualitative_score(evidence: &'static str) -> DimensionScore {
     // Qualitative dimensions cannot be measured in CI (need live traffic,
-    // real E2E, tenants, etc.). Score 0.0 so they are excluded from the
-    // weighted total denominator but still visible in the report.
+    // real E2E, tenants, etc.). Score 0.0 keeps the contribution neutral
+    // while the dimension is still visible in the report.
     DimensionScore {
         score: 0.0,
         evidence,
@@ -781,8 +783,9 @@ fn build_report() -> BenchmarkReport {
 
     // ── Aggregate weighted score ─────────────────────────────────────
     // All dimensions (measured + qualitative) contribute to the weighted total.
-    // Qualitative dimensions use a conservative default score of 7.0,
-    // reflecting expected minimum viability without external measurement.
+    // Qualitative dimensions score 0.0 (see qualitative_score) so they do not
+    // inflate the aggregate, but ARE included in the denominator to prevent
+    // giving credit for unmeasured capabilities.
 
     let mut weighted_sum = 0.0;
     let mut measured_weight_total = 0.0;
@@ -849,12 +852,10 @@ fn comprehensive_benchmark_each_dimension_meets_gate() {
 #[test]
 fn comprehensive_benchmark_weighted_total_meets_gate() {
     let report = build_report();
-    // The weighted total gate is 85.0 — qualitative dimensions (score 0.0)
-    // are excluded from the denominator, so this reflects only measured scores.
-    // Gate is set to 50.0 for the local profile — qualitative dimensions
-    // (score 0.0) are excluded from the denominator, and only measured
-    // dimensions contribute. The previous 95.0 gate assumed a full-feature
-    // build; the local profile has fewer enabled features.
+    // Gate set to 48.0 for the local profile. All dimensions (measured +
+    // qualitative) contribute to the denominator; qualitative dimensions
+    // score 0.0 and pull the average down. The previous 95.0 gate assumed
+    // a full-feature build with all dimensions measurable.
     let total_gate = 48.0;
     let epsilon = 1e-9;
     assert!(

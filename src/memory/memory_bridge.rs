@@ -71,9 +71,12 @@ impl From<CanonicalEntry> for PersistenceEntry {
 /// [`MemoryEntry`](PersistenceEntry) and call `MemoryPersistence::store()`.
 ///
 /// Bridge API for persistence-only store (wired into production flow).
-pub fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyhow::Result<()> {
+pub async fn persist_store(
+    persistence: &MemoryPersistence,
+    entry: CanonicalEntry,
+) -> anyhow::Result<()> {
     let p_entry: PersistenceEntry = entry.into();
-    persistence.store(p_entry)
+    persistence.store(p_entry).await
 }
 
 /// Bridge for `store()` — persists the entry in both subsystems.
@@ -84,20 +87,22 @@ pub fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> 
 /// # Errors
 ///
 /// Bridge API for coordinated dual-store (memory + persistence, wired into production flow).
-pub fn bridge_store(
+pub async fn bridge_store(
     memory_store: &Mutex<MemoryStore>,
     persistence: &MemoryPersistence,
     entry: CanonicalEntry,
 ) -> anyhow::Result<()> {
     // Step 1: in-memory store
-    let mut store = memory_store.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("memory bridge mutex poisoned during store");
-        poisoned.into_inner()
-    });
-    store.store(entry.clone());
+    {
+        let mut store = memory_store.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("memory bridge mutex poisoned during store");
+            poisoned.into_inner()
+        });
+        store.store(entry.clone());
+    }
 
     // Step 2: persistence (conversion via `From` impl)
-    persist_store(persistence, entry)?;
+    persist_store(persistence, entry).await?;
 
     Ok(())
 }
@@ -113,7 +118,7 @@ pub fn bridge_store(
 ///
 /// Returns an error if `auto_migrate()` fails.  The in-memory promotion will
 /// still have been applied.
-pub fn bridge_promote(
+pub async fn bridge_promote(
     memory_store: &Mutex<MemoryStore>,
     persistence: &MemoryPersistence,
 ) -> anyhow::Result<MemoryPromotionReport> {
@@ -127,7 +132,7 @@ pub fn bridge_promote(
     };
 
     // Step 2: trigger persistence tier migration
-    let _migration_report = persistence.auto_migrate()?;
+    let _migration_report = persistence.auto_migrate().await?;
 
     Ok(report)
 }
@@ -172,8 +177,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_bridge_store_and_promote() {
+    #[tokio::test]
+    async fn test_bridge_store_and_promote() {
         let store = Mutex::new(MemoryStore::new(MemoryPolicy::default()));
         let tmp = tempfile::tempdir().expect("create temp dir");
         let db_path = tmp.path().join("warm.db");
@@ -183,10 +188,14 @@ mod tests {
 
         // Store an entry via the bridge
         let entry = make_canonical("bridge-test-1", MemoryClass::Observation, 0.80);
-        bridge_store(&store, &persistence, entry).expect("bridge_store should succeed");
+        bridge_store(&store, &persistence, entry)
+            .await
+            .expect("bridge_store should succeed");
 
         // Promote via the bridge
-        let report = bridge_promote(&store, &persistence).expect("bridge_promote should succeed");
+        let report = bridge_promote(&store, &persistence)
+            .await
+            .expect("bridge_promote should succeed");
         // The entry with usefulness 0.80 from Observation should promote to Episodic
         assert_eq!(
             report.promoted_count, 1,
@@ -218,7 +227,7 @@ mod tests {
                             tracing::info!("auto_migrate task cancelled");
                             break;
                         }
-                        let _ = mp.auto_migrate();
+                        let _ = mp.auto_migrate().await;
                     }
                     _ = cancel_clone.cancelled() => {
                         tracing::info!("auto_migrate task cancelled via token");

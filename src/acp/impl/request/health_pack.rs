@@ -38,7 +38,7 @@ pub(super) async fn breaker_reset_payload(server: &AcpServer, params: Value) -> 
         .resilience
         .circuit_breakers
         .lock()
-        .map(|guard| guard.reset(target))
+        .map(|mut guard| guard.reset(target))
         .unwrap_or(0);
     let breakers = server
         .resilience
@@ -183,7 +183,7 @@ pub(super) async fn breaker_recovery_payload(server: &AcpServer, params: Value) 
             .resilience
             .circuit_breakers
             .lock()
-            .map(|guard| guard.reset(target))
+            .map(|mut guard| guard.reset(target))
             .unwrap_or(0);
         (recovered_services, breaker_reset_count)
     };
@@ -236,7 +236,7 @@ pub(super) async fn cache_clear_payload(server: &AcpServer) -> Result<Value> {
 pub(super) async fn vector_clear_payload(server: &AcpServer) -> Result<Value> {
     let (memory_removed, summary_removed) =
         if let Some(store) = server.cache_deps.cache.vector_store.clone() {
-            store.clear_all()?
+            store.clear_all().await?
         } else {
             (0, 0)
         };

@@ -80,13 +80,9 @@ pub struct SafetyViolation {
     pub suggested_action: SafetyAction,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SafetySeverity {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
+/// Severity level for content safety violations.
+/// Re-exported from the shared [`DetectionSeverity`](super::severity::DetectionSeverity) enum.
+pub use super::severity::DetectionSeverity as SafetySeverity;
 
 // ---------------------------------------------------------------------------
 // ContentSafetyConfig

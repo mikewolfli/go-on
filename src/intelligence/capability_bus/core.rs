@@ -712,10 +712,7 @@ impl CapabilityBus {
         outcome: &str,
         detail: Value,
     ) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now_ms = crate::intelligence::now_ms();
 
         let mut history = write_guard(&self.event_history);
         history.push_back(BusEvent {
@@ -789,8 +786,8 @@ impl CapabilityBus {
         read_guard(&self.event_history).iter().cloned().collect()
     }
 
-    pub fn capability_bus_profile(&self) -> CapabilityBusProfile {
-        let mut p = write_guard(&self.profile);
+    pub async fn capability_bus_profile(&self) -> CapabilityBusProfile {
+        let mut p = write_guard(&self.profile).clone();
         // BLUE70: Read from consolidated buses
         {
             let ukb = read_guard(&self.unified_knowledge_bus);
@@ -854,7 +851,7 @@ impl CapabilityBus {
 
         #[cfg(feature = "sub-bus-memory")]
         {
-            let mb = self.memory_bus.profile();
+            let mb = self.memory_bus.profile().await;
             p.memory_cache_hit_rate = mb.cache_hit_rate;
             p.memory_total_entries = mb.vector_docs_count + mb.memory_entries;
         }
@@ -1447,7 +1444,7 @@ pub(crate) mod tests {
             "tool call should be counted exactly once"
         );
 
-        let profile = bus.capability_bus_profile();
+        let profile = bus.capability_bus_profile().await;
         assert_eq!(profile.tool_bus_calls, after);
 
         let action_event = bus

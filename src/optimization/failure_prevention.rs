@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Re-export the unified circuit breaker type from the hyper-resilience module.
 ///
@@ -16,10 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub use crate::resilience::hyper_resilience::CircuitBreaker as UnifiedCircuitBreaker;
 
 fn now_epoch_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    crate::shared::timestamps::now_ts() as u64
 }
 
 /// Health status of a service

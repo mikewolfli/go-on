@@ -69,7 +69,7 @@ impl TenantBudgetEnforcer {
 
     /// Return the current day number (unix timestamp / 86400).
     fn today() -> i64 {
-        crate::acp::prelude::now_ts() / 86400
+        crate::shared::timestamps::now_ts_ms() / 86_400_000
     }
 
     /// Reset daily counters if the day has changed.

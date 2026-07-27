@@ -53,7 +53,7 @@ pub(crate) fn governance_remediate_payload(server: &AcpServer, params: Value) ->
                 .resilience
                 .circuit_breakers
                 .lock()
-                .map(|guard| guard.reset(None))
+                .map(|mut guard| guard.reset(None))
                 .unwrap_or(0);
             tracing::info!(
                 risk_id = %risk_id,

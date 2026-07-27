@@ -132,6 +132,17 @@ impl AppConfig {
 
         // Apply auto-rules AFTER migration to ensure phase structure is final.
         defaults::apply_auto_rules(path, &mut cfg);
+
+        // Sync `[protocol].mode` → `runtime.protocol_mode` so that
+        // the protocol.mode TOML key is available without re-reading
+        // the raw file (previously re-read in server.rs).
+        if let Some(ref protocol) = cfg.protocol {
+            if let Some(ref mode) = protocol.mode {
+                let rt = cfg.runtime.get_or_insert_with(Default::default);
+                rt.protocol_mode.get_or_insert_with(|| mode.clone());
+            }
+        }
+
         if !cfg.role_registry().is_empty() {
             install_role_registry(cfg.role_registry().clone());
         }

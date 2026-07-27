@@ -607,7 +607,7 @@ pub async fn start_background_tasks(
                         _ = shutdown.notified() => break,
                         _ = interval.tick() => {}
                     }
-                    match mp.auto_migrate() {
+                    match mp.auto_migrate().await {
                         Ok(report) => {
                             let total = report.promoted_hot_to_warm
                                 + report.promoted_warm_to_cold
@@ -652,7 +652,7 @@ pub async fn start_background_tasks(
         tokio::spawn(async move {
             // S6: defer initial promote by 500ms to let server accept requests first
             tokio::time::sleep(Duration::from_millis(500)).await;
-            match crate::memory::memory_bridge::bridge_promote(&memory_store, &mp) {
+            match crate::memory::memory_bridge::bridge_promote(&memory_store, &mp).await {
                 Ok(report) => {
                     if report.promoted_count > 0 {
                         tracing::info!(

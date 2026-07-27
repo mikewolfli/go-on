@@ -219,7 +219,7 @@ pub(crate) async fn observe_phase(
     //   2. Sanitize (MEDIUM/LOW) — replace injection spans with inert markers
     //   3. Log only — contaminations are recorded for audit
     if let Some(ref detector) = server.governance_deps.injection_detector {
-        use crate::security::prompt_injection::InjectionSeverity;
+        use crate::security::severity::DetectionSeverity as InjectionSeverity;
 
         // Detect and classify severity across ALL messages first.
         let mut has_high_or_critical = false;
@@ -1718,7 +1718,8 @@ pub(crate) async fn reflect_phase(
         &exec_out.last_err,
         params,
         started,
-    );
+    )
+    .await;
 
     // AgentMemoryBus completion
     store_agent_memory_bus_completion(
@@ -1867,7 +1868,8 @@ pub(crate) async fn reflect_phase(
             &server.persistence.memory_store,
             mp.as_ref(),
             entry,
-        );
+        )
+        .await;
     }
 
     // ── MemoryRetrievalEngine: index session memory (GAP-B52-13) ───────
@@ -2131,7 +2133,7 @@ async fn run_multi_agent_pipeline(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn capability_bus_feedback(
+async fn capability_bus_feedback(
     server: &AcpServer,
     trace: &RequestTraceContext,
     phase_name: &str,
@@ -2154,7 +2156,8 @@ fn capability_bus_feedback(
             duration_ms,
             token_cost_est,
             if success { 0.8 } else { 0.2 },
-        );
+        )
+        .await;
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

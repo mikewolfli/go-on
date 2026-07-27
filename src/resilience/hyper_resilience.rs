@@ -25,20 +25,14 @@ use super::chaos::ChaosEngine;
 // Lock helpers
 // ---------------------------------------------------------------------------
 
-/// Acquire a write lock on a Mutex.
+/// Acquire a lock on a Mutex, recovering from poison via the shared macro.
 fn lock_mutex<T>(mtx: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mtx.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("hyper_resilience mutex poisoned, recovering");
-        poisoned.into_inner()
-    })
+    crate::lock_or_recover!(mtx, "hyper_resilience")
 }
 
-/// Acquire a read lock on a RwLock.
+/// Acquire a read lock on a RwLock, recovering from poison via the shared macro.
 fn read_lock<T>(rw: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
-    rw.read().unwrap_or_else(|poisoned| {
-        tracing::warn!("hyper_resilience rwlock poisoned, recovering");
-        poisoned.into_inner()
-    })
+    crate::read_or_recover!(rw, "hyper_resilience")
 }
 
 // ---------------------------------------------------------------------------
@@ -204,15 +198,14 @@ pub struct ResilienceProfile {
 /// - `circuit_breakers`: `Mutex` (frequently mutated)
 /// - `failover_groups`: `Mutex` (separate from circuit breakers)
 /// - `healing_actions_taken`: `AtomicU64` (lock-free counter)
-/// - Test metrics: `Mutex` (occasional writes)
+/// - `test_metrics`: `Mutex<TestMetrics>` (consolidated latency + error rate)
 pub struct HyperResilienceEngine {
     config: RwLock<ResilienceConfig>,
     circuit_breakers: Mutex<HashMap<String, CircuitBreaker>>,
     failover_groups: Mutex<HashMap<String, FailoverGroup>>,
     healing_actions_taken: AtomicU64,
     started_ms: u64,
-    test_avg_latency_ms: Mutex<f64>,
-    test_error_rate: Mutex<f64>,
+    test_metrics: Mutex<TestMetrics>,
     cancel_tx: watch::Sender<bool>,
     /// Handle for the background health check task, used to detect panics.
     health_check_handle: Mutex<Option<JoinHandle<()>>>,
@@ -277,8 +270,10 @@ impl HyperResilienceEngine {
             failover_groups: Mutex::new(HashMap::new()),
             healing_actions_taken: AtomicU64::new(0),
             started_ms: now_ms,
-            test_avg_latency_ms: Mutex::new(10.0),
-            test_error_rate: Mutex::new(0.001),
+            test_metrics: Mutex::new(TestMetrics {
+                avg_latency_ms: 10.0,
+                error_rate: 0.001,
+            }),
             cancel_tx,
             health_check_handle: Mutex::new(None),
             #[cfg(feature = "chaos-testing")]
@@ -614,8 +609,10 @@ impl HyperResilienceEngine {
             .values()
             .filter(|cb| matches!(cb.state, CircuitState::Open))
             .count();
-        let avg_latency_ms = *lock_mutex(&self.test_avg_latency_ms);
-        let error_rate = *lock_mutex(&self.test_error_rate);
+        let metrics = lock_mutex(&self.test_metrics);
+        let avg_latency_ms = metrics.avg_latency_ms;
+        let error_rate = metrics.error_rate;
+        drop(metrics);
         drop(cbs);
 
         let fgs = lock_mutex(&self.failover_groups);
@@ -1116,16 +1113,15 @@ impl HyperResilienceEngine {
                 .count();
             drop(cbs);
 
-            let mut avg_latency = lock_mutex(&self.test_avg_latency_ms);
-            let mut err_rate = lock_mutex(&self.test_error_rate);
+            let mut metrics = lock_mutex(&self.test_metrics);
 
             if total > 0 {
-                *err_rate = open as f64 / total as f64;
+                metrics.error_rate = open as f64 / total as f64;
             } else {
-                *err_rate = 0.0;
+                metrics.error_rate = 0.0;
             }
             // Estimate latency from half-open attempts (higher when failing)
-            *avg_latency = if half_open > 0 {
+            metrics.avg_latency_ms = if half_open > 0 {
                 15.0 + (half_open as f64 * 5.0)
             } else {
                 8.0
@@ -1216,8 +1212,10 @@ impl HyperResilienceEngine {
             failover_groups: Mutex::new(HashMap::new()),
             healing_actions_taken: AtomicU64::new(0),
             started_ms: now_ms,
-            test_avg_latency_ms: Mutex::new(10.0),
-            test_error_rate: Mutex::new(0.001),
+            test_metrics: Mutex::new(TestMetrics {
+                avg_latency_ms: 10.0,
+                error_rate: 0.001,
+            }),
             cancel_tx,
             health_check_handle: Mutex::new(None),
             #[cfg(feature = "chaos-testing")]
@@ -1486,6 +1484,15 @@ impl FaultConsensus {
 // RS5: Recovery plan persistence
 // ---------------------------------------------------------------------------
 
+/// Consolidated test metrics (latency + error rate under one Mutex).
+#[derive(Debug, Clone)]
+struct TestMetrics {
+    /// Average latency estimate in milliseconds.
+    avg_latency_ms: f64,
+    /// Error rate estimate (0.0 – 1.0).
+    error_rate: f64,
+}
+
 /// A recovery plan step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryStep {
@@ -1607,6 +1614,7 @@ impl RecoveryPlanStore {
 // ---------------------------------------------------------------------------
 
 /// Return the current time in milliseconds since the Unix epoch.
+#[inline(always)]
 fn now_millis() -> u64 {
     crate::shared::timestamps::now_ts_ms() as u64
 }

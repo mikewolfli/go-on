@@ -69,7 +69,7 @@ impl AgentVoter for CapabilityBusVoter {
     /// The `context` may contain the proposal description; the voter uses it
     /// together with bus metrics to produce a reasoned vote.
     async fn vote(&self, context: &str) -> Vote {
-        let profile = self.bus.capability_bus_profile();
+        let profile = self.bus.capability_bus_profile().await;
 
         // Compute a capability coverage ratio from the profile.
         let coverage = if profile.capability_graph_agents > 0 {

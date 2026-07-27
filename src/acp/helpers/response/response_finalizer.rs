@@ -52,7 +52,7 @@ struct ResponseMetadata {
 ///
 /// Returns the augmented response `Value` with all new fields injected.
 #[allow(clippy::too_many_arguments)]
-pub fn finalize_chat_response(
+pub async fn finalize_chat_response(
     server: &AcpServer,
     trace: &RequestTraceContext,
     mode: &str,
@@ -98,7 +98,8 @@ pub fn finalize_chat_response(
         conversation_id,
         sched_task_id,
         candidate_agents,
-    );
+    )
+    .await;
 
     // ── Step 2: Build response metadata ───────────────────────────────
     let metadata = build_response_metadata(
@@ -112,7 +113,8 @@ pub fn finalize_chat_response(
         tool_execution_results,
         response_text,
         &metrics,
-    );
+    )
+    .await;
 
     // ── Step 3: Format the final response body ────────────────────────
     format_response_body(
@@ -134,7 +136,7 @@ pub fn finalize_chat_response(
 /// feedback, agent outcome recording, and tenant budget tracking.
 /// Returns execution metrics for downstream metadata construction.
 #[allow(clippy::too_many_arguments)]
-fn collect_agent_outputs(
+async fn collect_agent_outputs(
     server: &AcpServer,
     trace: &RequestTraceContext,
     mode: &str,
@@ -212,7 +214,8 @@ fn collect_agent_outputs(
             elapsed,
             used_tokens,
             1.0,
-        );
+        )
+        .await;
         // Also update the reinforcement learning loop with the outcome (spawn to avoid blocking)
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let cb = Arc::clone(cb);
@@ -261,7 +264,7 @@ fn collect_agent_outputs(
 /// execution plans, orchestration alignment, fork registry entries,
 /// and evaluation suite scores.
 #[allow(clippy::too_many_arguments)]
-fn build_response_metadata(
+async fn build_response_metadata(
     server: &AcpServer,
     _result: &Value,
     mode: &str,
@@ -357,7 +360,7 @@ fn build_response_metadata(
                 "message_count": 1,
             }),
         };
-        let plan = Planner::plan(&envelope);
+        let plan = Planner::plan(&envelope).await;
         json!({
             "plan_id": plan.plan_id,
             "steps": plan.steps.iter().map(|s| json!({
@@ -553,7 +556,8 @@ mod tests {
             false,
             false,
             "Fix the bug",
-        );
+        )
+        .await;
 
         // Verify the result includes the augmented fields
         assert!(
@@ -613,7 +617,8 @@ mod tests {
             false,
             false,
             "Test objective",
-        );
+        )
+        .await;
 
         assert!(augmented.get("execution_plan").is_some());
         assert!(augmented.get("schema_error").is_some());
@@ -673,7 +678,8 @@ mod tests {
             false,
             false,
             "Research the codebase for the authentication bug",
-        );
+        )
+        .await;
 
         // Verify orchestration fields are computed with tool results
         let alignment = augmented

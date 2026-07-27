@@ -72,34 +72,37 @@ pub(crate) async fn persist_chat_knowledge(
     })
     .to_string();
 
-    let mut store = server
-        .persistence
-        .memory_store
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            tracing::warn!("memory store mutex poisoned during persist_chat_knowledge");
-            poisoned.into_inner()
+    let (promoted_count, retained_entries) = {
+        let mut store = server
+            .persistence
+            .memory_store
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("memory store mutex poisoned during persist_chat_knowledge");
+                poisoned.into_inner()
+            });
+        store.store(MemoryEntry {
+            id: format!(
+                "knowledge-{}-{}",
+                crate::acp::prelude::now_ts_ms(),
+                branch_id
+            ),
+            class: memory_class,
+            content: memory_content,
+            timestamp: crate::acp::prelude::now_ts().to_string(),
+            usefulness: confidence as f32,
+            staleness: 0,
+            user_id: None,
         });
-    store.store(MemoryEntry {
-        id: format!(
-            "knowledge-{}-{}",
-            crate::acp::prelude::now_ts_ms(),
-            branch_id
-        ),
-        class: memory_class,
-        content: memory_content,
-        timestamp: crate::acp::prelude::now_ts().to_string(),
-        usefulness: confidence as f32,
-        staleness: 0,
-        user_id: None,
-    });
-    store.gc();
-    let promotion = store.promote();
-    let promoted_count = promotion.promoted_count;
-    let retained_entries = store.retrieve(MemoryClass::Observation, 256).len()
-        + store.retrieve(MemoryClass::Episodic, 256).len()
-        + store.retrieve(MemoryClass::Semantic, 256).len()
-        + store.retrieve(MemoryClass::ProjectState, 256).len();
+        store.gc();
+        let promotion = store.promote();
+        let promoted_count = promotion.promoted_count;
+        let retained_entries = store.retrieve(MemoryClass::Observation, 256).len()
+            + store.retrieve(MemoryClass::Episodic, 256).len()
+            + store.retrieve(MemoryClass::Semantic, 256).len()
+            + store.retrieve(MemoryClass::ProjectState, 256).len();
+        (promoted_count, retained_entries)
+    };
 
     let mut vector_memory_written = false;
     if let Some(vector_store) = server.cache_deps.cache.vector_store.clone() {
@@ -116,6 +119,7 @@ pub(crate) async fn persist_chat_knowledge(
                 &format!("knowledge:{}:{}", phase_name, request_excerpt),
                 &vector_payload,
             )
+            .await
             .is_ok()
         {
             server.observability.metrics.record_vector_store();
@@ -162,7 +166,11 @@ pub(crate) async fn persist_vector_memory(
         return;
     };
 
-    if let Err(err) = store.upsert(phase_name, query_text, response_text) {
+    if let Err(err) = store
+        .clone()
+        .upsert(phase_name, query_text, response_text)
+        .await
+    {
         warn!(phase = phase_name, error = %err, "vector upsert failed");
     } else {
         server.observability.metrics.record_vector_store();
@@ -183,7 +191,7 @@ pub(crate) async fn persist_vector_memory(
             build_phase_summary(&params.messages, response_text, settings.summary_max_chars)
         });
         if !summary_text.is_empty() {
-            if let Err(err) = store.upsert_phase_summary(phase_name, &summary_text) {
+            if let Err(err) = store.upsert_phase_summary(phase_name, &summary_text).await {
                 warn!(phase = phase_name, error = %err, "phase summary upsert failed");
             } else {
                 server.observability.metrics.record_summary_store();

@@ -1,62 +1,33 @@
 //! Agent implementations
 //!
-//! This module provides implementations for various AI agents, including AI21 Labs, Aleph Alpha, Anthropic, Cohere, Copilot, DeepQuest, DeepSeek, Doubao (ByteDance), FaceWall, Fireworks AI, Gemini (Google), GLM (Zhipu AI), Groq, Hunyuan (Tencent), Langboat, Llama (Meta), Loop AI, MiniMax, Mistral AI, Moonshot, Nim, OpenAI, OpenAI-compatible, Perplexity AI, Qianfan (Baidu), Qwen (Alibaba), Replicate, Skywork, StepFun, Together AI, Titan (Amazon), Wenxin (Baidu), Xihu, and Yi (01.AI).
+//! This module provides implementations for various AI agents, including Anthropic, Cohere,
+//! Copilot, DeepSeek, Gemini (Google), OpenAI, OpenAI-compatible, Qianfan (Baidu),
+//! and Wenxin (Baidu).
 
 pub mod agent;
-pub mod ai21;
-pub mod aleph;
 pub mod anthropic;
 pub mod cohere;
 pub mod communication;
 pub mod copilot;
-pub mod deepquest;
 pub mod deepseek;
-pub mod facewall;
 #[cfg(any(
     feature = "sub-bus-tool",
     feature = "simple-server",
     feature = "multi-users-server"
 ))]
 pub mod factory;
-#[cfg(any(
-    feature = "sub-bus-tool",
-    feature = "simple-server",
-    feature = "multi-users-server"
-))]
-pub mod fireworks;
 pub mod fragment; // BLUE71 §9: ContextFragment injection
 pub mod gemini;
-pub mod glm;
 pub mod graph_store; // BLUE71 §8: AgentGraphStore persistence
-pub mod groq;
-pub mod hunyuan;
-pub mod kimi;
-pub mod langboat;
-pub mod llama;
-pub mod loopai;
-pub mod minimax;
-pub mod mistral;
-pub mod moonshot;
-pub mod nim;
 pub mod openai;
 pub mod openai_compatible;
-pub mod perplexity;
 pub mod progress_reporter;
 pub mod qianfan;
-pub mod replicate;
 pub mod self_evolution_agent; // GAP-B52-03: Self-Evolution Agent
 pub mod session; // GAP-BLUE71: SessionActor tree architecture
-pub mod siliconflow;
-pub mod skywork;
 pub mod sse_compressor;
 pub mod sse_optimizer;
-pub mod stepfun;
-pub mod titan;
-pub mod together;
 pub mod wenxin;
-pub mod xai;
-pub mod xihu;
-pub mod yi;
 
 use std::collections::HashMap;
 
@@ -116,42 +87,15 @@ pub(crate) fn strip_trailing_incomplete_escape(s: &str) -> String {
     s[..end].to_string()
 }
 
-pub use ai21::Ai21Agent;
-pub use aleph::AlephAgent;
 pub use anthropic::AnthropicAgent;
 pub use cohere::CohereAgent;
 pub use copilot::CopilotAgent;
-pub use deepquest::DeepQuestAgent;
 pub use deepseek::DeepSeekAgent;
-
-pub use facewall::FaceWallAgent;
-pub use fireworks::FireworksAgent;
 pub use gemini::GeminiAgent;
-pub use glm::GlmAgent;
-pub use groq::GroqAgent;
-pub use hunyuan::HunyuanAgent;
-pub use kimi::KimiAgent;
-pub use langboat::LangboatAgent;
-pub use llama::LlamaAgent;
-pub use loopai::LoopAiAgent;
-pub use minimax::MiniMaxAgent;
-pub use mistral::MistralAgent;
-pub use moonshot::MoonshotAgent;
-pub use nim::NimAgent;
 pub use openai::OpenAiAgent;
 pub use openai_compatible::OpenAiCompatibleAgent;
-pub use perplexity::PerplexityAgent;
 pub use qianfan::QianfanAgent;
-pub use replicate::ReplicateAgent;
-pub use siliconflow::SiliconFlowAgent;
-pub use skywork::SkyworkAgent;
-pub use stepfun::StepFunAgent;
-pub use titan::TitanAgent;
-pub use together::TogetherAgent;
 pub use wenxin::WenxinAgent;
-pub use xai::XaiAgent;
-pub use xihu::XihuAgent;
-pub use yi::YiAgent;
 
 pub use sse_compressor::{SseDecompressor, StreamingConfig};
 

@@ -13,7 +13,19 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
+/// Shared tokio runtime for LSP operations — created once.
+static LSP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn lsp_runtime() -> &'static tokio::runtime::Runtime {
+    LSP_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build shared LSP runtime")
+    })
+}
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde_json::{json, Value};
@@ -366,7 +378,7 @@ impl LspClient {
 }
 
 /// Helper: run an async LSP `query_definition` from a sync context.
-/// Creates a new tokio runtime and connects to the LSP server.
+/// Uses the shared LSP runtime to avoid creating a new Runtime each call.
 fn run_lsp_definition(
     address: &str,
     file_path: &str,
@@ -375,14 +387,14 @@ fn run_lsp_definition(
 ) -> Result<Vec<Value>> {
     let addr = address.to_string();
     let fp = file_path.to_string();
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
+    lsp_runtime().block_on(async {
         let client = LspClient::connect(&addr).await?;
         client.query_definition(&fp, line, column).await
     })
 }
 
 /// Helper: run an async LSP `query_references` from a sync context.
+/// Uses the shared LSP runtime to avoid creating a new Runtime each call.
 fn run_lsp_references(
     address: &str,
     file_path: &str,
@@ -391,14 +403,14 @@ fn run_lsp_references(
 ) -> Result<Vec<Value>> {
     let addr = address.to_string();
     let fp = file_path.to_string();
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
+    lsp_runtime().block_on(async {
         let client = LspClient::connect(&addr).await?;
         client.query_references(&fp, line, column).await
     })
 }
 
 /// Helper: run an async LSP `query_code_action` from a sync context.
+/// Uses the shared LSP runtime to avoid creating a new Runtime each call.
 fn run_lsp_code_action(
     address: &str,
     file_path: &str,
@@ -411,8 +423,7 @@ fn run_lsp_code_action(
     let fp = file_path.to_string();
     let act = action.to_string();
     let det = detail.to_string();
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
+    lsp_runtime().block_on(async {
         let client = LspClient::connect(&addr).await?;
         client
             .query_code_action(&fp, &act, &det, line, column)

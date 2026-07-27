@@ -208,7 +208,7 @@ pub fn build_role_routing(task_description: &str) -> Value {
 
 /// Build task graph checkpoint from conversation execution state.
 #[allow(clippy::too_many_arguments)]
-pub fn build_task_graph_checkpoint(
+pub async fn build_task_graph_checkpoint(
     server: &AcpServer,
     conversation_id: &str,
     task_description: &str,
@@ -294,7 +294,7 @@ pub fn build_task_graph_checkpoint(
         let graph_id = format!("graph-{}", conversation_id);
         let checkpoint_id = format!("ckpt-{}", crate::acp::prelude::now_ts());
 
-        if let Err(e) = store.save_graph(&graph_id, &task_graph) {
+        if let Err(e) = store.save_graph(&graph_id, &task_graph).await {
             tracing::warn!(target: "task_graph", "failed to save graph: {e}");
         }
 
@@ -322,7 +322,7 @@ pub fn build_task_graph_checkpoint(
             .collect();
 
         let checkpoint = task_graph.snapshot(task_description, 1, subtask_records);
-        if let Err(e) = store.save_checkpoint(&checkpoint, &graph_id) {
+        if let Err(e) = store.save_checkpoint(&checkpoint, &graph_id).await {
             tracing::warn!(target: "task_graph", "failed to save checkpoint: {e}");
         }
 
@@ -451,7 +451,8 @@ mod tests {
             &[],
             None,
             100,
-        );
+        )
+        .await;
 
         // With no task_graph_store configured, all results are None
         assert!(checkpoint.is_none());

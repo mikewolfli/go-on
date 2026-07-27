@@ -6,9 +6,6 @@
 //! a 1-10 complexity score that feeds into the BrainLoop and scheduler.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // ComplexityLevel
@@ -104,13 +101,6 @@ pub struct ComplexityEstimate {
 // ComplexityEstimator
 // ---------------------------------------------------------------------------
 
-/// A history entry that tracks insertion order via a monotonically
-/// increasing sequence number, enabling age-based eviction.
-#[derive(Debug)]
-struct HistoryEntry {
-    seq: u64,
-}
-
 /// Estimates task complexity from task descriptions and metadata.
 #[derive(Debug)]
 pub struct ComplexityEstimator {
@@ -118,10 +108,6 @@ pub struct ComplexityEstimator {
     complex_keywords: Vec<String>,
     /// Keywords that indicate low complexity.
     simple_keywords: Vec<String>,
-    /// Historical complexity scores for similar tasks (task summary → entry).
-    history: Mutex<HashMap<String, HistoryEntry>>,
-    /// Monotonically increasing counter to stamp insertion order.
-    next_seq: AtomicU64,
 }
 
 impl ComplexityEstimator {
@@ -158,8 +144,6 @@ impl ComplexityEstimator {
                 "version".to_string(),
                 "help".to_string(),
             ],
-            history: Mutex::new(HashMap::new()),
-            next_seq: AtomicU64::new(1),
         }
     }
 
@@ -266,22 +250,6 @@ impl ComplexityEstimator {
                 signal4.name, signal4.raw_value, signal4.weight, signal4.normalized
             ),
         ];
-
-        // Record in history for trend analysis (F-GAP-17).
-        // Keep at most 1000 entries to bound memory growth.
-        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-        {
-            let mut history = self.history.lock().unwrap();
-            if history.len() >= 1000 {
-                // Retain only the 500 newest entries by sequence number.
-                // Collect sequence numbers, find the threshold, then retain.
-                let mut seqs: Vec<u64> = history.values().map(|e| e.seq).collect();
-                seqs.select_nth_unstable(499);
-                let threshold = seqs[499];
-                history.retain(|_, entry| entry.seq >= threshold);
-            }
-            history.insert(task_description.to_string(), HistoryEntry { seq });
-        }
 
         ComplexityEstimate {
             score,

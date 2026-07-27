@@ -726,7 +726,8 @@ pub(crate) async fn workflow_generate_payload(
         "generate",
         task,
         &params,
-    );
+    )
+    .await;
     let _dag_order_updated = crate::acp::helpers::planner_bridge::apply_dag_order_to_workflow(
         &mut workflow,
         &planner_bridge,
@@ -1170,7 +1171,8 @@ pub(crate) async fn handle_workflow_ask(
         "ask",
         task,
         &params,
-    );
+    )
+    .await;
     let _dag_order_updated = crate::acp::helpers::planner_bridge::apply_dag_order_to_workflow(
         &mut workflow,
         &planner_bridge,

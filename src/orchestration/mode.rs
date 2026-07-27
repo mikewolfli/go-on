@@ -538,22 +538,25 @@ impl GenericModeRuntime {
     /// - 0.7–0.95 = high risk (warrants AllowWithAudit degradation)
     /// - > 0.95  = extreme risk (full Block)
     pub fn compute_risk_score(&self, objective: &str) -> f64 {
-        let lower = objective.to_lowercase();
         let mut score: f64 = 0.0;
 
         // Extreme-risk keywords (additive 0.30 each)
-        let extreme_keywords = ["drop database", "drop table", "truncate", "uninstall"];
-        for kw in &extreme_keywords {
-            if lower.contains(kw) {
+        // Multi-word phrases checked via contains (word-boundary not needed for unique phrases)
+        let extreme_multis = ["drop database", "drop table"];
+        for kw in &extreme_multis {
+            if objective.to_lowercase().contains(kw) {
                 score += 0.30;
             }
         }
 
-        // High-risk keywords (additive 0.20 each)
+        // Extreme single words and high-risk keywords (additive 0.20 each)
+        // Uses word_boundary_match to avoid false positives like "undelete" matching "delete"
         let high_risk_keywords = [
             "delete",
             "remove",
             "drop",
+            "truncate",
+            "uninstall",
             "bash",
             "execute_command",
             "shell_exec",
@@ -565,7 +568,7 @@ impl GenericModeRuntime {
             "force",
         ];
         for kw in &high_risk_keywords {
-            if lower.contains(kw) {
+            if Self::word_boundary_match(objective, kw) {
                 score += 0.20;
             }
         }
@@ -575,7 +578,7 @@ impl GenericModeRuntime {
             "write", "edit", "modify", "update", "create", "patch", "rename", "move", "copy",
         ];
         for kw in &medium_risk_keywords {
-            if lower.contains(kw) {
+            if Self::word_boundary_match(objective, kw) {
                 score += 0.10;
             }
         }

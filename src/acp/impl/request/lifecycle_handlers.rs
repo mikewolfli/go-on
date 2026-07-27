@@ -52,17 +52,15 @@ pub(super) async fn health_payload(server: &AcpServer) -> Result<Value> {
         json!({"enabled": false})
     };
 
-    let capability_profile = server
-        .governance_deps
-        .capability_bus
-        .as_ref()
-        .map(|cb| {
-            json!({
-                "enabled": true,
-                "profile": cb.capability_bus_profile(),
-            })
+    let capability_profile = if let Some(cb) = server.governance_deps.capability_bus.as_ref() {
+        let p = cb.capability_bus_profile().await;
+        json!({
+            "enabled": true,
+            "profile": p,
         })
-        .unwrap_or(json!({"enabled": false}));
+    } else {
+        json!({"enabled": false})
+    };
 
     let total = status.metrics.total_requests.max(1);
     let success_rate = (status.metrics.successful_requests as f64 / total as f64) * 100.0;
@@ -133,7 +131,7 @@ fn check_status_label(value: CheckStatus) -> &'static str {
 // Helper: build_health_probes_payload
 // ---------------------------------------------------------------------------
 
-pub(super) fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
+pub(super) async fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let metrics = server.observability.metrics.snapshot();
 
@@ -142,7 +140,8 @@ pub(super) fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
         config_path,
         server.cache_deps.cache.response_cache.as_deref(),
         server.cache_deps.cache.vector_store.as_deref(),
-    )?;
+    )
+    .await?;
 
     let token_cache_stats = match server.cache_deps.cache.token_cache.stats.try_read() {
         Ok(guard) => guard.clone(),
@@ -344,27 +343,20 @@ pub(super) fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
 // handle_capabilities_list
 // ---------------------------------------------------------------------------
 
-pub(super) fn capabilities_list_payload(server: &AcpServer) -> Result<Value> {
-    let capability_profile = server
-        .governance_deps
-        .capability_bus
-        .as_ref()
-        .map(|cb| {
-            let p = cb.capability_bus_profile();
-            serde_json::json!({
-                "enabled": p.enabled,
-                "routing_count": p.routing_count,
-                "capability_graph_agents": p.capability_graph_agents,
-                "knowledge_insights_count": p.knowledge_insights_count,
-                "workflow_presets_count": p.workflow_presets_count,
-                "provenance_entries_count": p.provenance_entries_count,
-            })
+pub(super) async fn capabilities_list_payload(server: &AcpServer) -> Result<Value> {
+    let capability_profile = if let Some(cb) = server.governance_deps.capability_bus.as_ref() {
+        let p = cb.capability_bus_profile().await;
+        serde_json::json!({
+            "enabled": p.enabled,
+            "routing_count": p.routing_count,
+            "capability_graph_agents": p.capability_graph_agents,
+            "knowledge_insights_count": p.knowledge_insights_count,
+            "workflow_presets_count": p.workflow_presets_count,
+            "provenance_entries_count": p.provenance_entries_count,
         })
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "enabled": false,
-            })
-        });
+    } else {
+        serde_json::json!(null)
+    };
 
     Ok(serde_json::json!({
         "capabilities": capability_profile,
@@ -395,7 +387,7 @@ fn backend_build_label() -> String {
 // Helper: build_runtime_stability_payload
 // ---------------------------------------------------------------------------
 
-pub(super) fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
+pub(super) async fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     // Snapshot metrics for inclusion in the stability payload below
     let metrics = server.observability.metrics.snapshot();
@@ -406,7 +398,8 @@ pub(super) fn build_runtime_stability_payload(server: &AcpServer) -> Result<Valu
         config_path,
         server.cache_deps.cache.response_cache.as_deref(),
         server.cache_deps.cache.vector_store.as_deref(),
-    )?;
+    )
+    .await?;
 
     let mut config_warnings = Vec::new();
     let mut strict_violations = Vec::new();
@@ -554,12 +547,12 @@ pub(super) fn build_runtime_stability_payload(server: &AcpServer) -> Result<Valu
 // Helper: build_runtime_self_model_payload
 // ---------------------------------------------------------------------------
 
-pub(super) fn build_runtime_self_model_payload(
+pub(super) async fn build_runtime_self_model_payload(
     server: &AcpServer,
     params: &Value,
 ) -> Result<Value> {
-    let probes_payload = build_health_probes_payload(server)?;
-    let stability_payload = build_runtime_stability_payload(server)?;
+    let probes_payload = build_health_probes_payload(server).await?;
+    let stability_payload = build_runtime_stability_payload(server).await?;
     let offline_eval_payload = build_rl_alignment_offline_eval_payload(params);
 
     let probes = probes_payload
@@ -753,14 +746,15 @@ pub(super) fn build_runtime_self_model_payload(
 // Helper: build_provider_status_payload
 // ---------------------------------------------------------------------------
 
-pub(super) fn build_provider_status_payload(server: &AcpServer) -> Result<Value> {
+pub(super) async fn build_provider_status_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
         server.cache_deps.cache.response_cache.as_deref(),
         server.cache_deps.cache.vector_store.as_deref(),
-    )?;
+    )
+    .await?;
 
     let provider_component = report
         .components

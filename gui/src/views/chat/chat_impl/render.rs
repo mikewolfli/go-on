@@ -120,7 +120,11 @@ impl ChatView {
     /// Render plain text immediately as a visual fallback while comrak parses
     /// in the background. Strips basic markdown syntax for readable instant display
     /// — no comrak overhead, no UI thread blocking.
-    fn render_plain_text_fallback(ui: &mut egui::Ui, text: &str, text_color: egui::Color32) {
+    pub(super) fn render_plain_text_fallback(
+        ui: &mut egui::Ui,
+        text: &str,
+        text_color: egui::Color32,
+    ) {
         let plain = Self::markdown_to_plain_text(text);
         ui.add(egui::Label::new(egui::RichText::new(plain).color(text_color)).wrap());
     }

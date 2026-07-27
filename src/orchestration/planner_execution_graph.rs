@@ -65,8 +65,8 @@ pub struct PlannerExecutionBridge {
 
 impl PlannerExecutionBridge {
     /// Create a new bridge from a task envelope.
-    pub fn from_task(task: &AgentTaskEnvelope) -> Self {
-        let plan = Planner::plan(task);
+    pub async fn from_task(task: &AgentTaskEnvelope) -> Self {
+        let plan = Planner::plan(task).await;
         let graph = build_execution_graph_from_plan(&plan);
         let total_steps = plan.steps.len();
         Self {
@@ -153,34 +153,34 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bridge_creates_dag_with_correct_node_count() {
-        let bridge = PlannerExecutionBridge::from_task(&make_test_envelope());
+    #[tokio::test]
+    async fn bridge_creates_dag_with_correct_node_count() {
+        let bridge = PlannerExecutionBridge::from_task(&make_test_envelope()).await;
         // Planner creates 3 steps: plan-1, exec-1, review-1
         assert_eq!(bridge.total_steps, 3);
         // Plus Start + End nodes from ExecutionGraph
         assert!(bridge.graph.nodes.len() >= 3);
     }
 
-    #[test]
-    fn bridge_ready_nodes_starts_with_plan_step() {
-        let bridge = PlannerExecutionBridge::from_task(&make_test_envelope());
+    #[tokio::test]
+    async fn bridge_ready_nodes_starts_with_plan_step() {
+        let bridge = PlannerExecutionBridge::from_task(&make_test_envelope()).await;
         let ready = bridge.ready_nodes();
         // plan-1 should be ready (no dependencies)
         assert!(ready.iter().any(|id| id == "plan-1"));
     }
 
-    #[test]
-    fn bridge_tracks_progress_correctly() {
-        let mut bridge = PlannerExecutionBridge::from_task(&make_test_envelope());
+    #[tokio::test]
+    async fn bridge_tracks_progress_correctly() {
+        let mut bridge = PlannerExecutionBridge::from_task(&make_test_envelope()).await;
         bridge.complete_step("plan-1", serde_json::Value::Null);
         let snapshot = bridge.progress_snapshot();
         assert_eq!(snapshot["completed"].as_u64(), Some(2)); // Start node + completed step
     }
 
-    #[test]
-    fn bridge_fail_propagation() {
-        let mut bridge = PlannerExecutionBridge::from_task(&make_test_envelope());
+    #[tokio::test]
+    async fn bridge_fail_propagation() {
+        let mut bridge = PlannerExecutionBridge::from_task(&make_test_envelope()).await;
         bridge.fail_step("plan-1", "test failure".to_string());
         // exec-1 depends on plan-1, so it should NOT be ready
         let ready = bridge.ready_nodes();

@@ -26,6 +26,10 @@ pub mod task_plan;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Maximum number of timestamped archive files to retain per artifact stem.
+/// Beyond this limit, the oldest archives are pruned on each write.
+const MAX_ARCHIVES_PER_STEM: usize = 10;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +91,28 @@ impl ArtifactLedger {
                 latest_path.display()
             )
         })?;
+
+        // ── Prune old archives ────────────────────────────────────────────────
+        // Keep at most MAX_ARCHIVES_PER_STEM archive files per artifact stem.
+        // List all files matching `{stem}-*.json`, sort by name (timestamp order),
+        // and remove the oldest ones.
+        if let Ok(mut entries) = fs::read_dir(&dir) {
+            let mut archives: Vec<PathBuf> = Vec::new();
+            let prefix = format!("{}-", stem);
+            while let Some(Ok(entry)) = entries.next() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with(&prefix) && name != latest_name {
+                        archives.push(path);
+                    }
+                }
+            }
+            archives.sort();
+            while archives.len() > MAX_ARCHIVES_PER_STEM {
+                let oldest = archives.remove(0);
+                let _ = fs::remove_file(&oldest);
+            }
+        }
 
         Ok(latest_path)
     }
@@ -198,23 +224,12 @@ impl FederatedRLAdapter {
 
     /// Return a profile that includes privacy and versioning status.
     pub fn profile(&self) -> FederatedProfile {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| {
-                tracing::warn!("FederatedRLAdapter: profile lock poisoned");
-                e.into_inner()
-            })
-            .profile()
+        crate::lock_or_recover!(self.inner, "FederatedRLAdapter.profile").profile()
     }
 
     /// Register a client for federated learning.
     pub fn register_client(&self, client_id: &str, weight: f64) -> anyhow::Result<()> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| {
-                tracing::warn!("FederatedRLAdapter: register_client lock poisoned");
-                e.into_inner()
-            })
+        crate::lock_or_recover!(self.inner, "FederatedRLAdapter.register_client")
             .register_client(client_id, weight)
     }
 
@@ -226,10 +241,7 @@ impl FederatedRLAdapter {
         weights: ModelWeights,
         improvement: f64,
     ) -> anyhow::Result<Option<FederatedRound>> {
-        let mut fl = self.inner.lock().unwrap_or_else(|e| {
-            tracing::warn!("FederatedRLAdapter: submit_and_aggregate lock poisoned");
-            e.into_inner()
-        });
+        let mut fl = crate::lock_or_recover!(self.inner, "FederatedRLAdapter.submit_and_aggregate");
         fl.submit_local_weights(client_id, weights, improvement)?;
         if fl.pending_weights_count() >= fl.min_clients_required() {
             let round = fl.aggregate_round()?;

@@ -71,13 +71,9 @@ impl InjectionPattern {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum InjectionSeverity {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
+/// Severity level for prompt injection detection.
+/// Re-exported from the shared [`DetectionSeverity`](super::severity::DetectionSeverity) enum.
+pub use super::severity::DetectionSeverity as InjectionSeverity;
 
 // ---------------------------------------------------------------------------
 // SafetyViolation / InjectionResult

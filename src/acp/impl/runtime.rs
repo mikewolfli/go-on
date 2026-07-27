@@ -106,7 +106,7 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
         if let Some(mp) = bg_server.get_or_init_memory_persistence() {
             let memory_store = bg_server.persistence.memory_store.clone();
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if let Err(e) = crate::memory::memory_bridge::bridge_promote(&memory_store, &mp) {
+            if let Err(e) = crate::memory::memory_bridge::bridge_promote(&memory_store, &mp).await {
                 tracing::warn!("memory bridge: initial promote failed (background): {e}");
             }
         }

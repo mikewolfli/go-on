@@ -6,10 +6,11 @@ use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{AutoTuneConfig, AutoTuneState, CacheConfig, VectorConfig};
 use crate::flow::FlowManager;
+use crate::orchestration::skill::SkillRegistry;
 use crate::vector::VectorStore;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 fn resolve_path(config_path: &Path, raw_path: &str) -> PathBuf {
     let candidate = PathBuf::from(raw_path);
@@ -200,6 +201,7 @@ pub async fn dispatch_server(
     autotune_config: Option<AutoTuneConfig>,
     autotune_state_path: Option<String>,
     _client: reqwest::Client,
+    skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
 ) -> Result<()> {
     let runtime_flow = flow_manager(config_path);
 
@@ -218,6 +220,7 @@ pub async fn dispatch_server(
         Some(config_path.to_string_lossy().to_string()),
         runtime_config,
         None,
+        skill_registry,
     )
     .await;
 
@@ -360,6 +363,7 @@ mod tests {
                     None,
                     None,
                     client,
+                    None,
                 )
                 .await;
 

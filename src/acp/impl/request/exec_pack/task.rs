@@ -730,7 +730,8 @@ async fn execute_single_subtask(
             search_phases.push(semantic_phase);
         }
         let snippets =
-            collect_vector_context_snippets(store, &search_phases, &subtask_description, 3);
+            collect_vector_context_snippets(store.clone(), &search_phases, &subtask_description, 3)
+                .await;
         if snippets.is_empty() {
             String::new()
         } else {

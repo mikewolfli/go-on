@@ -40,78 +40,77 @@ pub use crate::schema::SessionId;
 
 /// Session-level lifecycle (BLUE71 §2.1.1).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum SessionLifecycle {
     /// Session created but not yet ready.
     Created {
         /// Creation timestamp (ms since epoch).
-        at_ms: u64,
+        _at_ms: u64,
     },
     /// Session ready to accept input.
     Ready {
         /// Timestamp when ready (ms since epoch).
-        since_ms: u64,
+        _since_ms: u64,
     },
     /// Session actively processing.
     Active {
         /// Timestamp when active started (ms since epoch).
-        started_at_ms: u64,
+        _started_at_ms: u64,
         /// Current depth of agent tree.
-        tree_depth: u32,
+        _tree_depth: u32,
     },
     /// Session draining (graceful shutdown — waiting for sub-agents).
     Draining {
         /// Reason for draining.
-        reason: String,
+        _reason: String,
     },
     /// Session archived (persisted and closed).
     Archived {
         /// Summary of the session.
-        summary: String,
+        _summary: String,
         /// Total tokens used.
-        total_tokens: u64,
+        _total_tokens: u64,
         /// Total wall-clock time in milliseconds.
-        total_wall_time_ms: u64,
+        _total_wall_time_ms: u64,
         /// Archive timestamp (ms since epoch).
-        archived_at_ms: u64,
+        _archived_at_ms: u64,
     },
 }
 
-#[allow(dead_code)]
 impl SessionLifecycle {
     /// Whether this state is terminal (no further transitions possible).
+    #[allow(dead_code)]
     pub fn is_terminal(&self) -> bool {
         matches!(self, SessionLifecycle::Archived { .. })
     }
 
     /// Human-readable summary.
+    #[allow(dead_code)]
     pub fn summary(&self) -> String {
         match self {
-            SessionLifecycle::Created { at_ms } => format!("created at {}", at_ms),
-            SessionLifecycle::Ready { since_ms } => format!("ready since {}", since_ms),
+            SessionLifecycle::Created { _at_ms } => format!("created at {}", _at_ms),
+            SessionLifecycle::Ready { _since_ms } => format!("ready since {}", _since_ms),
             SessionLifecycle::Active {
-                started_at_ms,
-                tree_depth,
+                _started_at_ms,
+                _tree_depth,
                 ..
             } => {
-                format!("active since {}, depth={}", started_at_ms, tree_depth)
+                format!("active since {}, depth={}", _started_at_ms, _tree_depth)
             }
-            SessionLifecycle::Draining { reason } => format!("draining: {}", reason),
+            SessionLifecycle::Draining { _reason } => format!("draining: {}", _reason),
             SessionLifecycle::Archived {
-                summary,
-                total_tokens,
+                _summary,
+                _total_tokens,
                 ..
             } => {
-                format!("archived: {} ({} tokens)", summary, total_tokens)
+                format!("archived: {} ({} tokens)", _summary, _total_tokens)
             }
         }
     }
 }
 
-#[allow(dead_code)]
 impl Default for SessionLifecycle {
     fn default() -> Self {
-        Self::Created { at_ms: now_ms() }
+        Self::Created { _at_ms: now_ms() }
     }
 }
 
@@ -121,7 +120,6 @@ impl Default for SessionLifecycle {
 
 /// Input message for a SessionActor's mailbox.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum SessionInput {
     /// User message for the root agent.
     UserMessage {
@@ -157,10 +155,9 @@ pub enum SessionInput {
 /// - Send messages via `input_queue`
 /// - Observe lifecycle via `lifecycle` watch channel
 /// - Await completion via `handle`
-#[allow(dead_code)]
 pub struct SessionHandle {
     /// Session ID.
-    pub session_id: SessionId,
+    pub _session_id: SessionId,
     /// Input queue sender.
     pub input_tx: mpsc::UnboundedSender<SessionInput>,
     /// Lifecycle watch channel receiver.
@@ -168,7 +165,7 @@ pub struct SessionHandle {
     /// Task join handle.
     pub handle: tokio::task::JoinHandle<()>,
     /// CommunicationBus for agent tree operations.
-    pub bus: Arc<CommunicationBus>,
+    pub _bus: Arc<CommunicationBus>,
 }
 
 #[allow(dead_code)]
@@ -344,7 +341,7 @@ pub async fn spawn_session(
     // 5. Create channels
     let (input_tx, input_rx) = mpsc::unbounded_channel::<SessionInput>();
     let (lifecycle_tx, lifecycle_rx) =
-        watch::channel(SessionLifecycle::Created { at_ms: now_ms() });
+        watch::channel(SessionLifecycle::Created { _at_ms: now_ms() });
 
     // 6. Create internal state
     let state = SessionState::new(
@@ -360,14 +357,16 @@ pub async fn spawn_session(
     let handle = tokio::spawn(session_main_loop(state, input_rx, lifecycle_tx.clone()));
 
     // 8. Set lifecycle to Ready once the task is running
-    lifecycle_tx.send_replace(SessionLifecycle::Ready { since_ms: now_ms() });
+    lifecycle_tx.send_replace(SessionLifecycle::Ready {
+        _since_ms: now_ms(),
+    });
 
     Ok(SessionHandle {
-        session_id,
+        _session_id: session_id,
         input_tx,
         lifecycle_rx,
         handle,
-        bus,
+        _bus: bus,
     })
 }
 
@@ -379,24 +378,20 @@ pub async fn spawn_session(
 /// - Agent tree management via `CommunicationBus`
 /// - Compaction via `CompactionManager`
 /// - Graceful shutdown via `SessionInput::Cancel`
-#[allow(dead_code)]
 async fn session_main_loop(
     mut state: SessionState,
     mut input_rx: mpsc::UnboundedReceiver<SessionInput>,
     lifecycle_tx: watch::Sender<SessionLifecycle>,
 ) {
     // Mark session as Ready
-    lifecycle_tx.send_replace(SessionLifecycle::Ready { since_ms: now_ms() });
+    lifecycle_tx.send_replace(SessionLifecycle::Ready {
+        _since_ms: now_ms(),
+    });
 
     // Create one AgentThread at session startup (reused across all messages)
     let mut root_thread: Option<AgentThread> = None;
     if let Some(agent) = state.root_agent.take() {
-        let config = SpawnConfig {
-            max_depth: 5,
-            max_concurrency: 1,
-            token_ceiling: None,
-            timeout_secs: 120,
-        };
+        let config = SpawnConfig { max_concurrency: 1 };
         match spawn_agent_non_blocking(agent, config, state.thread_budget.clone(), None).await {
             Ok(thread) => {
                 root_thread = Some(thread);
@@ -416,8 +411,8 @@ async fn session_main_loop(
             SessionInput::UserMessage { content, reply_to } => {
                 // Set lifecycle to Active
                 lifecycle_tx.send_replace(SessionLifecycle::Active {
-                    started_at_ms: now_ms(),
-                    tree_depth: 1,
+                    _started_at_ms: now_ms(),
+                    _tree_depth: 1,
                 });
 
                 // Add to conversation history
@@ -466,11 +461,8 @@ async fn session_main_loop(
                 state
                     .graph_store
                     .upsert_edge(AgentGraphEdge {
-                        parent: state.root_path.clone(),
                         child: state.root_path.clone(),
                         status: "running".to_string(),
-                        child_name: Some(state.root_agent_name.clone()),
-                        task: Some(content.clone()),
                     })
                     .await;
 
@@ -504,7 +496,9 @@ async fn session_main_loop(
                 }
 
                 // Return to Ready state
-                lifecycle_tx.send_replace(SessionLifecycle::Ready { since_ms: now_ms() });
+                lifecycle_tx.send_replace(SessionLifecycle::Ready {
+                    _since_ms: now_ms(),
+                });
             }
             SessionInput::Steer { instruction } => {
                 // Store steering instruction — injected into the next ChatRequest's
@@ -518,18 +512,12 @@ async fn session_main_loop(
                 );
             }
             SessionInput::Checkpoint => {
-                // Serialize current conversation history to JSON checkpoint.
-                // Stores the checkpoint as a graph_store edge with status="checkpoint".
-                // The serialized data can be retrieved via list_descendants() for recovery.
-                let checkpoint_data = state.history.to_checkpoint_json();
+                // Store the checkpoint as a graph_store edge with status="checkpoint".
                 state
                     .graph_store
                     .upsert_edge(AgentGraphEdge {
-                        parent: state.root_path.clone(),
                         child: state.root_path.clone(),
                         status: "checkpoint".to_string(),
-                        child_name: Some(format!("{}_checkpoint", state.root_agent_name)),
-                        task: Some(checkpoint_data), // serialized history stored here
                     })
                     .await;
                 tracing::info!(
@@ -541,7 +529,7 @@ async fn session_main_loop(
             }
             SessionInput::Cancel { reason } => {
                 lifecycle_tx.send_replace(SessionLifecycle::Draining {
-                    reason: reason.clone(),
+                    _reason: reason.clone(),
                 });
 
                 // Update graph store status (BLUE71 §8)
@@ -569,10 +557,10 @@ async fn session_main_loop(
 
     // Session ended — archive
     lifecycle_tx.send_replace(SessionLifecycle::Archived {
-        summary: format!("{} turns", state.history.len()),
-        total_tokens: state.history.estimated_tokens() as u64,
-        total_wall_time_ms: 0, // Would track from creation time
-        archived_at_ms: now_ms(),
+        _summary: format!("{} turns", state.history.len()),
+        _total_tokens: state.history.estimated_tokens() as u64,
+        _total_wall_time_ms: 0, // Would track from creation time
+        _archived_at_ms: now_ms(),
     });
 }
 
@@ -633,27 +621,27 @@ mod tests {
     #[test]
     fn test_session_lifecycle_terminal() {
         let archived = SessionLifecycle::Archived {
-            summary: "done".into(),
-            total_tokens: 100,
-            total_wall_time_ms: 500,
-            archived_at_ms: 1000,
+            _summary: "done".into(),
+            _total_tokens: 100,
+            _total_wall_time_ms: 500,
+            _archived_at_ms: 1000,
         };
         assert!(archived.is_terminal());
 
-        let created = SessionLifecycle::Created { at_ms: 0 };
+        let created = SessionLifecycle::Created { _at_ms: 0 };
         assert!(!created.is_terminal());
     }
 
     #[test]
     fn test_session_lifecycle_summary() {
-        let s = SessionLifecycle::Created { at_ms: 1000 }.summary();
+        let s = SessionLifecycle::Created { _at_ms: 1000 }.summary();
         assert!(s.contains("created"));
 
         let s = SessionLifecycle::Archived {
-            summary: "done".into(),
-            total_tokens: 100,
-            total_wall_time_ms: 500,
-            archived_at_ms: 1500,
+            _summary: "done".into(),
+            _total_tokens: 100,
+            _total_wall_time_ms: 500,
+            _archived_at_ms: 1500,
         }
         .summary();
         assert!(s.contains("archived"));

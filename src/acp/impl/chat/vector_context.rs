@@ -106,7 +106,7 @@ pub(crate) async fn load_phase_summary(
 
     let store = server.cache_deps.cache.vector_store.clone()?;
 
-    match store.get_phase_summary(phase_name) {
+    match store.get_phase_summary(phase_name).await {
         Ok(summary) => {
             server
                 .observability
@@ -169,13 +169,16 @@ pub(crate) async fn load_vector_context(
         };
     };
 
-    match store.search(
-        phase_name,
-        query_text,
-        settings.top_k,
-        settings.min_similarity,
-        settings.max_snippet_chars,
-    ) {
+    match store
+        .search(
+            phase_name,
+            query_text,
+            settings.top_k,
+            settings.min_similarity,
+            settings.max_snippet_chars,
+        )
+        .await
+    {
         Ok((hits, feedback)) => {
             server
                 .observability

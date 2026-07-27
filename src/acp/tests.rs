@@ -98,6 +98,7 @@ mod test_suite {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            protocol: None,
         };
 
         // Create server using builder

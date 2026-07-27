@@ -1025,6 +1025,8 @@ pub struct ServerBuilder {
     /// Policy reloader for hot-reloading governance policies (GAP-B58-D04)
     policy_reloader:
         Option<Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>>,
+    /// Pre-loaded skill registry from bootstrap, avoiding redundant disk scan.
+    pre_loaded_skill_registry: Option<Arc<std::sync::RwLock<SkillRegistry>>>,
     /// Optional multimodal processor for document, audio, video, and repo analysis.
     multimodal_processor: Option<crate::multimodal::MultimodalProcessor>,
     /// Lazy initialization parameters for memory persistence (S1 startup optimization).
@@ -1070,6 +1072,7 @@ impl ServerBuilder {
             permit_exposure_analyzer: None,
             security_advisor: None,
             policy_reloader: None,
+            pre_loaded_skill_registry: None,
             multimodal_processor: None,
             lazy_memory_persistence_params: None,
             runtime_config: None,
@@ -1083,6 +1086,15 @@ impl ServerBuilder {
     /// Set config path
     pub fn with_config_path(mut self, config_path: Option<String>) -> Self {
         self.config_path = config_path;
+        self
+    }
+
+    /// Inject a pre-loaded skill registry, skipping the redundant disk scan in `build()`.
+    pub fn with_pre_loaded_skill_registry(
+        mut self,
+        registry: Arc<std::sync::RwLock<SkillRegistry>>,
+    ) -> Self {
+        self.pre_loaded_skill_registry = Some(registry);
         self
     }
 
@@ -1276,35 +1288,42 @@ impl ServerBuilder {
         ));
         let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
 
-        // Initialize skill registry with disk-persisted prompt-based skills
-        let mut registry = SkillRegistry::default();
-        let prompt_skills_path =
-            std::path::PathBuf::from("./skills-cache").join("prompt_skills.json");
-        registry.set_persistence_path(prompt_skills_path);
-        if let Err(e) = registry.load_prompt_skills_from_disk() {
-            tracing::warn!("Failed to load prompt skills from disk: {}", e);
-        }
-        let skill_registry = Arc::new(std::sync::RwLock::new(registry));
+        // Initialize skill registry — use pre-loaded from bootstrap if available,
+        // otherwise create a fresh one and scan disk.
+        let skill_registry = if let Some(registry) = self.pre_loaded_skill_registry {
+            registry
+        } else {
+            let mut registry = SkillRegistry::default();
+            let prompt_skills_path =
+                std::path::PathBuf::from("./skills-cache").join("prompt_skills.json");
+            registry.set_persistence_path(prompt_skills_path);
+            if let Err(e) = registry.load_prompt_skills_from_disk() {
+                tracing::warn!("Failed to load prompt skills from disk: {}", e);
+            }
+            let skill_registry = Arc::new(std::sync::RwLock::new(registry));
 
-        // Register built-in skills
+            // Discover and register local skills from ~/.agents/skills/
+            // so user-authored SKILL.md files are available to the server.
+            {
+                let mut reg = skill_registry.write().unwrap_or_else(|e| e.into_inner());
+                if let Err(e) = reg.discover_and_register_local_skills(None) {
+                    tracing::warn!(
+                        "Failed to discover local skills in ServerBuilder::build: {}",
+                        e
+                    );
+                }
+            }
+
+            skill_registry
+        };
+
+        // Register built-in skills (runs on both pre-loaded and fresh paths)
         {
             let mut reg = skill_registry.write().unwrap_or_else(|e| e.into_inner());
             let _ = reg.register(Arc::new(crate::orchestration::skill::EchoSkill));
             let _ = reg.register(Arc::new(
                 crate::orchestration::skill::SkillCreatorSkill::new(skill_registry.clone()),
             ));
-        }
-
-        // Discover and register local skills from ~/.agents/skills/
-        // so user-authored SKILL.md files are available to the server.
-        {
-            let mut reg = skill_registry.write().unwrap_or_else(|e| e.into_inner());
-            if let Err(e) = reg.discover_and_register_local_skills(None) {
-                tracing::warn!(
-                    "Failed to discover local skills in ServerBuilder::build: {}",
-                    e
-                );
-            }
         }
 
         // Wire the skill registry into the global tool layer

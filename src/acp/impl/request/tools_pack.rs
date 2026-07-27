@@ -437,7 +437,7 @@ pub(crate) async fn execute_mcp_tool_call(
 
     let result = async {
     if let Some(harness_bus) = server.governance_deps.harness_bus.as_ref() {
-        let verdict = harness_bus.evaluator.check_tool_call(name, arguments);
+        let verdict = harness_bus.evaluator.check_tool_call(&tool_name, arguments);
         // Skip require_review for tools that are registered in the
         // tool_registry — they are explicitly registered and trusted.
         let is_registered = server.tool_registry.get(name).is_some();

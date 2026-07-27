@@ -720,7 +720,7 @@ async fn process_user_message_and_run_agent(
 ) {
     // ── Prompt injection detection ──
     {
-        use crate::security::prompt_injection::InjectionSeverity;
+        use crate::security::severity::DetectionSeverity as InjectionSeverity;
         let detector = injection_detector();
         let (sanitized, result) = detector.detect_and_sanitize(line);
 

@@ -5,18 +5,23 @@
 
 use crate::i18n::runtime::tf;
 use crate::memory::vector::VectorStore;
+use std::sync::Arc;
 
 /// Collect relevant context snippets from the vector store by searching
 /// across multiple phases (execution phase and semantic phase).
-pub(super) fn collect_vector_context_snippets(
-    store: &VectorStore,
+pub(super) async fn collect_vector_context_snippets(
+    store: Arc<VectorStore>,
     search_phases: &[String],
     subtask_description: &str,
     max_snippets: usize,
 ) -> Vec<String> {
     let mut snippets: Vec<String> = Vec::new();
     for phase in search_phases {
-        if let Ok((hits, _)) = store.search(phase, subtask_description, max_snippets, 0.25, 512) {
+        if let Ok((hits, _)) = store
+            .clone()
+            .search(phase, subtask_description, max_snippets, 0.25, 512)
+            .await
+        {
             for hit in hits {
                 let snippet = hit.response_snippet.trim();
                 if snippet.is_empty() {

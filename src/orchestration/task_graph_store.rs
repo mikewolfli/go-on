@@ -8,7 +8,8 @@ use std::collections::HashSet;
 #[cfg(not(feature = "backend-postgres"))]
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tokio::task::spawn_blocking;
 
 use anyhow::Result;
 use serde_json;
@@ -23,14 +24,20 @@ use rusqlite::{params, Connection, OptionalExtension};
 /// Uses shared `crate::lock_or_recover!` macro.
 #[cfg(not(feature = "backend-postgres"))]
 fn lock_guard(conn: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
-    crate::lock_or_recover!(conn, "task_graph_store")
+    match conn.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("task_graph_store mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
 }
 
 /// SQLite-backed persistent store for task graphs and checkpoints.
 #[cfg(not(feature = "backend-postgres"))]
 pub struct TaskGraphStore {
     /// SQLite connection (mutex-protected)
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     /// Path to the database file
     _db_path: PathBuf,
 }
@@ -78,123 +85,173 @@ impl TaskGraphStore {
         )?;
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             _db_path: db_path.to_path_buf(),
         })
     }
 
     /// Save a task graph, inserting or replacing an existing entry.
-    pub fn save_graph(&self, graph_id: &str, graph: &TaskGraph) -> Result<()> {
-        let now = now_ts();
+    pub async fn save_graph(&self, graph_id: &str, graph: &TaskGraph) -> Result<()> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let graph_id = graph_id.to_string();
+        let root_node_id = graph.root.clone();
         let serialized = serde_json::to_string(graph)?;
-        let conn = lock_guard(&self.conn);
-        conn.execute(
-            "INSERT INTO task_graphs (graph_id, root_node_id, serialized_graph, created_at, updated_at, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active')
-             ON CONFLICT(graph_id) DO UPDATE SET
-                root_node_id = excluded.root_node_id,
-                serialized_graph = excluded.serialized_graph,
-                updated_at = excluded.updated_at,
-                status = excluded.status",
-            params![graph_id, graph.root, serialized, now, now],
-        )?;
-        Ok(())
+        spawn_blocking(move || {
+            let now = now_ts();
+            let conn = lock_guard(&conn);
+            conn.execute(
+                "INSERT INTO task_graphs (graph_id, root_node_id, serialized_graph, created_at, updated_at, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'active')
+                 ON CONFLICT(graph_id) DO UPDATE SET
+                    root_node_id = excluded.root_node_id,
+                    serialized_graph = excluded.serialized_graph,
+                    updated_at = excluded.updated_at,
+                    status = excluded.status",
+                params![graph_id, root_node_id, serialized, now, now],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Load a task graph by its graph_id.
-    pub fn load_graph(&self, graph_id: &str) -> Result<Option<TaskGraph>> {
-        let conn = lock_guard(&self.conn);
-        let mut stmt =
-            conn.prepare("SELECT serialized_graph FROM task_graphs WHERE graph_id = ?1")?;
-        let result: Option<String> = stmt
-            .query_row(params![graph_id], |row| row.get(0))
-            .optional()?;
-        match result {
-            Some(json) => {
-                let graph: TaskGraph = serde_json::from_str(&json)?;
-                Ok(Some(graph))
+    pub async fn load_graph(&self, graph_id: &str) -> Result<Option<TaskGraph>> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let graph_id = graph_id.to_string();
+        spawn_blocking(move || {
+            let conn = lock_guard(&conn);
+            let mut stmt =
+                conn.prepare("SELECT serialized_graph FROM task_graphs WHERE graph_id = ?1")?;
+            let result: Option<String> = stmt
+                .query_row(params![graph_id], |row| row.get(0))
+                .optional()?;
+            match result {
+                Some(json) => {
+                    let graph: TaskGraph = serde_json::from_str(&json)?;
+                    Ok(Some(graph))
+                }
+                None => Ok(None),
             }
-            None => Ok(None),
-        }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Save a checkpoint artifact, associating it with a graph.
-    pub fn save_checkpoint(
+    pub async fn save_checkpoint(
         &self,
         checkpoint: &TaskGraphCheckpointArtifact,
         graph_id: &str,
     ) -> Result<()> {
-        let now = now_ts();
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let graph_id = graph_id.to_string();
+        let checkpoint_id = checkpoint.checkpoint_id.clone();
         let serialized = serde_json::to_string(checkpoint)?;
-        let conn = lock_guard(&self.conn);
-        conn.execute(
-            "INSERT INTO task_checkpoints (checkpoint_id, graph_id, serialized_checkpoint, created_at)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(checkpoint_id) DO UPDATE SET
-                graph_id = excluded.graph_id,
-                serialized_checkpoint = excluded.serialized_checkpoint,
-                created_at = excluded.created_at",
-            params![checkpoint.checkpoint_id, graph_id, serialized, now],
-        )?;
-        Ok(())
+        spawn_blocking(move || {
+            let now = now_ts();
+            let conn = lock_guard(&conn);
+            conn.execute(
+                "INSERT INTO task_checkpoints (checkpoint_id, graph_id, serialized_checkpoint, created_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(checkpoint_id) DO UPDATE SET
+                    graph_id = excluded.graph_id,
+                    serialized_checkpoint = excluded.serialized_checkpoint,
+                    created_at = excluded.created_at",
+                params![checkpoint_id, graph_id, serialized, now],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Load a checkpoint artifact by its checkpoint_id.
-    pub fn load_checkpoint(
+    pub async fn load_checkpoint(
         &self,
         checkpoint_id: &str,
     ) -> Result<Option<TaskGraphCheckpointArtifact>> {
-        let conn = lock_guard(&self.conn);
-        let mut stmt = conn.prepare(
-            "SELECT serialized_checkpoint FROM task_checkpoints WHERE checkpoint_id = ?1",
-        )?;
-        let result: Option<String> = stmt
-            .query_row(params![checkpoint_id], |row| row.get(0))
-            .optional()?;
-        match result {
-            Some(json) => {
-                let ckpt: TaskGraphCheckpointArtifact = serde_json::from_str(&json)?;
-                Ok(Some(ckpt))
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let checkpoint_id = checkpoint_id.to_string();
+        spawn_blocking(move || {
+            let conn = lock_guard(&conn);
+            let mut stmt = conn.prepare(
+                "SELECT serialized_checkpoint FROM task_checkpoints WHERE checkpoint_id = ?1",
+            )?;
+            let result: Option<String> = stmt
+                .query_row(params![checkpoint_id], |row| row.get(0))
+                .optional()?;
+            match result {
+                Some(json) => {
+                    let ckpt: TaskGraphCheckpointArtifact = serde_json::from_str(&json)?;
+                    Ok(Some(ckpt))
+                }
+                None => Ok(None),
             }
-            None => Ok(None),
-        }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// List all graph IDs with status 'active'.
-    pub fn list_active_graphs(&self) -> Result<Vec<String>> {
-        let conn = lock_guard(&self.conn);
-        let mut stmt = conn.prepare(
-            "SELECT graph_id FROM task_graphs WHERE status = 'active' ORDER BY updated_at DESC",
-        )?;
-        let ids: Vec<String> = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<String>, _>>()?;
-        Ok(ids)
+    pub async fn list_active_graphs(&self) -> Result<Vec<String>> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        spawn_blocking(move || {
+            let conn = lock_guard(&conn);
+            let mut stmt = conn.prepare(
+                "SELECT graph_id FROM task_graphs WHERE status = 'active' ORDER BY updated_at DESC",
+            )?;
+            let ids: Vec<String> = stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<String>, _>>()?;
+            Ok(ids)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Mark a graph as completed (status = 'completed').
-    pub fn mark_graph_completed(&self, graph_id: &str) -> Result<()> {
-        let now = now_ts();
-        let conn = lock_guard(&self.conn);
-        conn.execute(
-            "UPDATE task_graphs SET status = 'completed', updated_at = ?1 WHERE graph_id = ?2",
-            params![now, graph_id],
-        )?;
-        Ok(())
+    pub async fn mark_graph_completed(&self, graph_id: &str) -> Result<()> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let graph_id = graph_id.to_string();
+        spawn_blocking(move || {
+            let now = now_ts();
+            let conn = lock_guard(&conn);
+            conn.execute(
+                "UPDATE task_graphs SET status = 'completed', updated_at = ?1 WHERE graph_id = ?2",
+                params![now, graph_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Delete a graph and all its associated checkpoints.
-    pub fn delete_graph(&self, graph_id: &str) -> Result<()> {
-        let conn = lock_guard(&self.conn);
-        conn.execute(
-            "DELETE FROM task_checkpoints WHERE graph_id = ?1",
-            params![graph_id],
-        )?;
-        conn.execute(
-            "DELETE FROM task_graphs WHERE graph_id = ?1",
-            params![graph_id],
-        )?;
-        Ok(())
+    pub async fn delete_graph(&self, graph_id: &str) -> Result<()> {
+        let _permit = crate::shared::db_pool::acquire_db_permit().await;
+        let conn = self.conn.clone();
+        let graph_id = graph_id.to_string();
+        spawn_blocking(move || {
+            let conn = lock_guard(&conn);
+            conn.execute(
+                "DELETE FROM task_checkpoints WHERE graph_id = ?1",
+                params![graph_id],
+            )?;
+            conn.execute(
+                "DELETE FROM task_graphs WHERE graph_id = ?1",
+                params![graph_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Load a checkpoint and reconstruct a TaskGraph from its subtask_records.
@@ -203,8 +260,11 @@ impl TaskGraphStore {
     /// rebuilt with a synthetic root node.  Dependencies are restored from
     /// each record; nodes with no stored dependencies fall back to depending
     /// on the root.
-    pub fn restore_graph_from_checkpoint(&self, checkpoint_id: &str) -> Result<Option<TaskGraph>> {
-        let ckpt = match self.load_checkpoint(checkpoint_id)? {
+    pub async fn restore_graph_from_checkpoint(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<Option<TaskGraph>> {
+        let ckpt = match self.load_checkpoint(checkpoint_id).await? {
             Some(c) => c,
             None => return Ok(None),
         };
@@ -569,8 +629,8 @@ mod tests {
         graph.snapshot("test task", 1, records)
     }
 
-    #[test]
-    fn test_save_and_load_graph() {
+    #[tokio::test]
+    async fn test_save_and_load_graph() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("task_graphs.sqlite3");
         let store = TaskGraphStore::new(&db_path).expect("store should initialize");
@@ -578,10 +638,12 @@ mod tests {
         let (graph_id, graph) = make_sample_graph();
         store
             .save_graph(&graph_id, &graph)
+            .await
             .expect("save_graph should succeed");
 
         let loaded = store
             .load_graph(&graph_id)
+            .await
             .expect("load_graph should succeed")
             .expect("graph should exist");
 
@@ -594,8 +656,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_save_and_load_checkpoint() {
+    #[tokio::test]
+    async fn test_save_and_load_checkpoint() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("task_graphs.sqlite3");
         let store = TaskGraphStore::new(&db_path).expect("store should initialize");
@@ -603,15 +665,18 @@ mod tests {
         let (graph_id, graph) = make_sample_graph();
         store
             .save_graph(&graph_id, &graph)
+            .await
             .expect("save_graph should succeed");
 
         let checkpoint = make_sample_checkpoint(&graph);
         store
             .save_checkpoint(&checkpoint, &graph_id)
+            .await
             .expect("save_checkpoint should succeed");
 
         let loaded = store
             .load_checkpoint(&checkpoint.checkpoint_id)
+            .await
             .expect("load_checkpoint should succeed")
             .expect("checkpoint should exist");
 
@@ -624,8 +689,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_restore_graph_from_checkpoint() {
+    #[tokio::test]
+    async fn test_restore_graph_from_checkpoint() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("task_graphs.sqlite3");
         let store = TaskGraphStore::new(&db_path).expect("store should initialize");
@@ -633,15 +698,18 @@ mod tests {
         let (graph_id, graph) = make_sample_graph();
         store
             .save_graph(&graph_id, &graph)
+            .await
             .expect("save_graph should succeed");
 
         let checkpoint = make_sample_checkpoint(&graph);
         store
             .save_checkpoint(&checkpoint, &graph_id)
+            .await
             .expect("save_checkpoint should succeed");
 
         let restored = store
             .restore_graph_from_checkpoint(&checkpoint.checkpoint_id)
+            .await
             .expect("restore_graph_from_checkpoint should succeed")
             .expect("restored graph should exist");
 
@@ -658,8 +726,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_list_active_graphs() {
+    #[tokio::test]
+    async fn test_list_active_graphs() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("task_graphs.sqlite3");
         let store = TaskGraphStore::new(&db_path).expect("store should initialize");
@@ -669,16 +737,19 @@ mod tests {
         g2.root = "root-2".to_string();
         let gid2 = "test-graph-002".to_string();
 
-        store.save_graph(&gid1, &g1).expect("save_graph 1");
-        store.save_graph(&gid2, &g2).expect("save_graph 2");
+        store.save_graph(&gid1, &g1).await.expect("save_graph 1");
+        store.save_graph(&gid2, &g2).await.expect("save_graph 2");
 
-        let active = store.list_active_graphs().expect("list_active_graphs");
+        let active = store
+            .list_active_graphs()
+            .await
+            .expect("list_active_graphs");
         assert!(active.contains(&gid1));
         assert!(active.contains(&gid2));
     }
 
-    #[test]
-    fn test_mark_completed_and_list() {
+    #[tokio::test]
+    async fn test_mark_completed_and_list() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("task_graphs.sqlite3");
         let store = TaskGraphStore::new(&db_path).expect("store should initialize");
@@ -686,18 +757,23 @@ mod tests {
         let (graph_id, graph) = make_sample_graph();
         store
             .save_graph(&graph_id, &graph)
+            .await
             .expect("save_graph should succeed");
 
         store
             .mark_graph_completed(&graph_id)
+            .await
             .expect("mark_graph_completed should succeed");
 
-        let active = store.list_active_graphs().expect("list_active_graphs");
+        let active = store
+            .list_active_graphs()
+            .await
+            .expect("list_active_graphs");
         assert!(!active.contains(&graph_id));
     }
 
-    #[test]
-    fn test_delete_graph_cascades_checkpoints() {
+    #[tokio::test]
+    async fn test_delete_graph_cascades_checkpoints() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("task_graphs.sqlite3");
         let store = TaskGraphStore::new(&db_path).expect("store should initialize");
@@ -705,27 +781,32 @@ mod tests {
         let (graph_id, graph) = make_sample_graph();
         store
             .save_graph(&graph_id, &graph)
+            .await
             .expect("save_graph should succeed");
 
         let checkpoint = make_sample_checkpoint(&graph);
         store
             .save_checkpoint(&checkpoint, &graph_id)
+            .await
             .expect("save_checkpoint should succeed");
 
         // Delete the graph (should cascade to checkpoints)
         store
             .delete_graph(&graph_id)
+            .await
             .expect("delete_graph should succeed");
 
         // Graph should no longer exist
         let loaded_graph = store
             .load_graph(&graph_id)
+            .await
             .expect("load_graph should succeed");
         assert!(loaded_graph.is_none());
 
         // Checkpoint should also be gone
         let loaded_ckpt = store
             .load_checkpoint(&checkpoint.checkpoint_id)
+            .await
             .expect("load_checkpoint should succeed");
         assert!(loaded_ckpt.is_none());
     }

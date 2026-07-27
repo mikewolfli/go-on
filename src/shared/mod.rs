@@ -1,4 +1,5 @@
 pub mod alert_severity;
+pub mod db_pool;
 pub mod execution_recorder;
 pub mod http_client;
 pub mod lock_utils;

@@ -24,12 +24,8 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, warn};
 
 use crate::agents::{
-    Ai21Agent, AlephAgent, AnthropicAgent, CohereAgent, CopilotAgent, DeepQuestAgent,
-    DeepSeekAgent, FaceWallAgent, FireworksAgent, GeminiAgent, GlmAgent, GroqAgent, HunyuanAgent,
-    KimiAgent, LangboatAgent, LlamaAgent, LoopAiAgent, MiniMaxAgent, MistralAgent, MoonshotAgent,
-    NimAgent, OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, ReplicateAgent,
-    SiliconFlowAgent, SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XaiAgent,
-    XihuAgent, YiAgent,
+    AnthropicAgent, CohereAgent, CopilotAgent, DeepSeekAgent, GeminiAgent, OpenAiAgent,
+    OpenAiCompatibleAgent, QianfanAgent, WenxinAgent,
 };
 use crate::core::error::Result as AppResult;
 
@@ -1017,17 +1013,22 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let model = required_field("openai", &config.model, "model")?;
             Ok(Arc::new(OpenAiAgent::new(api_key_env, url, model, client)))
         }
-        "ai21" => {
-            let api_key_env = required_field("ai21", &config.api_key_env, "api_key_env")?;
-            let url = required_field("ai21", &config.url, "url")?;
-            let model = required_field("ai21", &config.model, "model")?;
-            Ok(Arc::new(Ai21Agent::new(api_key_env, url, model, client)))
-        }
-        "aleph" => {
-            let api_key_env = required_field("aleph", &config.api_key_env, "api_key_env")?;
-            let url = required_field("aleph", &config.url, "url")?;
-            let model = required_field("aleph", &config.model, "model")?;
-            Ok(Arc::new(AlephAgent::new(api_key_env, url, model, client)))
+        agent_type @ ("fireworks" | "ai21" | "aleph" | "deepquest" | "facewall" | "glm"
+        | "groq" | "hunyuan" | "kimi" | "langboat" | "llama" | "loopai"
+        | "minimax" | "mistral" | "moonshot" | "nim" | "perplexity" | "replicate"
+        | "siliconflow" | "skywork" | "stepfun" | "titan" | "together" | "xai"
+        | "xihu" | "yi") => {
+            let api_key_env = required_field(agent_type, &config.api_key_env, "api_key_env")?;
+            let url = required_field(agent_type, &config.url, "url")?;
+            let model = required_field(agent_type, &config.model, "model")?;
+            Ok(Arc::new(OpenAiCompatibleAgent::new(
+                url,
+                "/chat/completions".to_string(),
+                api_key_env,
+                model,
+                true,
+                client,
+            )))
         }
         "cohere" => {
             let api_key_env = required_field("cohere", &config.api_key_env, "api_key_env")?;
@@ -1035,188 +1036,11 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let model = required_field("cohere", &config.model, "model")?;
             Ok(Arc::new(CohereAgent::new(api_key_env, url, model, client)))
         }
-        "deepquest" => {
-            let api_key_env = required_field("deepquest", &config.api_key_env, "api_key_env")?;
-            let url = required_field("deepquest", &config.url, "url")?;
-            let model = required_field("deepquest", &config.model, "model")?;
-            Ok(Arc::new(DeepQuestAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
-        "facewall" => {
-            let api_key_env = required_field("facewall", &config.api_key_env, "api_key_env")?;
-            let url = required_field("facewall", &config.url, "url")?;
-            let model = required_field("facewall", &config.model, "model")?;
-            Ok(Arc::new(FaceWallAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
-        "fireworks" => {
-            let api_key_env = required_field("fireworks", &config.api_key_env, "api_key_env")?;
-            let url = required_field("fireworks", &config.url, "url")?;
-            let model = required_field("fireworks", &config.model, "model")?;
-            Ok(Arc::new(FireworksAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
         "gemini" => {
             let api_key_env = required_field("gemini", &config.api_key_env, "api_key_env")?;
             let url = required_field("gemini", &config.url, "url")?;
             let model = required_field("gemini", &config.model, "model")?;
             Ok(Arc::new(GeminiAgent::new(api_key_env, url, model, client)))
-        }
-        "glm" => {
-            let api_key_env = required_field("glm", &config.api_key_env, "api_key_env")?;
-            let url = required_field("glm", &config.url, "url")?;
-            let model = required_field("glm", &config.model, "model")?;
-            Ok(Arc::new(GlmAgent::new(api_key_env, url, model, client)))
-        }
-        "groq" => {
-            let api_key_env = required_field("groq", &config.api_key_env, "api_key_env")?;
-            let url = required_field("groq", &config.url, "url")?;
-            let model = required_field("groq", &config.model, "model")?;
-            Ok(Arc::new(GroqAgent::new(api_key_env, url, model, client)))
-        }
-        "langboat" => {
-            let api_key_env = required_field("langboat", &config.api_key_env, "api_key_env")?;
-            let url = required_field("langboat", &config.url, "url")?;
-            let model = required_field("langboat", &config.model, "model")?;
-            Ok(Arc::new(LangboatAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
-        "llama" => {
-            let api_key_env = required_field("llama", &config.api_key_env, "api_key_env")?;
-            let url = required_field("llama", &config.url, "url")?;
-            let model = required_field("llama", &config.model, "model")?;
-            Ok(Arc::new(LlamaAgent::new(api_key_env, url, model, client)))
-        }
-        "loopai" => {
-            let api_key_env = required_field("loopai", &config.api_key_env, "api_key_env")?;
-            let url = required_field("loopai", &config.url, "url")?;
-            let model = required_field("loopai", &config.model, "model")?;
-            Ok(Arc::new(LoopAiAgent::new(api_key_env, url, model, client)))
-        }
-        "minimax" => {
-            let api_key_env = required_field("minimax", &config.api_key_env, "api_key_env")?;
-            let url = required_field("minimax", &config.url, "url")?;
-            let model = required_field("minimax", &config.model, "model")?;
-            Ok(Arc::new(MiniMaxAgent::new(api_key_env, url, model, client)))
-        }
-        "mistral" => {
-            let api_key_env = required_field("mistral", &config.api_key_env, "api_key_env")?;
-            let url = required_field("mistral", &config.url, "url")?;
-            let model = required_field("mistral", &config.model, "model")?;
-            Ok(Arc::new(MistralAgent::new(api_key_env, url, model, client)))
-        }
-        "moonshot" => {
-            let api_key_env = required_field("moonshot", &config.api_key_env, "api_key_env")?;
-            let url = required_field("moonshot", &config.url, "url")?;
-            let model = required_field("moonshot", &config.model, "model")?;
-            Ok(Arc::new(MoonshotAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
-        "nim" => {
-            let api_key_env = required_field("nim", &config.api_key_env, "api_key_env")?;
-            let url = required_field("nim", &config.url, "url")?;
-            let model = required_field("nim", &config.model, "model")?;
-            Ok(Arc::new(NimAgent::new(api_key_env, url, model, client)))
-        }
-        "perplexity" => {
-            let api_key_env = required_field("perplexity", &config.api_key_env, "api_key_env")?;
-            let url = required_field("perplexity", &config.url, "url")?;
-            let model = required_field("perplexity", &config.model, "model")?;
-            Ok(Arc::new(PerplexityAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
-        "replicate" => {
-            let api_key_env = required_field("replicate", &config.api_key_env, "api_key_env")?;
-            let url = required_field("replicate", &config.url, "url")?;
-            let model = required_field("replicate", &config.model, "model")?;
-            Ok(Arc::new(ReplicateAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
-        "skywork" => {
-            let api_key_env = required_field("skywork", &config.api_key_env, "api_key_env")?;
-            let url = required_field("skywork", &config.url, "url")?;
-            let model = required_field("skywork", &config.model, "model")?;
-            Ok(Arc::new(SkyworkAgent::new(api_key_env, url, model, client)))
-        }
-        "stepfun" => {
-            let api_key_env = required_field("stepfun", &config.api_key_env, "api_key_env")?;
-            let url = required_field("stepfun", &config.url, "url")?;
-            let model = required_field("stepfun", &config.model, "model")?;
-            Ok(Arc::new(StepFunAgent::new(api_key_env, url, model, client)))
-        }
-        "titan" => {
-            let api_key_env = required_field("titan", &config.api_key_env, "api_key_env")?;
-            let url = required_field("titan", &config.url, "url")?;
-            let model = required_field("titan", &config.model, "model")?;
-            Ok(Arc::new(TitanAgent::new(api_key_env, url, model, client)))
-        }
-        "together" => {
-            let api_key_env = required_field("together", &config.api_key_env, "api_key_env")?;
-            let url = required_field("together", &config.url, "url")?;
-            let model = required_field("together", &config.model, "model")?;
-            Ok(Arc::new(TogetherAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
-        }
-        "xihu" => {
-            let api_key_env = required_field("xihu", &config.api_key_env, "api_key_env")?;
-            let url = required_field("xihu", &config.url, "url")?;
-            let model = required_field("xihu", &config.model, "model")?;
-            Ok(Arc::new(XihuAgent::new(api_key_env, url, model, client)))
-        }
-        "yi" => {
-            let api_key_env = required_field("yi", &config.api_key_env, "api_key_env")?;
-            let url = required_field("yi", &config.url, "url")?;
-            let model = required_field("yi", &config.model, "model")?;
-            Ok(Arc::new(YiAgent::new(api_key_env, url, model, client)))
-        }
-        "xai" => {
-            let api_key_env = required_field("xai", &config.api_key_env, "api_key_env")?;
-            let url = required_field("xai", &config.url, "url")?;
-            let model = required_field("xai", &config.model, "model")?;
-            Ok(Arc::new(XaiAgent::new(api_key_env, url, model, client)))
-        }
-        "siliconflow" => {
-            let api_key_env = required_field("siliconflow", &config.api_key_env, "api_key_env")?;
-            let url = required_field("siliconflow", &config.url, "url")?;
-            let model = required_field("siliconflow", &config.model, "model")?;
-            Ok(Arc::new(SiliconFlowAgent::new(
-                api_key_env,
-                url,
-                model,
-                client,
-            )))
         }
         "qianfan" => {
             let api_key_env = required_field("qianfan", &config.api_key_env, "api_key_env")?;
@@ -1247,18 +1071,6 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
                 supports_system,
                 client,
             )))
-        }
-        "hunyuan" => {
-            let api_key_env = required_field("hunyuan", &config.api_key_env, "api_key_env")?;
-            let url = required_field("hunyuan", &config.url, "url")?;
-            let model = required_field("hunyuan", &config.model, "model")?;
-            Ok(Arc::new(HunyuanAgent::new(api_key_env, url, model, client)))
-        }
-        "kimi" => {
-            let api_key_env = required_field("kimi", &config.api_key_env, "api_key_env")?;
-            let url = required_field("kimi", &config.url, "url")?;
-            let model = required_field("kimi", &config.model, "model")?;
-            Ok(Arc::new(KimiAgent::new(api_key_env, url, model, client)))
         }
         other => anyhow::bail!(
             "{}",
@@ -1478,6 +1290,7 @@ mod tests {
             startup_context: None,
             scheduler: None,
             reputation: None,
+            protocol: None,
         };
 
         let registry = AgentRegistry::from_config(

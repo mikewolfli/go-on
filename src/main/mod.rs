@@ -209,16 +209,23 @@ async fn run() -> Result<()> {
     // ── System bootstrap: i18n, observability, provider, skills discovery ──
     // Telemetry is already initialized above, so skip it here.
     // The returned SkillRegistry is populated with ~/.agents/skills/ SKILL.md files.
-    if let Err(e) =
-        crate::core::bootstrap::perform_bootstrap(&crate::core::bootstrap::BootstrapConfig {
+    let skill_registry =
+        match crate::core::bootstrap::perform_bootstrap(&crate::core::bootstrap::BootstrapConfig {
             enable_telemetry: false,
             enable_i18n: true,
             config_path: config_path.clone(),
         })
         .await
-    {
-        tracing::warn!("bootstrap skipped: {e}");
-    }
+        {
+            Ok(registry) => {
+                tracing::info!("bootstrap complete, skill registry populated");
+                Some(Arc::new(std::sync::RwLock::new(registry)))
+            }
+            Err(e) => {
+                tracing::warn!("bootstrap skipped: {e}");
+                None
+            }
+        };
 
     // GAP-B50-33: Check startup memory and start background memory monitor
     //
@@ -253,7 +260,7 @@ async fn run() -> Result<()> {
     }
 
     // Load, validate configuration, and handle validation-only modes
-    let config = match server::handle_validation_mode(&cli, &config_path)? {
+    let config = match server::handle_validation_mode(&cli, &config_path).await? {
         Some(config) => config,
         None => return Ok(()),
     };
@@ -313,7 +320,7 @@ async fn run() -> Result<()> {
         let cp = config_path.clone();
         let config = Arc::new(tokio::task::spawn_blocking(move || AppConfig::load(&cp)).await??);
         tokio::select! {
-            result = server::start_server(config.clone(), &cli, &config_path, Some(cl_agent_handle.clone())) => {
+            result = server::start_server(config.clone(), &cli, &config_path, Some(cl_agent_handle.clone()), skill_registry.clone()) => {
                 result?;
             }
             _ = shutdown_notify.notified() => {
@@ -330,7 +337,7 @@ async fn run() -> Result<()> {
 
     // Start the server with top-level graceful shutdown signal handling
     tokio::select! {
-        result = server::start_server(config, &cli, &config_path, Some(cl_agent_handle)) => {
+        result = server::start_server(config, &cli, &config_path, Some(cl_agent_handle), skill_registry) => {
             result?;
         }
         _ = shutdown_notify.notified() => {

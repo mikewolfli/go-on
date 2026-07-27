@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+
 
 /// The status of a council proposal.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -388,8 +388,5 @@ impl ReputationRecord {
 
 /// Returns the current Unix timestamp in milliseconds.
 pub fn now_epoch_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }

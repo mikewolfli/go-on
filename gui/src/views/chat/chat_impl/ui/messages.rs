@@ -643,12 +643,6 @@ pub fn show_messages(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
                     .show(ui, |ui| {
                         ui.set_max_width(max_bubble_width - 20.0);
 
-                        // ── Content-hash cached markdown rendering ──
-                        // Reuse the hash computed in the dirty-check above
-                        // (already stored in rendered_content_hashes[msg_idx])
-                        let _content_changed = msg_idx < chat.rendered_content_hashes.len()
-                            && chat.rendered_content_hashes[msg_idx] != 0;
-
                         // ── Streaming cursor: append ▊ to last AI message during streaming ──
                         let is_streaming = chat.sending
                             && !is_user
@@ -716,14 +710,21 @@ pub fn show_messages(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
                                                     );
                                                 });
                                                 ui.add_space(4.0);
-                                                ChatView::render_markdown(
-                                                    ui,
-                                                    text,
-                                                    &i18n.t("chat.copyCode"),
-                                                    enable_markdown_val,
-                                                    think_text,
-                                                    &trunc_hint,
-                                                );
+                                                // ── Anti-flicker: plain text for thinking during streaming ──
+                                                if is_streaming && is_last_seg {
+                                                    ChatView::render_plain_text_fallback(
+                                                        ui, text, think_text,
+                                                    );
+                                                } else {
+                                                    ChatView::render_markdown(
+                                                        ui,
+                                                        text,
+                                                        &i18n.t("chat.copyCode"),
+                                                        enable_markdown_val,
+                                                        think_text,
+                                                        &trunc_hint,
+                                                    );
+                                                }
                                             });
                                     }
                                     MessageSegment::Content(text) => {
@@ -732,14 +733,28 @@ pub fn show_messages(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
                                         } else {
                                             text.clone()
                                         };
-                                        ChatView::render_markdown(
-                                            ui,
-                                            &display_text,
-                                            &i18n.t("chat.copyCode"),
-                                            enable_markdown_val,
-                                            text_color,
-                                            &trunc_hint,
-                                        );
+                                        // ── Anti-flicker: plain text during streaming ──
+                                        // When streaming, content changes every frame so
+                                        // the markdown cache constantly misses, causing a
+                                        // visible plain-text → markdown bounce on every
+                                        // frame.  Render plain text directly instead of
+                                        // going through render_markdown's two-phase path.
+                                        if is_streaming && is_last_seg {
+                                            ChatView::render_plain_text_fallback(
+                                                ui,
+                                                &display_text,
+                                                text_color,
+                                            );
+                                        } else {
+                                            ChatView::render_markdown(
+                                                ui,
+                                                &display_text,
+                                                &i18n.t("chat.copyCode"),
+                                                enable_markdown_val,
+                                                text_color,
+                                                &trunc_hint,
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -750,14 +765,22 @@ pub fn show_messages(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
                             } else {
                                 content_text.clone()
                             };
-                            ChatView::render_markdown(
-                                ui,
-                                &display_content,
-                                &i18n.t("chat.copyCode"),
-                                enable_markdown_val,
-                                text_color,
-                                &i18n.t("chat.largeMessageTruncated"),
-                            );
+                            if is_streaming {
+                                ChatView::render_plain_text_fallback(
+                                    ui,
+                                    &display_content,
+                                    text_color,
+                                );
+                            } else {
+                                ChatView::render_markdown(
+                                    ui,
+                                    &display_content,
+                                    &i18n.t("chat.copyCode"),
+                                    enable_markdown_val,
+                                    text_color,
+                                    &i18n.t("chat.largeMessageTruncated"),
+                                );
+                            }
                         }
 
                         // ── Action bar (Zed/Copilot-style, hover-only) ──
