@@ -8,7 +8,10 @@ use std::collections::HashSet;
 #[cfg(not(feature = "backend-postgres"))]
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+#[cfg(not(feature = "backend-postgres"))]
+use std::sync::Arc;
+use std::sync::Mutex;
+#[cfg(not(feature = "backend-postgres"))]
 use tokio::task::spawn_blocking;
 
 use anyhow::Result;
@@ -388,7 +391,7 @@ impl TaskGraphStore {
     }
 
     /// Save a task graph, inserting or replacing an existing entry.
-    pub fn save_graph(&self, graph_id: &str, graph: &TaskGraph) -> Result<()> {
+    pub async fn save_graph(&self, graph_id: &str, graph: &TaskGraph) -> Result<()> {
         let now = now_ts();
         let serialized = serde_json::to_string(graph)?;
         let mut client = pg_lock_guard(&self.client);
@@ -423,7 +426,7 @@ impl TaskGraphStore {
     }
 
     /// Save a checkpoint artifact, associating it with a graph.
-    pub fn save_checkpoint(
+    pub async fn save_checkpoint(
         &self,
         checkpoint: &TaskGraphCheckpointArtifact,
         graph_id: &str,

@@ -5,12 +5,11 @@
 
 // F-GAP-49: Module wired into production protocol pipeline.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
-use crate::shared::token_bucket::TokenBucket;
+use crate::shared::token_bucket::{BucketMap, TokenBucket};
 
 /// Rate limit configuration for a tenant
 #[derive(Debug, Clone)]
@@ -34,7 +33,7 @@ impl Default for TenantRateLimit {
 /// lock across .await points. std::sync::Mutex is faster for this pattern.
 #[derive(Debug)]
 pub struct RateLimitMiddleware {
-    buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
+    buckets: Arc<BucketMap>,
     default_limit: TenantRateLimit,
     idle_timeout: Duration,
     max_tenants: usize,
@@ -51,7 +50,7 @@ impl RateLimitMiddleware {
 
     pub fn new(default_limit: TenantRateLimit) -> Self {
         Self {
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            buckets: Arc::new(BucketMap::new()),
             default_limit,
             idle_timeout: Duration::from_secs(3600),
             max_tenants: Self::DEFAULT_MAX_TENANTS,
@@ -71,77 +70,84 @@ impl RateLimitMiddleware {
     }
 
     /// Perform lazy eviction: remove idle tenant entries.
-    fn lazy_evict(&self, buckets: &mut HashMap<String, TokenBucket>) {
-        if buckets.len() >= self.max_tenants {
-            buckets.retain(|_, bucket| !bucket.is_idle(self.idle_timeout));
-        }
+    fn lazy_evict(&self) {
+        self.buckets.with_lock(|buckets| {
+            if buckets.len() >= self.max_tenants {
+                buckets.retain(|_, bucket| !bucket.is_idle(self.idle_timeout));
+            }
+        });
     }
 
     /// Evict a specific tenant from the rate limiter.
     pub fn evict_tenant(&self, tenant_id: &str) {
-        let mut buckets = crate::lock_or_recover!(self.buckets, "rate_limit");
-        buckets.remove(tenant_id);
+        self.buckets.with_lock(|buckets| buckets.remove(tenant_id));
     }
 
     /// Check if a request from the given tenant should be allowed.
     /// Returns Ok(()) if allowed, or the number of seconds to wait before retrying.
     pub fn check(&self, tenant_id: &str) -> Result<(), u64> {
-        let mut buckets = crate::lock_or_recover!(self.buckets, "rate_limit");
+        self.lazy_evict();
 
-        self.lazy_evict(&mut buckets);
+        let should_reject = self.buckets.with_lock(|buckets| {
+            if !buckets.contains_key(tenant_id) && buckets.len() >= self.max_tenants {
+                warn!(
+                    "rate limit tenant limit reached (max={}), rejecting tenant '{}'",
+                    self.max_tenants, tenant_id
+                );
+                return true;
+            }
+            false
+        });
 
-        if !buckets.contains_key(tenant_id) && buckets.len() >= self.max_tenants {
-            warn!(
-                "rate limit tenant limit reached (max={}), rejecting tenant '{}'",
-                self.max_tenants, tenant_id
-            );
+        if should_reject {
             return Err(60);
         }
 
-        let bucket = buckets.entry(tenant_id.to_string()).or_insert_with(|| {
-            TokenBucket::new(
-                self.default_limit.burst as f64,
-                self.default_limit.rpm as f64 / 60.0,
-            )
-        });
+        let burst = self.default_limit.burst as f64;
+        let refill_rate = self.default_limit.rpm as f64 / 60.0;
 
-        if bucket.try_consume(1.0) {
+        if self.buckets.try_consume(tenant_id, burst, refill_rate) {
             Ok(())
         } else {
-            let retry_after = (1.0 / bucket.refill_rate).ceil() as u64;
+            let retry_after = self.buckets.with_lock(|buckets| {
+                buckets
+                    .get(tenant_id)
+                    .map(|b| (1.0 / b.refill_rate).ceil() as u64)
+                    .unwrap_or(1)
+            });
             Err(retry_after.max(1))
         }
     }
 
     /// Get current rate limit state for a tenant
     pub fn state(&self, tenant_id: &str) -> RateLimitState {
-        let buckets = crate::lock_or_recover!(self.buckets, "rate_limit");
-
-        if let Some(bucket) = buckets.get(tenant_id) {
-            RateLimitState {
-                remaining: bucket.tokens as u64,
-                capacity: bucket.capacity as u64,
-                refill_per_second: bucket.refill_rate,
+        self.buckets.with_lock(|buckets| {
+            if let Some(bucket) = buckets.get(tenant_id) {
+                RateLimitState {
+                    remaining: bucket.tokens as u64,
+                    capacity: bucket.capacity as u64,
+                    refill_per_second: bucket.refill_rate,
+                }
+            } else {
+                RateLimitState {
+                    remaining: self.default_limit.burst,
+                    capacity: self.default_limit.burst,
+                    refill_per_second: self.default_limit.rpm as f64 / 60.0,
+                }
             }
-        } else {
-            RateLimitState {
-                remaining: self.default_limit.burst,
-                capacity: self.default_limit.burst,
-                refill_per_second: self.default_limit.rpm as f64 / 60.0,
-            }
-        }
+        })
     }
 
     /// Compute the Retry-After header value in seconds for the given tenant.
     pub fn retry_after(&self, tenant_id: &str) -> u64 {
-        let buckets = crate::lock_or_recover!(self.buckets, "rate_limit");
-
-        if let Some(bucket) = buckets.get(tenant_id) {
-            let wait_ms = bucket.wait_time_ms();
-            (wait_ms / 1000).max(1)
-        } else {
-            0
-        }
+        self.buckets.with_lock(|buckets| {
+            if let Some(bucket) = buckets.get(tenant_id) {
+                let wait_ms = bucket.wait_time_ms();
+                (wait_ms / 1000).max(1)
+            } else {
+                0
+            }
+        })
     }
 
     /// Start a background eviction task for idle tenants.
@@ -154,10 +160,9 @@ impl RateLimitMiddleware {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(check_interval).await;
-                let mut guard = crate::lock_or_recover!(buckets);
-                let before = guard.len();
-                guard.retain(|_, bucket| !bucket.is_idle(idle_timeout));
-                let after = guard.len();
+                let before = buckets.len();
+                buckets.retain(|_, bucket| !bucket.is_idle(idle_timeout));
+                let after = buckets.len();
                 if before != after {
                     warn!(
                         "rate limit eviction: removed {} idle tenants ({} remaining)",
@@ -177,14 +182,16 @@ impl RateLimitMiddleware {
     /// Try to consume tokens for a tenant (sync, no async required).
     /// Looks up or creates a token bucket and attempts to consume tokens.
     pub fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
-        let mut buckets = crate::lock_or_recover!(self.buckets, "rate_limit");
-        let bucket = buckets.entry(tenant_id.to_string()).or_insert_with(|| {
-            TokenBucket::new(
-                self.default_limit.burst as f64,
-                self.default_limit.rpm as f64,
-            )
-        });
-        bucket.try_consume(tokens)
+        let burst = self.default_limit.burst as f64;
+        let refill_rate = self.default_limit.rpm as f64;
+        // For multi-token consumption we bypass the single-token try_consume
+        // and operate directly on the bucket.
+        self.buckets.with_lock(|buckets| {
+            let bucket = buckets
+                .entry(tenant_id.to_string())
+                .or_insert_with(|| TokenBucket::new(burst, refill_rate));
+            bucket.try_consume(tokens)
+        })
     }
 }
 
@@ -219,10 +226,7 @@ mod tests {
 
     #[test]
     fn test_retry_after() {
-        let limiter = RateLimitMiddleware::new(TenantRateLimit {
-            rpm: 60,
-            burst: 1,
-        });
+        let limiter = RateLimitMiddleware::new(TenantRateLimit { rpm: 60, burst: 1 });
         assert!(limiter.check("test").is_ok());
         let err = limiter.check("test").unwrap_err();
         assert!(err >= 1);

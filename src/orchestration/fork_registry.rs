@@ -344,18 +344,8 @@ impl ForkRegistry {
     /// Register a new fork. Returns the generated unique ID, or `None`
     /// if the registry is at capacity.
     ///
-    /// The default quota from `ForkConfig` is used.
+    /// Uses the default quota from `ForkConfig`.
     pub fn register(&self, parent_task_id: &str) -> Result<Option<String>> {
-        self.register_with_quota(parent_task_id, self.config.default_quota)
-    }
-
-    /// Register a new fork with an explicit resource quota.
-    /// Returns `None` if the registry is at capacity.
-    pub fn register_with_quota(
-        &self,
-        parent_task_id: &str,
-        quota: ForkResourceQuota,
-    ) -> Result<Option<String>> {
         let fork_id = self.generate_id();
         let mut inner = self
             .inner
@@ -364,7 +354,11 @@ impl ForkRegistry {
         if inner.forks.len() >= self.config.max_forks {
             return Ok(None);
         }
-        let entry = ForkEntry::new(fork_id.clone(), parent_task_id.to_string(), quota);
+        let entry = ForkEntry::new(
+            fork_id.clone(),
+            parent_task_id.to_string(),
+            self.config.default_quota,
+        );
         inner.forks.insert(fork_id.clone(), entry);
         Ok(Some(fork_id))
     }
@@ -651,22 +645,17 @@ mod tests {
     }
 
     #[test]
-    fn test_register_with_quota() {
+    fn test_register_uses_default_quota() {
         let reg = ForkRegistry::new(test_config());
-        let quota = ForkResourceQuota {
-            cpu_quota: 2.0,
-            memory_mb: 1024,
-            time_limit_secs: 600,
-        };
         let fid = reg
-            .register_with_quota("parent-1", quota)
+            .register("parent-1")
             .expect("should register")
             .expect("should have fork id");
         let entry = reg
             .find(&fid)
             .expect("should find")
             .expect("should have entry");
-        assert_eq!(entry.quota, quota);
+        assert_eq!(entry.quota, reg.config.default_quota);
     }
 
     #[test]

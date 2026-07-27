@@ -27,7 +27,7 @@ fn resolve_path(config_path: &Path, raw_path: &str) -> PathBuf {
 /// Initialize response cache.
 #[cfg_attr(not(feature = "backend-postgres"), allow(unused_variables))] // config_path unused in backend-postgres code path
 pub async fn initialize_cache(
-    config_path: &Path,
+    _config_path: &Path,
     cache_cfg: Option<CacheConfig>,
 ) -> Result<Option<Arc<ResponseCache>>> {
     let Some(cfg) = cache_cfg else {
@@ -53,7 +53,7 @@ pub async fn initialize_cache(
 
     #[cfg(not(feature = "backend-postgres"))]
     {
-        let cp = resolve_path(config_path, &cfg.path);
+        let cp = resolve_path(_config_path, &cfg.path);
         let r = tokio::task::spawn_blocking(move || {
             ResponseCache::new(&cp, cfg.default_ttl_seconds, cfg.max_entries)
                 .map(Arc::new)

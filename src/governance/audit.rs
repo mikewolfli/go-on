@@ -64,11 +64,14 @@ pub struct AuditLogEntry {
 
 // ─── ThreadSafeAuditLog ─────────────────────────────────────────────────────
 
-/// Thread-safe audit log with optional NDJSON file persistence.
+/// Thread-safe audit log with optional NDJSON persistence.
 ///
-/// Wraps internal state in `Arc<Mutex<...>>` so it can be shared across threads.
 /// When a `log_path` is configured, every recorded entry is appended as a JSON
 /// line to the file. Buffer overflow warnings are emitted via `tracing::warn!`.
+///
+/// When the active file exceeds 100 MB it is compressed into a gzip archive
+/// (`audit.ndjson.1.gz` → `.2.gz` → …) and a fresh file is started. Old
+/// archives beyond `max_archives` are deleted automatically.
 pub struct ThreadSafeAuditLog {
     inner: Arc<Mutex<AuditLogInner>>,
 }
@@ -78,6 +81,8 @@ struct AuditLogInner {
     max_entries: usize,
     dropped_count: u64,
     log_path: Option<PathBuf>,
+    /// Maximum number of compressed archive files to keep.
+    max_archives: usize,
 }
 
 impl ThreadSafeAuditLog {
@@ -89,7 +94,6 @@ impl ThreadSafeAuditLog {
         }
     }
 
-    /// Create a new thread-safe audit log with the given capacity.
     pub fn new(max_entries: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(AuditLogInner {
@@ -97,11 +101,11 @@ impl ThreadSafeAuditLog {
                 max_entries,
                 dropped_count: 0,
                 log_path: None,
+                max_archives: 10,
             })),
         }
     }
 
-    /// Create a new thread-safe audit log with capacity and NDJSON file path.
     pub fn new_with_path(max_entries: usize, log_path: impl Into<PathBuf>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(AuditLogInner {
@@ -109,6 +113,7 @@ impl ThreadSafeAuditLog {
                 max_entries,
                 dropped_count: 0,
                 log_path: Some(log_path.into()),
+                max_archives: 10,
             })),
         }
     }
@@ -138,12 +143,18 @@ impl ThreadSafeAuditLog {
 
         // NDJSON persistence — append entry as a JSON line to the log file
         if let Some(ref log_path) = inner.log_path {
+            let max_archives = inner.max_archives;
             if let Err(e) = append_ndjson_entry(log_path, &entry) {
                 tracing::warn!(
                     "audit: failed to persist entry to {}: {}",
                     log_path.display(),
                     e
                 );
+            }
+            // After the append (which may have triggered rotation), clean up
+            // old archives beyond the configured maximum.
+            if let Some(parent) = log_path.parent() {
+                cleanup_old_archives(parent, "audit.ndjson", max_archives);
             }
         }
     }
@@ -255,6 +266,52 @@ fn rotate_file(path: &Path) -> Result<(), AuditError> {
     // Truncate the original file
     fs::write(path, b"")?;
     Ok(())
+}
+
+/// Remove old archive files, keeping only the `max_to_keep` most recent.
+///
+/// Archive files follow the pattern `<stem>.N.gz` (e.g. `audit.ndjson.1.gz`).
+/// Files are sorted by their modification time and the oldest beyond the limit
+/// are deleted. This prevents unbounded disk growth in the audit directory.
+fn cleanup_old_archives(dir: &Path, stem: &str, max_to_keep: usize) {
+    if max_to_keep == 0 {
+        return;
+    }
+    let Ok(mut entries) = fs::read_dir(dir).map(|e| {
+        e.filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with(stem) && n.ends_with(".gz"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>()
+    }) else {
+        return;
+    };
+
+    // Sort by modification time (oldest first) so we can delete the oldest.
+    entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+
+    if entries.len() <= max_to_keep {
+        return;
+    }
+
+    for entry in entries
+        .iter()
+        .take(entries.len().saturating_sub(max_to_keep))
+    {
+        if let Err(e) = fs::remove_file(entry.path()) {
+            tracing::warn!(
+                "audit: failed to remove old archive {}: {}",
+                entry.path().display(),
+                e
+            );
+        } else {
+            tracing::debug!("audit: removed old archive {}", entry.path().display());
+        }
+    }
 }
 
 /// Resolve `~/.goon/audit.ndjson` or fall back to `.goon/audit.ndjson`.

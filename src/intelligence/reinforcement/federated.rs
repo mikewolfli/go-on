@@ -676,10 +676,7 @@ impl FederatedLearning {
 
 /// Returns the current system timestamp in milliseconds since the Unix epoch.
 fn elapsed_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ── Thread-safe wrapper type ──────────────────────────────────────────────

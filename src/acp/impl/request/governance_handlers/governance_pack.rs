@@ -89,7 +89,7 @@ pub(crate) fn classify_request_error_kind(error: &anyhow::Error) -> &'static str
     "GeneralError"
 }
 
-pub(super) fn infer_error_contract_kind(
+pub(crate) fn infer_error_contract_kind(
     code: i32,
     message: &str,
     explicit: Option<&str>,
@@ -152,7 +152,7 @@ pub(crate) fn build_retry_policy_for_kind(kind: &str) -> Value {
     }
 }
 
-pub(super) fn with_error_contract_data(
+pub(crate) fn with_error_contract_data(
     code: i32,
     message: &str,
     data: Option<Value>,
@@ -290,7 +290,7 @@ pub(crate) fn build_capability_profile(method: &str, task: &str, params: &Value)
     })
 }
 
-pub(super) fn build_sandbox_profile(
+pub(crate) fn build_sandbox_profile(
     method: &str,
     params: &Value,
     capability_profile: &Value,
@@ -319,7 +319,7 @@ pub(super) fn build_sandbox_profile(
     })
 }
 
-pub(super) fn build_approval_checkpoint(
+pub(crate) fn build_approval_checkpoint(
     method: &str,
     change_bundle: &Value,
     params: &Value,
@@ -385,7 +385,7 @@ pub(crate) fn detect_git_branch() -> Option<String> {
     }
 }
 
-pub(super) fn build_repo_native_context(
+pub(crate) fn build_repo_native_context(
     method: &str,
     params: &Value,
     change_bundle: &Value,

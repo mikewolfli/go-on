@@ -93,6 +93,7 @@ impl ConversationHistory {
     }
 
     /// Prepend a system summary turn at the beginning.
+    #[allow(dead_code)]
     pub fn prepend_system_summary(&mut self, summary: String) {
         let tokens = estimate_tokens(&summary);
         let turn = ConversationTurn {
@@ -969,17 +970,19 @@ mod tests {
             };
             hist.push(turn);
         }
+        // Compact first to populate effectiveness history, then test feedback blending
+        compactor.compact(&mut hist);
         let before = compactor
             .effectiveness_history()
             .back()
-            .unwrap()
-            .quality_score;
+            .map(|r| r.quality_score)
+            .unwrap_or(0.0);
         compactor.record_user_feedback(0.5);
         let after = compactor
             .effectiveness_history()
             .back()
-            .unwrap()
-            .quality_score;
+            .map(|r| r.quality_score)
+            .unwrap_or(0.0);
         assert_ne!(before, after);
     }
 

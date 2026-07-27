@@ -32,6 +32,8 @@ const PHASE_SUMMARY_COLUMNS: &str = "phase, summary_text, updated_at";
 use crate::memory::embedding_provider::{
     local_hash_embed, ConfigurableEmbeddingProvider, EmbeddingProvider,
 };
+#[cfg(not(feature = "backend-postgres"))]
+use crate::shared::math::cosine_similarity_f32;
 use anyhow::Result;
 #[cfg(not(feature = "backend-postgres"))]
 use fastrand;
@@ -175,7 +177,7 @@ impl HnswIndex {
     /// Distance between a query vector and a stored node.
     fn distance(&self, query: &[f32], node: usize) -> f32 {
         let v = &self.vectors[node];
-        1.0 - cosine_similarity(query, v)
+        1.0 - cosine_similarity_f32(query, v)
     }
 
     /// Greedy search at a single layer, returning up to `ef` nearest neighbours.
@@ -260,7 +262,7 @@ impl HnswIndex {
             .iter()
             .map(|&n| HnswNodeDist {
                 idx: n,
-                dist: 1.0 - cosine_similarity(node_vec, &self.vectors[n]),
+                dist: 1.0 - cosine_similarity_f32(node_vec, &self.vectors[n]),
             })
             .collect();
         dists.sort();
@@ -404,6 +406,15 @@ impl HnswIndex {
     }
 }
 
+/// Shared spawn_blocking wrapper for vector store async methods.
+/// Eliminates the duplicated `spawn_blocking().await.map_err()` pattern.
+macro_rules! spawn_blocking_vec {
+    ($block:expr) => {
+        spawn_blocking($block)
+            .await
+            .map_err(|e| anyhow::anyhow!("VectorStore blocking thread panicked: {e}"))?
+    };
+}
 /// Vector store for similarity search
 #[cfg(not(feature = "backend-postgres"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,25 +579,13 @@ impl VectorStore {
         let phase = phase.to_string();
         let query_text = query_text.to_string();
         let response_text = response_text.to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let query = query_text.trim();
             let response = response_text.trim();
             if query.is_empty() || response.is_empty() {
                 return Ok(());
             }
-            let embedding = if let Some(ref provider) = self.embedding_provider {
-                let vec = provider.embed(query);
-                if vec.len() != self.dimensions {
-                    anyhow::bail!(
-                        "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
-                        vec.len(),
-                        self.dimensions,
-                    );
-                }
-                vec
-            } else {
-                embed_text(query, self.dimensions)
-            };
+            let embedding = embed_with_check(query, self.dimensions, &self.embedding_provider)?;
             let embedding_json = serde_json::to_string(&embedding)?;
             let embedding_blob = embedding_blob(&embedding);
             let memory_key = build_memory_key(&phase, query);
@@ -632,9 +631,10 @@ impl VectorStore {
                 let mut stmt = conn.prepare(
                     "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT ?2 OFFSET ?1",
                 )?;
-                let rows = stmt.query_map(params![self.max_entries as i64, SENTINEL_LIMIT], |row| {
-                    row.get::<_, String>(0)
-                })?;
+                let rows = stmt
+                    .query_map(params![self.max_entries as i64, SENTINEL_LIMIT], |row| {
+                        row.get::<_, String>(0)
+                    })?;
                 rows.filter_map(|r| r.ok()).collect()
             };
 
@@ -670,8 +670,6 @@ impl VectorStore {
 
             Ok(())
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Search for similar entries
@@ -695,7 +693,7 @@ impl VectorStore {
     ) -> Result<(Vec<VectorHit>, VectorPrecisionFeedback)> {
         let phase = phase.to_string();
         let query_text = query_text.to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             if top_k == 0 {
                 return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
@@ -705,19 +703,8 @@ impl VectorStore {
                 return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
 
-            let query_embedding = if let Some(ref provider) = self.embedding_provider {
-                let vec = provider.embed(query);
-                if vec.len() != self.dimensions {
-                    anyhow::bail!(
-                        "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
-                        vec.len(),
-                        self.dimensions,
-                    );
-                }
-                vec
-            } else {
-                embed_text(query, self.dimensions)
-            };
+            let query_embedding =
+                embed_with_check(query, self.dimensions, &self.embedding_provider)?;
             let now = now_ts();
             let limit = self.max_entries.max(top_k);
 
@@ -740,19 +727,19 @@ impl VectorStore {
                 }
             }
 
-        // Collect results within a locked scope, then release the lock
-        // before doing sorting/processing (minimizes lock duration).
-        let scored = {
-            let conn = self.conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'search', recovering");
-                poisoned.into_inner()
-            });
+            // Collect results within a locked scope, then release the lock
+            // before doing sorting/processing (minimizes lock duration).
+            let scored = {
+                let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("vector mutex poisoned in 'search', recovering");
+                    poisoned.into_inner()
+                });
 
-            let scored = match self.mode {
-                SqliteVectorMode::SqliteVec => {
-                    let query_blob = embedding_blob(&query_embedding);
-                    let mut stmt = conn.prepare(
-                        "
+                let scored = match self.mode {
+                    SqliteVectorMode::SqliteVec => {
+                        let query_blob = embedding_blob(&query_embedding);
+                        let mut stmt = conn.prepare(
+                            "
                         SELECT memory_key, response_text, updated_at,
                                vec_distance_cosine(embedding_blob, ?2) AS distance
                         FROM vector_memory
@@ -761,92 +748,93 @@ impl VectorStore {
                         ORDER BY distance ASC, updated_at DESC
                         LIMIT ?3
                         ",
-                    )?;
-                    let mut rows = stmt.query(params![phase, query_blob, limit as i64])?;
-                    let mut scored: Vec<(String, f32, String)> = Vec::new();
+                        )?;
+                        let mut rows = stmt.query(params![phase, query_blob, limit as i64])?;
+                        let mut scored: Vec<(String, f32, String)> = Vec::new();
 
-                    while let Some(row) = rows.next()? {
-                        let memory_key: String = row.get(0)?;
-                        let response_text: String = row.get(1)?;
-                        let updated_at: i64 = row.get(2)?;
-                        let distance: f64 = row.get(3)?;
-                        let similarity = (1.0_f32 - distance as f32).clamp(0.0, 1.0);
-                        if similarity < min_similarity {
-                            continue;
+                        while let Some(row) = rows.next()? {
+                            let memory_key: String = row.get(0)?;
+                            let response_text: String = row.get(1)?;
+                            let updated_at: i64 = row.get(2)?;
+                            let distance: f64 = row.get(3)?;
+                            let similarity = (1.0_f32 - distance as f32).clamp(0.0, 1.0);
+                            if similarity < min_similarity {
+                                continue;
+                            }
+                            let blended =
+                                blend_similarity_with_recency(similarity, now, updated_at);
+                            scored.push((memory_key, blended, response_text));
                         }
-                        let blended = blend_similarity_with_recency(similarity, now, updated_at);
-                        scored.push((memory_key, blended, response_text));
+                        scored
                     }
-                    scored
-                }
-                SqliteVectorMode::JsonFallback => {
-                    let mut stmt = conn.prepare(
-                        "
+                    SqliteVectorMode::JsonFallback => {
+                        let mut stmt = conn.prepare(
+                            "
                         SELECT memory_key, response_text, embedding_json, updated_at
                         FROM vector_memory
                         WHERE phase = ?1
                         ORDER BY updated_at DESC
                         LIMIT ?2
                         ",
-                    )?;
+                        )?;
 
-                    let mut rows = stmt.query(params![phase, limit as i64])?;
-                    let mut scored: Vec<(String, f32, String)> = Vec::new();
+                        let mut rows = stmt.query(params![phase, limit as i64])?;
+                        let mut scored: Vec<(String, f32, String)> = Vec::new();
 
-                    while let Some(row) = rows.next()? {
-                        let memory_key: String = row.get(0)?;
-                        let response_text: String = row.get(1)?;
-                        let embedding_json: Option<String> = row.get(2)?;
-                        let updated_at: i64 = row.get(3)?;
+                        while let Some(row) = rows.next()? {
+                            let memory_key: String = row.get(0)?;
+                            let response_text: String = row.get(1)?;
+                            let embedding_json: Option<String> = row.get(2)?;
+                            let updated_at: i64 = row.get(3)?;
 
-                        let Some(embedding_json) = embedding_json else {
-                            continue;
-                        };
-                        let memory_embedding: Vec<f32> = match serde_json::from_str(&embedding_json)
-                        {
-                            Ok(v) => v,
-                            Err(_) => continue,
-                        };
-                        if memory_embedding.len() != query_embedding.len() {
-                            continue;
+                            let Some(embedding_json) = embedding_json else {
+                                continue;
+                            };
+                            let memory_embedding: Vec<f32> =
+                                match serde_json::from_str(&embedding_json) {
+                                    Ok(v) => v,
+                                    Err(_) => continue,
+                                };
+                            if memory_embedding.len() != query_embedding.len() {
+                                continue;
+                            }
+
+                            let similarity =
+                                cosine_similarity_f32(&query_embedding, &memory_embedding);
+                            if similarity < min_similarity {
+                                continue;
+                            }
+
+                            let blended =
+                                blend_similarity_with_recency(similarity, now, updated_at);
+                            scored.push((memory_key, blended, response_text));
                         }
 
-                        let similarity = cosine_similarity(&query_embedding, &memory_embedding);
-                        if similarity < min_similarity {
-                            continue;
-                        }
-
-                        let blended = blend_similarity_with_recency(similarity, now, updated_at);
-                        scored.push((memory_key, blended, response_text));
+                        scored
                     }
+                };
 
-                    scored
-                }
-            };
-
-            // Update hit counts while still holding the lock
-            if !scored.is_empty() {
-                for (memory_key, _, _) in &scored {
-                    conn.execute(
-                        "
+                // Update hit counts while still holding the lock
+                if !scored.is_empty() {
+                    for (memory_key, _, _) in &scored {
+                        conn.execute(
+                            "
                         UPDATE vector_memory
                         SET hit_count = hit_count + 1,
                             last_hit_at = ?2
                         WHERE memory_key = ?1
                         ",
-                        params![memory_key, now],
-                    )?;
+                            params![memory_key, now],
+                        )?;
+                    }
                 }
-            }
 
-            scored
-        }; // conn is dropped here, releasing the lock
+                scored
+            }; // conn is dropped here, releasing the lock
 
-        let (hits, feedback) = scored_to_hits(scored, top_k, max_snippet_chars);
-        Ok((hits, feedback))
+            let (hits, feedback) = scored_to_hits(scored, top_k, max_snippet_chars);
+            Ok((hits, feedback))
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get phase summary
@@ -859,7 +847,7 @@ impl VectorStore {
     pub async fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
         let conn = self.conn.clone();
         let phase = phase.to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
                 poisoned.into_inner()
@@ -878,8 +866,6 @@ impl VectorStore {
 
             Ok(summary)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Upsert phase summary
@@ -894,7 +880,7 @@ impl VectorStore {
         let conn = self.conn.clone();
         let phase = phase.to_string();
         let text = summary_text.trim().to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             if text.is_empty() {
                 return Ok(());
             }
@@ -920,8 +906,6 @@ impl VectorStore {
 
             Ok(())
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get memory entry count
@@ -930,7 +914,7 @@ impl VectorStore {
     /// * `Result<u64>` - Returns Ok(u64) with the number of memory entries, or an error if something goes wrong
     pub async fn memory_entry_count(&self) -> Result<u64> {
         let conn = self.conn.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
                 poisoned.into_inner()
@@ -940,8 +924,6 @@ impl VectorStore {
             })?;
             Ok(count.max(0) as u64)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Get summary entry count
@@ -950,7 +932,7 @@ impl VectorStore {
     /// * `Result<u64>` - Returns Ok(u64) with the number of summary entries, or an error if something goes wrong
     pub async fn summary_entry_count(&self) -> Result<u64> {
         let conn = self.conn.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
                 poisoned.into_inner()
@@ -960,8 +942,6 @@ impl VectorStore {
             })?;
             Ok(count.max(0) as u64)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Clear all entries
@@ -970,7 +950,7 @@ impl VectorStore {
     /// * `Result<(usize, usize)>` - Returns Ok((usize, usize)) with the number of memory entries and summary entries deleted, or an error if something goes wrong
     pub async fn clear_all(&self) -> Result<(usize, usize)> {
         let conn = self.conn.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'clear', recovering");
                 poisoned.into_inner()
@@ -979,14 +959,12 @@ impl VectorStore {
             let summaries_deleted = conn.execute("DELETE FROM phase_summary", [])?;
             Ok((memory_deleted, summaries_deleted))
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Reclaim SQLite free pages after retention cleanup.
     pub async fn vacuum(&self) -> Result<()> {
         let conn = self.conn.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
                 poisoned.into_inner()
@@ -994,8 +972,6 @@ impl VectorStore {
             conn.execute_batch("VACUUM;")?;
             Ok(())
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Ensure the in-memory HNSW index is built from SQLite data.
@@ -1277,9 +1253,29 @@ fn embed_text(text: &str, dimensions: usize) -> Vec<f32> {
     local_hash_embed(text, dimensions)
 }
 
-#[cfg(not(feature = "backend-postgres"))]
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
+/// Shared embedding helper: dispatches to the configured provider or the minhash
+/// fallback, and validates that the returned vector has the expected dimension.
+///
+/// Used by both the SQLite and PostgreSQL backends to eliminate the identical
+/// 12-line dimension-checking pattern that was duplicated across every method.
+fn embed_with_check(
+    query: &str,
+    dimensions: usize,
+    provider: &Option<ConfigurableEmbeddingProvider>,
+) -> Result<Vec<f32>> {
+    if let Some(ref provider) = provider {
+        let vec = provider.embed(query);
+        if vec.len() != dimensions {
+            anyhow::bail!(
+                "Embedding dimension mismatch: got {} but store expects {} dimensions",
+                vec.len(),
+                dimensions,
+            );
+        }
+        Ok(vec)
+    } else {
+        Ok(embed_text(query, dimensions))
+    }
 }
 
 fn trim_chars(input: &str, max_chars: usize) -> String {
@@ -1670,6 +1666,20 @@ impl VectorStore {
         self
     }
 
+    /// Create a new vector store configured from environment variables.
+    ///
+    /// Reads `GO_ON_DATABASE_URL` (connection string) and
+    /// `GO_ON_EMBEDDING_BACKEND` (embedding provider) from the environment.
+    ///
+    /// This is the recommended entry point for production deployments.
+    pub fn new_with_env(max_entries: usize) -> Result<Self> {
+        let url = std::env::var("GO_ON_DATABASE_URL")
+            .map_err(|_| anyhow::anyhow!("GO_ON_DATABASE_URL must be set for postgres backend"))?;
+        let provider = crate::memory::embedding_provider::embedding_provider_from_env();
+        let dimensions = provider.dimensions();
+        Self::new(&url, dimensions, max_entries).map(|s| s.with_embedding_provider(provider))
+    }
+
     pub async fn upsert(
         self: Arc<Self>,
         phase: &str,
@@ -1679,25 +1689,13 @@ impl VectorStore {
         let phase = phase.to_string();
         let query_text = query_text.to_string();
         let response_text = response_text.to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let query = query_text.trim();
             let response = response_text.trim();
             if query.is_empty() || response.is_empty() {
                 return Ok(());
             }
-            let embedding_vec = if let Some(ref provider) = self.embedding_provider {
-                let vec = provider.embed(query);
-                if vec.len() != self.dimensions {
-                    anyhow::bail!(
-                        "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
-                        vec.len(),
-                        self.dimensions,
-                    );
-                }
-                vec
-            } else {
-                embed_text(query, self.dimensions)
-            };
+            let embedding_vec = embed_with_check(query, self.dimensions, &self.embedding_provider)?;
             let embedding = Vector::from(embedding_vec);
             let memory_key = build_memory_key(&phase, query);
             let now = now_ts();
@@ -1736,8 +1734,6 @@ impl VectorStore {
 
             Ok(())
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     pub async fn search(
@@ -1750,7 +1746,7 @@ impl VectorStore {
     ) -> Result<(Vec<VectorHit>, VectorPrecisionFeedback)> {
         let phase = phase.to_string();
         let query_text = query_text.to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             if top_k == 0 {
                 return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
@@ -1759,19 +1755,7 @@ impl VectorStore {
                 return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
             }
 
-            let query_vec = if let Some(ref provider) = self.embedding_provider {
-                let vec = provider.embed(query);
-                if vec.len() != self.dimensions {
-                    anyhow::bail!(
-                        "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
-                        vec.len(),
-                        self.dimensions,
-                    );
-                }
-                vec
-            } else {
-                embed_text(query, self.dimensions)
-            };
+            let query_vec = embed_with_check(query, self.dimensions, &self.embedding_provider)?;
             let query_embedding = Vector::from(query_vec);
             let now = now_ts();
             let mut client = self.client.lock().unwrap_or_else(|poisoned| {
@@ -1821,14 +1805,12 @@ impl VectorStore {
             let (hits, feedback) = scored_to_hits(scored, top_k, max_snippet_chars);
             Ok((hits, feedback))
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     pub async fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
         let client = self.client.clone();
         let phase = phase.to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let mut client = client.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
                 poisoned.into_inner()
@@ -1843,15 +1825,13 @@ impl VectorStore {
                 )?
                 .map(|row| row.get(0)))
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     pub async fn upsert_phase_summary(&self, phase: &str, summary_text: &str) -> Result<()> {
         let client = self.client.clone();
         let phase = phase.to_string();
         let text = summary_text.trim().to_string();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             if text.is_empty() {
                 return Ok(());
             }
@@ -1874,13 +1854,11 @@ impl VectorStore {
             )?;
             Ok(())
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     pub async fn memory_entry_count(&self) -> Result<u64> {
         let client = self.client.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let mut client = client.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
                 poisoned.into_inner()
@@ -1889,13 +1867,11 @@ impl VectorStore {
             let count: i64 = row.get(0);
             Ok(count.max(0) as u64)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     pub async fn summary_entry_count(&self) -> Result<u64> {
         let client = self.client.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let mut client = client.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
                 poisoned.into_inner()
@@ -1904,13 +1880,11 @@ impl VectorStore {
             let count: i64 = row.get(0);
             Ok(count.max(0) as u64)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     pub async fn clear_all(&self) -> Result<(usize, usize)> {
         let client = self.client.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let mut client = client.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'clear_all', recovering");
                 poisoned.into_inner()
@@ -1919,8 +1893,6 @@ impl VectorStore {
             let summaries_deleted = client.execute("DELETE FROM phase_summary", &[])? as usize;
             Ok((memory_deleted, summaries_deleted))
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Reclaim PostgreSQL storage after retention cleanup.
@@ -1932,7 +1904,7 @@ impl VectorStore {
     /// space reclamation and consistent test/benchmark behaviour.
     pub async fn vacuum(&self) -> Result<()> {
         let client = self.client.clone();
-        spawn_blocking(move || {
+        spawn_blocking_vec!(move || {
             let mut client = client.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
                 poisoned.into_inner()
@@ -1940,7 +1912,5 @@ impl VectorStore {
             client.batch_execute("VACUUM ANALYZE")?;
             Ok(())
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 }

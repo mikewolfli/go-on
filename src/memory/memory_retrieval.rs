@@ -68,7 +68,7 @@ impl MemoryLink {
             m1: m1.into(),
             m2: m2.into(),
             link_type,
-            created_at: now_secs(),
+            created_at: crate::shared::timestamps::now_ts(),
             strength: strength.clamp(0.0, 1.0),
         }
     }
@@ -481,10 +481,7 @@ impl MemoryRetrievalEngine {
         if idx.is_empty() {
             return Vec::new();
         }
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let now_secs = crate::shared::timestamps::now_ts();
 
         let mut results = Vec::new();
         for (id, sim, _content) in idx.search(query_embedding, k) {
@@ -515,13 +512,6 @@ impl MemoryRetrievalEngine {
 // ===========================================================================
 // Helpers
 // ===========================================================================
-
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
 
 // ===========================================================================
 // Tests

@@ -23,7 +23,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use crate::memory::summarization::{MemorySummarizer, SummarizedMemory};
 
@@ -87,7 +87,7 @@ impl MemoryEntry {
         content: impl Into<String>,
         usefulness: f32,
     ) -> Self {
-        let now = now_secs();
+        let now = crate::shared::timestamps::now_ts();
         Self {
             id: id.into(),
             tier: MemoryTier::Hot,
@@ -105,18 +105,18 @@ impl MemoryEntry {
 
     /// Touch the entry, updating its access timestamp and count.
     pub fn touch(&mut self) {
-        self.accessed_at = now_secs();
+        self.accessed_at = crate::shared::timestamps::now_ts();
         self.access_count += 1;
     }
 
     /// Returns the age of this entry in seconds.
     pub fn age_secs(&self) -> i64 {
-        now_secs().saturating_sub(self.created_at)
+        crate::shared::timestamps::now_ts().saturating_sub(self.created_at)
     }
 
     /// Returns the time since last access in seconds.
     pub fn idle_secs(&self) -> i64 {
-        now_secs().saturating_sub(self.accessed_at)
+        crate::shared::timestamps::now_ts().saturating_sub(self.accessed_at)
     }
 }
 
@@ -380,7 +380,7 @@ impl ColdStorage {
     /// Append a single entry to the latest shard for the current month,
     /// rotating to a new shard when the current one exceeds the size limit.
     fn append_entry(&self, entry: &MemoryEntry) -> Result<()> {
-        let now_s = now_secs();
+        let now_s = crate::shared::timestamps::now_ts();
         // Compute year/month from Unix timestamp (simple divisional approach).
         // Uses 1970-01-01 as base, accounting for leap years.
         let (year, month) = ts_to_year_month(now_s);
@@ -616,7 +616,7 @@ fn query_all(
 
 #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
 fn query_all(
-    conn: &postgres::Client,
+    conn: &mut postgres::Client,
     sql: &str,
     params: &[&(dyn postgres::types::ToSql + Sync)],
 ) -> Result<Vec<MemoryEntry>> {
@@ -664,6 +664,7 @@ impl WarmStore {
             "
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
+            PRAGMA wal_autocheckpoint = 1000;
 
             CREATE TABLE IF NOT EXISTS warm_memory (
                 id TEXT PRIMARY KEY,
@@ -692,6 +693,11 @@ impl WarmStore {
                 ON warm_memory(user_id);
             ",
         )?;
+
+        // Force a WAL checkpoint on startup so the WAL file does not grow
+        // unboundedly between application restarts (BLUE69 §performance).
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             max_entries,
@@ -816,11 +822,18 @@ impl WarmStore {
         }
         #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
         {
+            let entry_id = entry.id.clone();
             let tier_label = entry.tier.label().to_string();
+            let class = entry.class.clone();
+            let content = entry.content.clone();
+            let created_at = entry.created_at;
+            let accessed_at = entry.accessed_at;
+            let usefulness = entry.usefulness;
+            let access_count = entry.access_count;
             let session_id = entry.session_id.clone();
             let user_id = entry.user_id.clone();
             spawn_blocking(move || {
-                let conn = conn.lock().unwrap_or_else(|poisoned| {
+                let mut conn = conn.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!("warm store mutex poisoned, recovering");
                     poisoned.into_inner()
                 });
@@ -843,15 +856,15 @@ impl WarmStore {
                 conn.execute(
                     &sql,
                     &[
-                        &entry.id,
+                        &entry_id,
                         &tier_label,
-                        &entry.class,
-                        &entry.content,
-                        &entry.created_at,
-                        &entry.accessed_at,
-                        &entry.usefulness,
+                        &class,
+                        &content,
+                        &created_at,
+                        &accessed_at,
+                        &usefulness,
                         &embedding_json,
-                        &entry.access_count,
+                        &access_count,
                         &session_id,
                         &user_id,
                     ],
@@ -879,6 +892,12 @@ impl WarmStore {
         let conn = self.conn.clone();
         let id = id.to_string();
         spawn_blocking(move || {
+            #[cfg(not(feature = "backend-sqlite"))]
+            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            #[cfg(feature = "backend-sqlite")]
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("warm store mutex poisoned, recovering");
                 poisoned.into_inner()
@@ -916,7 +935,8 @@ impl WarmStore {
         let conn = self.conn.clone();
         let id = id.to_string();
         spawn_blocking(move || {
-            let conn = conn.lock().unwrap_or_else(|poisoned| {
+            #[allow(unused_mut, reason = "mut needed by backend-postgres Client::execute")]
+            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("warm store mutex poisoned, recovering");
                 poisoned.into_inner()
             });
@@ -943,6 +963,12 @@ impl WarmStore {
     ) -> Result<Vec<MemoryEntry>> {
         let conn = self.conn.clone();
         spawn_blocking(move || {
+            #[cfg(not(feature = "backend-sqlite"))]
+            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            #[cfg(feature = "backend-sqlite")]
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("warm store mutex poisoned, recovering");
                 poisoned.into_inner()
@@ -953,7 +979,14 @@ impl WarmStore {
                 WARM_MEMORY_COLUMNS,
                 p = PARAM_PREFIX
             );
-            query_all(&conn, &sql, &[&min_usefulness, &(limit as i64)])
+            #[cfg(feature = "backend-sqlite")]
+            {
+                query_all(&conn, &sql, &[&min_usefulness, &(limit as i64)])
+            }
+            #[cfg(not(feature = "backend-sqlite"))]
+            {
+                query_all(&mut *conn, &sql, &[&min_usefulness, &(limit as i64)])
+            }
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -964,6 +997,12 @@ impl WarmStore {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
         let conn = self.conn.clone();
         spawn_blocking(move || {
+            #[cfg(not(feature = "backend-sqlite"))]
+            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            #[cfg(feature = "backend-sqlite")]
             let conn = conn.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("warm store mutex poisoned, recovering");
                 poisoned.into_inner()
@@ -990,6 +1029,11 @@ impl WarmStore {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
         let conn = self.conn.clone();
         spawn_blocking(move || {
+            #[cfg(not(feature = "backend-sqlite"))]
+            let mut conn = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+            #[cfg(feature = "backend-sqlite")]
             let conn = conn
                 .lock()
                 .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
@@ -999,10 +1043,10 @@ impl WarmStore {
                 let empty_params: [&dyn rusqlite::types::ToSql; 0] = [];
                 query_all(&conn, &sql, &empty_params)
             }
-            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            #[cfg(not(feature = "backend-sqlite"))]
             {
                 let empty_params: [&(dyn postgres::types::ToSql + Sync); 0] = [];
-                query_all(&conn, &sql, &empty_params)
+                query_all(&mut *conn, &sql, &empty_params)
             }
         })
         .await
@@ -1017,6 +1061,11 @@ impl WarmStore {
         let conn = self.conn.clone();
         let session_id = session_id.to_string();
         spawn_blocking(move || {
+            #[cfg(not(feature = "backend-sqlite"))]
+            let mut conn = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+            #[cfg(feature = "backend-sqlite")]
             let conn = conn
                 .lock()
                 .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
@@ -1026,7 +1075,14 @@ impl WarmStore {
                 WARM_MEMORY_COLUMNS,
                 p = PARAM_PREFIX
             );
-            query_all(&conn, &sql, &[&session_id, &(limit as i64)])
+            #[cfg(feature = "backend-sqlite")]
+            {
+                query_all(&conn, &sql, &[&session_id, &(limit as i64)])
+            }
+            #[cfg(not(feature = "backend-sqlite"))]
+            {
+                query_all(&mut *conn, &sql, &[&session_id, &(limit as i64)])
+            }
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -1309,7 +1365,7 @@ impl MemoryPersistence {
 
         // ── Step 2: Check warm for TTL candidates ──
         let warm_entries = self.warm.iterate_all().await?;
-        let now = now_secs();
+        let now = crate::shared::timestamps::now_ts();
         for entry in warm_entries {
             let idle = now.saturating_sub(entry.accessed_at);
             if idle >= self.policy.warm_ttl_secs {
@@ -1519,14 +1575,6 @@ pub struct MigrationReport {
 // ===========================================================================
 // Helpers
 // ===========================================================================
-
-/// Current Unix timestamp in seconds.
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
 
 /// Convert a Unix timestamp (seconds) to a (year, month) tuple.
 /// Uses days-since-epoch arithmetic with a simple leap-year-aware algorithm.

@@ -314,6 +314,10 @@ impl ApprovalEngine {
     /// Set the SQLite database path for persistent approval queue storage.
     /// When set, the engine will create the `approval_queue` table on init
     /// and reload any pending approvals from the database.
+    #[allow(
+        unused_mut,
+        reason = "needed by backend-sqlite, unused by backend-postgres"
+    )]
     pub fn with_db_path(mut self, db_path: String) -> Self {
         #[cfg(feature = "backend-sqlite")]
         {

@@ -9,6 +9,7 @@
 //! results vs. panicking).
 
 use crate::memory::memory_persistence::MemoryEntry;
+use crate::shared::math::cosine_similarity;
 
 // ── Flat (exact) vector index ──────────────────────────────────────────────
 
@@ -132,24 +133,7 @@ impl VectorIndex {
     }
 }
 
-// ── Cosine similarity ──────────────────────────────────────────────────────
 
-/// Compute cosine similarity between two equal-length vectors.
-///
-/// Returns `0.0` if either vector is zero-length or zero-norm.
-pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let norm_b: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a * norm_b)
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -3,6 +3,7 @@ pub mod db_pool;
 pub mod execution_recorder;
 pub mod http_client;
 pub mod lock_utils;
+pub mod math;
 pub mod protocol_mode;
 pub mod provenance_helpers;
 pub mod role_types;

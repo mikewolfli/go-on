@@ -82,7 +82,7 @@ mod diagnostic_pack;
 mod dispatch;
 pub(crate) mod exec_pack;
 mod governance_handlers;
-mod governance_pack;
+use self::governance_handlers::governance_pack;
 mod hardness_pack;
 mod health_pack;
 mod learning_pack;

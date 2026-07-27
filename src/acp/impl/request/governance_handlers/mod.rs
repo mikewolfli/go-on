@@ -9,6 +9,7 @@
 
 pub(super) mod actions;
 pub(super) mod audit;
+pub(super) mod governance_pack;
 pub(super) mod plan;
 pub(super) mod status;
 

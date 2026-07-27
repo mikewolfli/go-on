@@ -85,7 +85,7 @@ use std::time::Instant;
 /// HarnessBus aggregates every governance component and exposes the
 /// PolicyEvaluator as its primary interface.
 pub struct HarnessBus {
-    pub evaluator: PolicyEvaluator,
+    pub evaluator: Arc<PolicyEvaluator>,
     pub audit_trail: Arc<Mutex<HarnessAuditTrail>>,
     pub feedback_collector: Option<PuaFeedbackCollector>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
@@ -130,7 +130,7 @@ impl HarnessBus {
     ) -> Self {
         let feedback_collector = storage_path.map(PuaFeedbackCollector::new);
         let bus = HarnessBus {
-            evaluator: PolicyEvaluator::new(
+            evaluator: Arc::new(PolicyEvaluator::new(
                 rule_engine,
                 sandbox_level,
                 budget,
@@ -138,7 +138,7 @@ impl HarnessBus {
                 runtime_control,
                 guard,
                 policy_reloader,
-            ),
+            )),
             audit_trail: Arc::new(Mutex::new(HarnessAuditTrail::default())),
             feedback_collector,
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
@@ -176,9 +176,26 @@ impl HarnessBus {
     }
 
     /// Pre-route evaluation — primary entry point called by CapabilityBus.
+    ///
+    /// The actual PolicyEvaluator::evaluate() call (which acquires up to 7 locks
+    /// sequentially) is moved to spawn_blocking to avoid blocking the tokio
+    /// runtime thread — BLUE69 principle #23.
     pub async fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
         let start = Instant::now();
-        let verdict = self.evaluator.evaluate(ctx);
+        let evaluator = self.evaluator.clone();
+        let ctx_for_blocking = ctx.clone();
+        let verdict = tokio::task::spawn_blocking(move || evaluator.evaluate(&ctx_for_blocking))
+            .await
+            .unwrap_or_else(|join_err| {
+                tracing::error!(
+                    error = %join_err,
+                    "PolicyEvaluator::evaluate() panicked in blocking thread"
+                );
+                PolicyVerdict::Deny(PolicyViolation {
+                    kind: "internal_error".to_string(),
+                    detail: "Policy evaluation thread panicked".to_string(),
+                })
+            });
         let elapsed = start.elapsed().as_millis() as u64;
 
         // Profile and runtime-control updates (scope ensures guards are dropped
