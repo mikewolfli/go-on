@@ -27,7 +27,7 @@ const MAX_AUDIT_ENTRIES: usize = 10_000;
 use crate::i18n::{t, tf};
 use anyhow::Result;
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,7 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // ---------------------------------------------------------------------------
 
 /// Severity of a security policy.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum PolicySeverity {
     Low,
     #[default]
@@ -62,7 +62,7 @@ impl std::fmt::Display for PolicySeverity {
 // ---------------------------------------------------------------------------
 
 /// Action to take when a policy's conditions match a request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PolicyAction {
     /// Allow the request unconditionally.
     Allow,
@@ -90,7 +90,7 @@ impl std::fmt::Display for PolicyAction {
 // ---------------------------------------------------------------------------
 
 /// Comparison operator for a policy condition.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConditionOperator {
     Equals,
     NotEquals,
@@ -118,7 +118,7 @@ impl std::fmt::Display for ConditionOperator {
 }
 
 /// A single condition that contributes to a policy match.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PolicyCondition {
     /// The field name to evaluate (e.g. "resource", "actor", "context.method").
     pub field: String,
@@ -179,7 +179,7 @@ fn regex_match(haystack: &str, pattern: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// How multiple conditions are combined.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum PolicyComposition {
     /// All conditions must match.
     #[default]
@@ -193,7 +193,7 @@ pub enum PolicyComposition {
 // ---------------------------------------------------------------------------
 
 /// A security policy definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SecurityPolicy {
     /// Unique policy identifier.
     pub id: String,
@@ -237,7 +237,7 @@ impl SecurityPolicy {
 // ---------------------------------------------------------------------------
 
 /// Result of a policy evaluation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PolicyVerdict {
     /// Whether the request is allowed.
     pub allowed: bool,
@@ -320,7 +320,7 @@ impl PolicyVerdict {
 // ---------------------------------------------------------------------------
 
 /// A recorded audit log entry for security policy evaluation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct AuditEntry {
     /// Unix timestamp (seconds since epoch).
     pub timestamp: i64,
@@ -366,7 +366,7 @@ impl AuditEntry {
 // ---------------------------------------------------------------------------
 
 /// Configuration for the security governor.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SecurityGovernorConfig {
     /// Whether the governor is enabled.
     pub enabled: bool,
@@ -396,7 +396,7 @@ impl Default for SecurityGovernorConfig {
 // ---------------------------------------------------------------------------
 
 /// Runtime metrics snapshot for the [`SecurityGovernor`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GovernorProfile {
     /// Whether the governor is enabled.
     pub enabled: bool,

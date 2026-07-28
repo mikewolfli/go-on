@@ -193,7 +193,12 @@ static RESPONSES_ID_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::
 
 fn next_responses_api_id(prefix: &str) -> String {
     let seq = RESPONSES_ID_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{}_{}_{}", prefix, crate::acp::prelude::now_ts_ms(), seq)
+    format!(
+        "{}_{}_{}",
+        prefix,
+        crate::shared::timestamps::now_ts_ms(),
+        seq
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +404,7 @@ pub(crate) async fn handle_openai_chat_completions(
         .model
         .clone()
         .unwrap_or_else(|| "go-on".to_string());
-    let request_id = format!("chatcmpl-{}", crate::acp::prelude::now_ts_ms());
+    let request_id = format!("chatcmpl-{}", crate::shared::timestamps::now_ts_ms());
     let mut params = openai_to_chat_params(&openai_req);
 
     if !openai_req.stream {
@@ -709,7 +714,7 @@ fn build_responses_api_response(
     model: &str,
     response_text: &str,
 ) -> serde_json::Value {
-    let msg_id = format!("msg_{}", crate::acp::prelude::now_ts_ms());
+    let msg_id = format!("msg_{}", crate::shared::timestamps::now_ts_ms());
     serde_json::json!({
         "id": request_id,
         "object": "response",
@@ -905,7 +910,7 @@ fn merge_responses_status_history(
     if last_status != Some(next_status) {
         history.push(serde_json::json!({
             "status": next_status,
-            "at": crate::acp::prelude::now_ts_ms(),
+            "at": crate::shared::timestamps::now_ts_ms(),
         }));
     }
 

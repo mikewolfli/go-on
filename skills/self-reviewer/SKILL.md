@@ -91,3 +91,11 @@ Returns a structured review report containing:
 - `/self-review` — Run self-review on pending changes
 - `/self-review code` — Review only code changes
 - `/self-review docs` — Review only documentation
+
+## Input
+
+When invoked, the user's request is available as:
+
+```
+{{input}}
+```

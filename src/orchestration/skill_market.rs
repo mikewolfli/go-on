@@ -385,7 +385,7 @@ impl SkillMarketRegistry {
             version: item.version.clone(),
             source: item.source.clone(),
             installed_path: install_dir,
-            installed_at_ms: crate::acp::prelude::now_ts_ms() as u64,
+            installed_at_ms: crate::shared::timestamps::now_ts_ms() as u64,
             enabled: true,
         };
 

@@ -620,7 +620,8 @@ pub(crate) async fn execute_mcp_tool_call(
                         tracing::warn!("lock poisoned, recovering");
                         poisoned.into_inner()
                     });
-                let scored = discovery.discover(query, top_k, &registry);
+                // No ThresholdLearner available here — use default 0.40 threshold.
+                let scored = discovery.discover(query, top_k, &registry, None);
                 drop(registry);
                 scored
                     .into_iter()

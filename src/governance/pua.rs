@@ -48,14 +48,14 @@ pub struct PuaExecutionReport {
     pub missing_checks: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PuaViolationKind {
     RedLine,
     StageFail,
     MissingEvidence,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PuaViolation {
     pub kind: PuaViolationKind,
     pub detail: String,

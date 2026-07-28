@@ -24,8 +24,8 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, warn};
 
 use crate::agents::{
-    AnthropicAgent, CohereAgent, CopilotAgent, DeepSeekAgent, GeminiAgent, OpenAiAgent,
-    OpenAiCompatibleAgent, QianfanAgent, WenxinAgent,
+    AnthropicAgent, CohereAgent, CopilotAgent, DeepSeekAgent, GeminiAgent, OpenAiCompatibleAgent,
+    QianfanAgent, WenxinAgent,
 };
 use crate::core::error::Result as AppResult;
 
@@ -523,14 +523,43 @@ impl From<mpsc::UnboundedSender<String>> for StreamingSender {
 /// and AgentTaskResult as output, and produce AgentAuditLog at decision points.
 #[async_trait]
 pub trait Agent: Send + Sync {
-    /// Send chat messages to the agent and receive streaming responses
+    /// Send chat messages to the agent and receive streaming responses.
+    ///
+    /// Default implementation wraps `chat_once` with retry logic via
+    /// `retry_chat_once`.  Agents that need custom retry or model-selection
+    /// behaviour (e.g. Copilot, OpenAI with SSE compression) override this.
     async fn chat(
         &self,
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
         sender: StreamingSender,
-    ) -> AppResult<()>;
+    ) -> AppResult<()> {
+        retry_chat_once(
+            || async {
+                self.chat_once(&messages, &principles, &options, sender.clone())
+                    .await
+                    .map_err(Into::into)
+            },
+            3,
+        )
+        .await
+    }
+
+    /// Perform a single chat attempt without retry logic.
+    ///
+    /// Implementations should make one API call and return the result.
+    /// The default returns an error; agents that override `chat` directly
+    /// (e.g. local test agents) do not need to implement this.
+    async fn chat_once(
+        &self,
+        _messages: &[Message],
+        _principles: &Option<Vec<String>>,
+        _options: &Option<HashMap<String, Value>>,
+        _sender: StreamingSender,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("chat_once not implemented"))
+    }
 
     /// Get available models for this provider
     ///
@@ -1011,7 +1040,19 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let api_key_env = required_field("openai", &config.api_key_env, "api_key_env")?;
             let url = required_field("openai", &config.url, "url")?;
             let model = required_field("openai", &config.model, "model")?;
-            Ok(Arc::new(OpenAiAgent::new(api_key_env, url, model, client)))
+            let chat_path = config
+                .chat_path
+                .clone()
+                .unwrap_or_else(|| "/v1/chat/completions".to_string());
+            let supports_system = config.supports_system.unwrap_or(true);
+            Ok(Arc::new(OpenAiCompatibleAgent::new_with_compression(
+                url,
+                chat_path,
+                api_key_env,
+                model,
+                supports_system,
+                client,
+            )))
         }
         agent_type @ ("fireworks" | "ai21" | "aleph" | "deepquest" | "facewall" | "glm"
         | "groq" | "hunyuan" | "kimi" | "langboat" | "llama" | "loopai"

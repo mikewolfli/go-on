@@ -97,7 +97,6 @@ pub(crate) async fn execute_tools_concurrent(
     let circuit_breaker_limit = config.circuit_breaker_limit;
     let mut circuit_breaker_triggered = false;
     let mut failure_count: usize = 0;
-    let mut total_success: usize = 0;
     let mut tool_results: Vec<ToolExecItem> = Vec::with_capacity(tool_calls.len());
 
     // Build concurrent futures for all tool calls.
@@ -128,19 +127,18 @@ pub(crate) async fn execute_tools_concurrent(
 
     // Collect results as they complete.
     while let Some(result) = futures.next().await {
-        let success = result.success;
-
-        if success {
-            total_success += 1;
-        } else {
+        if !result.success {
             failure_count += 1;
         }
 
         tool_results.push(result);
 
         // Check circuit breaker.
-        if circuit_breaker_limit > 0 && failure_count >= circuit_breaker_limit && total_success == 0
-        {
+        // Triggered when failure_count reaches the limit, regardless of
+        // whether any success occurred. The previous `&& total_success == 0`
+        // condition was too aggressive — it would trip on the very first
+        // failure even in normal operation, causing premature cancellation.
+        if circuit_breaker_limit > 0 && failure_count >= circuit_breaker_limit {
             circuit_breaker_triggered = true;
             // Cancel remaining futures by dropping the stream.
             break;
@@ -393,7 +391,9 @@ async fn execute_single_tool(
         let duration_ms = start.elapsed().as_millis() as u64;
 
         // ── Post-execute hooks ────────────────────────────────────────
-        tool_registry.hooks.run_post(&tool_name, &input, &output, duration_ms);
+        tool_registry
+            .hooks
+            .run_post(&tool_name, &input, &output, duration_ms);
 
         ToolExecItem {
             tool_name,

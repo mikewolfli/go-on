@@ -55,7 +55,7 @@ impl MetacognitivePersistence {
             actions,
             reports,
             config,
-            saved_at_ms: crate::intelligence::now_ms(),
+            saved_at_ms: crate::shared::timestamps::now_ts_ms() as u64,
         };
 
         let json = serde_json::to_string_pretty(&snapshot).map_err(std::io::Error::other)?;

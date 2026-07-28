@@ -18,10 +18,6 @@ pub struct TokenBucket {
     pub refill_rate: f64,
     /// Last Instant-based refill timestamp.
     last_refill: Instant,
-    /// Last ms-epoch-based refill timestamp.
-    /// Kept for API compatibility; unused internally after BucketMap migration.
-    #[allow(dead_code)]
-    last_refill_ms: i64,
     /// Last time a token was consumed (used for idle detection).
     last_access: Instant,
 }
@@ -38,25 +34,6 @@ impl TokenBucket {
             capacity,
             refill_rate,
             last_refill: now,
-            last_refill_ms: 0,
-            last_access: now,
-        }
-    }
-
-    /// Create a new bucket using ms-epoch-based timing.
-    ///
-    /// * `capacity`       – maximum tokens (burst).
-    /// * `refill_rate`    – tokens per second.
-    /// * `now_ms`         – current time in milliseconds (epoch).
-    #[allow(dead_code)]
-    pub fn new_ms(capacity: f64, refill_rate: f64, now_ms: i64) -> Self {
-        let now = Instant::now();
-        Self {
-            tokens: capacity,
-            capacity,
-            refill_rate,
-            last_refill: now,
-            last_refill_ms: now_ms,
             last_access: now,
         }
     }
@@ -67,17 +44,6 @@ impl TokenBucket {
         if elapsed > 0.0 {
             self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
             self.last_refill = Instant::now();
-        }
-    }
-
-    /// Refill tokens based on a ms-epoch timestamp.
-    #[allow(dead_code)]
-    pub fn refill_ms(&mut self, now_ms: i64) {
-        let elapsed_ms = (now_ms - self.last_refill_ms).max(0) as f64;
-        if elapsed_ms > 0.0 {
-            let refill = elapsed_ms / 1000.0 * self.refill_rate;
-            self.tokens = (self.tokens + refill).min(self.capacity);
-            self.last_refill_ms = now_ms;
         }
     }
 
@@ -117,6 +83,7 @@ impl TokenBucket {
 /// Internally uses `std::sync::Mutex` because all operations are short synchronous
 /// critical sections that never hold the lock across `.await` points.
 #[derive(Debug, Default)]
+#[allow(clippy::len_without_is_empty)]
 pub struct BucketMap {
     inner: Mutex<HashMap<String, TokenBucket>>,
 }
@@ -155,12 +122,6 @@ impl BucketMap {
     /// Number of tracked buckets.
     pub fn len(&self) -> usize {
         self.inner.lock().map(|g| g.len()).unwrap_or(0)
-    }
-
-    /// Returns `true` if the map contains no buckets.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// Snapshot of current tokens and capacity per key.

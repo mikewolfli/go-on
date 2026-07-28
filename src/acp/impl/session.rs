@@ -3,7 +3,7 @@
 //! Provides token-based authentication, session lifecycle management,
 //! and automatic cleanup of expired sessions.
 
-use crate::acp::prelude::now_ts_ms as now_ms;
+use crate::shared::timestamps::now_ts_ms as now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;

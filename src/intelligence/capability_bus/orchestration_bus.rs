@@ -14,7 +14,6 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::intelligence::{lock_guard, read_guard, write_guard};
 use crate::orchestration::core_dag::{ExCondition, ExNode, ExNodeKind, ExecutionGraph};
 use crate::orchestration::flow::FlowManager;
 
@@ -174,13 +173,13 @@ impl OrchestrationBus {
     pub fn register_mode(&self, mode: &str) {
         // Parse known standard modes to keep enum conversion path active.
         let _ = OrchestrationMode::from_str(mode);
-        let mut modes = write_guard(self.available_modes.as_ref());
+        let mut modes = crate::write_or_recover!(self.available_modes.as_ref(), "intelligence");
         let mode_str = mode.to_string();
         if !modes.contains(&mode_str) {
             modes.push(mode_str);
         }
         // Update profile
-        let mut prof = lock_guard(self.profile.as_ref());
+        let mut prof = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         prof.available_modes = modes.len() as u32;
     }
 
@@ -189,7 +188,7 @@ impl OrchestrationBus {
     /// # Returns
     /// * `Vec<String>` - A sorted copy of registered mode names
     pub fn available_modes(&self) -> Vec<String> {
-        let modes = read_guard(self.available_modes.as_ref());
+        let modes = crate::read_or_recover!(self.available_modes.as_ref(), "intelligence");
         let mut result = modes.clone();
         result.sort();
         result
@@ -270,7 +269,7 @@ impl OrchestrationBus {
     /// # Returns
     /// * `Result<()>` - Ok if the flow was started, Err if it is already active
     pub fn start_flow(&self, flow_name: &str, task_id: &str) -> Result<()> {
-        let mut flow_map = lock_guard(self.active_flow_map.as_ref());
+        let mut flow_map = crate::lock_or_recover!(self.active_flow_map.as_ref(), "intelligence");
 
         if flow_map.contains_key(flow_name) {
             return Err(anyhow!(
@@ -312,7 +311,7 @@ impl OrchestrationBus {
         flow_map.insert(flow_name.to_string(), entry);
 
         // Update profile
-        let mut prof = lock_guard(self.profile.as_ref());
+        let mut prof = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         prof.active_flows = flow_map.len() as u32;
 
         Ok(())
@@ -324,7 +323,7 @@ impl OrchestrationBus {
     /// * `flow_name` - The name of the flow to complete
     /// * `task_id` - The task identifier to verify against
     pub fn complete_flow(&self, flow_name: &str, task_id: &str) {
-        let mut flow_map = lock_guard(self.active_flow_map.as_ref());
+        let mut flow_map = crate::lock_or_recover!(self.active_flow_map.as_ref(), "intelligence");
 
         if let Some(entry) = flow_map.get(flow_name) {
             if entry.task_id == task_id {
@@ -333,7 +332,7 @@ impl OrchestrationBus {
         }
 
         // Update profile
-        let mut prof = lock_guard(self.profile.as_ref());
+        let mut prof = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         prof.active_flows = flow_map.len() as u32;
 
         // Increment total routes (lock-free atomic counter)
@@ -345,7 +344,7 @@ impl OrchestrationBus {
     /// # Returns
     /// * `Vec<FlowStatus>` - Status information for each active flow
     pub fn active_flows(&self) -> Vec<FlowStatus> {
-        let flow_map = lock_guard(self.active_flow_map.as_ref());
+        let flow_map = crate::lock_or_recover!(self.active_flow_map.as_ref(), "intelligence");
 
         flow_map
             .values()
@@ -364,7 +363,7 @@ impl OrchestrationBus {
     /// # Returns
     /// * `OrchestrationBusProfile` - A copy of the current profile metrics
     pub fn profile(&self) -> OrchestrationBusProfile {
-        let mut prof = lock_guard(self.profile.as_ref());
+        let mut prof = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         prof.total_routes = self.total_routes.load(Ordering::Relaxed);
         prof.clone()
     }
@@ -378,7 +377,7 @@ impl OrchestrationBus {
         task_name: &str,
         predecessor: &str,
     ) -> Vec<String> {
-        let mut graph = lock_guard(self.execution_graph.as_ref());
+        let mut graph = crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence");
         let node = ExNode::new(task_id, ExNodeKind::Task, task_name);
         graph.add_node(node);
         graph.add_edge(predecessor, task_id, None);
@@ -395,7 +394,7 @@ impl OrchestrationBus {
         true_target: &str,
         false_target: &str,
     ) {
-        let mut graph = lock_guard(self.execution_graph.as_ref());
+        let mut graph = crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence");
         graph.add_condition(
             cond_id,
             cond_id,
@@ -415,7 +414,7 @@ impl OrchestrationBus {
 
     /// Mark a task node as complete and record its output.
     pub fn complete_graph_task(&self, task_id: &str, output: serde_json::Value) -> Result<bool> {
-        let mut graph = lock_guard(self.execution_graph.as_ref());
+        let mut graph = crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence");
         graph.complete_task(task_id, output)?;
         Ok(graph.is_complete())
     }
@@ -428,7 +427,7 @@ impl OrchestrationBus {
         parallel_tasks: Vec<(String, String)>,
         predecessor: &str,
     ) -> Result<(String, String)> {
-        let mut graph = lock_guard(self.execution_graph.as_ref());
+        let mut graph = crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence");
         graph.add_fan_out(branch_name, join_name, parallel_tasks, predecessor)
     }
 
@@ -438,12 +437,12 @@ impl OrchestrationBus {
         id: &str,
         state: crate::orchestration::core_dag::ExNodeState,
     ) -> Result<()> {
-        lock_guard(self.execution_graph.as_ref()).set_node_state(id, state)
+        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence").set_node_state(id, state)
     }
 
     /// Check if a fan-out group is complete.
     pub fn is_fan_out_complete(&self, group_id: &str) -> bool {
-        lock_guard(self.execution_graph.as_ref()).is_fan_out_complete(group_id)
+        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence").is_fan_out_complete(group_id)
     }
 
     /// Count graph nodes in a given state.
@@ -451,17 +450,17 @@ impl OrchestrationBus {
         &self,
         state: &crate::orchestration::core_dag::ExNodeState,
     ) -> usize {
-        lock_guard(self.execution_graph.as_ref()).count_by_state(state)
+        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence").count_by_state(state)
     }
 
     /// Summary of fan-out groups: (group_id, completed_count, total_count).
     pub fn graph_fan_out_summary(&self) -> Vec<(String, usize, usize)> {
-        lock_guard(self.execution_graph.as_ref()).fan_out_summary()
+        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence").fan_out_summary()
     }
 
     /// Reset the execution graph for reuse.
     pub fn reset_graph(&self) {
-        lock_guard(self.execution_graph.as_ref()).reset();
+        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence").reset();
     }
 }
 

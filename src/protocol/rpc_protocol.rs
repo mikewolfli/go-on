@@ -40,7 +40,7 @@ pub fn chat_trace_context(id: &Option<Value>, method: &str) -> RequestTraceConte
     let request_id = id
         .as_ref()
         .map(value_to_id)
-        .unwrap_or_else(|| format!("ts-{}", crate::acp::prelude::now_ts_ms()));
+        .unwrap_or_else(|| format!("ts-{}", crate::shared::timestamps::now_ts_ms()));
     RequestTraceContext {
         trace_id: format!("{:08x}", fastrand::u32(..)),
         span_id: format!("root-{method}"),

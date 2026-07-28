@@ -2,6 +2,8 @@
 name: review-pr
 description: Review a pull request diff and provide comprehensive feedback
 version: 1.0.0
+author: go-on-team
+min_go_on_version: 1.0.0
 ---
 
 # Pull Request Review Skill

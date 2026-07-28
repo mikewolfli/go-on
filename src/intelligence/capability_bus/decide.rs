@@ -13,7 +13,7 @@ use crate::governance::harness_bus::{AgentExecutionPolicy, PolicyVerdict};
 use crate::governance::pua::TaskContext;
 use crate::intelligence::adaptive_selector::ContextFeatures;
 use crate::intelligence::token_cache::{estimate_token_count, ContextLengthClass};
-use crate::intelligence::{lock_guard, read_guard, write_guard};
+
 use serde::Serialize;
 use std::env;
 use std::time::Instant;
@@ -216,7 +216,7 @@ fn query_capabilities_semantic(
     bus: &CapabilityBus,
     task_description: &str,
 ) -> Vec<crate::intelligence::semantic_matcher::ScoredModel> {
-    let graph = lock_guard(&bus.capability_graph);
+    let graph = crate::lock_or_recover!(&bus.capability_graph, "intelligence");
     let capabilities: Vec<crate::intelligence::semantic_matcher::ModelCapability> = graph
         .all_capability_names()
         .into_iter()
@@ -489,7 +489,7 @@ impl CapabilityBus {
 
         // Step C2: BLUE70: Query ReinforcementBus for learned routing preferences.
         let q_preferred_action = {
-            let rb = read_guard(&self.reinforcement_bus);
+            let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
             rb.select_action(&task_type_str, &candidate_agents)
         };
         if let Some(ref preferred) = q_preferred_action {
@@ -763,14 +763,14 @@ impl CapabilityBus {
         let _healthy_agents_count = sensing.healthy_agents.len();
 
         {
-            let mut p = write_guard(&self.profile);
+            let mut p = crate::write_or_recover!(&self.profile, "intelligence");
             p.routing_count = p.routing_count.saturating_add(1);
             p.last_route_duration_ms = start.elapsed().as_millis() as u64;
         }
 
         // Send a control message through the transport layer if an agent was selected
         if let Some(agent) = &selected_agent {
-            let transport = lock_guard(&self.transport);
+            let transport = crate::lock_or_recover!(&self.transport, "intelligence");
             let msg = serde_json::json!({ "selected_tool": agent, "agent": agent });
             let _ = transport.send_control("capability-bus", "tool-bus", &msg.to_string());
         }

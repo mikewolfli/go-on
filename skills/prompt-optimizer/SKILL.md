@@ -108,3 +108,11 @@ explanations outside the code block.
 4. **Output constraint** — Prevents extraneous explanations
 5. **Test requirement** — Ensures correctness is verifiable
 ```
+
+## Input
+
+When invoked, the user's request is available as:
+
+```
+{{input}}
+```

@@ -50,3 +50,11 @@ Track task progress across agent invocations.
 - `/progress mark <step_id> done` — Mark step as completed
 - `/progress mark <step_id> blocked` — Mark step as blocked
 - `/progress reset` — Reset progress for the current task
+
+## Input
+
+When invoked, the user's request is available as:
+
+```
+{{input}}
+```

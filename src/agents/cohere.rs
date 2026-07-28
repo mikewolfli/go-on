@@ -12,9 +12,9 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
 use crate::agents::{
-    apply_openai_common_options, principles_to_text, stream_sse_events, SseEventAction,
+    apply_openai_common_options, check_api_response, principles_to_text, stream_sse_events,
+    SseEventAction,
 };
 use tracing::warn;
 
@@ -166,7 +166,10 @@ impl CohereAgent {
         })
         .await
     }
+}
 
+#[async_trait]
+impl Agent for CohereAgent {
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -187,47 +190,9 @@ impl CohereAgent {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("cohere", &status.to_string(), &body)
-            );
-        }
-
-        let ct = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
-            tracing::warn!("cohere: unexpected content-type: {ct}");
-            anyhow::bail!("unexpected content-type: {ct}");
-        }
+        let response = check_api_response(response, "cohere").await?;
 
         self.stream_cohere(response, sender).await
-    }
-}
-
-#[async_trait]
-impl Agent for CohereAgent {
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> crate::core::error::Result<()> {
-        retry_chat_once(
-            || async {
-                self.chat_once(&messages, &principles, &options, sender.clone())
-                    .await
-                    .map_err(Into::into)
-            },
-            3,
-        )
-        .await
     }
 
     fn available_models(&self) -> Vec<ModelInfo> {

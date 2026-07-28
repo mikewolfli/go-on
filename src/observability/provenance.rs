@@ -172,7 +172,7 @@ impl ProvenanceLedger {
         success: bool,
         duration_ms: u64,
     ) -> Result<(), anyhow::Error> {
-        let now_ms = now_ms();
+        let now_ms = crate::shared::timestamps::now_ts_ms() as u64;
 
         let entry = ProvenanceEntry {
             id: format!("prov-{}-{}", task_id, now_ms),
@@ -213,10 +213,6 @@ impl ProvenanceLedger {
         });
         inner.entries.clear();
     }
-}
-
-fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 #[cfg(test)]

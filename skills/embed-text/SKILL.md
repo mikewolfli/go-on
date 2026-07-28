@@ -2,6 +2,8 @@
 name: embed-text
 description: Generate a semantic embedding/vector representation of text for similarity search
 version: 1.0.0
+author: go-on-team
+min_go_on_version: 1.0.0
 ---
 
 # Embed Text Skill

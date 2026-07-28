@@ -3,7 +3,7 @@
 //! Matches incoming tasks against known scenarios to provide pre-configured
 //! routing decisions, tool selections, and execution strategies.
 
-use crate::intelligence::{lock_guard, now_ms, read_guard, write_guard};
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -129,7 +129,7 @@ impl ScenarioMatcher {
     /// Register a scenario. If a scenario with the same `id` already exists,
     /// it is replaced (including statistics reset for that id).
     pub fn register_scenario(&self, scenario: Scenario) {
-        let mut scenarios = write_guard(self.scenarios.as_ref());
+        let mut scenarios = crate::write_or_recover!(self.scenarios.as_ref(), "intelligence");
 
         // Replace existing scenario with the same id, or push new.
         if let Some(pos) = scenarios.iter().position(|s| s.id == scenario.id) {
@@ -149,7 +149,7 @@ impl ScenarioMatcher {
         }
 
         // Update profile counters.
-        let mut profile = lock_guard(self.profile.as_ref());
+        let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         let total = scenarios.len() as u32;
         let active = scenarios.iter().filter(|s| s.is_active).count() as u32;
         profile.total_scenarios = total;
@@ -159,14 +159,14 @@ impl ScenarioMatcher {
     /// Deactivate a scenario by its `id`. This is a no-op if the id does not
     /// exist.
     pub fn deactivate_scenario(&self, scenario_id: &str) {
-        let mut scenarios = write_guard(self.scenarios.as_ref());
+        let mut scenarios = crate::write_or_recover!(self.scenarios.as_ref(), "intelligence");
         if let Some(scenario) = scenarios.iter_mut().find(|s| s.id == scenario_id) {
             scenario.is_active = false;
         }
 
         // Update active count in profile.
         let active = scenarios.iter().filter(|s| s.is_active).count() as u32;
-        let mut profile = lock_guard(self.profile.as_ref());
+        let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         profile.active_scenarios = active;
     }
 
@@ -190,7 +190,7 @@ impl ScenarioMatcher {
     ) -> MatchResult {
         let start = Instant::now();
 
-        let scenarios = read_guard(self.scenarios.as_ref());
+        let scenarios = crate::read_or_recover!(self.scenarios.as_ref(), "intelligence");
 
         // Score each active scenario.
         struct Scored {
@@ -311,8 +311,8 @@ impl ScenarioMatcher {
 
         // Update match statistics.
         {
-            let mut stats_map = lock_guard(self.match_stats.as_ref());
-            let now = now_ms();
+            let mut stats_map = crate::lock_or_recover!(self.match_stats.as_ref(), "intelligence");
+            let now = crate::shared::timestamps::now_ts_ms() as u64;
             if let Some(ref top) = top {
                 let entry =
                     stats_map
@@ -331,7 +331,7 @@ impl ScenarioMatcher {
 
         // Update profile.
         {
-            let mut profile = lock_guard(self.profile.as_ref());
+            let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
             profile.total_matches += 1;
             profile.last_match_duration_ms = duration_ms;
             let total = profile.total_matches;
@@ -368,7 +368,7 @@ impl ScenarioMatcher {
     /// Record an outcome for the scenario identified by `scenario_id`.
     /// Updates the running average duration and success/failure counts.
     pub fn record_outcome(&self, scenario_id: &str, success: bool, duration_ms: u64) {
-        let mut stats_map = lock_guard(self.match_stats.as_ref());
+        let mut stats_map = crate::lock_or_recover!(self.match_stats.as_ref(), "intelligence");
         let entry = stats_map
             .entry(scenario_id.to_string())
             .or_insert_with(|| ScenarioStats {
@@ -398,7 +398,7 @@ impl ScenarioMatcher {
 
     /// Return a snapshot of the current matcher profile.
     pub fn profile(&self) -> MatcherProfile {
-        let profile = lock_guard(self.profile.as_ref());
+        let profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         profile.clone()
     }
 }
@@ -459,7 +459,7 @@ mod tests {
                 enabled_tools: vec![],
                 add_tags: vec![],
             },
-            created_ms: now_ms(),
+            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
             is_active: true,
         }
     }

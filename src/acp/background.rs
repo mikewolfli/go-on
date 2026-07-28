@@ -413,7 +413,7 @@ pub async fn start_background_tasks(
                             issues: Vec::new(),
                             health_score: 1.0,
                             modules_scanned: 0,
-                            scanned_at_ms: crate::intelligence::now_ms(),
+                            scanned_at_ms: crate::shared::timestamps::now_ts_ms() as u64,
                         }
                     });
                     tracing::info!(

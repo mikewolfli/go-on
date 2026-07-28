@@ -2,6 +2,8 @@
 name: note-taking
 description: Maintain structured working notes across sessions for project context and decisions
 version: 1.0.0
+author: go-on-team
+min_go_on_version: 1.0.0
 ---
 
 # Note-Taking Skill

@@ -35,7 +35,6 @@ pub use prelude::{
     // re-exported for ACP consumer public API surface
     enforce_checkpoint_capacity,
     now_ts,
-    now_ts_ms,
     with_acp_lock,
     with_acp_lock_async,
     CircuitBreakerRegistry,

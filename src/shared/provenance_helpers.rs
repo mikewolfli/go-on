@@ -33,10 +33,6 @@ fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
 /// Helper to create a provenance entry.
 pub fn make_entry(
     task_id: &str,
@@ -56,7 +52,7 @@ pub fn make_entry(
         input_digest: digest(input),
         output_digest: digest(output),
         upstream_ids,
-        timestamp_ms: now_ms(),
+        timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
         rationale: None,
         metadata: serde_json::Value::Object(Default::default()),
     }

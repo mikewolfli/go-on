@@ -9,9 +9,18 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::debug;
+
+use crate::intelligence::model_selector::{
+    ModelCharacteristics, ModelSelectionStrategy, ModelSelector, SelectionCriteria,
+};
 
 const DEFAULT_EXPLORATION_BIAS: f32 = 0.8;
 const DEFAULT_MAX_MODELS: usize = 1000;
+
+/// Minimum total observations before UCB selection is considered reliable.
+/// Below this threshold, the static fallback strategy is used.
+const COLD_START_OBSERVATION_THRESHOLD: u64 = 10;
 
 // ---------------------------------------------------------------------------
 // Context Features
@@ -116,11 +125,17 @@ pub struct AdaptiveSelectorSnapshot {
 // ---------------------------------------------------------------------------
 
 /// Adaptive model selector with context-aware UCB bandit learning.
+///
+/// When UCB exploration data is insufficient (cold start), falls back to a
+/// static [`ModelSelectionStrategy`] provided at construction time.
+#[derive(Debug)]
 pub struct AdaptiveModelSelector {
     /// Metrics keyed by `"<model_id>::<context_key>"` for context-dependent stats.
     metrics: HashMap<String, ModelMetrics>,
     exploration_bias: f32,
     max_models: usize,
+    /// Optional static strategy for fallback during cold start.
+    static_strategy: Option<ModelSelectionStrategy>,
 }
 
 impl AdaptiveModelSelector {
@@ -129,7 +144,29 @@ impl AdaptiveModelSelector {
             metrics: HashMap::new(),
             exploration_bias: DEFAULT_EXPLORATION_BIAS,
             max_models: DEFAULT_MAX_MODELS,
+            static_strategy: None,
         }
+    }
+
+    /// Create a new selector with a static fallback strategy for cold starts.
+    ///
+    /// When UCB data is insufficient, [`select_with_static_fallback`] will
+    /// delegate to [`ModelSelector::select_model`] using the given strategy.
+    pub fn with_static_strategy(strategy: ModelSelectionStrategy) -> Self {
+        Self {
+            static_strategy: Some(strategy),
+            ..Self::new()
+        }
+    }
+
+    /// Returns `true` when total observations are below the cold-start threshold.
+    pub fn is_cold_start(&self) -> bool {
+        self.total_observations() < COLD_START_OBSERVATION_THRESHOLD
+    }
+
+    /// Returns the static fallback strategy, if configured.
+    pub fn static_strategy(&self) -> Option<ModelSelectionStrategy> {
+        self.static_strategy.clone()
     }
 
     pub fn exploration_bias(&self) -> f32 {
@@ -189,9 +226,9 @@ impl AdaptiveModelSelector {
             }
         }
 
-        let now = crate::intelligence::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let entry = self.metrics.entry(key.to_string()).or_insert_with(|| {
-            let now = crate::intelligence::now_ms();
+            let now = crate::shared::timestamps::now_ts_ms() as u64;
             ModelMetrics {
                 model_id: model_id.to_string(),
                 context_key: context_key.to_string(),
@@ -272,6 +309,46 @@ impl AdaptiveModelSelector {
     /// Legacy: rank candidates (global-only).
     pub fn rank_candidates(&self, candidates: &[(String, Option<String>)]) -> Vec<String> {
         self.rank_candidates_with_context(candidates, &ContextFeatures::default())
+    }
+
+    // ── Static fallback selection ─────────────────────────────────────────
+
+    /// Select the best model using UCB when data is sufficient, falling back
+    /// to static [`ModelSelector::select_model`] during cold start.
+    ///
+    /// # Arguments
+    /// * `criteria` - Selection criteria (used by static fallback).
+    /// * `available_models` - All available model characteristics (used by
+    ///   static fallback and as UCB candidate pool).
+    /// * `context` - Optional context for context-aware UCB selection.
+    ///
+    /// # Returns
+    /// * `Option<String>` - Selected model ID, or `None` if no suitable model.
+    pub fn select_with_static_fallback(
+        &self,
+        criteria: &SelectionCriteria,
+        available_models: &[ModelCharacteristics],
+        context: Option<&ContextFeatures>,
+    ) -> Option<String> {
+        // Cold start: use static fallback strategy when insufficient UCB data
+        if self.is_cold_start() {
+            if let Some(ref strategy) = self.static_strategy {
+                debug!(
+                    total_observations = self.total_observations(),
+                    threshold = COLD_START_OBSERVATION_THRESHOLD,
+                    strategy = ?strategy,
+                    "cold start: static model selection fallback"
+                );
+                return ModelSelector::select_model(criteria, available_models, strategy.clone());
+            }
+        }
+
+        // Warm: use UCB on available model IDs as candidates
+        let candidates: Vec<String> = available_models.iter().map(|m| m.id.clone()).collect();
+        match context {
+            Some(ctx) => self.get_best_model_with_context(&candidates, ctx),
+            None => self.get_best_model(&candidates),
+        }
     }
 
     pub fn snapshot(&self) -> AdaptiveSelectorSnapshot {

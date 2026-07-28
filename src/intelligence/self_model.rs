@@ -5,8 +5,7 @@
 //! `Arc<Mutex<>>` for thread-safe access.
 
 use crate::i18n::runtime::tf;
-use crate::intelligence::lock_guard;
-use crate::intelligence::now_ms;
+
 use crate::shared::execution_recorder::ExecutionRecorder;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -184,7 +183,7 @@ impl SelfModelCore {
                 limitations: Vec::new(),
                 snapshots: Vec::new(),
                 capability_stats: HashMap::new(),
-                last_update_ms: now_ms(),
+                last_update_ms: crate::shared::timestamps::now_ts_ms() as u64,
                 persistence_path: None,
             })),
         }
@@ -195,7 +194,7 @@ impl SelfModelCore {
     /// as pretty-printed JSON.
     pub fn with_persistence_path(self, path: PathBuf) -> Self {
         {
-            let mut inner = lock_guard(&self.inner);
+            let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
             inner.persistence_path = Some(path);
         }
         self
@@ -226,7 +225,7 @@ impl SelfModelCore {
         let data = fs::read_to_string(&path)?;
         let mut inner: Inner = serde_json::from_str(&data)?;
         inner.persistence_path = Some(path);
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Ok(Self {
             inner: Arc::new(Mutex::new(inner)),
         })
@@ -236,16 +235,16 @@ impl SelfModelCore {
 
     /// Set (or overwrite) the system identity.
     pub fn set_identity(&self, identity: SelfIdentity) {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.identity = Some(identity);
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
         // Use persist_inner to avoid re-entrant lock deadlock
         Self::persist_inner(&inner);
     }
 
     /// Get the system identity, if one has been set.
     pub fn get_identity(&self) -> Option<SelfIdentity> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.identity.clone()
     }
 
@@ -255,7 +254,7 @@ impl SelfModelCore {
     ///
     /// Returns an error if a capability with the same name already exists.
     pub fn register_capability(&self, capability: SelfCapability) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         if inner.capabilities.iter().any(|c| c.name == capability.name) {
             bail!(
                 "{}",
@@ -274,7 +273,7 @@ impl SelfModelCore {
         }
 
         inner.capabilities.push(capability);
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Self::persist_inner(&inner);
         Ok(())
     }
@@ -283,7 +282,7 @@ impl SelfModelCore {
     ///
     /// Returns an error if no capability with the given `name` exists.
     pub fn update_capability(&self, name: &str, effectiveness: f64, confidence: f64) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let cap = inner
             .capabilities
             .iter_mut()
@@ -295,16 +294,16 @@ impl SelfModelCore {
         cap.effectiveness = effectiveness.clamp(0.0, 1.0);
         cap.confidence = confidence.clamp(0.0, 1.0);
         cap.usage_count = cap.usage_count.saturating_add(1);
-        cap.last_verified_ms = now_ms();
+        cap.last_verified_ms = crate::shared::timestamps::now_ts_ms() as u64;
 
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Self::persist_inner(&inner);
         Ok(())
     }
 
     /// Retrieve a capability by name.
     pub fn get_capability(&self, name: &str) -> Option<SelfCapability> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.capabilities.iter().find(|c| c.name == name).cloned()
     }
 
@@ -313,7 +312,7 @@ impl SelfModelCore {
     /// When `category_filter` is `None`, all capabilities are returned.
     /// When `Some(cat)`, only capabilities whose `category` equals the filter are returned.
     pub fn list_capabilities(&self, category_filter: Option<&str>) -> Vec<SelfCapability> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         match category_filter {
             Some(cat) => inner
                 .capabilities
@@ -332,7 +331,7 @@ impl SelfModelCore {
     /// If the number of limitations exceeds max_history, the oldest
     /// limitation (by discovered_ms) is evicted.
     pub fn add_limitation(&self, limitation: SelfLimitation) {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.limitations.push(limitation);
 
         // Evict oldest limitation when max_history is exceeded.
@@ -341,7 +340,7 @@ impl SelfModelCore {
             inner.limitations.remove(0);
         }
 
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Self::persist_inner(&inner);
     }
 
@@ -349,7 +348,7 @@ impl SelfModelCore {
     ///
     /// Returns an error if no limitation with the given `name` exists.
     pub fn acknowledge_limitation(&self, name: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let lim = inner
             .limitations
             .iter_mut()
@@ -361,14 +360,14 @@ impl SelfModelCore {
                 )
             })?;
         lim.is_acknowledged = true;
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Self::persist_inner(&inner);
         Ok(())
     }
 
     /// Retrieve a limitation by name.
     pub fn get_limitation(&self, name: &str) -> Option<SelfLimitation> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.limitations.iter().find(|l| l.name == name).cloned()
     }
 
@@ -377,7 +376,7 @@ impl SelfModelCore {
     /// When `acknowledged_only` is `false`, all limitations are returned.
     /// When `true`, only limitations where `is_acknowledged == true` are returned.
     pub fn list_limitations(&self, acknowledged_only: bool) -> Vec<SelfLimitation> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         if acknowledged_only {
             inner
                 .limitations
@@ -397,7 +396,7 @@ impl SelfModelCore {
     /// If `enable_performance_tracking` is `false` in the config, the snapshot
     /// is silently discarded.
     pub fn record_performance(&self, snapshot: SelfPerformanceSnapshot) {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         if !inner.config.enable_performance_tracking {
             return;
         }
@@ -410,7 +409,7 @@ impl SelfModelCore {
             inner.snapshots.remove(0);
         }
 
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Self::persist_inner(&inner);
     }
 
@@ -418,7 +417,7 @@ impl SelfModelCore {
     ///
     /// If `count` is larger than the number of available snapshots, all are returned.
     pub fn performance_history(&self, count: usize) -> Vec<SelfPerformanceSnapshot> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let len = inner.snapshots.len();
         let start = len.saturating_sub(count);
         inner.snapshots[start..].iter().rev().cloned().collect()
@@ -426,7 +425,7 @@ impl SelfModelCore {
 
     /// Get the latest performance snapshot, if any.
     pub fn latest_performance(&self) -> Option<SelfPerformanceSnapshot> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.snapshots.last().cloned()
     }
 
@@ -444,7 +443,7 @@ impl SelfModelCore {
         tasks: u64,
     ) {
         let snapshot = SelfPerformanceSnapshot {
-            timestamp_ms: now_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
             avg_latency_ms: latency,
             p50_latency_ms: latency,
             p95_latency_ms: latency,
@@ -472,9 +471,9 @@ impl SelfModelCore {
     pub fn record_execution_result(&self, capability_name: &str, success: bool, latency: u64) {
         const EMA_ALPHA: f64 = 0.3;
         let observed_success = if success { 1.0 } else { 0.0 };
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let stats = inner
             .capability_stats
             .entry(capability_name.to_string())
@@ -515,14 +514,14 @@ impl SelfModelCore {
 
     /// Get the dynamic EMA stats for a specific capability, if any.
     pub fn get_capability_stats(&self, name: &str) -> Option<CapabilityStats> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.capability_stats.get(name).cloned()
     }
 
     /// Return the list of capability names whose dynamic effectiveness score
     /// is below 0.5 — these need improvement or replacement.
     pub fn capability_gaps(&self) -> Vec<String> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let mut gaps: Vec<String> = inner
             .capability_stats
             .iter()
@@ -538,7 +537,7 @@ impl SelfModelCore {
     /// Return a summary profile of the self-model's current state, including
     /// live dynamic EMA metrics.
     pub fn profile(&self) -> SelfModelProfile {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         let limitations_count = inner.limitations.len();
         let acknowledged_limitations = inner
@@ -655,7 +654,7 @@ mod tests {
             description: format!("Limitation {}", name),
             severity: severity.to_string(),
             workaround: None,
-            discovered_ms: now_ms(),
+            discovered_ms: crate::shared::timestamps::now_ts_ms() as u64,
             is_acknowledged: false,
         }
     }
@@ -770,7 +769,7 @@ mod tests {
     fn test_record_performance() {
         let core = SelfModelCore::new(test_config());
         let snap = SelfPerformanceSnapshot {
-            timestamp_ms: now_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
             avg_latency_ms: 150.0,
             p50_latency_ms: 120.0,
             p95_latency_ms: 300.0,

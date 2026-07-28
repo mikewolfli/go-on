@@ -84,7 +84,7 @@ pub(crate) async fn persist_chat_knowledge(
         store.store(MemoryEntry {
             id: format!(
                 "knowledge-{}-{}",
-                crate::acp::prelude::now_ts_ms(),
+                crate::shared::timestamps::now_ts_ms(),
                 branch_id
             ),
             class: memory_class,

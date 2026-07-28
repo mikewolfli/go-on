@@ -1,7 +1,26 @@
+//! Quality assessment types, verdicts, signals, and knowledge distillation.
+//!
+//! ## Cross-references
+//!
+//! - [`QualityVerdict`] is the canonical verdict enum. The [`verification`](crate::intelligence::verification)
+//!   module aliases it as `VerificationVerdict` for semantic clarity in the verification pipeline.
+//! - [`QualitySignal`] is similarly aliased as `VerificationSignal` in the verification module.
+//! - The [`evaluation`](crate::intelligence::evaluation) module uses [`EvaluationScore`], a numeric scoring
+//!   struct that is conceptually separate from the categorical `QualityVerdict` enum.
+
 use serde::{Deserialize, Serialize};
 
 use crate::intelligence::reinforcement::{KnowledgeInsightArtifact, WorkflowLearningEvent};
 
+/// Canonical quality verdict enum.
+///
+/// This is the single source of truth for categorical quality verdicts.
+/// The [`verification`](crate::intelligence::verification) module re-exports
+/// this as `VerificationVerdict` via a type alias.
+///
+/// See the [module-level docs](self) for cross-references to related types
+/// in [`verification`](crate::intelligence::verification) and
+/// [`evaluation`](crate::intelligence::evaluation).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum QualityVerdict {
     Approve,

@@ -7,7 +7,7 @@
 //! Q-learning exploration rate and Q-values (F-GAP-51).
 
 use super::core::CapabilityBus;
-use crate::intelligence::write_guard;
+
 use tracing::warn;
 
 impl CapabilityBus {
@@ -39,7 +39,7 @@ impl CapabilityBus {
 
         // Apply suggested exploration rate to ReinforcementBus for future decisions.
         {
-            let mut rb = write_guard(&self.reinforcement_bus);
+            let mut rb = crate::write_or_recover!(&self.reinforcement_bus, "intelligence");
             rb.decay_exploration(1.0); // Reset: apply the rate via decay
         }
         // Note: Q-value scaling is handled internally by ReinforcementBus.record_reward().

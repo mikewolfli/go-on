@@ -9,8 +9,9 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
-use crate::agents::{option_f64, principles_to_text, stream_sse_events, SseEventAction};
+use crate::agents::{
+    check_api_response, option_f64, principles_to_text, stream_sse_events, SseEventAction,
+};
 
 pub struct GeminiAgent {
     api_key_env: String,
@@ -134,7 +135,10 @@ impl GeminiAgent {
 
         payload
     }
+}
 
+#[async_trait]
+impl Agent for GeminiAgent {
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -159,24 +163,7 @@ impl GeminiAgent {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("gemini", &status.to_string(), &body)
-            );
-        }
-
-        let ct = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
-            tracing::warn!("gemini: unexpected content-type: {ct}");
-            anyhow::bail!("unexpected content-type: {ct}");
-        }
+        let response = check_api_response(response, "gemini").await?;
 
         // Parse Gemini streaming response which uses `candidates[0].content.parts[*]`
         // format. Each part may contain `text` for plain output or `functionCall`
@@ -239,10 +226,7 @@ impl GeminiAgent {
         })
         .await
     }
-}
 
-#[async_trait]
-impl Agent for GeminiAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
@@ -351,23 +335,5 @@ impl Agent for GeminiAgent {
                 context_window: Some(1_048_576),
             },
         ]
-    }
-
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> crate::core::error::Result<()> {
-        retry_chat_once(
-            || async {
-                self.chat_once(&messages, &principles, &options, sender.clone())
-                    .await
-                    .map_err(Into::into)
-            },
-            3,
-        )
-        .await
     }
 }

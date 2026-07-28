@@ -16,11 +16,6 @@ fn new_msg_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-/// Current timestamp in milliseconds.
-fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
 /// Message delivery target — replaces the AgentPathPattern+Channel enum.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentTarget {
@@ -95,7 +90,7 @@ impl AgentMessage {
             id: new_msg_id(),
             from,
             to,
-            timestamp_ms: now_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
             kind,
             payload: Value::Null,
             in_reply_to: None,

@@ -109,13 +109,6 @@ impl GuardianCircuitBreaker {
         }
         self.denials.push_back(denied);
     }
-
-    /// Reset the circuit breaker (e.g., after configuration change).
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.consecutive_denials = 0;
-        self.denials.clear();
-    }
 }
 
 impl Default for GuardianCircuitBreaker {
@@ -497,17 +490,6 @@ mod tests {
         cb.record_decision(true);
         cb.record_decision(true);
         cb.record_decision(false); // allow resets consecutive count
-        assert!(!cb.should_skip_review());
-    }
-
-    #[test]
-    fn test_circuit_breaker_reset() {
-        let mut cb = GuardianCircuitBreaker::new(3, 10, 50);
-        cb.record_decision(true);
-        cb.record_decision(true);
-        cb.record_decision(true);
-        assert!(cb.should_skip_review());
-        cb.reset();
         assert!(!cb.should_skip_review());
     }
 

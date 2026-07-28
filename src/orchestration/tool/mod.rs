@@ -2324,4 +2324,17 @@ mod tests {
             ),
         }
     }
+
+    #[test]
+    fn test_no_duplicate_tool_names() {
+        let registry = ToolRegistry::new();
+        let names = registry.names();
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            assert!(
+                seen.insert(name),
+                "Duplicate tool name: {name}\nAll names: {names:#?}",
+            );
+        }
+    }
 }

@@ -69,7 +69,7 @@ use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::intelligence::hot_failover::HotFailover;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
-use crate::intelligence::now_ms;
+
 use crate::intelligence::reinforcement::federated::FederatedLearning;
 use crate::intelligence::reinforcement::federated::FederatedRL;
 use crate::intelligence::reinforcement::learning::RewardFunction;
@@ -78,7 +78,7 @@ use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::observability::live_performance::LivePerformanceFeed;
 
 use crate::intelligence::world_model::WorldModel;
-use crate::intelligence::{lock_guard, read_guard, write_guard};
+
 use crate::observability::provenance::ProvenanceLedger;
 #[cfg(any(
     feature = "sub-bus-tool",
@@ -712,9 +712,9 @@ impl CapabilityBus {
         outcome: &str,
         detail: Value,
     ) {
-        let now_ms = crate::intelligence::now_ms();
+        let now_ms = crate::shared::timestamps::now_ts_ms() as u64;
 
-        let mut history = write_guard(&self.event_history);
+        let mut history = crate::write_or_recover!(&self.event_history, "intelligence");
         history.push_back(BusEvent {
             timestamp_ms: now_ms,
             stage: stage.to_string(),
@@ -783,32 +783,36 @@ impl CapabilityBus {
     // ------------------------------------------------------------------
 
     pub fn snapshot_events(&self) -> Vec<BusEvent> {
-        read_guard(&self.event_history).iter().cloned().collect()
+        crate::read_or_recover!(&self.event_history, "intelligence")
+            .iter()
+            .cloned()
+            .collect()
     }
 
     pub async fn capability_bus_profile(&self) -> CapabilityBusProfile {
-        let mut p = write_guard(&self.profile).clone();
+        let mut p = crate::write_or_recover!(&self.profile, "intelligence").clone();
         // BLUE70: Read from consolidated buses
         {
-            let ukb = read_guard(&self.unified_knowledge_bus);
+            let ukb = crate::read_or_recover!(&self.unified_knowledge_bus, "intelligence");
             p.reputation_agents_count = ukb.reputation_count();
             p.knowledge_insights_count = ukb.insight_count();
             p.experience_case_count = ukb.experience_count();
         }
         {
-            let rb = read_guard(&self.reinforcement_bus);
+            let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
             p.q_learning_table_size = rb.table_size();
         }
         {
-            let lob = read_guard(&self.learning_optimization_bus);
+            let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
             p.learning_events_count = lob.event_count();
         }
-        p.capability_graph_agents = lock_guard(&self.capability_graph).total_agents();
-        p.event_history_len = read_guard(&self.event_history).len();
+        p.capability_graph_agents =
+            crate::lock_or_recover!(&self.capability_graph, "intelligence").total_agents();
+        p.event_history_len = crate::read_or_recover!(&self.event_history, "intelligence").len();
         p.workflow_presets_count = self
             .workflow_registry
             .as_ref()
-            .map(|wr| lock_guard(wr).list().len())
+            .map(|wr| crate::lock_or_recover!(wr, "intelligence").list().len())
             .unwrap_or(0);
         p.provenance_entries_count = self.provenance_ledger.len();
 
@@ -870,23 +874,24 @@ impl CapabilityBus {
 
         // BLUE70: Consolidated bus profile metrics
         {
-            let ukb = read_guard(&self.unified_knowledge_bus);
+            let ukb = crate::read_or_recover!(&self.unified_knowledge_bus, "intelligence");
             p.unified_knowledge_insight_count = ukb.insight_count();
             p.unified_knowledge_experience_count = ukb.experience_count();
         }
         {
-            let rb = read_guard(&self.reinforcement_bus);
+            let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
             p.reinforcement_table_size = rb.table_size();
         }
         {
-            let lob = read_guard(&self.learning_optimization_bus);
+            let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
             p.learning_optimization_event_count = lob.event_count();
         }
 
         // Skill evolution metrics
         #[cfg(feature = "sub-bus-tool")]
         {
-            let skills = read_guard(self.tool_bus.skill_registry_ref());
+            let skills =
+                crate::read_or_recover!(self.tool_bus.skill_registry_ref(), "intelligence");
             p.skill_evolution_count = skills
                 .evolution_history
                 .values()
@@ -900,11 +905,11 @@ impl CapabilityBus {
             feature = "multi-users-server"
         ))]
         {
-            let fp = lock_guard(&self.agent_factory).profile();
+            let fp = crate::lock_or_recover!(&self.agent_factory, "intelligence").profile();
             p.agent_factory_active_instances = fp.active_instances as u32;
             p.agent_factory_templates = fp.total_templates as u32;
 
-            let cp = lock_guard(&self.council).profile();
+            let cp = crate::lock_or_recover!(&self.council, "intelligence").profile();
             p.council_active_members = cp.active_members;
             p.council_pending_proposals = cp.pending_count;
         }
@@ -967,7 +972,7 @@ impl CapabilityBus {
         quality_score: f64,
     ) {
         use crate::governance::harness_bus::AuditEntry;
-        let now_for_audit = now_ms();
+        let now_for_audit = crate::shared::timestamps::now_ts_ms() as u64;
         let entry = AuditEntry {
             timestamp: now_for_audit as i64,
             request_id: format!("evolve_{}_{}", state.0, action),
@@ -1064,7 +1069,7 @@ impl CapabilityBus {
         // ── ScenarioMatcher: record task pattern ────────────────────────
         if timeout(timeout_dur, async {
             use crate::intelligence::matcher::{MatchRules, ScenarioRouting};
-            let now = now_ms();
+            let now = crate::shared::timestamps::now_ts_ms() as u64;
             let scenario_id = format!("evolve_{}_{}", state.0, action);
             self.matcher
                 .register_scenario(crate::intelligence::matcher::Scenario {
@@ -1167,7 +1172,7 @@ impl CapabilityBus {
             warn!("evolve: evolve_metacognitive timed out — skipping");
         }
 
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         if timeout(timeout_dur, async {
             self.evolve_discovery(state, action, reward, quality_score, success, now)
         })
@@ -1207,12 +1212,13 @@ impl CapabilityBus {
                         insights.len()
                     );
                     for insight in &insights {
-                        if let Err(e) = lock_guard(&self.continuous_learning)
-                            .consolidate_experience(
-                                &format!("abstract_knowledge_{}", now),
-                                insight,
-                                0.5,
-                            )
+                        if let Err(e) =
+                            crate::lock_or_recover!(&self.continuous_learning, "intelligence")
+                                .consolidate_experience(
+                                    &format!("abstract_knowledge_{}", now),
+                                    insight,
+                                    0.5,
+                                )
                         {
                             warn!("evolve: abstract_knowledge consolidate failed: {}", e);
                         }
@@ -1283,7 +1289,7 @@ impl CapabilityBus {
 
         // ── BLUE70: Read Q-value and exploration rate from ReinforcementBus ──
         let (q_value, exploration_rate) = timeout(timeout_dur, async {
-            let rb = read_guard(&self.reinforcement_bus);
+            let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
             let qv = rb.best_q_value(&state.0);
             let er = 0.1; // default exploration rate; ReinforcementBus manages its own
             drop(rb);

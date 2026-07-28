@@ -199,10 +199,6 @@ impl FlowManager {
                     .unwrap_or_else(|| "unknown".to_string());
                 return Err(ProxyError::AgentNotFound(first).into());
             }
-
-            // NOTE: The `break` inside the loop above already limits iteration to one agent
-            // when fallback is disabled, so `resolved_agents` will only contain at most one
-            // entry. The old `truncate(1)` call here was redundant and has been removed.
         }
 
         Ok(ResolvedRouting {

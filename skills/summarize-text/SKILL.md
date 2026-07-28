@@ -2,6 +2,8 @@
 name: summarize-text
 description: Summarize long text into concise, structured summaries
 version: 1.0.0
+author: go-on-team
+min_go_on_version: 1.0.0
 ---
 
 # Summarize Text Skill

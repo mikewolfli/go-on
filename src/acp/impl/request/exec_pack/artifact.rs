@@ -64,8 +64,8 @@ pub(crate) fn build_multi_agent_sessions(
     source: &str,
     report: &RuntimeExecutionReport,
 ) -> Value {
-    let agent_session_id = format!("agent-session-{}", crate::acp::prelude::now_ts_ms());
-    let merge_session_id = format!("merge-session-{}", crate::acp::prelude::now_ts_ms());
+    let agent_session_id = format!("agent-session-{}", crate::shared::timestamps::now_ts_ms());
+    let merge_session_id = format!("merge-session-{}", crate::shared::timestamps::now_ts_ms());
     let subtask_sessions = report
         .assignment_records
         .iter()

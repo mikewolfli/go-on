@@ -4,7 +4,6 @@
 //! It tracks active transport mode, protocol health, and latency statistics
 //! to enable intelligent protocol recommendations for task execution.
 
-use crate::intelligence::{lock_guard, read_guard, write_guard};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -146,7 +145,7 @@ impl ProtocolBus {
     /// is incremented.
     pub fn set_active_transport(&self, transport: &str) {
         {
-            let mut current = write_guard(self.active_transport.as_ref());
+            let mut current = crate::write_or_recover!(self.active_transport.as_ref(), "intelligence");
             if *current != transport {
                 *current = transport.to_string();
             } else {
@@ -156,14 +155,14 @@ impl ProtocolBus {
         }
 
         // Update profile outside of the transport lock to avoid nested locking.
-        let mut profile = lock_guard(self.profile.as_ref());
+        let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         profile.active_transport = transport.to_string();
         profile.total_protocol_switches += 1;
     }
 
     /// Return the currently active transport mode.
     pub fn active_transport(&self) -> String {
-        read_guard(self.active_transport.as_ref()).clone()
+        crate::read_or_recover!(self.active_transport.as_ref(), "intelligence").clone()
     }
 
     /// Recommend the best protocol for a task of the given type and payload size.
@@ -176,11 +175,11 @@ impl ProtocolBus {
     /// Returns a `ProtocolRecommendation` with the preferred protocol, a
     /// human-readable reason, and a confidence score.
     pub fn recommend_protocol(&self, task_type: &str, payload_size: u64) -> ProtocolRecommendation {
-        let transport = read_guard(self.active_transport.as_ref()).clone();
+        let transport = crate::read_or_recover!(self.active_transport.as_ref(), "intelligence").clone();
 
-        let health = read_guard(self.protocol_health.as_ref()).clone();
+        let health = crate::read_or_recover!(self.protocol_health.as_ref(), "intelligence").clone();
 
-        let latency = read_guard(self.protocol_latency.as_ref()).clone();
+        let latency = crate::read_or_recover!(self.protocol_latency.as_ref(), "intelligence").clone();
 
         // 1. If the active transport is healthy, prefer it.
         if health.get(&transport).copied().unwrap_or(false) {
@@ -245,7 +244,7 @@ impl ProtocolBus {
     /// entries per protocol). If the protocol is not yet tracked, a new entry is
     /// created automatically.
     pub fn record_protocol_latency(&self, protocol: &str, duration_ms: u64) {
-        let mut latency = write_guard(self.protocol_latency.as_ref());
+        let mut latency = crate::write_or_recover!(self.protocol_latency.as_ref(), "intelligence");
         // Evict oldest when at capacity for a new protocol.
         if !latency.contains_key(protocol) && latency.len() >= self.max_protocols {
             if let Some(oldest) = latency.keys().next().cloned() {
@@ -258,7 +257,7 @@ impl ProtocolBus {
         stats.record(duration_ms);
 
         // If the protocol is not already in the health map, add it as healthy.
-        let mut health = write_guard(self.protocol_health.as_ref());
+        let mut health = crate::write_or_recover!(self.protocol_health.as_ref(), "intelligence");
         // Evict oldest from health map in sync.
         if !health.contains_key(protocol) && health.len() >= self.max_protocols {
             if let Some(oldest) = health.keys().next().cloned() {
@@ -272,7 +271,7 @@ impl ProtocolBus {
     ///
     /// Unknown protocols are assumed healthy by default.
     pub fn is_protocol_healthy(&self, protocol: &str) -> bool {
-        read_guard(self.protocol_health.as_ref())
+        crate::read_or_recover!(self.protocol_health.as_ref(), "intelligence")
             .get(protocol)
             .copied()
             .unwrap_or(true)
@@ -281,10 +280,10 @@ impl ProtocolBus {
     /// Return a snapshot of the current `ProtocolBusProfile`.
     pub fn profile(&self) -> ProtocolBusProfile {
         let transport = self.active_transport();
-        let health = read_guard(self.protocol_health.as_ref());
+        let health = crate::read_or_recover!(self.protocol_health.as_ref(), "intelligence");
         let healthy_count = health.values().filter(|h| **h).count() as u32;
 
-        let profile_guard = lock_guard(self.profile.as_ref());
+        let profile_guard = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         ProtocolBusProfile {
             enabled: profile_guard.enabled,
             active_transport: transport,

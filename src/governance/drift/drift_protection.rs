@@ -5,7 +5,8 @@
 //! deviation against configured policy thresholds.
 
 use anyhow::{bail, Result};
-use serde::{Deserialize, Serialize};
+
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,7 +15,7 @@ use tracing;
 use crate::i18n::runtime::tf;
 
 /// Categories of drift that the system monitors.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DriftType {
     /// Deviation from strategic goals or objectives.
     Goal,
@@ -29,7 +30,7 @@ pub enum DriftType {
 }
 
 /// Severity level assigned to a detected drift alert.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum DriftSeverity {
     /// Informational notice – drift is present but within acceptable bounds.
     Notice,
@@ -42,7 +43,7 @@ pub enum DriftSeverity {
 }
 
 /// A single measured metric with its baseline and computed deviation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DriftMetric {
     /// Human-readable name identifying this metric.
     pub name: String,
@@ -59,7 +60,7 @@ pub struct DriftMetric {
 }
 
 /// An alert raised when a drift metric exceeds one of the policy thresholds.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DriftAlert {
     /// Unique identifier for this alert.
     pub id: String,
@@ -82,7 +83,7 @@ pub struct DriftAlert {
 }
 
 /// A policy that defines acceptable drift thresholds for one or more drift types.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DriftPolicy {
     /// Name of this policy.
     pub name: String,
@@ -101,7 +102,7 @@ pub struct DriftPolicy {
 }
 
 /// A snapshot summary of the drift protection engine's current state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DriftProfile {
     /// Total number of metrics being tracked.
     pub total_metrics: usize,
@@ -116,16 +117,13 @@ pub struct DriftProfile {
 }
 
 /// Configuration for the drift protection engine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DriftProtectionConfig {
     /// Interval in milliseconds between automatic drift checks.
-    #[serde(default = "default_check_interval")]
     pub check_interval_ms: u64,
     /// Maximum number of alerts to retain in the engine.
-    #[serde(default = "default_max_alerts")]
     pub max_alerts: usize,
     /// Time in milliseconds after which an unresolved alert is auto-resolved.
-    #[serde(default = "default_auto_resolve")]
     pub auto_resolve_after_ms: u64,
 }
 

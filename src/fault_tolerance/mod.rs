@@ -1,7 +1,17 @@
 //! Cross-node Fault Tolerance module — F-GAP-28
 //!
-//! Provides node-level fault isolation, heartbeat-based failure detection,
-//! and automatic recovery coordination across a distributed cluster.
+//! **Scope — Node-level fault detection:** heartbeats, isolation groups,
+//! recovery plans, and cluster-health computation.
+//!
+//! This module owns the node-level lifecycle: detecting when a peer goes
+//! silent, isolating it from traffic, and coordinating automated recovery
+//! plans (escalation, reintegration).  It does **not** implement service-level
+//! patterns such as circuit breaking, failover routing, or self-healing
+//! retry logic — those belong to the [`resilience`] module.
+//!
+//! Both modules are complementary: `fault_tolerance` answers *"is the node
+//! alive?"* and *"how do we bring it back?"* while `resilience` answers
+//! *"how do we keep serving through transient failures?"*
 
 mod detector;
 mod recovery;

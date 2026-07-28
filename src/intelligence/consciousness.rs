@@ -3,13 +3,25 @@
 //! Tracks simulated "consciousness" metrics for agent self-awareness.
 //! All mutable state is guarded behind `Arc<Mutex<>>` for thread-safe
 //! concurrent access.
+//!
+//! ## Relationship with [`super::metacognitive`]
+//!
+//! - `consciousness` tracks **numerical awareness metrics** across 7 dimensions and
+//!   maintains a state machine (Unconscious → MetaCognitive). It is purely
+//!   metric/statistical — no task tracking, no agent association.
+//! - [`super::metacognitive`] tracks **concrete execution observations**, manages
+//!   a corrective action lifecycle, and generates structured reflection reports
+//!   with severity-weighted confidence scores.
+//! - The two subsystems are bridged by [`super::triple_fusion`], which pushes
+//!   metacognitive observations into consciousness EnvironmentalAwareness metrics
+//!   and converts consciousness insights into evolution triggers.
+//!
+//! In short: `consciousness` = *how aware* the system is numerically;
+//! `metacognitive` = *what it observes and does about it*.
 
-use crate::intelligence::lock_guard;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-
-use crate::intelligence::now_ms;
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
@@ -213,13 +225,13 @@ impl ConsciousnessMetrics {
             bail!("confidence must be in [0.0, 1.0], got {confidence}");
         }
 
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         let metric = AwarenessMetric {
             metric_type,
             value,
             confidence,
-            timestamp_ms: now_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
         };
 
         inner.metrics.push(metric);
@@ -284,7 +296,7 @@ impl ConsciousnessMetrics {
     pub fn trigger_reflexion(&self, trigger: &str) -> Result<ReflexionRecord> {
         // Clone metrics and other data under the lock, then process outside
         let (metrics_clone, next_id) = {
-            let inner = lock_guard(&self.inner);
+            let inner = crate::lock_or_recover!(&self.inner, "intelligence");
             (inner.metrics.clone(), inner.next_reflexion_id)
         };
 
@@ -314,11 +326,11 @@ impl ConsciousnessMetrics {
             state_before,
             state_after,
             insights,
-            timestamp_ms: now_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
         };
 
         // Re-acquire lock to write back
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.next_reflexion_id += 1;
         // Replace metrics with boosted versions.
         inner.metrics = boosted_metrics;
@@ -338,7 +350,7 @@ impl ConsciousnessMetrics {
     /// Compute the average value for a specific awareness metric type,
     /// considering only metrics within the tracking window.
     pub fn awareness_by_type(&self, metric_type: AwarenessMetricType) -> f64 {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let filtered: Vec<f64> = inner
             .metrics
             .iter()
@@ -358,7 +370,7 @@ impl ConsciousnessMetrics {
 
     /// Return a snapshot of the tracker's runtime metrics.
     pub fn profile(&self) -> ConsciousnessProfile {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         let overall = self.compute_overall_from_inner(&inner.metrics);
         let state = self.compute_state_from_metrics(&inner.metrics);
@@ -420,7 +432,7 @@ impl ConsciousnessMetrics {
 
     /// Compute the simple average awareness (unweighted) for state calculation.
     fn average_awareness(&self) -> f64 {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let types = AwarenessMetricType::all();
         let mut sum = 0.0;
         let mut count = 0;
@@ -447,7 +459,7 @@ impl ConsciousnessMetrics {
     /// before any trend adjustment is applied, preventing noise from small
     /// sample sizes.
     fn compute_trend(&self) -> TrendDirection {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let window = inner.config.tracking_window;
         let metrics: Vec<&AwarenessMetric> =
             inner.metrics.iter().rev().take(window).collect::<Vec<_>>();

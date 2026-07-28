@@ -165,21 +165,10 @@ impl Default for AgentLifecycle {
 pub struct AgentLifecycleBuilder;
 
 impl AgentLifecycleBuilder {
-    fn now_ms() -> u64 {
-        crate::shared::timestamps::now_ts_ms() as u64
-    }
-
     /// Create a Registered state.
     pub fn registered() -> AgentLifecycle {
         AgentLifecycle::Registered {
-            at_ms: Self::now_ms(),
-        }
-    }
-
-    /// Create an Idle state.
-    pub fn idle() -> AgentLifecycle {
-        AgentLifecycle::Idle {
-            since_ms: Self::now_ms(),
+            at_ms: crate::shared::timestamps::now_ts_ms() as u64,
         }
     }
 }

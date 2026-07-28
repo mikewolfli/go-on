@@ -7,8 +7,7 @@
 //! lock ordering discipline documented in `core::CapabilityBus`.
 
 use super::core::CapabilityBus;
-use crate::intelligence::{lock_guard, write_guard};
-use crate::intelligence::now_ms;
+
 use crate::intelligence::reinforcement::learning::RlTaskExecutionMetrics;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
@@ -30,9 +29,9 @@ impl CapabilityBus {
             quality_score,
             duration_ms: 0,
         };
-        let reward = lock_guard(&self.reward_fn).calculate(&metrics);
+        let reward = crate::lock_or_recover!(&self.reward_fn, "intelligence").calculate(&metrics);
         // BLUE70: Use ReinforcementBus (replaces legacy QLearningAgent)
-        let mut rb = write_guard(&self.reinforcement_bus);
+        let mut rb = crate::write_or_recover!(&self.reinforcement_bus, "intelligence");
         rb.record_reward(&state.0, action, reward, &next_state.0);
         reward
     }
@@ -47,7 +46,7 @@ impl CapabilityBus {
     ) {
         if success {
             // BLUE70: Record in UnifiedKnowledgeBus (replaces legacy ExperienceKnowledgeBase)
-            write_guard(&self.unified_knowledge_bus).record_outcome(
+            crate::write_or_recover!(&self.unified_knowledge_bus, "intelligence").record_outcome(
                 &state.0,
                 &state.1,
                 true,
@@ -66,7 +65,7 @@ impl CapabilityBus {
         success: bool,
     ) {
         if success {
-            let now = now_ms();
+            let now = crate::shared::timestamps::now_ts_ms() as u64;
             let frl = self.federated_rl.submit_policy(
                 "local_agent".to_string(),
                 format!("evolve_{}", state.0),
@@ -101,18 +100,20 @@ impl CapabilityBus {
         success: bool,
         quality_score: f64,
     ) {
-        if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
-            &format!("{:?}_{}", state.0, action),
-            &serde_json::json!({
-                "state": state,
-                "action": action,
-                "success": success,
-                "reward": reward,
-                "quality": quality_score,
-            })
-            .to_string(),
-            quality_score,
-        ) {
+        if let Err(e) = crate::lock_or_recover!(&self.continuous_learning, "intelligence")
+            .consolidate_experience(
+                &format!("{:?}_{}", state.0, action),
+                &serde_json::json!({
+                    "state": state,
+                    "action": action,
+                    "success": success,
+                    "reward": reward,
+                    "quality": quality_score,
+                })
+                .to_string(),
+                quality_score,
+            )
+        {
             warn!(
                 "evolve: continuous_learning.consolidate_experience failed: {}",
                 e
@@ -126,12 +127,12 @@ impl CapabilityBus {
         if count.is_multiple_of(10) {
             // 1. Detect forgetting and reinforce forgotten memories
             let forgotten = {
-                let cl = lock_guard(&self.continuous_learning);
+                let cl = crate::lock_or_recover!(&self.continuous_learning, "intelligence");
                 cl.detect_forgetting()
             };
             for curve in &forgotten {
-                if let Err(e) =
-                    lock_guard(&self.continuous_learning).reinforce_memory(&curve.memory_id)
+                if let Err(e) = crate::lock_or_recover!(&self.continuous_learning, "intelligence")
+                    .reinforce_memory(&curve.memory_id)
                 {
                     warn!("evolve: reinforce_memory failed: {}", e);
                 }
@@ -145,7 +146,7 @@ impl CapabilityBus {
 
             // 2. Replay important memories and feed into Q-learning
             let replayed = {
-                let cl = lock_guard(&self.continuous_learning);
+                let cl = crate::lock_or_recover!(&self.continuous_learning, "intelligence");
                 cl.replay_important_memories(3)
             };
             for mem in &replayed {
@@ -162,12 +163,13 @@ impl CapabilityBus {
                             if let (Some(s0), Some(s1)) = (arr[0].as_str(), arr[1].as_str()) {
                                 let replayed_state = (s0.to_string(), s1.to_string());
                                 // BLUE70: Use ReinforcementBus (replaces legacy QLearningAgent)
-                                write_guard(&self.reinforcement_bus).record_reward(
-                                    &replayed_state.0,
-                                    action_str,
-                                    replay_reward,
-                                    &state.0,
-                                );
+                                crate::write_or_recover!(&self.reinforcement_bus, "intelligence")
+                                    .record_reward(
+                                        &replayed_state.0,
+                                        action_str,
+                                        replay_reward,
+                                        &state.0,
+                                    );
                             }
                         }
                     }

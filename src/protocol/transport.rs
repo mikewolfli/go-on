@@ -298,7 +298,7 @@ impl MultiChannelTransport {
             ));
         }
 
-        let now = Self::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let stats = ChannelStats {
             channel: channel_id.clone(),
             messages_sent: 0,
@@ -330,7 +330,7 @@ impl MultiChannelTransport {
     /// Returns a `DeliveryReceipt` indicating the initial delivery status.
     pub fn send(&self, message: TransportMessage) -> Result<DeliveryReceipt> {
         let mut inner = lock_guard(&self.inner);
-        let now = Self::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Dedup for ExactlyOnce QoS: if the message id was already sent, return
         // a Delivered receipt without re-enqueuing
@@ -448,7 +448,7 @@ impl MultiChannelTransport {
     /// Receive all available messages from a specific channel.
     pub fn receive(&self, channel_id: ChannelId) -> Result<Vec<TransportMessage>> {
         let mut inner = lock_guard(&self.inner);
-        let now = Self::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         let channel = inner.channels.get_mut(&channel_id).ok_or_else(|| {
             anyhow::anyhow!(tf(
@@ -622,7 +622,7 @@ impl MultiChannelTransport {
             ));
         }
 
-        let now = Self::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let queued = QueuedMessage {
             message: msg.clone(),
             retries_remaining: target.config.max_retries,
@@ -681,7 +681,7 @@ impl MultiChannelTransport {
     /// Returns the number of messages removed.
     pub fn expire_old_messages(&self) -> usize {
         let mut inner = lock_guard(&self.inner);
-        let now = Self::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let mut total_removed = 0;
         let mut total_failure_add = 0u64;
 
@@ -713,11 +713,6 @@ impl MultiChannelTransport {
 
     // ── internal helpers ──────────────────────────────────────────────────
 
-    /// Current time in milliseconds since Unix epoch.
-    fn now_ms() -> u64 {
-        crate::shared::timestamps::now_ts_ms() as u64
-    }
-
     /// Build a minimal TransportMessage with default QoS and auto-generated id.
     fn make_message(
         &self,
@@ -734,7 +729,7 @@ impl MultiChannelTransport {
             payload: payload.to_string(),
             source: source.to_string(),
             target: target.to_string(),
-            created_ms: Self::now_ms(),
+            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
             ttl_ms: 30000,
             delivery_attempts: 0,
         }
@@ -792,7 +787,7 @@ mod tests {
         channel: ChannelId,
         priority: MessagePriority,
     ) -> TransportMessage {
-        let now = MultiChannelTransport::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let channel_name = channel.to_string();
         TransportMessage {
             id: generate_message_id(),
@@ -991,7 +986,7 @@ mod tests {
     fn test_message_ttl_expiration() {
         let transport = configured_transport();
 
-        let now = MultiChannelTransport::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let expired_msg = TransportMessage {
             id: "ttl-msg".to_string(),
             channel: ChannelId::Data,

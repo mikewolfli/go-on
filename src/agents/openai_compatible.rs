@@ -8,9 +8,10 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
+use crate::agents::agent::chat_request_failed_msg;
 use crate::agents::{
     apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
+    stream_sse_to_sender_compressed, StreamingConfig,
 };
 
 pub struct OpenAiCompatibleAgent {
@@ -19,6 +20,7 @@ pub struct OpenAiCompatibleAgent {
     api_key_env: String,
     model: String,
     supports_system: bool,
+    enable_compression: bool,
     client: reqwest::Client,
 }
 
@@ -37,6 +39,31 @@ impl OpenAiCompatibleAgent {
             api_key_env,
             model,
             supports_system,
+            enable_compression: false,
+            client,
+        }
+    }
+
+    /// Create a new agent with SSE compression enabled.
+    ///
+    /// When compression is enabled, the SSE response stream is gzip-decompressed
+    /// before parsing, reducing bandwidth for large responses from providers
+    /// that support gzip-encoded streaming.
+    pub fn new_with_compression(
+        base_url: String,
+        chat_path: String,
+        api_key_env: String,
+        model: String,
+        supports_system: bool,
+        client: reqwest::Client,
+    ) -> Self {
+        Self {
+            base_url,
+            chat_path,
+            api_key_env,
+            model,
+            supports_system,
+            enable_compression: true,
             client,
         }
     }
@@ -96,6 +123,45 @@ impl OpenAiCompatibleAgent {
         )
     }
 
+    /// Chat with SSE compression support.
+    ///
+    /// When `enable_compression` is true, the SSE stream is gzip-decompressed
+    /// before parsing, reducing bandwidth on large responses. This is
+    /// transparent to the token extraction layer.
+    async fn chat_once_compressed(
+        &self,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
+        sender: crate::agent::StreamingSender,
+        compress_cfg: &StreamingConfig,
+    ) -> anyhow::Result<()> {
+        let api_key = resolve_secret(&self.api_key_env, "openai_compatible.api_key_env")?;
+
+        let merged = self.merge_principles_into_messages(messages, principles);
+        let endpoint = self.chat_endpoint();
+        let payload = self.build_payload(merged, options);
+
+        let response = self
+            .client
+            .post(endpoint)
+            .bearer_auth(api_key)
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "{}",
+                chat_request_failed_msg("openai_compatible", &status.to_string(), &body)
+            );
+        }
+
+        stream_sse_to_sender_compressed(response, sender, compress_cfg).await
+    }
+
     fn build_payload(
         &self,
         messages: Vec<Message>,
@@ -112,6 +178,51 @@ impl OpenAiCompatibleAgent {
         apply_openai_common_options(&mut payload, options);
 
         payload
+    }
+}
+
+#[async_trait]
+impl Agent for OpenAiCompatibleAgent {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+        sender: crate::agent::StreamingSender,
+    ) -> crate::core::error::Result<()> {
+        if self.enable_compression {
+            let compress_cfg = StreamingConfig {
+                enable_compression: true,
+                ..Default::default()
+            };
+
+            crate::agents::agent::retry_chat_once(
+                || async {
+                    self.chat_once_compressed(
+                        &messages,
+                        &principles,
+                        &options,
+                        sender.clone(),
+                        &compress_cfg,
+                    )
+                    .await
+                    .map_err(Into::into)
+                },
+                3,
+            )
+            .await
+        } else {
+            // Wraps chat_once with retry (same as the default Agent::chat)
+            crate::agents::agent::retry_chat_once(
+                || async {
+                    self.chat_once(&messages, &principles, &options, sender.clone())
+                        .await
+                        .map_err(Into::into)
+                },
+                3,
+            )
+            .await
+        }
     }
 
     async fn chat_once(
@@ -146,10 +257,7 @@ impl OpenAiCompatibleAgent {
 
         stream_sse_to_sender(response, sender).await
     }
-}
 
-#[async_trait]
-impl Agent for OpenAiCompatibleAgent {
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
         let model_id = self.model.clone();
         if model_id.is_empty() {
@@ -167,24 +275,6 @@ impl Agent for OpenAiCompatibleAgent {
 
     fn default_model(&self) -> Option<crate::agent::ModelInfo> {
         self.available_models().into_iter().next()
-    }
-
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> crate::core::error::Result<()> {
-        retry_chat_once(
-            || async {
-                self.chat_once(&messages, &principles, &options, sender.clone())
-                    .await
-                    .map_err(Into::into)
-            },
-            3,
-        )
-        .await
     }
 }
 

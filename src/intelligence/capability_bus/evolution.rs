@@ -10,7 +10,7 @@
 use super::core::CapabilityBus;
 use crate::intelligence::consciousness::AwarenessMetricType;
 use crate::intelligence::evolution_graph::{EvolutionStage, TrendDirection};
-use crate::intelligence::lock_guard;
+
 use crate::intelligence::self_model::SelfPerformanceSnapshot;
 use crate::intelligence::world_model::EntityType;
 use tracing::warn;
@@ -24,7 +24,7 @@ impl CapabilityBus {
         success: bool,
         quality_score: f64,
     ) {
-        let mut eg = lock_guard(&self.evolution_graph);
+        let mut eg = crate::lock_or_recover!(&self.evolution_graph, "intelligence");
         let cap_name = format!("evolve_{}", action);
         if let Err(e) = eg.register_capability(&state.0, &cap_name, EvolutionStage::New) {
             warn!("evolve: evolution_graph.register_capability failed: {}", e);

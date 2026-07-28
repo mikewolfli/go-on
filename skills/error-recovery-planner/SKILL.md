@@ -47,3 +47,11 @@ Analyze failures and propose structured recovery plans.
 3. Propose up to 3 fix attempts in priority order
 4. After each attempt, record whether it succeeded or failed
 5. If all attempts fail, propose a fallback approach
+
+## Input
+
+When invoked, the user's request is available as:
+
+```
+{{input}}
+```

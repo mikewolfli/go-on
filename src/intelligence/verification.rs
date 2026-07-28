@@ -1,7 +1,15 @@
 //! Phase 4: Structured Verification and Review
+//!
 //! These structures are intentional framework definitions for Phase 0-9 architecture.
 //! Structured verification and deterministic checks will be integrated into the
 //! review gate once verification signal aggregation logic is implemented.
+//!
+//! ## Relationship to `quality_models`
+//!
+//! - [`VerificationVerdict`] is a type alias for [`QualityVerdict`](crate::quality_models::QualityVerdict).
+//! - [`VerificationSignal`] is a type alias for [`QualitySignal`](crate::quality_models::QualitySignal).
+//! - This ensures a single source of truth for categorical verdicts; the aliases
+//!   exist only for semantic naming within the verification domain.
 
 use crate::agent::AgentAuditLog;
 use crate::pua::{quality_compass, PuaExecutionReport};
@@ -9,7 +17,19 @@ use crate::quality_models::{QualitySignal, QualitySignalType, QualityVerdict};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Type alias for [`QualityVerdict`](crate::quality_models::QualityVerdict).
+///
+/// The verification pipeline uses this alias for semantic clarity — a
+/// `VerificationVerdict` is the outcome of running structured checks.
+/// It delegates to the canonical [`QualityVerdict`](crate::quality_models::QualityVerdict)
+/// enum defined in [`quality_models`](crate::quality_models).
 pub type VerificationVerdict = QualityVerdict;
+
+/// Type alias for [`QualitySignal`](crate::quality_models::QualitySignal).
+///
+/// Provides a semantic name within the verification context for the canonical
+/// [`QualitySignal`](crate::quality_models::QualitySignal) type from
+/// [`quality_models`](crate::quality_models).
 pub type VerificationSignal = QualitySignal;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

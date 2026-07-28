@@ -5,8 +5,9 @@
 //! assessing risk. Integrates the RULES/ directory as system prompts
 //! to guide LLM-based code generation.
 
+use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::intelligence::model_selector::{
-    ModelCharacteristics, ModelSelectionStrategy, ModelSelector, SelectionCriteria,
+    ModelCharacteristics, ModelSelectionStrategy, SelectionCriteria,
 };
 use crate::orchestration::self_evolution::sandbox::CodePatch;
 use serde::{Deserialize, Serialize};
@@ -186,8 +187,8 @@ impl From<std::io::Error> for SelfEvolutionAgentError {
 /// Integrates the `RULES/` directory as system prompts to ground LLM
 /// generations in the project's coding standards.
 pub struct SelfEvolutionAgent {
-    /// Model selector for choosing the right LLM for each task.
-    model_selector: Arc<ModelSelector>,
+    /// Adaptive model selector with static fallback for choosing the right LLM.
+    adaptive_selector: AdaptiveModelSelector,
     /// Agent registry reference for resolving available agents/models.
     agent_registry: HashMap<String, String>,
     /// Cached RULES content loaded at initialization.
@@ -203,7 +204,7 @@ pub struct SelfEvolutionAgent {
 impl std::fmt::Debug for SelfEvolutionAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelfEvolutionAgent")
-            .field("model_selector", &self.model_selector)
+            .field("adaptive_selector", &self.adaptive_selector)
             .field("agent_registry", &self.agent_registry)
             .field("rules_prompts", &self.rules_prompts)
             .field("project_root", &self.project_root)
@@ -251,7 +252,9 @@ impl SelfEvolutionAgent {
         );
 
         Self {
-            model_selector: Arc::new(ModelSelector),
+            adaptive_selector: AdaptiveModelSelector::with_static_strategy(
+                ModelSelectionStrategy::Balanced,
+            ),
             agent_registry,
             rules_prompts,
             project_root,
@@ -643,6 +646,9 @@ impl SelfEvolutionAgent {
     }
 
     /// Select the best model for a given task type.
+    ///
+    /// Uses the adaptive UCB selector when sufficient data is available,
+    /// falling back to the balanced static strategy during cold start.
     pub fn select_model(&self, task_type: &str) -> Option<String> {
         let criteria = match task_type {
             "code_generation" => SelectionCriteria::code_generation(),
@@ -651,11 +657,8 @@ impl SelfEvolutionAgent {
             _ => SelectionCriteria::fast_response(),
         };
 
-        ModelSelector::select_model(
-            &criteria,
-            &self.available_models,
-            ModelSelectionStrategy::Balanced,
-        )
+        self.adaptive_selector
+            .select_with_static_fallback(&criteria, &self.available_models, None)
     }
 
     // -----------------------------------------------------------------------

@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Built-in roles
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltinRole {
     Admin,
     User,

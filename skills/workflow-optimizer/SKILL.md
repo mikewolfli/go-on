@@ -105,5 +105,13 @@ fetch-data → validate → transform → upload (4 sequential steps)
 fetch-data ──┬─→ validate ──┐
               │               ├─→ transform(parallel=2) → upload(batch=50)
               └─→ enrich ────┘
+	```
 ```
+
+## Input
+
+When invoked, the user's request is available as:
+
+```
+{{input}}
 ```

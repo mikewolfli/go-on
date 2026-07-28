@@ -11,7 +11,7 @@ use crate::pua::mode_execution_report;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -131,19 +131,12 @@ pub trait ModeRuntime: Send + Sync {
     fn kind(&self) -> ModeKind;
     /// Returns the approval posture for this mode.
     fn posture(&self) -> ApprovalPosture {
-        // Default: derive from user_approval_required for backward compat.
-        if self.user_approval_required() {
-            ApprovalPosture::Suggest
-        } else {
-            ApprovalPosture::Auto
-        }
+        ApprovalPosture::Auto
     }
     /// Returns the allowed tools for this mode.
     fn allowed_tools(&self) -> Vec<String>;
     /// Returns the maximum number of tool calls allowed.
     fn max_tool_calls(&self) -> usize;
-    /// Whether user approval is required for this mode.
-    fn user_approval_required(&self) -> bool;
     /// Whether the given objective is high risk.
     fn is_high_risk_operation(&self, objective: &str) -> bool;
     /// Run the mode orchestration for a given agent task.
@@ -176,19 +169,12 @@ pub fn resolve_mode_runtime_with_posture(
     registry: Option<Arc<AgentRegistry>>,
     agent_name: Option<String>,
 ) -> std::result::Result<Box<dyn ModeRuntime>, String> {
-    let kind = match mode.to_lowercase().as_str() {
-        "ask" => ModeKind::Ask,
-        "plan" => ModeKind::Plan,
-        "edit" => ModeKind::Edit,
-        // "agent" maps to FullAuto
-        "agent" => ModeKind::FullAuto,
-        "full_auto" => ModeKind::FullAuto,
-        "safeguard" => ModeKind::SafeGuard,
-        _ => {
-            tracing::warn!("unknown mode '{}', defaulting to Ask", mode);
-            ModeKind::Ask
-        }
-    };
+    let kind = ModeKind::from(mode);
+    // Log a warning when the mode string was not recognized (ModeKind::from silently
+    // defaults to Ask for unrecognized input, but we want visibility at this call site).
+    if kind == ModeKind::Ask && !matches!(mode.to_lowercase().as_str(), "ask") {
+        tracing::warn!("unknown mode '{}', defaulting to Ask", mode);
+    }
     let registry = registry.ok_or_else(|| "ModeRuntime requires a registry".to_string())?;
     let mut runtime = GenericModeRuntime::new(kind, registry, agent_name);
     if let Some(p) = posture {
@@ -519,15 +505,18 @@ impl GenericModeRuntime {
     }
 
     /// Create a new SafeGuard-mode runtime with degradation enabled.
+    ///
+    /// # Deprecated
+    /// Use `GenericModeRuntime::new(ModeKind::SafeGuard, registry, agent_name)`
+    /// and set `auto_degrade = true` on the result instead.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `GenericModeRuntime::new(ModeKind::SafeGuard, registry, agent_name)` and set `.auto_degrade = true` on the result."
+    )]
     pub fn new_safeguard(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
-        Self {
-            posture: Self::default_posture_for(&ModeKind::SafeGuard),
-            kind: ModeKind::SafeGuard,
-            agent_registry: Some(registry),
-            agent_name,
-            auto_degrade: true,
-            degrade_policy: AutoDegradePolicy::default(),
-        }
+        let mut runtime = Self::new(ModeKind::SafeGuard, registry, agent_name);
+        runtime.auto_degrade = true;
+        runtime
     }
 
     /// Compute a numeric risk score for the given objective string.
@@ -539,12 +528,14 @@ impl GenericModeRuntime {
     /// - > 0.95  = extreme risk (full Block)
     pub fn compute_risk_score(&self, objective: &str) -> f64 {
         let mut score: f64 = 0.0;
+        let lower = objective.to_lowercase(); // Pre-compute once
 
         // Extreme-risk keywords (additive 0.30 each)
         // Multi-word phrases checked via contains (word-boundary not needed for unique phrases)
         let extreme_multis = ["drop database", "drop table"];
         for kw in &extreme_multis {
-            if objective.to_lowercase().contains(kw) {
+            if lower.contains(kw) {
+                // Use pre-computed lowercase
                 score += 0.30;
             }
         }
@@ -928,161 +919,233 @@ impl ModeRuntime for GenericModeRuntime {
     }
 
     fn allowed_tools(&self) -> Vec<String> {
-        /// All non-destructive / read-only tools for Plan mode.
-        fn plan_tools() -> Vec<String> {
-            vec![
-                "read_file".to_string(),
-                "read_file_lines".to_string(),
-                "search_files".to_string(),
-                "grep".to_string(),
-                "list_directory".to_string(),
-                "inspect_git_diff".to_string(),
-                "code_index_search".to_string(),
-                "go_to_definition".to_string(),
-                "find_references".to_string(),
-                "date_time".to_string(),
-                "environment_info".to_string(),
-                "json_query".to_string(),
-                "diff".to_string(),
-                "archive_inspect".to_string(),
-                "code_metrics".to_string(),
-                "dns_lookup".to_string(),
-                "ping".to_string(),
-                "docker_ps".to_string(),
-                "docker_logs".to_string(),
-                "http_request".to_string(),
-                "skill_list".to_string(),
-                "rss_read".to_string(),
-                "jsonl_read".to_string(),
-            ]
-        }
+        static PLAN_TOOLS: OnceLock<Vec<&'static str>> = OnceLock::new();
+        static ALL_EXEC_TOOLS: OnceLock<Vec<&'static str>> = OnceLock::new();
+        static READ_ONLY_TOOLS: OnceLock<Vec<&'static str>> = OnceLock::new();
 
-        /// All available tools for full execution modes (Edit, SafeGuard, FullAuto).
-        /// This includes every unconditional tool + skill tools.
-        /// Feature-gated tools are compiled conditionally; the registry handles availability.
-        /// The governance/sandbox layer provides runtime safety, not mode-level tool filtering.
-        fn all_execution_tools() -> Vec<String> {
-            vec![
-                // ── File tools ──
-                "read_file".to_string(),
-                "read_file_lines".to_string(),
-                "write_file".to_string(),
-                "apply_patch".to_string(),
-                "file_move".to_string(),
-                "file_delete".to_string(),
-                "copy_path".to_string(),
-                "create_directory".to_string(),
-                "format_code".to_string(),
-                "hash_file".to_string(),
-                "file_watch".to_string(),
-                // ── Search tools ──
-                "search_files".to_string(),
-                "grep".to_string(),
-                "code_index_search".to_string(),
-                "go_to_definition".to_string(),
-                "find_references".to_string(),
-                // ── Git / Diff ──
-                "inspect_git_diff".to_string(),
-                "diff".to_string(),
-                "git".to_string(),
-                // ── Build / Test / Lint ──
-                "cargo_check".to_string(),
-                "cargo_test".to_string(),
-                "run_tests".to_string(),
-                "run_build".to_string(),
-                "lint_code".to_string(),
-                "diagnostics".to_string(),
-                // ── Shell / Execution ──
-                "shell_exec".to_string(),
-                // ── Directory ──
-                "list_directory".to_string(),
-                // ── Archive ──
-                "archive_inspect".to_string(),
-                "archive_extract".to_string(),
-                "compress".to_string(),
-                "decompress".to_string(),
-                // ── Network ──
-                "http_request".to_string(),
-                "web_search".to_string(),
-                "dns_lookup".to_string(),
-                "ping".to_string(),
-                "port_scan".to_string(),
-                // ── Data ──
-                "jsonl_read".to_string(),
-                "jsonl_write".to_string(),
-                "json_query".to_string(),
-                "rss_read".to_string(),
-                // ── Docker ──
-                "docker_ps".to_string(),
-                "docker_logs".to_string(),
-                "docker_exec".to_string(),
-                "docker_build".to_string(),
-                "docker_push".to_string(),
-                "docker_compose".to_string(),
-                // ── Utility ──
-                "date_time".to_string(),
-                "environment_info".to_string(),
-                "uuid_gen".to_string(),
-                "random_token".to_string(),
-                "encode_decode".to_string(),
-                "template_render".to_string(),
-                "code_metrics".to_string(),
-                "security_scan".to_string(),
-                "search_packages".to_string(),
-                "add_dependency".to_string(),
-                // ── Agent tools ──
-                "spawn_agent".to_string(),
-                "apply_code_action".to_string(),
-                // ── Skill tools (always available) ──
-                "skill_list".to_string(),
-                "skill_execute".to_string(),
-                "skill_create".to_string(),
-                "skill_reload".to_string(),
-            ]
-        }
-
-        /// Read-only subset of tools for SafeGuard ReadOnly degradation.
-        fn read_only_tools() -> Vec<String> {
-            vec![
-                "read_file".to_string(),
-                "read_file_lines".to_string(),
-                "search_files".to_string(),
-                "grep".to_string(),
-                "list_directory".to_string(),
-                "inspect_git_diff".to_string(),
-                "code_index_search".to_string(),
-                "go_to_definition".to_string(),
-                "find_references".to_string(),
-                "diff".to_string(),
-                "date_time".to_string(),
-                "environment_info".to_string(),
-                "json_query".to_string(),
-                "archive_inspect".to_string(),
-                "dns_lookup".to_string(),
-                "ping".to_string(),
-                "docker_ps".to_string(),
-                "docker_logs".to_string(),
-                "rss_read".to_string(),
-                "jsonl_read".to_string(),
-                "code_metrics".to_string(),
-                "security_scan".to_string(),
-                "skill_list".to_string(),
-                "web_search".to_string(),
-            ]
-        }
-
-        match self.kind {
-            ModeKind::Ask => vec![],
-            ModeKind::Plan => plan_tools(),
-            ModeKind::Edit | ModeKind::FullAuto => all_execution_tools(),
+        let tools = match self.kind {
+            ModeKind::Ask => return vec![],
+            ModeKind::Plan => PLAN_TOOLS.get_or_init(|| {
+                vec![
+                    "read_file",
+                    "read_file_lines",
+                    "search_files",
+                    "grep",
+                    "list_directory",
+                    "inspect_git_diff",
+                    "code_index_search",
+                    "go_to_definition",
+                    "find_references",
+                    "date_time",
+                    "environment_info",
+                    "json_query",
+                    "diff",
+                    "archive_inspect",
+                    "code_metrics",
+                    "dns_lookup",
+                    "ping",
+                    "docker_ps",
+                    "docker_logs",
+                    "http_request",
+                    "skill_list",
+                    "rss_read",
+                    "jsonl_read",
+                ]
+            }),
+            ModeKind::Edit | ModeKind::FullAuto => ALL_EXEC_TOOLS.get_or_init(|| {
+                vec![
+                    // ── File tools ──
+                    "read_file",
+                    "read_file_lines",
+                    "write_file",
+                    "apply_patch",
+                    "file_move",
+                    "file_delete",
+                    "copy_path",
+                    "create_directory",
+                    "format_code",
+                    "hash_file",
+                    "file_watch",
+                    // ── Search tools ──
+                    "search_files",
+                    "grep",
+                    "code_index_search",
+                    "go_to_definition",
+                    "find_references",
+                    // ── Git / Diff ──
+                    "inspect_git_diff",
+                    "diff",
+                    "git",
+                    // ── Build / Test / Lint ──
+                    "cargo_check",
+                    "cargo_test",
+                    "run_tests",
+                    "run_build",
+                    "lint_code",
+                    "diagnostics",
+                    // ── Shell / Execution ──
+                    "shell_exec",
+                    // ── Directory ──
+                    "list_directory",
+                    // ── Archive ──
+                    "archive_inspect",
+                    "archive_extract",
+                    "compress",
+                    "decompress",
+                    // ── Network ──
+                    "http_request",
+                    "web_search",
+                    "dns_lookup",
+                    "ping",
+                    "port_scan",
+                    // ── Data ──
+                    "jsonl_read",
+                    "jsonl_write",
+                    "json_query",
+                    "rss_read",
+                    // ── Docker ──
+                    "docker_ps",
+                    "docker_logs",
+                    "docker_exec",
+                    "docker_build",
+                    "docker_push",
+                    "docker_compose",
+                    // ── Utility ──
+                    "date_time",
+                    "environment_info",
+                    "uuid_gen",
+                    "random_token",
+                    "encode_decode",
+                    "template_render",
+                    "code_metrics",
+                    "security_scan",
+                    "search_packages",
+                    "add_dependency",
+                    // ── Agent tools ──
+                    "spawn_agent",
+                    "apply_code_action",
+                    // ── Skill tools (always available) ──
+                    "skill_list",
+                    "skill_execute",
+                    "skill_create",
+                    "skill_reload",
+                ]
+            }),
             ModeKind::SafeGuard => {
                 if matches!(self.degrade_policy, AutoDegradePolicy::ReadOnly) {
-                    read_only_tools()
+                    READ_ONLY_TOOLS.get_or_init(|| {
+                        vec![
+                            "read_file",
+                            "read_file_lines",
+                            "search_files",
+                            "grep",
+                            "list_directory",
+                            "inspect_git_diff",
+                            "code_index_search",
+                            "go_to_definition",
+                            "find_references",
+                            "diff",
+                            "date_time",
+                            "environment_info",
+                            "json_query",
+                            "archive_inspect",
+                            "dns_lookup",
+                            "ping",
+                            "docker_ps",
+                            "docker_logs",
+                            "rss_read",
+                            "jsonl_read",
+                            "code_metrics",
+                            "security_scan",
+                            "skill_list",
+                            "web_search",
+                        ]
+                    })
                 } else {
-                    all_execution_tools()
+                    ALL_EXEC_TOOLS.get_or_init(|| {
+                        vec![
+                            // ── File tools ──
+                            "read_file",
+                            "read_file_lines",
+                            "write_file",
+                            "apply_patch",
+                            "file_move",
+                            "file_delete",
+                            "copy_path",
+                            "create_directory",
+                            "format_code",
+                            "hash_file",
+                            "file_watch",
+                            // ── Search tools ──
+                            "search_files",
+                            "grep",
+                            "code_index_search",
+                            "go_to_definition",
+                            "find_references",
+                            // ── Git / Diff ──
+                            "inspect_git_diff",
+                            "diff",
+                            "git",
+                            // ── Build / Test / Lint ──
+                            "cargo_check",
+                            "cargo_test",
+                            "run_tests",
+                            "run_build",
+                            "lint_code",
+                            "diagnostics",
+                            // ── Shell / Execution ──
+                            "shell_exec",
+                            // ── Directory ──
+                            "list_directory",
+                            // ── Archive ──
+                            "archive_inspect",
+                            "archive_extract",
+                            "compress",
+                            "decompress",
+                            // ── Network ──
+                            "http_request",
+                            "web_search",
+                            "dns_lookup",
+                            "ping",
+                            "port_scan",
+                            // ── Data ──
+                            "jsonl_read",
+                            "jsonl_write",
+                            "json_query",
+                            "rss_read",
+                            // ── Docker ──
+                            "docker_ps",
+                            "docker_logs",
+                            "docker_exec",
+                            "docker_build",
+                            "docker_push",
+                            "docker_compose",
+                            // ── Utility ──
+                            "date_time",
+                            "environment_info",
+                            "uuid_gen",
+                            "random_token",
+                            "encode_decode",
+                            "template_render",
+                            "code_metrics",
+                            "security_scan",
+                            "search_packages",
+                            "add_dependency",
+                            // ── Agent tools ──
+                            "spawn_agent",
+                            "apply_code_action",
+                            // ── Skill tools (always available) ──
+                            "skill_list",
+                            "skill_execute",
+                            "skill_create",
+                            "skill_reload",
+                        ]
+                    })
                 }
             }
-        }
+        };
+
+        tools.iter().map(|s| s.to_string()).collect()
     }
 
     fn max_tool_calls(&self) -> usize {
@@ -1093,13 +1156,6 @@ impl ModeRuntime for GenericModeRuntime {
             ModeKind::FullAuto => 50,
             ModeKind::SafeGuard => 30,
         }
-    }
-
-    fn user_approval_required(&self) -> bool {
-        // Frontend controls approval display, not the runtime.
-        // Edit mode delegates approval to the frontend's pending_tool_approval mechanism.
-        // SafeGuard uses its own risk-based degradation policy.
-        false
     }
 
     fn is_high_risk_operation(&self, objective: &str) -> bool {

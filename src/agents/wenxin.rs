@@ -3,95 +3,28 @@
 //! This module provides an implementation for the Baidu Wenxin API.
 
 use std::collections::HashMap;
-use std::time::Duration;
-use std::time::Instant;
 
-use anyhow::Result;
 use async_trait::async_trait;
-use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 
-use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, retry_chat_once, token_request_failed_msg};
+use crate::agents::agent::chat_request_failed_msg;
+use crate::agents::baidu_auth::BaiduAuthClient;
 use crate::agents::{option_f64, option_string, principles_to_text, stream_sse_to_sender};
 
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
 
-#[derive(Debug, Deserialize)]
-struct WenxinTokenResponse {
-    access_token: String,
-    expires_in: Option<u64>,
-}
-
-struct CachedWenxinToken {
-    token: String,
-    expires_at: Instant,
-}
-
 pub struct WenxinAgent {
-    api_key_env: String,
-    secret_key_env: String,
     client: reqwest::Client,
-    token_cache: Mutex<Option<CachedWenxinToken>>,
+    auth_client: BaiduAuthClient,
 }
 
 impl WenxinAgent {
     pub fn new(api_key_env: String, secret_key_env: String, client: reqwest::Client) -> Self {
         Self {
-            api_key_env,
-            secret_key_env,
+            auth_client: BaiduAuthClient::new(api_key_env, secret_key_env, client.clone()),
             client,
-            token_cache: Mutex::new(None),
         }
-    }
-
-    async fn get_access_token(&self) -> Result<String> {
-        {
-            let cache = self.token_cache.lock().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.expires_at > Instant::now() {
-                    return Ok(cached.token.clone());
-                }
-            }
-        }
-
-        let api_key = resolve_secret(&self.api_key_env, "wenxin.api_key_env")?;
-        let secret_key = resolve_secret(&self.secret_key_env, "wenxin.secret_key_env")?;
-
-        let mut url = reqwest::Url::parse("https://aip.baidubce.com/oauth/2.0/token")?;
-        {
-            let mut pairs = url.query_pairs_mut();
-            pairs.append_pair("grant_type", "client_credentials");
-            pairs.append_pair("client_id", api_key.as_str());
-            pairs.append_pair("client_secret", secret_key.as_str());
-        }
-        let response = self.client.get(url).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                token_request_failed_msg("wenxin", &status.to_string(), &body)
-            );
-        }
-
-        let token_response: WenxinTokenResponse = response.json().await?;
-        let ttl_seconds = token_response.expires_in.unwrap_or(1800);
-        let safety_margin = ttl_seconds.min(120);
-        let expires_at = Instant::now() + Duration::from_secs(ttl_seconds - safety_margin);
-
-        {
-            let mut cache = self.token_cache.lock().await;
-            *cache = Some(CachedWenxinToken {
-                token: token_response.access_token.clone(),
-                expires_at,
-            });
-        }
-
-        Ok(token_response.access_token)
     }
 
     fn resolve_target_model(options: &Option<HashMap<String, Value>>) -> String {
@@ -175,7 +108,10 @@ impl WenxinAgent {
 
         payload
     }
+}
 
+#[async_trait]
+impl Agent for WenxinAgent {
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -183,7 +119,7 @@ impl WenxinAgent {
         options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
-        let token = self.get_access_token().await?;
+        let token = self.auth_client.get_access_token("wenxin").await?;
         let target_model = Self::resolve_target_model(options);
         let endpoint_path = Self::endpoint_for_model(&target_model);
         let endpoint = format!(
@@ -202,27 +138,6 @@ impl WenxinAgent {
         }
 
         stream_sse_to_sender(response, sender).await
-    }
-}
-
-#[async_trait]
-impl Agent for WenxinAgent {
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> crate::core::error::Result<()> {
-        retry_chat_once(
-            || async {
-                self.chat_once(&messages, &principles, &options, sender.clone())
-                    .await
-                    .map_err(Into::into)
-            },
-            3,
-        )
-        .await
     }
 
     fn available_models(&self) -> Vec<ModelInfo> {

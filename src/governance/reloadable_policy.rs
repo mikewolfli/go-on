@@ -119,7 +119,10 @@ impl PolicyReloader {
                 "policy_reload",
                 &format!("reloaded {} policies", policy_count),
                 error_msg,
-                Some(format!("reload-{}", now_ms())),
+                Some(format!(
+                    "reload-{}",
+                    crate::shared::timestamps::now_ts_ms() as u64
+                )),
             );
         }
     }
@@ -232,11 +235,6 @@ pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-/// Returns the current time in milliseconds since the Unix epoch.
-pub fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
 // ─── Concrete reloadable policy wrappers ────────────────────────────────────
 
 /// A reloadable policy that reads a TOML-based red-line configuration file.
@@ -307,7 +305,7 @@ threshold = 0.5
         }
 
         let config: serde_json::Value = toml::from_str(&content)?;
-        self.last_reload = now_ms();
+        self.last_reload = crate::shared::timestamps::now_ts_ms() as u64;
         self.checksum = Some(new_checksum);
         self.config = Some(config);
         info!("RedLine policy reloaded from {}", self.path.display());
@@ -433,7 +431,7 @@ require_review = false
         }
 
         let config: serde_json::Value = toml::from_str(&content)?;
-        self.last_reload = now_ms();
+        self.last_reload = crate::shared::timestamps::now_ts_ms() as u64;
         self.checksum = Some(new_checksum);
         self.config = Some(config);
         info!(
@@ -551,7 +549,7 @@ block_commands = true
         }
 
         let config: serde_json::Value = toml::from_str(&content)?;
-        self.last_reload = now_ms();
+        self.last_reload = crate::shared::timestamps::now_ts_ms() as u64;
         self.checksum = Some(new_checksum);
         self.config = Some(config);
         info!("Sandbox policy reloaded from {}", self.path.display());
@@ -619,7 +617,7 @@ mod tests {
     impl ReloadablePolicy for TestPolicy {
         fn reload(&mut self) -> Result<()> {
             self.reload_count += 1;
-            self.last_reload = now_ms();
+            self.last_reload = crate::shared::timestamps::now_ts_ms() as u64;
             Ok(())
         }
 

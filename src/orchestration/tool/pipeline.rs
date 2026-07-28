@@ -2,6 +2,7 @@
 //!
 //! Builds on the tool registry to execute steps sequentially.
 
+use futures_util::future::join_all;
 use serde_json::Value;
 use std::time::Instant;
 use tracing;
@@ -37,15 +38,43 @@ pub enum PipelineErrorStrategy {
 // ---------------------------------------------------------------------------
 
 /// A named, executable pipeline of tool steps with an error strategy.
+///
+/// Supports both sequential steps (`steps`) and parallel groups (`parallel_groups`).
+/// Sequential steps run first in order, then each parallel group runs all its
+/// member steps concurrently using `tokio::join!`. This allows callers to
+/// express "do A, then do B and C simultaneously" in a single pipeline.
 pub struct ToolPipeline {
     /// Human-readable name for observability.
     pub name: String,
-    /// Steps that make up this pipeline.
+    /// Steps that make up this pipeline (run sequentially in order).
     pub steps: Vec<PipelineStep>,
+    /// Groups of steps to execute in parallel (each group runs concurrently).
+    /// Groups are executed after sequential steps complete.
+    /// Within each group, all steps run concurrently via `tokio::join!`.
+    pub parallel_groups: Vec<Vec<PipelineStep>>,
     /// Error handling strategy applied across all steps.
     pub on_error: PipelineErrorStrategy,
     /// Sandbox enforcement level (None = no governance checks).
     pub sandbox_level: Option<SandboxLevel>,
+}
+
+impl ToolPipeline {
+    /// Create a new ToolPipeline with the given name and sequential steps.
+    /// `parallel_groups` defaults to empty (no parallel execution).
+    pub fn new(
+        name: String,
+        steps: Vec<PipelineStep>,
+        on_error: PipelineErrorStrategy,
+        sandbox_level: Option<SandboxLevel>,
+    ) -> Self {
+        Self {
+            name,
+            steps,
+            parallel_groups: Vec::new(),
+            on_error,
+            sandbox_level,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,13 +110,23 @@ pub struct PipelineStepResult {
 // ---------------------------------------------------------------------------
 
 impl ToolPipeline {
-    /// Execute all pipeline steps sequentially against the given tool registry.
+    /// Execute all pipeline steps against the given tool registry.
+    ///
+    /// Execution order:
+    /// 1. Sequential steps (`self.steps`) — run in order.
+    /// 2. Parallel groups (`self.parallel_groups`) — each group runs
+    ///    all its member steps concurrently via `tokio::join!`.
+    ///
+    /// If any step fails, the error strategy (`on_error`) determines whether
+    /// execution continues. Budget governance (max 256 tool calls) applies
+    /// across the entire pipeline.
     pub async fn execute(&self, registry: &ToolRegistry, context: &Value) -> PipelineResult {
         let total_start = Instant::now();
         let mut step_results: Vec<PipelineStepResult> = Vec::new();
         let mut all_success = true;
         let mut tool_calls_used: u32 = 0;
 
+        // Phase 1: Sequential steps
         for step in &self.steps {
             let (results, should_continue) = execute_step(
                 registry,
@@ -107,6 +146,80 @@ impl ToolPipeline {
             step_results.extend(results);
 
             if !should_continue {
+                return PipelineResult {
+                    step_results,
+                    total_duration_ms: total_start.elapsed().as_millis() as u64,
+                    success: all_success,
+                };
+            }
+        }
+
+        // Phase 2: Parallel groups (each group runs concurrently)
+        for group in &self.parallel_groups {
+            if group.is_empty() {
+                continue;
+            }
+
+            // Check budget: count steps in this group before executing
+            let group_count = group.len() as u32;
+            tool_calls_used += group_count;
+            if tool_calls_used > 256 {
+                let budget_exceeded = PipelineStepResult {
+                    tool_name: "<budget>".to_string(),
+                    output: None,
+                    error: Some(
+                        "pipeline budget exceeded: max 256 tool calls per pipeline".to_string(),
+                    ),
+                    duration_ms: 0,
+                };
+                step_results.push(budget_exceeded);
+                all_success = false;
+                break;
+            }
+
+            // Execute all steps in the group concurrently using join_all.
+            // Each spawned future owns its data (no borrow of `group` across await).
+            let group_owned: Vec<(String, Value)> = group
+                .iter()
+                .map(|s| (s.tool_name.clone(), s.input.clone()))
+                .collect();
+            let sandbox = self.sandbox_level;
+            let registry_ref: &ToolRegistry = registry;
+
+            let futs: Vec<_> = group_owned
+                .into_iter()
+                .map(|(tool_name, input)| {
+                    async move {
+                        // Check governance individually
+                        if let Err(e) = check_tool_in_pipeline(&tool_name, sandbox) {
+                            tracing::warn!(
+                                target: "tool_pipeline",
+                                tool = %tool_name,
+                                error = %e,
+                                "parallel step blocked by sandbox policy"
+                            );
+                            return PipelineStepResult {
+                                tool_name,
+                                output: None,
+                                error: Some(e),
+                                duration_ms: 0,
+                            };
+                        }
+                        run_single_tool(registry_ref, &tool_name, &input).await
+                    }
+                })
+                .collect();
+
+            let group_results: Vec<PipelineStepResult> = join_all(futs).await;
+
+            let group_success = group_results.iter().all(|r| r.error.is_none());
+            if !group_success {
+                all_success = false;
+            }
+            step_results.extend(group_results);
+
+            // Apply error strategy at group level (if any step failed and strategy is not Continue, abort)
+            if !group_success && self.on_error != PipelineErrorStrategy::Continue {
                 break;
             }
         }
@@ -437,6 +550,7 @@ mod tests {
                 tool_name: "echo".to_string(),
                 input: json!({}),
             }],
+            parallel_groups: Vec::new(),
             on_error: PipelineErrorStrategy::Continue,
             sandbox_level: None,
         };
@@ -445,5 +559,71 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.step_results.len(), 1);
         assert!(result.step_results[0].error.is_none());
+    }
+
+    #[tokio::test]
+    async fn parallel_group_executes_concurrently() {
+        let mut registry = ToolRegistry::new_empty();
+        registry.register(EchoTool);
+
+        let pipeline = ToolPipeline {
+            name: "test-parallel".to_string(),
+            steps: Vec::new(),
+            parallel_groups: vec![vec![
+                PipelineStep {
+                    tool_name: "echo".to_string(),
+                    input: json!({}),
+                },
+                PipelineStep {
+                    tool_name: "echo".to_string(),
+                    input: json!({}),
+                },
+                PipelineStep {
+                    tool_name: "echo".to_string(),
+                    input: json!({}),
+                },
+            ]],
+            on_error: PipelineErrorStrategy::Continue,
+            sandbox_level: None,
+        };
+
+        let result = pipeline.execute(&registry, &json!({})).await;
+        assert!(result.success);
+        // 3 parallel steps + 0 sequential = 3 total
+        assert_eq!(result.step_results.len(), 3);
+        // All should have succeeded (no errors)
+        assert!(result.step_results.iter().all(|r| r.error.is_none()));
+    }
+
+    #[tokio::test]
+    async fn sequential_then_parallel_executes_all_steps() {
+        let mut registry = ToolRegistry::new_empty();
+        registry.register(EchoTool);
+
+        let pipeline = ToolPipeline {
+            name: "test-mixed".to_string(),
+            steps: vec![PipelineStep {
+                tool_name: "echo".to_string(),
+                input: json!({}),
+            }],
+            parallel_groups: vec![vec![
+                PipelineStep {
+                    tool_name: "echo".to_string(),
+                    input: json!({}),
+                },
+                PipelineStep {
+                    tool_name: "echo".to_string(),
+                    input: json!({}),
+                },
+            ]],
+            on_error: PipelineErrorStrategy::Continue,
+            sandbox_level: None,
+        };
+
+        let result = pipeline.execute(&registry, &json!({})).await;
+        assert!(result.success);
+        // 1 sequential + 2 parallel = 3 total
+        assert_eq!(result.step_results.len(), 3);
+        assert!(result.step_results.iter().all(|r| r.error.is_none()));
     }
 }

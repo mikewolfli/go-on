@@ -460,6 +460,9 @@ fn handle_iteration(
 ///
 /// A tuple of `(LoopDecision, LoopTrace)` where the decision conveys the
 /// final outcome and the trace records every iteration for observability.
+/// NOTE: Prefer `execute_loop_async` for new code. This sync variant
+/// is kept for backward compatibility in test environments where
+/// an async runtime is not available.
 pub fn execute_loop(
     task: &str,
     registry: &ToolRegistry,

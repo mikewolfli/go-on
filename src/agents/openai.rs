@@ -1,6 +1,9 @@
 //! OpenAI agent implementation
 //!
 //! This module provides an implementation for the OpenAI API.
+// Note: OpenAiAgent is superseded by OpenAiCompatibleAgent with compression enabled.
+// The struct and methods are kept for backward compatibility as public API.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 
@@ -9,8 +12,10 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
-use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
+use crate::agents::agent::retry_chat_once;
+use crate::agents::{
+    apply_openai_common_options, check_api_response, principles_to_text, stream_sse_to_sender,
+};
 
 pub struct OpenAiAgent {
     api_key_env: String,
@@ -77,48 +82,6 @@ impl OpenAiAgent {
         payload
     }
 
-    async fn chat_once(
-        &self,
-        messages: &[Message],
-        principles: &Option<Vec<String>>,
-        options: &Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> anyhow::Result<()> {
-        let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
-        let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let payload = self.build_payload(messages, principles, options);
-
-        let response = self
-            .client
-            .post(endpoint)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("openai", &status.to_string(), &body)
-            );
-        }
-
-        let ct = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
-            tracing::warn!("openai: unexpected content-type: {ct}");
-            anyhow::bail!("unexpected content-type: {ct}");
-        }
-
-        stream_sse_to_sender(response, sender).await
-    }
-
     /// Chat with optional SSE compression.
     ///
     /// When `options` contains `"sse_compress": true`, the SSE stream is
@@ -145,24 +108,7 @@ impl OpenAiAgent {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("openai", &status.to_string(), &body)
-            );
-        }
-
-        let ct = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
-            tracing::warn!("openai: unexpected content-type: {ct}");
-            anyhow::bail!("unexpected content-type: {ct}");
-        }
+        let response = check_api_response(response, "openai").await?;
 
         crate::agents::stream_sse_to_sender_compressed(response, sender, compress_cfg).await
     }
@@ -207,6 +153,31 @@ impl Agent for OpenAiAgent {
             3,
         )
         .await
+    }
+
+    async fn chat_once(
+        &self,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
+        sender: crate::agent::StreamingSender,
+    ) -> anyhow::Result<()> {
+        let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
+        let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let payload = self.build_payload(messages, principles, options);
+
+        let response = self
+            .client
+            .post(endpoint)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        let response = check_api_response(response, "openai").await?;
+
+        stream_sse_to_sender(response, sender).await
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {

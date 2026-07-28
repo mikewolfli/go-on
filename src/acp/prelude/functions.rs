@@ -17,11 +17,6 @@ pub fn now_ts() -> i64 {
     crate::shared::timestamps::now_ts()
 }
 
-/// Get current timestamp in milliseconds (delegates to `crate::shared::timestamps`).
-pub fn now_ts_ms() -> i64 {
-    crate::shared::timestamps::now_ts_ms()
-}
-
 /// Enforce checkpoint capacity
 pub fn enforce_checkpoint_capacity(
     state: &mut ConversationState,

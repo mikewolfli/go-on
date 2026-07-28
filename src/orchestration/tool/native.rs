@@ -4,9 +4,25 @@
 //! function definitions, parses native function call responses back into
 //! ToolInput.
 //!
-//! This module provides the bridge logic for when provider function-calling
-//! is wired in. Currently only compiled in tests, but the public API is
-//! ready for integration.
+//! # Status: Superseded by `shared::tool_descriptors`
+//!
+//! This module is an **alternative approach** to generating tool schemas that
+//! has been superseded by the `tool_descriptors` system:
+//!
+//! - **`tool_descriptors`** (`shared::tool_descriptors.rs` + `tools_pack.rs`):
+//!   The active tool schema pipeline. Used by `agent_options.rs` to build
+//!   OpenAI-format tool definitions from `tool_descriptor()`, and by
+//!   `build_mcp_tool_descriptors()` to build Anthropic/MCP-format descriptors.
+//!   The `Tool` trait's `input_schema()` also delegates to `tool_descriptors`
+//!   by default.
+//! - **`NativeToolBridge`** (this module): An earlier design that wraps a
+//!   `ToolRegistry` and caches schemas internally. Not wired into any caller.
+//!
+//! This module is kept for its unit tests (`builds_openai_tools_from_registry`,
+//! `builds_anthropic_tools_from_registry`, `parses_openai_tool_call_into_input`,
+//! `rejects_unknown_tool`) which serve as regression coverage for the schema
+//! format roundtrip. If the test coverage is ever ported to the `tool_descriptors`
+//! module or the integration tests, this file can be removed entirely.
 
 use crate::orchestration::tool::{ToolInput, ToolRegistry};
 use serde_json::{json, Value};

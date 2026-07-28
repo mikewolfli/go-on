@@ -47,3 +47,11 @@ Summarize long conversations to fit within token windows.
 
 - `/summarize` — Generate context summary
 - `/summarize save` — Save summary to `docs/context-summary.md`
+
+## Input
+
+When invoked, the user's request is available as:
+
+```
+{{input}}
+```

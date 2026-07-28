@@ -7,6 +7,11 @@
 //!
 //! The outer `Arc<StdMutex<CircuitBreakerRegistry>>` in `AcpServer` provides
 //! thread safety; this struct holds the data directly (no inner Mutex).
+//!
+//! NOTE: This registry currently only tracks Closed state. Open/HalfOpen
+//! transitions are managed by HyperResilienceEngine internally. If future
+//! wiring is needed to sync HRE state back to this registry, restore the
+//! Open/HalfOpen variants and transition_to() method.
 
 use std::collections::HashMap;
 
@@ -22,7 +27,7 @@ use serde::Serialize;
 pub struct CircuitBreakerSnapshot {
     /// Circuit breaker name
     pub name: String,
-    /// Current state (closed, open, half-open)
+    /// Current state (always "closed" in this registry)
     pub state: String,
     /// Failure count
     pub failure_count: u32,
@@ -43,30 +48,9 @@ pub struct CircuitBreakerSnapshot {
 /// Circuit breaker state
 #[derive(Debug, Clone)]
 pub(crate) struct CircuitBreakerState {
-    pub(crate) stage: CircuitBreakerStage,
     pub(crate) failure_count: u32,
     pub(crate) success_count: u32,
     pub(crate) last_state_change: i64,
-}
-
-/// Circuit breaker stage
-///
-/// Only `Closed` is actively used; `Open` and `HalfOpen` are reserved
-/// for future sync with `HyperResilienceEngine`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) enum CircuitBreakerStage {
-    #[default]
-    Closed,
-    #[expect(
-        dead_code,
-        reason = "reserved for future HyperResilienceEngine sync; never constructed yet"
-    )]
-    Open,
-    #[expect(
-        dead_code,
-        reason = "reserved for future HyperResilienceEngine sync; never constructed yet"
-    )]
-    HalfOpen,
 }
 
 // ============================================================================
@@ -90,25 +74,18 @@ impl CircuitBreakerRegistry {
         Self::default()
     }
 
-    /// Get the number of open circuit breakers.
+    /// Get the number of open circuit breakers (always 0 — HRE tracks actual state).
     pub fn open_count(&self) -> u32 {
-        self.inner
-            .values()
-            .filter(|state| matches!(state.stage, CircuitBreakerStage::Open))
-            .count() as u32
+        0
     }
 
-    /// Get circuit breaker snapshots.
+    /// Get circuit breaker snapshots (all report "closed" — HRE is the state authority).
     pub fn snapshots(&self) -> Vec<CircuitBreakerSnapshot> {
         self.inner
             .iter()
             .map(|(name, state)| CircuitBreakerSnapshot {
                 name: name.clone(),
-                state: match state.stage {
-                    CircuitBreakerStage::Closed => "closed".to_string(),
-                    CircuitBreakerStage::Open => "open".to_string(),
-                    CircuitBreakerStage::HalfOpen => "half-open".to_string(),
-                },
+                state: "closed".to_string(),
                 failure_count: state.failure_count,
                 success_count: state.success_count,
                 last_state_change: state.last_state_change,
@@ -118,19 +95,18 @@ impl CircuitBreakerRegistry {
             .collect()
     }
 
-    /// Check if all circuit breakers are closed (healthy).
+    /// Check if all circuit breakers are closed (always true — HRE is the authority).
     pub fn is_healthy(&self) -> bool {
-        self.open_count() == 0
+        true
     }
 
-    /// Reset one circuit breaker or all tracked breakers back to closed state.
+    /// Reset one circuit breaker or all tracked breakers back to initial state.
     /// The caller must hold the outer lock; takes `&mut self` for interior access.
     pub fn reset(&mut self, name: Option<&str>) -> usize {
         let now = now_ts();
         match name {
             Some(name) => {
                 if let Some(state) = self.inner.get_mut(name) {
-                    state.stage = CircuitBreakerStage::Closed;
                     state.failure_count = 0;
                     state.success_count = 0;
                     state.last_state_change = now;
@@ -142,7 +118,6 @@ impl CircuitBreakerRegistry {
             None => {
                 let count = self.inner.len();
                 for state in self.inner.values_mut() {
-                    state.stage = CircuitBreakerStage::Closed;
                     state.failure_count = 0;
                     state.success_count = 0;
                     state.last_state_change = now;

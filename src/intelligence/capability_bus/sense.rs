@@ -8,7 +8,6 @@
 
 use super::core::{CapabilityBus, WorkflowLearningEvent};
 use crate::governance::pua::TaskContext;
-use crate::intelligence::{lock_guard, read_guard};
 
 // ---------------------------------------------------------------------------
 // Stage output type
@@ -40,10 +39,10 @@ impl CapabilityBus {
     pub fn sense(&self, task: &TaskContext) -> SensingOutput {
         // Include task risk score in heartbeat so `task` is unconditionally referenced
         // across all feature configurations.
-        let cap_agents = lock_guard(&self.capability_graph).total_agents();
+        let cap_agents = crate::lock_or_recover!(&self.capability_graph, "intelligence").total_agents();
         // BLUE70: Read from UnifiedKnowledgeBus (replaces legacy ReputationStore)
         let rep_snapshot = {
-            let ukb = read_guard(&self.unified_knowledge_bus);
+            let ukb = crate::read_or_recover!(&self.unified_knowledge_bus, "intelligence");
             ukb.all_reputations().into_iter().map(|r| {
                 crate::intelligence::reputation::ReputationRecord {
                     agent: r.agent.clone(),
@@ -58,11 +57,11 @@ impl CapabilityBus {
         };
         // BLUE70: Read from LearningOptimizationBus (replaces legacy WorkflowLearningBus)
         let _learning_rates = {
-            let lob = read_guard(&self.learning_optimization_bus);
+            let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
             lob.events_snapshot().iter().map(|e| e.agent.clone()).collect::<Vec<_>>()
         };
         let learning_snapshot: Vec<WorkflowLearningEvent> = {
-            let lob = read_guard(&self.learning_optimization_bus);
+            let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
             lob.events_snapshot().into_iter().map(|e| WorkflowLearningEvent {
                 task_type: e.task_type,
                 agent: e.agent,
@@ -116,7 +115,7 @@ impl CapabilityBus {
 
         // Send a heartbeat through the transport layer, including task risk score
         // so the transport is always informed of the current task context.
-        let transport = lock_guard(&self.transport);
+        let transport = crate::lock_or_recover!(&self.transport, "intelligence");
         let heartbeat = format!(
             "{{\"status\":\"alive\",\"risk_score\":{}}}",
             task.risk_score
@@ -140,20 +139,20 @@ impl CapabilityBus {
     /// BLUE70: Query consolidated buses for enhanced context.
     /// Returns optimization suggestion from the LearningOptimizationBus.
     pub fn blue70_sense_optimization(&self, task_type: &str) -> Option<String> {
-        let lob = read_guard(&self.learning_optimization_bus);
+        let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
         lob.suggestion_for(task_type)
             .and_then(|s| s.recommended_agent.clone())
     }
 
     /// BLUE70: Get agent reputation from UnifiedKnowledgeBus.
     pub fn blue70_agent_reputation(&self, agent: &str) -> Option<f64> {
-        let ukb = read_guard(&self.unified_knowledge_bus);
+        let ukb = crate::read_or_recover!(&self.unified_knowledge_bus, "intelligence");
         ukb.get_reputation(agent)
     }
 
     /// BLUE70: Get best agent for a task via ReinforcementBus Q-learning.
     pub fn blue70_best_agent(&self, task_type: &str, agents: &[String]) -> Option<String> {
-        let rb = read_guard(&self.reinforcement_bus);
+        let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
         rb.select_action(task_type, agents)
     }
 

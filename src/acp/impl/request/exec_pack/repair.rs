@@ -142,7 +142,7 @@ pub(crate) fn evaluate_repair_termination_criteria(
         );
     }
 
-    let elapsed_ms = crate::acp::prelude::now_ts_ms() as u64 - start_time_ms;
+    let elapsed_ms = crate::shared::timestamps::now_ts_ms() as u64 - start_time_ms;
     let budget_ms = context.budget_time_seconds * 1000;
     if elapsed_ms > budget_ms {
         return (

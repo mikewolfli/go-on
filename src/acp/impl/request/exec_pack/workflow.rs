@@ -34,7 +34,7 @@ fn workflow_runs() -> &'static StdMutex<Vec<WorkflowRunRecord>> {
 
 fn next_workflow_run_id() -> String {
     let seq = WORKFLOW_RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("run-{}-{}", crate::acp::prelude::now_ts_ms(), seq)
+    format!("run-{}-{}", crate::shared::timestamps::now_ts_ms(), seq)
 }
 
 fn merge_effective_option_from_root(params: &Value, key: &str, out: &mut HashMap<String, Value>) {

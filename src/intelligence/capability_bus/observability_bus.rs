@@ -29,7 +29,6 @@
 //! All internal state is protected by `Arc<Mutex<…>>`, making `ObservabilityBus`
 //! safe to share across asynchronous boundaries.
 
-use crate::intelligence::lock_guard;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -238,11 +237,11 @@ impl ObservabilityBus {
         error: Option<String>,
         token_cost: u64,
     ) {
-        let now = crate::intelligence::now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // --- 1. Push trace event into the ring buffer ---
         {
-            let mut events = lock_guard(self.trace_events.as_ref());
+            let mut events = crate::lock_or_recover!(self.trace_events.as_ref(), "intelligence");
             if events.len() == self.max_events {
                 events.pop_front();
             }
@@ -259,7 +258,7 @@ impl ObservabilityBus {
 
         // --- 2. Update per-agent latency ---
         {
-            let mut windows = lock_guard(self.windows.as_ref());
+            let mut windows = crate::lock_or_recover!(self.windows.as_ref(), "intelligence");
             let window = windows
                 .entry(agent.to_string())
                 .or_insert_with(|| DurationWindow::new(self.max_events));
@@ -275,7 +274,7 @@ impl ObservabilityBus {
                 last_updated_ms: now,
             };
 
-            let mut latency = lock_guard(self.agent_latency.as_ref());
+            let mut latency = crate::lock_or_recover!(self.agent_latency.as_ref(), "intelligence");
             // Evict oldest agent latency when at capacity for a new agent.
             if !latency.contains_key(agent) && latency.len() >= self.max_agents {
                 if let Some(oldest) = latency.keys().next().cloned() {
@@ -287,7 +286,8 @@ impl ObservabilityBus {
 
         // --- 3. Update per-agent error rate ---
         {
-            let mut error_rates = lock_guard(self.agent_error_rates.as_ref());
+            let mut error_rates =
+                crate::lock_or_recover!(self.agent_error_rates.as_ref(), "intelligence");
             // Evict oldest agent error rate when at capacity for a new agent.
             if !error_rates.contains_key(agent) && error_rates.len() >= self.max_agents {
                 if let Some(oldest) = error_rates.keys().next().cloned() {
@@ -320,11 +320,11 @@ impl ObservabilityBus {
 
         // --- 4. Update profile ---
         {
-            let mut profile = lock_guard(self.profile.as_ref());
+            let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
             profile.total_traces += 1;
 
             // Recompute system-level aggregates from latencies.
-            let latency = lock_guard(self.agent_latency.as_ref());
+            let latency = crate::lock_or_recover!(self.agent_latency.as_ref(), "intelligence");
             profile.tracked_agents = latency.len() as u32;
 
             let avg_sys: f64 = if !latency.is_empty() {
@@ -335,7 +335,8 @@ impl ObservabilityBus {
             };
             profile.avg_system_latency_ms = avg_sys;
 
-            let error_rates = lock_guard(self.agent_error_rates.as_ref());
+            let error_rates =
+                crate::lock_or_recover!(self.agent_error_rates.as_ref(), "intelligence");
             let (total_errors, total_calls): (u64, u64) =
                 error_rates.values().fold((0, 0), |(acc_err, acc_call), s| {
                     (acc_err + s.error_count, acc_call + s.total_calls)
@@ -350,13 +351,13 @@ impl ObservabilityBus {
 
     /// Return latency statistics for a specific agent, or `None` if unknown.
     pub fn agent_latency(&self, agent: &str) -> Option<LatencyStats> {
-        let latency = lock_guard(self.agent_latency.as_ref());
+        let latency = crate::lock_or_recover!(self.agent_latency.as_ref(), "intelligence");
         latency.get(agent).cloned()
     }
 
     /// Return error-rate statistics for a specific agent, or `None` if unknown.
     pub fn agent_error_rate(&self, agent: &str) -> Option<ErrorRateStats> {
-        let error_rates = lock_guard(self.agent_error_rates.as_ref());
+        let error_rates = crate::lock_or_recover!(self.agent_error_rates.as_ref(), "intelligence");
         error_rates.get(agent).cloned()
     }
 
@@ -366,7 +367,7 @@ impl ObservabilityBus {
     /// Agents with zero recorded calls are **excluded** since there is
     /// insufficient data for a routing decision.
     pub fn healthy_agents(&self, max_error_rate: f64) -> Vec<String> {
-        let error_rates = lock_guard(self.agent_error_rates.as_ref());
+        let error_rates = crate::lock_or_recover!(self.agent_error_rates.as_ref(), "intelligence");
         error_rates
             .iter()
             .filter(|(_, s)| s.total_calls > 0 && s.error_rate < max_error_rate)
@@ -379,7 +380,7 @@ impl ObservabilityBus {
     ///
     /// Agents with zero recorded calls are excluded.
     pub fn slow_agents(&self, threshold_ms: f64) -> Vec<String> {
-        let latency = lock_guard(self.agent_latency.as_ref());
+        let latency = crate::lock_or_recover!(self.agent_latency.as_ref(), "intelligence");
         latency
             .iter()
             .filter(|(_, s)| s.sample_count > 0 && s.avg_duration_ms > threshold_ms)
@@ -389,7 +390,7 @@ impl ObservabilityBus {
 
     /// Return a high-level profile snapshot of the bus.
     pub fn system_health(&self) -> ObservabilityBusProfile {
-        let profile = lock_guard(self.profile.as_ref());
+        let profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         profile.clone()
     }
 
@@ -398,7 +399,7 @@ impl ObservabilityBus {
     /// If fewer than `count` events have been recorded, all available events
     /// are returned.
     pub fn recent_traces(&self, count: usize) -> Vec<TraceEvent> {
-        let events = lock_guard(self.trace_events.as_ref());
+        let events = crate::lock_or_recover!(self.trace_events.as_ref(), "intelligence");
         let len = events.len();
         let start = len.saturating_sub(count);
         events.range(start..).cloned().collect()

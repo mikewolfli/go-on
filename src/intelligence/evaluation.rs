@@ -4,6 +4,19 @@
 //! multi-dimensional scoring for agent quality assessment.
 //!
 //! Also re-exports TraceEvent used by ACP request/chat runtime paths.
+//!
+//! ## Relationship to other quality types
+//!
+//! - [`EvaluationScore`] is a **numeric scoring struct** (`accuracy`,
+//!   `completeness`, `efficiency`, `safety` as `f64` values). It is
+//!   conceptually separate from the categorical [`QualityVerdict`](crate::quality_models::QualityVerdict)
+//!   enum defined in [`quality_models`](crate::quality_models).
+//! - The [`verification`](crate::intelligence::verification) module uses
+//!   `VerificationVerdict` (an alias for `QualityVerdict`) for structured
+//!   review outcomes. `EvaluationScore` is used for benchmark-based
+//!   agent evaluation instead.
+//! - These types are complementary: `EvaluationScore` measures *how well*
+//!   while `QualityVerdict` decides *what to do*.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -482,7 +495,11 @@ pub struct BenchmarkCase {
     pub tags: Vec<String>,
 }
 
-/// Multi-dimensional score for an evaluation run
+/// Multi-dimensional numeric score for an evaluation run.
+///
+/// This is a continuous scoring struct (each field is `f64` in [0.0, 1.0]),
+/// distinct from the categorical [`QualityVerdict`](crate::quality_models::QualityVerdict)
+/// enum. See the [module-level docs](self) for cross-references.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationScore {
     pub accuracy: f64,

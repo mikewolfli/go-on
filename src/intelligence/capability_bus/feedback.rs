@@ -10,7 +10,7 @@
 use super::core::CapabilityBus;
 #[cfg(feature = "sub-bus-orchestration")]
 use crate::intelligence::capability_bus::orchestration_bus::OrchestrationBus;
-use crate::intelligence::write_guard;
+
 use crate::shared::provenance_helpers::make_entry;
 
 /// RAII guard that ensures `complete_flow` is called when `feedback()` returns,
@@ -67,7 +67,7 @@ impl CapabilityBus {
 
         // 1. BLUE70: Write to LearningOptimizationBus (replaces legacy WorkflowLearningBus)
         {
-            let mut lob = write_guard(&self.learning_optimization_bus);
+            let mut lob = crate::write_or_recover!(&self.learning_optimization_bus, "intelligence");
             lob.record_and_optimize(
                 crate::intelligence::capability_bus::learning_optimization_bus::LearningEvent {
                     task_type: task_type.to_string(),
@@ -83,7 +83,7 @@ impl CapabilityBus {
 
         // 2. BLUE70: Write to UnifiedKnowledgeBus + ReinforcementBus (replaces legacy ReputationStore + QLearningAgent + ExperienceKnowledgeBase)
         {
-            let mut ukb = write_guard(&self.unified_knowledge_bus);
+            let mut ukb = crate::write_or_recover!(&self.unified_knowledge_bus, "intelligence");
             let outcome_summary = format!(
                 "agent={} task={} success={} dur={}ms tokens={} quality={:.2}",
                 agent, task_type, success, duration_ms, token_cost, quality_score

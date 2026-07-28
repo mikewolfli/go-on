@@ -336,7 +336,7 @@ mod test_suite {
     #[test]
     fn test_timestamp_utilities() {
         let ts = now_ts();
-        let ts_ms = now_ts_ms();
+        let ts_ms = crate::shared::timestamps::now_ts_ms();
 
         assert!(ts > 0);
         assert!(ts_ms > 0);

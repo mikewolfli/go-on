@@ -34,6 +34,7 @@ pub enum ExcelWriterError {
     #[error("invalid sheet name: {0}")]
     InvalidSheetName(String),
     /// Feature is not enabled.
+    #[cfg(not(feature = "document-excel-write"))]
     #[error("feature document-excel-write is not enabled")]
     FeatureDisabled,
 }

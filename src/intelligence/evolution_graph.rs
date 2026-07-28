@@ -4,7 +4,7 @@
 //! version history, and performance trends. This module enables monitoring
 //! of agent capability maturity and automatic promotion/deprecation decisions.
 
-use crate::intelligence::now_ms;
+
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -208,7 +208,7 @@ impl EvolutionGraph {
         let version = CapabilityVersion {
             version: format!("v{}", self.version_counter),
             stage: record.current_stage,
-            created_ms: now_ms(),
+            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
             success_rate,
             avg_latency_ms,
         };

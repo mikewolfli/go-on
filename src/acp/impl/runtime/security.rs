@@ -166,7 +166,7 @@ async fn write_entry_rejection(
     policy: &str,
     cors_headers: &str,
 ) -> Result<()> {
-    let trace_id = format!("entry-{}", crate::acp::prelude::now_ts_ms());
+    let trace_id = format!("entry-{}", crate::shared::timestamps::now_ts_ms());
     write_http_json_response(
         socket,
         status,

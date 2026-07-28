@@ -22,7 +22,7 @@
 //!   full peer set and shared‑entry machinery is active.
 
 use crate::i18n::runtime::tf;
-use crate::intelligence::now_ms;
+
 use serde::{Deserialize, Serialize};
 use tracing;
 
@@ -269,7 +269,7 @@ impl DistributedMemoryBus {
             value: value.to_string(),
             tags,
             confidence: confidence.clamp(0.0, 1.0),
-            created_ms: now_ms(),
+            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
             ttl_ms,
         };
 
@@ -435,7 +435,7 @@ impl DistributedMemoryBus {
         // 2. Create a shared wrapper
         let shared_entry = SharedMemoryEntry {
             entry,
-            synced_ms: now_ms(),
+            synced_ms: crate::shared::timestamps::now_ts_ms() as u64,
             source_node: local_node_id(),
             sync_count: 1,
         };
@@ -489,7 +489,7 @@ impl DistributedMemoryBus {
     /// An entry is considered expired when `created_ms + ttl_ms < now` and
     /// `ttl_ms > 0`.
     pub fn prune_expired(&self) {
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let mut pruned = 0u64;
 
         // Prune local entries
@@ -768,7 +768,7 @@ impl DistributedMemoryBus {
         let entries: Vec<MemoryBusEntry> = serde_json::from_str(entries_json)?;
 
         let count = entries.len();
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         let mut guard = self
             .shared_entries
@@ -884,7 +884,7 @@ impl DistributedMemoryBus {
             // actual HTTP call. Here we simulate by storing locally as shared.
             {
                 let mut guard = shared_entries.lock().unwrap_or_else(|e| e.into_inner());
-                let now = now_ms();
+                let now = crate::shared::timestamps::now_ts_ms() as u64;
                 for entry in &entries_to_sync {
                     let shared = SharedMemoryEntry {
                         entry: entry.clone(),

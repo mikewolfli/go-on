@@ -1691,7 +1691,7 @@ impl AcpServer {
     ) -> anyhow::Result<bool> {
         let request_id = format!(
             "perm-{}-{}",
-            crate::acp::prelude::now_ts_ms(),
+            crate::shared::timestamps::now_ts_ms(),
             fastrand::u32(..)
         );
         let rx = self

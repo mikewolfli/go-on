@@ -12,8 +12,7 @@ pub use types::*;
 
 use crate::i18n::runtime::tf;
 use crate::intelligence::causal_bayesian_graph::{BayesianCausalPath, CausalBayesianGraph};
-use crate::intelligence::lock_guard;
-use crate::intelligence::now_ms;
+
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -70,7 +69,7 @@ impl WorldModel {
                 entities: Vec::new(),
                 relationships: Vec::new(),
                 events: Vec::new(),
-                last_update_ms: now_ms(),
+                last_update_ms: crate::shared::timestamps::now_ts_ms() as u64,
                 next_entity_id: 1,
                 next_event_id: 1,
                 next_snapshot_id: 1,
@@ -93,8 +92,8 @@ impl WorldModel {
     /// Returns an error if an entity with the same `name` and `entity_type`
     /// already exists, or if the maximum number of entities has been reached.
     pub fn register_entity(&self, name: &str, entity_type: EntityType) -> Result<String> {
-        let mut inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Check for duplicate by name + type.
         if inner
@@ -155,8 +154,8 @@ impl WorldModel {
     /// Merges the provided `properties` into the entity's existing properties.
     /// Returns an error if no entity with the given `id` exists.
     pub fn update_entity(&self, id: &str, properties: HashMap<String, String>) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         let entity = inner
             .entities
@@ -252,7 +251,7 @@ impl WorldModel {
                 drop(inner);
                 let chain_links = self.infer_causal_chain(&state_changes);
                 if !chain_links.is_empty() {
-                    let mut inner = lock_guard(&self.inner);
+                    let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
                     for link in &chain_links {
                         if inner.causal_links.len() < inner.max_causal_links {
                             let idx = inner.causal_links.len();
@@ -290,8 +289,8 @@ impl WorldModel {
     ///
     /// Returns an error if no entity with the given `id` exists.
     pub fn remove_entity(&self, id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         let pos = inner
             .entities
@@ -322,8 +321,8 @@ impl WorldModel {
         rel_type: RelationshipType,
         weight: f64,
     ) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Verify both entities exist.
         if !inner.entities.iter().any(|e| e.id == source_id) {
@@ -364,8 +363,8 @@ impl WorldModel {
         source: &str,
         payload: HashMap<String, String>,
     ) -> Result<String> {
-        let mut inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         let id = format!("evt_{}", inner.next_event_id);
         inner.next_event_id += 1;
@@ -446,7 +445,7 @@ impl WorldModel {
         entity_type: Option<EntityType>,
         min_confidence: f64,
     ) -> Vec<WorldEntity> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         inner
             .entities
@@ -464,7 +463,7 @@ impl WorldModel {
 
     /// Query all relationships involving the given entity ID.
     pub fn query_relationships(&self, entity_id: &str) -> Vec<Relationship> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         inner
             .relationships
@@ -476,7 +475,7 @@ impl WorldModel {
 
     /// Query events filtered by `event_type` and occurring after `since_ms`.
     pub fn query_events(&self, event_type: &str, since_ms: u64) -> Vec<WorldEvent> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         inner
             .events
@@ -508,7 +507,7 @@ impl WorldModel {
         max_path_length: usize,
         min_probability: f64,
     ) -> Vec<BayesianCausalPath> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.bayesian_graph.find_paths_mcts(
             cause_entity,
             "state",
@@ -526,7 +525,7 @@ impl WorldModel {
     /// Uses Bayesian inversion on the internal causal graph:
     /// P(effect | ¬cause) = (P(effect) - P(cause) * P(effect|cause)) / (1 - P(cause))
     pub fn counterfactual_probability(&self, cause_entity: &str, effect_entity: &str) -> f64 {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.bayesian_graph.counterfactual_probability(
             cause_entity,
             "state",
@@ -537,7 +536,7 @@ impl WorldModel {
 
     /// Get the Bayesian graph's node and edge count for diagnostics.
     pub fn bayesian_graph_stats(&self) -> (usize, usize, u64) {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         (
             inner.bayesian_graph.node_count(),
             inner.bayesian_graph.edge_count(),
@@ -559,7 +558,7 @@ impl WorldModel {
     /// This is called from `CapabilityBus::decide()` as an additional scoring
     /// dimension alongside reputation, recency, and task-fit scores.
     pub fn causal_agent_insight(&self, agent_name: &str, task_type: &str) -> f64 {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         // Only meaningful if sufficient observations exist (at least 10 edges)
         if inner.bayesian_graph.edge_count() < 10 {
             return 0.5; // neutral — insufficient data
@@ -587,8 +586,8 @@ impl WorldModel {
 
     /// Capture a point-in-time snapshot of the world model's state.
     pub fn snapshot(&self) -> StateSnapshot {
-        let mut inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         let snapshot_id = format!("snap_{}", inner.next_snapshot_id);
         inner.next_snapshot_id += 1;
@@ -606,8 +605,8 @@ impl WorldModel {
     /// Remove entities, relationships, and events that are older than the
     /// retention period. Returns the number of entities that were removed.
     pub fn cleanup_stale(&self) -> usize {
-        let mut inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let cutoff = now.saturating_sub(inner.config.state_retention_ms);
 
         let before = inner.entities.len();
@@ -651,7 +650,7 @@ impl WorldModel {
         delay_ms: f64,
         context_tags: Vec<String>,
     ) {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let existing_pos = inner
             .causal_links
             .iter()
@@ -688,7 +687,7 @@ impl WorldModel {
                 .or_default()
                 .push(idx);
         }
-        inner.last_update_ms = now_ms();
+        inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
     }
 
     /// Predict the outcome of taking `action` on `target_entity`.
@@ -698,7 +697,7 @@ impl WorldModel {
     /// Uses the causal_links_by_cause index for O(1) lookups by cause_entity_id
     /// instead of scanning all causal_links (O(N)).
     pub fn predict_outcome(&self, action: &str, target_entity: &str) -> Vec<Prediction> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let mut results: Vec<Prediction> = Vec::new();
 
         // Helper to convert entity properties to a serde_json Value
@@ -766,7 +765,7 @@ impl WorldModel {
     /// Uses both the event stream and the existing `causal_links_by_cause` index
     /// to find multi-step sequences, hub nodes, and temporal correlations.
     pub fn discover_causal_patterns(&self, window_ms: u64) -> Vec<String> {
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let cutoff = now.saturating_sub(window_ms);
 
         // Collect event and index data while holding the lock
@@ -774,7 +773,7 @@ impl WorldModel {
             Vec<EventData>,
             std::collections::HashMap<String, usize>,
         ) = {
-            let inner = lock_guard(&self.inner);
+            let inner = crate::lock_or_recover!(&self.inner, "intelligence");
             let events: Vec<_> = inner
                 .events
                 .iter()
@@ -884,7 +883,7 @@ impl WorldModel {
         // Push all discovered links into inner state and maintain the index
         if !new_links.is_empty() {
             // Deduplicate against existing links before inserting
-            let mut inner = lock_guard(&self.inner);
+            let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
             let mut actually_added = 0;
             for link in &new_links {
                 let already_exists = inner.causal_links.iter().any(|l| {
@@ -942,11 +941,11 @@ impl WorldModel {
     ///
     /// Returns the list of discovered correlations with confidence scores.
     pub fn infer_causal_links(&self) -> Vec<Correlation> {
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Snapshot entity state before locking for mutation to avoid borrow conflict
         let entity_snapshots: Vec<(String, HashMap<String, String>)> = {
-            let inner = lock_guard(&self.inner);
+            let inner = crate::lock_or_recover!(&self.inner, "intelligence");
             inner
                 .entities
                 .iter()
@@ -954,7 +953,7 @@ impl WorldModel {
                 .collect()
         };
 
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         // Record current state of all entities into the reasoner
         for (id, props) in &entity_snapshots {
@@ -1005,7 +1004,7 @@ impl WorldModel {
     /// Returns a list of `(property_name, expected_value, confidence)` tuples
     /// ordered by confidence descending.
     pub fn predict_next_state(&self, entity_id: &str) -> Vec<(String, String, f64)> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         // Find the entity's current properties
         let current_props = inner
@@ -1026,7 +1025,7 @@ impl WorldModel {
     /// A→B→C→... patterns from the current set of discovered correlations.
     /// Returns chains sorted by length (longest first).
     pub fn infer_causal_chains(&self, max_chain_length: usize) -> Vec<Vec<Correlation>> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.causal_reasoner.infer_causal_chains(max_chain_length)
     }
 
@@ -1050,7 +1049,7 @@ impl WorldModel {
         max_chain_length: usize,
         min_confidence: f64,
     ) -> Vec<CausalChain> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner
             .causal_reasoner
             .infer_causal_chains_deep(max_chain_length, min_confidence)
@@ -1148,7 +1147,7 @@ impl WorldModel {
     ///
     /// Returns a list of `Prediction` values sorted by confidence descending.
     pub fn predict_entity_changes(&self, entity_id: &str, horizon_ms: u64) -> Vec<Prediction> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let mut predictions: Vec<Prediction> = Vec::new();
 
         // 1. Use causal reasoner's state-based predictions
@@ -1204,7 +1203,7 @@ impl WorldModel {
 
     /// Returns all recorded causal links.
     pub fn get_causal_links(&self) -> Vec<CausalLink> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.causal_links.clone()
     }
 
@@ -1216,7 +1215,7 @@ impl WorldModel {
     /// - If `entity_id` has incoming causal links, suggests what inputs affect it.
     /// - Returns `None` when no relevant causal links are found.
     pub fn predict(&self, entity_id: &str, attribute: &str, horizon_ms: u64) -> Option<Prediction> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         // Check for outgoing causal links — predict effects on linked entities
         if let Some(indices) = inner.causal_links_by_cause.get(entity_id) {
@@ -1287,8 +1286,8 @@ impl WorldModel {
 
     /// Return a summary profile of the world model's current state.
     pub fn profile(&self) -> WorldModelProfile {
-        let inner = lock_guard(&self.inner);
-        let now = now_ms();
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let cutoff = now.saturating_sub(inner.config.state_retention_ms);
 
         let total_entities = inner.entities.len();
@@ -1514,7 +1513,7 @@ mod tests {
         let mut p3 = HashMap::new();
         p3.insert("level".to_string(), "error".to_string());
 
-        let t0 = now_ms();
+        let t0 = crate::shared::timestamps::now_ts_ms() as u64;
 
         wm.record_event("log", &id, p1).unwrap();
         wm.record_event("log", &id, p2).unwrap();
@@ -1529,7 +1528,7 @@ mod tests {
         assert_eq!(alert_events.len(), 1);
 
         // Query with future timestamp returns nothing.
-        let future = now_ms() + 10_000;
+        let future = crate::shared::timestamps::now_ts_ms() as u64 + 10_000;
         let empty = wm.query_events("log", future);
         assert!(empty.is_empty());
     }
@@ -1671,7 +1670,7 @@ mod tests {
         props_b.insert("mem".to_string(), "high".to_string());
         props_b.insert("disk".to_string(), "empty".to_string());
 
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         reasoner.record_state("server-1", props_a, now);
         reasoner.record_state("server-1", props_b, now + 100);
 
@@ -1697,7 +1696,7 @@ mod tests {
     #[test]
     fn test_causal_reasoner_predict() {
         let mut reasoner = CausalReasoner::new(100, 10_000);
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Set up history showing: when server-1 goes high-cpu, db-1 follows
         let mut s1_props = HashMap::new();
@@ -1912,7 +1911,7 @@ mod tests {
     #[test]
     fn test_causal_chains_deep_confidence_decay() {
         let mut reasoner = CausalReasoner::new(100, 10_000);
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Set up a chain: A→B, B→C, C→D
         let mut props_a = HashMap::new();
@@ -1964,7 +1963,7 @@ mod tests {
     #[test]
     fn test_causal_chains_deep_branching() {
         let mut reasoner = CausalReasoner::new(100, 10_000);
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Simulate correlations via snapshots: X→Y and X→Z (same cause, different effects)
         let mut props_x = HashMap::new();
@@ -2006,7 +2005,7 @@ mod tests {
     #[test]
     fn test_causal_chains_deep_feedback_loop() {
         let mut reasoner = CausalReasoner::new(100, 10_000);
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Create a cycle: A→B, B→C, C→A
         let mut props_a = HashMap::new();
@@ -2049,7 +2048,7 @@ mod tests {
     #[test]
     fn test_causal_chains_deep_threshold_filtering() {
         let mut reasoner = CausalReasoner::new(100, 10_000);
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Add many snapshots to try to generate some correlations
         for i in 0..5 {

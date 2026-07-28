@@ -153,7 +153,7 @@ impl ApprovalRequest {
 // TimeoutPolicy
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TimeoutPolicy {
     /// Multiplier applied to the risk level's base escalate timeout.
     pub escalate_timeout_multiplier: f64,
@@ -180,7 +180,7 @@ impl Default for TimeoutPolicy {
 // EscalationChain
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EscalationStep {
     pub level: u32,
     pub approver_role: String,
@@ -188,7 +188,7 @@ pub struct EscalationStep {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EscalationChain {
     pub steps: Vec<EscalationStep>,
     pub current_step: u32,

@@ -47,7 +47,7 @@ impl CodeQualityReport {
 /// `CodeQualityReport` with per-issue entries and a health score.
 pub fn run_code_quality_scan() -> CodeQualityReport {
     let mut issues = Vec::new();
-    let scanned_at_ms = crate::intelligence::now_ms();
+    let scanned_at_ms = crate::shared::timestamps::now_ts_ms() as u64;
 
     match std::process::Command::new("cargo")
         .args(["clippy", "--message-format=short", "--quiet"])

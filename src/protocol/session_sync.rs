@@ -126,7 +126,7 @@ impl SharedSession {
             chat_history: Vec::new(),
             active_tasks: Vec::new(),
             council_proposals: Vec::new(),
-            last_active: now_ms(),
+            last_active: crate::shared::timestamps::now_ts_ms() as u64,
             version: 0,
         }
     }
@@ -139,7 +139,7 @@ impl SharedSession {
             chat_history: Vec::new(),
             active_tasks: Vec::new(),
             council_proposals: Vec::new(),
-            last_active: now_ms(),
+            last_active: crate::shared::timestamps::now_ts_ms() as u64,
             version: 0,
         }
     }
@@ -233,7 +233,7 @@ impl SharedSession {
 
     /// Touch the `last_active` timestamp and bump the version.
     fn touch(&mut self) {
-        self.last_active = now_ms();
+        self.last_active = crate::shared::timestamps::now_ts_ms() as u64;
         self.version += 1;
     }
 
@@ -654,7 +654,7 @@ impl SessionRegistry {
     /// write-lock deletion, yet still be removed. By using one write-lock
     /// transaction, we guarantee consistency.
     pub async fn cleanup_inactive_sessions(&self, max_age: Duration) -> usize {
-        let threshold = now_ms().saturating_sub(max_age.as_millis() as u64);
+        let threshold = (crate::shared::timestamps::now_ts_ms() as u64).saturating_sub(max_age.as_millis() as u64);
 
         // Perform stale check AND deletion under a single write lock to
         // prevent TOCTOU races.
@@ -691,12 +691,6 @@ impl SessionRegistry {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Returns the current system time in milliseconds since the Unix epoch.
-// activated, formerly F-GAP-51
-fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -710,7 +704,7 @@ mod tests {
             id: id.to_string(),
             role: role.to_string(),
             content: content.to_string(),
-            timestamp: now_ms(),
+            timestamp: crate::shared::timestamps::now_ts_ms() as u64,
             metadata: HashMap::new(),
         }
     }
@@ -720,7 +714,7 @@ mod tests {
             id: id.to_string(),
             status: status.to_string(),
             progress,
-            started_at: now_ms(),
+            started_at: crate::shared::timestamps::now_ts_ms() as u64,
             description: format!("task {id}"),
         }
     }
@@ -730,7 +724,7 @@ mod tests {
             id: id.to_string(),
             title: title.to_string(),
             status: "pending".to_string(),
-            submitted_at: now_ms(),
+            submitted_at: crate::shared::timestamps::now_ts_ms() as u64,
             metadata: HashMap::new(),
         }
     }

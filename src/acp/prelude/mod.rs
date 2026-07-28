@@ -51,7 +51,7 @@ pub use types::*;
 mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
-    use super::{with_acp_lock, PhaseRateLimiter, RuntimeMetrics};
+    use super::{with_acp_lock, CircuitBreakerRegistry, PhaseRateLimiter, RuntimeMetrics};
 
     #[test]
     fn runtime_metrics_records_request_latency_and_outcomes() {
@@ -130,5 +130,27 @@ mod tests {
             guard.tracked_phases()
         });
         assert_eq!(tracked_before, 1);
+    }
+
+    #[test]
+    fn circuit_breaker_defaults_to_closed() {
+        let registry = CircuitBreakerRegistry::new();
+        assert_eq!(registry.open_count(), 0);
+        assert!(registry.is_healthy());
+        assert!(registry.snapshots().is_empty());
+    }
+
+    #[test]
+    fn circuit_breaker_reset_handles_empty_registry() {
+        let mut registry = CircuitBreakerRegistry::new();
+        let count = registry.reset(None);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn circuit_breaker_reset_with_name_returns_zero_for_unknown() {
+        let mut registry = CircuitBreakerRegistry::new();
+        let count = registry.reset(Some("unknown"));
+        assert_eq!(count, 0);
     }
 }

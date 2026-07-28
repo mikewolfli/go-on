@@ -242,7 +242,7 @@ impl CodeIndex {
         self.file_mtimes = new_mtimes;
         self.files_indexed = files_scanned;
         self.total_symbols = symbols_found;
-        self.last_built_ms = now_ms();
+        self.last_built_ms = crate::shared::timestamps::now_ts_ms() as u64;
 
         let elapsed = start.elapsed();
         info!(
@@ -576,11 +576,6 @@ fn ext_to_language(ext: &str) -> String {
         "rsx" => "Rust/RSX".to_string(),
         _ => ext.to_string(),
     }
-}
-
-/// Current timestamp in milliseconds.
-fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 /// Get file modification time in milliseconds.

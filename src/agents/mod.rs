@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod anthropic;
+pub mod baidu_auth;
 pub mod cohere;
 pub mod communication;
 pub mod copilot;
@@ -16,15 +17,13 @@ pub mod deepseek;
     feature = "multi-users-server"
 ))]
 pub mod factory;
-pub mod fragment; // BLUE71 §9: ContextFragment injection
 pub mod gemini;
-pub mod graph_store; // BLUE71 §8: AgentGraphStore persistence
 pub mod openai;
 pub mod openai_compatible;
 pub mod progress_reporter;
 pub mod qianfan;
 pub mod self_evolution_agent; // GAP-B52-03: Self-Evolution Agent
-pub mod session; // GAP-BLUE71: SessionActor tree architecture
+
 pub mod sse_compressor;
 pub mod sse_optimizer;
 pub mod wenxin;
@@ -92,7 +91,6 @@ pub use cohere::CohereAgent;
 pub use copilot::CopilotAgent;
 pub use deepseek::DeepSeekAgent;
 pub use gemini::GeminiAgent;
-pub use openai::OpenAiAgent;
 pub use openai_compatible::OpenAiCompatibleAgent;
 pub use qianfan::QianfanAgent;
 pub use wenxin::WenxinAgent;
@@ -160,6 +158,33 @@ pub fn option_u64(options: &Option<HashMap<String, Value>>, key: &str) -> Option
         .as_ref()
         .and_then(|map| map.get(key))
         .and_then(|v| v.as_u64())
+}
+
+/// Check an LLM API response for success and valid content-type.
+/// Returns the response on success for further processing (e.g., streaming),
+/// or bails with a descriptive error including the response body on failure.
+pub async fn check_api_response(
+    response: reqwest::Response,
+    provider_name: &str,
+) -> anyhow::Result<reqwest::Response> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "{}",
+            agent::chat_request_failed_msg(provider_name, &status.to_string(), &body)
+        );
+    }
+    let ct = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
+        warn!("{provider_name}: unexpected content-type: {ct}");
+        anyhow::bail!("unexpected content-type: {ct}");
+    }
+    Ok(response)
 }
 
 /// Resolve the effective model name, substituting "auto" or empty with
@@ -358,6 +383,21 @@ impl SseEventParser {
         Ok(events)
     }
 
+    /// Push raw bytes (e.g. from a decompression layer) into the parser.
+    ///
+    /// Internally validates UTF-8 without allocating — the bytes are borrowed
+    /// directly as `&str` in the common (valid UTF-8) case. Falls back to a
+    /// lossy conversion only when invalid sequences are encountered.
+    fn push_chunk_bytes(&mut self, chunk: &[u8]) -> Result<Vec<String>> {
+        match std::str::from_utf8(chunk) {
+            Ok(valid) => self.push_chunk(valid),
+            Err(_) => {
+                let owned = String::from_utf8_lossy(chunk).into_owned();
+                self.push_chunk(&owned)
+            }
+        }
+    }
+
     fn finish(&mut self) -> Vec<String> {
         if !self.buffer.is_empty() {
             let mut line = std::mem::take(&mut self.buffer);
@@ -405,13 +445,9 @@ where
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
-        // Fast UTF-8 decode — SSE streams from LLM APIs are almost always
-        // valid UTF-8, so we avoid the allocation overhead of from_utf8_lossy
-        // by checking first. Falls back to lossy conversion for robustness.
-        let chunk_text = std::str::from_utf8(&chunk)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_| String::from_utf8_lossy(&chunk).to_string());
-        match parser.push_chunk(&chunk_text) {
+        // Delegate to push_chunk_bytes which borrows the bytes as &str
+        // (zero-copy) in the common valid-UTF-8 case.
+        match parser.push_chunk_bytes(&chunk) {
             Ok(events) => {
                 for event in events {
                     if matches!(on_event(&event)?, SseEventAction::Stop) {
@@ -513,10 +549,7 @@ pub async fn stream_sse_to_sender_compressed(
         if decompressed.is_empty() {
             continue;
         }
-        let chunk_text = std::str::from_utf8(&decompressed)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_| String::from_utf8_lossy(&decompressed).to_string());
-        match parser.push_chunk(&chunk_text) {
+        match parser.push_chunk_bytes(&decompressed) {
             Ok(events) => {
                 for event in events {
                     if sse_event_to_sender(&event, &sender) {
@@ -534,12 +567,9 @@ pub async fn stream_sse_to_sender_compressed(
     // Flush any remaining decompressed data and parse it
     let tail = decompressor.flush();
     if !tail.is_empty() {
-        let tail_text = std::str::from_utf8(&tail)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|_| String::from_utf8_lossy(&tail).to_string());
         // Parse decompressed tail data through a fresh parser
         let mut tail_parser = SseEventParser::default();
-        if let Ok(events) = tail_parser.push_chunk(&tail_text) {
+        if let Ok(events) = tail_parser.push_chunk_bytes(&tail) {
             for event in events {
                 if sse_event_to_sender(&event, &sender) {
                     break;

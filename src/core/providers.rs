@@ -5,11 +5,17 @@
 //! defaults). Both the setup wizard and the config-defaults layer use this
 //! single copy instead of maintaining their own duplicates.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::core::config::types::ProviderSpec;
 
 static PROVIDER_SPECS: OnceLock<Vec<ProviderSpec>> = OnceLock::new();
+
+/// Combined indices for O(1) lookups by name (unique) and agent_type (may have
+/// duplicates — values are stored in insertion order to match `.find()` semantics).
+type ProviderIndex = (HashMap<String, usize>, HashMap<String, Vec<usize>>);
+static PROVIDER_INDEX: OnceLock<ProviderIndex> = OnceLock::new();
 
 /// Returns the full list of built-in provider specs, lazily initialised.
 pub fn provider_specs() -> &'static [ProviderSpec] {
@@ -18,16 +24,39 @@ pub fn provider_specs() -> &'static [ProviderSpec] {
         .as_slice()
 }
 
+fn build_provider_index() -> ProviderIndex {
+    let specs = provider_specs();
+    let mut name_map = HashMap::with_capacity(specs.len());
+    let mut agent_type_map: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, spec) in specs.iter().enumerate() {
+        name_map.insert(spec.name.clone(), i);
+        agent_type_map
+            .entry(spec.agent_type.to_ascii_lowercase())
+            .or_default()
+            .push(i);
+    }
+    (name_map, agent_type_map)
+}
+
+fn provider_name_index() -> &'static HashMap<String, usize> {
+    &PROVIDER_INDEX.get_or_init(build_provider_index).0
+}
+
+fn provider_agent_type_index() -> &'static HashMap<String, Vec<usize>> {
+    &PROVIDER_INDEX.get_or_init(build_provider_index).1
+}
+
 /// Look up a provider spec by the `name` field.
 pub fn provider_spec_by_name(name: &str) -> Option<&'static ProviderSpec> {
-    provider_specs().iter().find(|spec| spec.name == name)
+    let idx = provider_name_index().get(name)?;
+    Some(&provider_specs()[*idx])
 }
 
 /// Look up a provider spec by the `agent_type` field (case-insensitive).
 pub fn provider_spec_by_agent_type(agent_type: &str) -> Option<&'static ProviderSpec> {
-    provider_specs()
-        .iter()
-        .find(|spec| spec.agent_type.eq_ignore_ascii_case(agent_type))
+    let indices = provider_agent_type_index().get(&agent_type.to_ascii_lowercase())?;
+    // Return the first match, preserving the original `.find()` semantics.
+    Some(&provider_specs()[indices[0]])
 }
 
 fn built_in_provider_specs() -> Vec<ProviderSpec> {

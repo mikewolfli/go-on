@@ -10,8 +10,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use crate::intelligence::now_ms;
-
 // ── ID generation ────────────────────────────────────────────────────────────
 
 static ROUND_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -33,8 +31,6 @@ fn generate_proposal_id() -> String {
     let n = PROPOSAL_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("prop-{}", n)
 }
-
-// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
 
 // ── Error type ──────────────────────────────────────────────────────────────
 
@@ -250,7 +246,7 @@ impl ConsensusEngine {
         }
 
         if node.last_heartbeat_ms == 0 {
-            node.last_heartbeat_ms = now_ms();
+            node.last_heartbeat_ms = crate::shared::timestamps::now_ts_ms() as u64;
         }
         nodes.insert(node.id.clone(), node);
         Ok(())
@@ -302,7 +298,7 @@ impl ConsensusEngine {
         }
 
         let round_id = generate_round_id();
-        let start = now_ms();
+        let start = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Build the round.
         let round = ConsensusRound {
@@ -322,7 +318,7 @@ impl ConsensusEngine {
                 round_id: round_id.clone(),
                 proposer_id: leader_id.to_string(),
                 data,
-                created_ms: now_ms(),
+                created_ms: crate::shared::timestamps::now_ts_ms() as u64,
             })
             .collect();
 
@@ -392,7 +388,7 @@ impl ConsensusEngine {
 
         // Record the vote with a timestamp.
         let recorded = ConsensusVote {
-            vote_ms: now_ms(),
+            vote_ms: crate::shared::timestamps::now_ts_ms() as u64,
             ..vote
         };
         votes.push(recorded);
@@ -533,7 +529,7 @@ impl ConsensusEngine {
         let node = nodes
             .get_mut(node_id)
             .ok_or_else(|| ConsensusError::NodeNotFound(node_id.to_string()))?;
-        node.last_heartbeat_ms = now_ms();
+        node.last_heartbeat_ms = crate::shared::timestamps::now_ts_ms() as u64;
         node.is_online = true;
         Ok(())
     }
@@ -544,7 +540,7 @@ impl ConsensusEngine {
     /// `heartbeat_interval_ms` is marked offline.  Returns the ids
     /// of nodes that were just marked offline.
     pub fn detect_failures(&self) -> Vec<String> {
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let interval = self.config.heartbeat_interval_ms;
 
         let mut nodes = match self.nodes.lock() {
@@ -658,7 +654,7 @@ mod tests {
             weight,
             role,
             is_online: true,
-            last_heartbeat_ms: now_ms(),
+            last_heartbeat_ms: crate::shared::timestamps::now_ts_ms() as u64,
         }
     }
 

@@ -11,35 +11,6 @@
 //! - **Verification Systems**: Ensuring output correctness and safety
 //! - **Consciousness Metrics**: BLUE38 F-GAP-25 Agency Consciousness Metrics (M10)
 
-/// Shared monotonic timestamp in milliseconds (epoch-based for human readability).
-///
-/// Many intelligence sub-modules previously defined their own `now_ms()` or `now_ts()`
-/// with identical bodies. Use this shared helper instead of duplicating.
-pub fn now_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
-/// Acquire a lock on a `Mutex`, recovering from a poisoned state with a warning.
-///
-/// Delegates to the shared `lock_or_recover!` macro from `crate::shared::lock_utils`.
-pub fn lock_guard<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    crate::lock_or_recover!(mtx, "intelligence")
-}
-
-/// Acquire a read lock on an `RwLock`, recovering from a poisoned state with a warning.
-///
-/// Delegates to the shared `read_or_recover!` macro from `crate::shared::lock_utils`.
-pub fn read_guard<T>(rw: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
-    crate::read_or_recover!(rw, "intelligence")
-}
-
-/// Acquire a write lock on an `RwLock`, recovering from a poisoned state with a warning.
-///
-/// Delegates to the shared `write_or_recover!` macro from `crate::shared::lock_utils`.
-pub fn write_guard<T>(rw: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
-    crate::write_or_recover!(rw, "intelligence")
-}
-
 pub mod adaptive_selector;
 pub mod causal_bayesian_graph;
 pub mod consensus;

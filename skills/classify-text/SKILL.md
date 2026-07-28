@@ -2,6 +2,8 @@
 name: classify-text
 description: Classify text into predefined categories with confidence scores
 version: 1.0.0
+author: go-on-team
+min_go_on_version: 1.0.0
 ---
 
 # Classify Text Skill

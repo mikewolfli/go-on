@@ -629,7 +629,11 @@ pub(crate) async fn execute_runtime_subtasks(
                     MemoryClass::Episodic
                 };
                 store.store(MemoryEntry {
-                    id: format!("mem-{}-{}", crate::acp::prelude::now_ts_ms(), index + 1),
+                    id: format!(
+                        "mem-{}-{}",
+                        crate::shared::timestamps::now_ts_ms(),
+                        index + 1
+                    ),
                     class,
                     content: content.clone(),
                     timestamp: crate::acp::prelude::now_ts().to_string(),
@@ -766,7 +770,7 @@ async fn execute_single_subtask(
         "subtask-{}-{}-{}",
         phase_index + 1,
         record_index + 1,
-        crate::acp::prelude::now_ts_ms()
+        crate::shared::timestamps::now_ts_ms()
     );
     let startup_evidence = crate::orchestration::startup_context::get()
         .as_ref()

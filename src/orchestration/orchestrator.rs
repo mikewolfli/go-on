@@ -58,8 +58,8 @@ pub fn select_mode_runtime_with_registry(
     Box::new(GenericModeRuntime::new(kind, registry, None))
 }
 
-/// Deprecated: returns runtimes with no agent registry.
-/// Execute task using selected mode with a provided agent registry.
+/// Execute task using the selected mode, providing the runtime with a
+/// full agent registry so it has access to real agents.
 ///
 /// Uses `select_mode_runtime_with_registry` so the runtime has access to
 /// real agents.
@@ -216,6 +216,12 @@ pub async fn execute_tool_pipeline(
     let pipeline = ToolPipeline {
         name: "orchestrator-pipeline".to_string(),
         steps,
+        // TODO: Parallelize non-dependent tools by building dependency-aware parallel_groups.
+        // Currently all tools run sequentially because parallel_groups is empty.
+        // A dependency analysis step before this point could group independent tools
+        // for concurrent execution, significantly reducing wall-clock time for
+        // multi-tool operations.
+        parallel_groups: Vec::new(),
         on_error: crate::orchestration::tool_pipeline::PipelineErrorStrategy::Continue,
         sandbox_level: Some(crate::governance::hardening::SandboxLevel::Basic),
     };
@@ -343,6 +349,7 @@ pub fn estimate_context_window(caps: &[String]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mode::ApprovalPosture;
 
     #[test]
     fn test_select_mode_runtime_with_registry() {
@@ -430,7 +437,7 @@ mod tests {
         let registry = Arc::new(AgentRegistry::new());
         let safeguard = select_mode_runtime_with_registry("safeguard", registry);
         assert_eq!(safeguard.kind(), ModeKind::SafeGuard);
-        assert!(!safeguard.user_approval_required()); // Base requirement is false
+        assert_eq!(safeguard.posture(), ApprovalPosture::Auto);
     }
 
     #[test]

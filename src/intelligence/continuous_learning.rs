@@ -12,7 +12,7 @@ use crate::agents::agent::{Agent, Message, StreamingSender};
 /// after it has been moved into a background task.
 pub type AgentInjector = Arc<Mutex<Option<Arc<dyn Agent>>>>;
 use crate::i18n::{t, tf};
-use crate::intelligence::now_ms;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -159,7 +159,7 @@ impl ForgettingRiskRecord {
             consecutive_critical: 0,
             consecutive_low: 0,
             last_score: 1.0,
-            last_assessed_ms: now_ms(),
+            last_assessed_ms: crate::shared::timestamps::now_ts_ms() as u64,
             flagged_for_eviction: false,
         }
     }
@@ -403,7 +403,7 @@ impl ContinuousLearningCenter {
             id: id.clone(),
             name: name.to_string(),
             task_type,
-            created_ms: now_ms(),
+            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
             priority,
             status: LearningStatus::Pending,
         };
@@ -474,7 +474,7 @@ impl ContinuousLearningCenter {
         let id = format!("mem-{}", state.next_memory_id);
         state.next_memory_id += 1;
 
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let memory = ConsolidatedMemory {
             id: id.clone(),
             pattern_key: pattern_key.to_string(),
@@ -823,7 +823,7 @@ Memories:
                 )
             })?;
 
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         curve.current_strength = curve.original_strength;
         curve.last_reinforced_ms = now;
 
@@ -866,7 +866,7 @@ Memories:
     /// dropped below `min_retention_importance` and returns them.
     pub fn detect_forgetting(&self) -> Vec<ForgettingCurve> {
         let state = lock_guard(&self.state);
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         state
             .forgetting_curves
             .values()
@@ -891,7 +891,7 @@ Memories:
             .or_default()
             .push(AgentResult {
                 success,
-                timestamp_ms: now_ms(),
+                timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
             });
     }
 
@@ -987,7 +987,7 @@ Memories:
         let state = lock_guard(&self.state);
         match state.forgetting_curves.get(memory_id) {
             Some(curve) => {
-                let now = now_ms();
+                let now = crate::shared::timestamps::now_ts_ms() as u64;
                 let elapsed_ms = now.saturating_sub(curve.last_reinforced_ms);
                 let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
                 curve.original_strength * (-curve.decay_rate * elapsed_hours).exp()
@@ -1044,7 +1044,7 @@ Memories:
     /// at risk (score < 0.3).
     pub fn detect_forgetting_risk(&self) -> Vec<ForgettingRiskRecord> {
         let mut state = lock_guard(&self.state);
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let mut at_risk = Vec::new();
 
         // Collect memory IDs to assess.
@@ -1132,7 +1132,7 @@ Memories:
     /// This uses an **Expanding Retrieval Practice** schedule similar to
     /// SuperMemo / Anki spaced-repetition algorithms.
     pub fn schedule_review(&self, entry: &ConsolidatedMemory) -> Instant {
-        let score = self.retention_score(entry, now_ms());
+        let score = self.retention_score(entry, crate::shared::timestamps::now_ts_ms() as u64);
         let delay_secs = if score < 0.1 {
             0
         } else if score < 0.3 {

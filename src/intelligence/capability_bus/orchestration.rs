@@ -5,13 +5,13 @@
 //! sense/decide/evolve pipeline (F-GAP-13, F-GAP-15, F-GAP-29).
 
 use super::core::CapabilityBus;
-use crate::intelligence::lock_guard;
+
 use tracing::warn;
 
 impl CapabilityBus {
     /// Send an evolve summary event through the transport layer.
     pub(crate) fn evolve_send_transport_event(&self, q_value: f64, exploration_rate: f64) {
-        let transport = lock_guard(&self.transport);
+        let transport = crate::lock_or_recover!(&self.transport, "intelligence");
         let summary = serde_json::json!({
             "q_value": q_value,
             "exploration_rate": exploration_rate,

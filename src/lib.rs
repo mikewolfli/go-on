@@ -15,7 +15,6 @@ pub mod cli;
 pub mod core;
 pub mod fault_tolerance;
 pub mod governance;
-pub mod hub;
 pub mod i18n;
 pub mod intelligence;
 pub mod mcp;

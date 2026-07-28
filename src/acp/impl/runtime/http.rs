@@ -891,7 +891,7 @@ pub(crate) async fn write_http_text_response(
 
 /// Build a trace context for HTTP requests.
 pub(crate) fn http_trace_context(method: &str) -> RequestTraceContext {
-    let request_id = format!("http-{}", crate::acp::prelude::now_ts_ms());
+    let request_id = format!("http-{}", crate::shared::timestamps::now_ts_ms());
     let seed = Some(serde_json::json!(request_id.clone()));
     let mut trace = chat_trace_context(&seed, "chat.http");
     trace.method = method.to_string();

@@ -17,8 +17,10 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use crate::agent::{resolve_secret, Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg};
-use crate::agents::{apply_openai_common_options, option_string, principles_to_text};
+use crate::agents::agent::{is_non_retryable_4xx, request_failed_msg};
+use crate::agents::{
+    apply_openai_common_options, check_api_response, option_string, principles_to_text,
+};
 use crate::i18n::runtime::tf;
 use crate::orchestration::autonomy_runtime::build_model_used_token;
 
@@ -443,7 +445,10 @@ impl CopilotAgent {
 
         payload
     }
+}
 
+#[async_trait]
+impl Agent for CopilotAgent {
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -469,24 +474,7 @@ impl CopilotAgent {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("copilot", &status.to_string(), &body)
-            );
-        }
-
-        let ct = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
-            tracing::warn!("copilot: unexpected content-type: {ct}");
-            anyhow::bail!("unexpected content-type: {ct}");
-        }
+        let response = check_api_response(response, "copilot").await?;
 
         // Stream the SSE response and capture the actual model name.
         // OpenAI-compatible streaming responses include the "model" field
@@ -543,10 +531,7 @@ impl CopilotAgent {
 
         Ok(())
     }
-}
 
-#[async_trait]
-impl Agent for CopilotAgent {
     async fn chat(
         &self,
         messages: Vec<Message>,

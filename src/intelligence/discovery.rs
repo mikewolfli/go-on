@@ -10,8 +10,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::intelligence::now_ms;
-
 // ── ID generation ────────────────────────────────────────────────────────────
 
 static DISCOVERY_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -20,8 +18,6 @@ fn generate_id() -> String {
     let n = DISCOVERY_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("disc-{}", n)
 }
-
-// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -210,7 +206,7 @@ impl DiscoveryCenter {
         }
 
         let id = generate_id();
-        let now = now_ms();
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
         let mut entry = entry;
         entry.id = id.clone();
         entry.created_ms = now;
@@ -226,7 +222,7 @@ impl DiscoveryCenter {
     ///
     /// When no limit is specified in the query, up to 20 results are returned.
     pub fn search(&self, query: &DiscoveryQuery) -> DiscoveryResult {
-        let start = now_ms();
+        let start = crate::shared::timestamps::now_ts_ms() as u64;
 
         // Hold the lock and filter in-place to avoid cloning the entire entries vec;
         // only matching entries are cloned out.
@@ -303,7 +299,7 @@ impl DiscoveryCenter {
         DiscoveryResult {
             entries: matches,
             total_matches,
-            query_duration_ms: now_ms().saturating_sub(start),
+            query_duration_ms: crate::shared::timestamps::now_ts_ms() as u64 - start,
             best_match,
         }
     }
@@ -621,7 +617,7 @@ impl DiscoveryCenter {
             } else {
                 0.0
             };
-            entry.last_used_ms = now_ms();
+            entry.last_used_ms = crate::shared::timestamps::now_ts_ms() as u64;
             drop(entries); // release lock before refresh_profile
             self.refresh_profile();
         }

@@ -8,9 +8,10 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, retry_chat_once};
+use crate::agents::agent::retry_chat_once;
 use crate::agents::{
-    apply_openai_common_options, principles_to_text, resolve_effective_model, stream_sse_to_sender,
+    apply_openai_common_options, check_api_response, principles_to_text, resolve_effective_model,
+    stream_sse_to_sender, stream_sse_to_sender_compressed, StreamingConfig,
 };
 
 pub struct DeepSeekAgent {
@@ -124,6 +125,87 @@ impl DeepSeekAgent {
         payload
     }
 
+    /// Chat with optional SSE compression.
+    ///
+    /// When `compress_cfg` is configured, the SSE stream is gzip-decompressed
+    /// before parsing, reducing bandwidth on large responses. This is
+    /// transparent to the token extraction layer.
+    async fn chat_once_compressed(
+        &self,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
+        sender: crate::agent::StreamingSender,
+        compress_cfg: &StreamingConfig,
+    ) -> anyhow::Result<()> {
+        let api_key = resolve_secret(&self.api_key_env, "deepseek.api_key_env")?;
+        let payload = self.build_payload(messages, principles, options);
+
+        let url = self.completion_endpoint();
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(api_key)
+            .json(&payload)
+            .send()
+            .await?;
+
+        let response = check_api_response(response, "deepseek").await?;
+
+        stream_sse_to_sender_compressed(response, sender, compress_cfg).await
+    }
+}
+
+#[async_trait]
+impl Agent for DeepSeekAgent {
+    async fn chat(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+        sender: crate::agent::StreamingSender,
+    ) -> crate::core::error::Result<()> {
+        // Check if SSE compression is requested via options
+        let use_compression = options
+            .as_ref()
+            .and_then(|o| o.get("sse_compress"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if use_compression {
+            let compress_cfg = StreamingConfig {
+                enable_compression: true,
+                ..Default::default()
+            };
+
+            retry_chat_once(
+                || async {
+                    self.chat_once_compressed(
+                        &messages,
+                        &principles,
+                        &options,
+                        sender.clone(),
+                        &compress_cfg,
+                    )
+                    .await
+                    .map_err(Into::into)
+                },
+                3,
+            )
+            .await
+        } else {
+            retry_chat_once(
+                || async {
+                    self.chat_once(&messages, &principles, &options, sender.clone())
+                        .await
+                        .map_err(Into::into)
+                },
+                3,
+            )
+            .await
+        }
+    }
+
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -143,47 +225,9 @@ impl DeepSeekAgent {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("deepseek", &status.to_string(), &body)
-            );
-        }
-
-        let ct = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
-            tracing::warn!("deepseek: unexpected content-type: {ct}");
-            anyhow::bail!("unexpected content-type: {ct}");
-        }
+        let response = check_api_response(response, "deepseek").await?;
 
         stream_sse_to_sender(response, sender).await
-    }
-}
-
-#[async_trait]
-impl Agent for DeepSeekAgent {
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> crate::core::error::Result<()> {
-        retry_chat_once(
-            || async {
-                self.chat_once(&messages, &principles, &options, sender.clone())
-                    .await
-                    .map_err(Into::into)
-            },
-            3,
-        )
-        .await
     }
 
     /// Returns the currently available DeepSeek models per their official API docs:

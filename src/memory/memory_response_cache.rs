@@ -17,6 +17,9 @@ pub struct MemoryResponseCache {
 
 impl MemoryResponseCache {
     /// Retrieve a cached response by key. Returns `None` if expired or absent.
+    ///
+    /// On hit, the entry is promoted to the back of the cache (most recently used)
+    /// using `move_index` to avoid the remove-then-reinsert double hash pattern.
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -25,9 +28,15 @@ impl MemoryResponseCache {
                 guard.shift_remove(key);
                 return None;
             }
+            // Use IndexMap's get_index_of and move_index to promote in O(1)
+            // without remove + reinsert (saves one hash + one clone).
             let entry = entry.clone();
-            guard.swap_remove(key);
-            guard.insert(key.to_string(), entry.clone());
+            if let Some(idx) = guard.get_index_of(key) {
+                let last = guard.len() - 1;
+                if idx != last {
+                    guard.move_index(idx, last);
+                }
+            }
             return Some(entry);
         }
         None
@@ -67,14 +76,12 @@ impl MemoryResponseCache {
         let expires_at = now_ts() + ttl_seconds as i64;
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
-        guard.shift_remove(&key);
-        guard.insert(
-            key,
-            MemoryCachedResponse {
-                response_text,
-                expires_at,
-            },
-        );
+        // Use entry API to avoid separate remove + insert hash lookups
+        let entry = MemoryCachedResponse {
+            response_text,
+            expires_at,
+        };
+        guard.insert(key, entry);
 
         const MAX_ENTRIES: usize = 2048;
         if guard.len() > MAX_ENTRIES {

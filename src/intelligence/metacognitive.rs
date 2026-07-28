@@ -3,11 +3,24 @@
 //! Provides a reflection/self-correction loop that monitors execution quality and
 //! triggers corrective actions.  All mutable state is guarded behind
 //! `Arc<Mutex<>>` for thread-safe concurrent access.
+//!
+//! ## Relationship with [`super::consciousness`]
+//!
+//! - [`super::consciousness`] tracks **numerical awareness metrics** across 7
+//!   dimensions and maintains a state machine (Unconscious → MetaCognitive). It
+//!   is purely metric/statistical — no task tracking, no agent association.
+//! - `metacognitive` tracks **concrete execution observations**, manages a
+//!   corrective action lifecycle, and generates structured reflection reports.
+//! - The two subsystems are bridged by [`super::triple_fusion`], which pushes
+//!   metacognitive observations into consciousness EnvironmentalAwareness metrics
+//!   and converts consciousness insights into evolution triggers.
+//!
+//! In short: `consciousness` = *how aware* the system is numerically;
+//! `metacognitive` = *what it observes and does about it*.
 
 use crate::agent::Agent;
 use crate::i18n::{t, tf};
-use crate::intelligence::lock_guard;
-use crate::intelligence::now_ms;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -313,7 +326,7 @@ impl MetacognitiveController {
         severity: &str,
         description: &str,
     ) -> Result<String> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let id = format!("obs-{}", inner.next_id);
         inner.next_id += 1;
 
@@ -324,7 +337,7 @@ impl MetacognitiveController {
             observation_type: observation_type.to_string(),
             severity: severity.to_string(),
             description: description.to_string(),
-            timestamp_ms: now_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
             is_resolved: false,
         };
 
@@ -352,7 +365,7 @@ impl MetacognitiveController {
 
     /// Get a single observation by id (O(1) via HashMap index).
     pub fn get_observation(&self, id: &str) -> Result<ExecutionObservation> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.observation_index.get(id).cloned().ok_or_else(|| {
             anyhow::anyhow!(
                 "{}",
@@ -364,13 +377,13 @@ impl MetacognitiveController {
     /// Get a single observation by id, returning `Option` (O(1) via HashMap
     /// index).
     pub fn get_observation_by_id(&self, id: &str) -> Option<ExecutionObservation> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.observation_index.get(id).cloned()
     }
 
     /// List all observations, optionally filtered to unresolved ones only.
     pub fn list_observations(&self, unresolved_only: bool) -> Vec<ExecutionObservation> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         if unresolved_only {
             inner
                 .observations
@@ -385,7 +398,7 @@ impl MetacognitiveController {
 
     /// Mark an observation as resolved (O(1) via HashMap index).
     pub fn resolve_observation(&self, id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         // Mutate in the Vec and then sync to the HashMap index.
         let resolved = {
             let obs = inner
@@ -419,7 +432,7 @@ impl MetacognitiveController {
         action_type: &str,
         description: &str,
     ) -> Result<String> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         // Validate that the observation exists (O(1) via HashMap index).
         if !inner.observation_index.contains_key(observation_id) {
@@ -441,7 +454,7 @@ impl MetacognitiveController {
             action_type: action_type.to_string(),
             description: description.to_string(),
             status: CorrectiveStatus::Pending,
-            created_ms: now_ms(),
+            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
             resolved_ms: 0,
             result: None,
         };
@@ -459,7 +472,7 @@ impl MetacognitiveController {
 
     /// Transition a Pending action to InProgress.
     pub fn execute_action(&self, action_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let action = inner
             .actions
             .iter_mut()
@@ -490,7 +503,7 @@ impl MetacognitiveController {
 
     /// Mark an action as Completed.
     pub fn complete_action(&self, action_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let action = inner
             .actions
             .iter_mut()
@@ -516,13 +529,13 @@ impl MetacognitiveController {
         }
 
         action.status = CorrectiveStatus::Completed;
-        action.resolved_ms = now_ms();
+        action.resolved_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Ok(())
     }
 
     /// Mark an action as Failed with an error reason stored in the description.
     pub fn fail_action(&self, action_id: &str, reason: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let action = inner
             .actions
             .iter_mut()
@@ -548,7 +561,7 @@ impl MetacognitiveController {
         }
 
         action.status = CorrectiveStatus::Failed;
-        action.resolved_ms = now_ms();
+        action.resolved_ms = crate::shared::timestamps::now_ts_ms() as u64;
         // Append failure reason to the description for traceability.
         action.description = format!(
             "{} {}",
@@ -560,7 +573,7 @@ impl MetacognitiveController {
 
     /// Skip a Pending action without executing it.
     pub fn skip_action(&self, action_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let action = inner
             .actions
             .iter_mut()
@@ -586,13 +599,13 @@ impl MetacognitiveController {
         }
 
         action.status = CorrectiveStatus::Skipped;
-        action.resolved_ms = now_ms();
+        action.resolved_ms = crate::shared::timestamps::now_ts_ms() as u64;
         Ok(())
     }
 
     /// List actions, optionally filtered by status.
     pub fn list_actions(&self, status_filter: Option<CorrectiveStatus>) -> Vec<CorrectiveAction> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         match status_filter {
             Some(status) => inner
                 .actions
@@ -612,7 +625,7 @@ impl MetacognitiveController {
     /// The `reflection_level` is auto-detected based on how many observations
     /// and actions exist for the task.
     pub fn generate_reflection_report(&self, task_id: &str) -> Result<String> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         let report_id = format!("report-{}", inner.next_id);
         inner.next_id += 1;
@@ -710,7 +723,7 @@ impl MetacognitiveController {
             overall_assessment,
             confidence_score,
             reflection_level,
-            created_ms: now_ms(),
+            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
         };
 
         // Evict oldest report when at capacity (insert before evict so the new
@@ -726,7 +739,7 @@ impl MetacognitiveController {
 
     /// Get a single reflection report by id.
     pub fn get_report(&self, id: &str) -> Result<ReflectionReport> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner
             .reports
             .iter()
@@ -742,7 +755,7 @@ impl MetacognitiveController {
 
     /// List all generated reflection reports.
     pub fn list_reports(&self) -> Vec<ReflectionReport> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.reports.clone()
     }
 
@@ -754,7 +767,7 @@ impl MetacognitiveController {
     ///
     /// Returns the list of report ids generated (one per affected task).
     pub fn autoreflect(&self) -> Vec<String> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         if !inner.config.enable_auto_reflection {
             return Vec::new();
@@ -801,7 +814,7 @@ impl MetacognitiveController {
     /// "critical" are included.  Each action includes an `impact_score`
     /// derived from the severity.
     pub fn get_actionable_insights(&self, task_id: &str) -> Vec<SuggestedAction> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         let mut insights = Vec::new();
         for obs in &inner.observations {
@@ -908,7 +921,7 @@ impl MetacognitiveController {
 
     /// Get historical corrective actions filtered by action type.
     pub fn get_historical_actions(&self, task_type: &str) -> Vec<CorrectiveAction> {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner
             .actions
             .iter()
@@ -926,7 +939,7 @@ impl MetacognitiveController {
         action_id: &str,
         result: CorrectiveResult,
     ) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let action = inner
             .actions
             .iter_mut()
@@ -943,7 +956,7 @@ impl MetacognitiveController {
 
     /// Get action effectiveness ratio: completed / (completed + failed).
     pub fn action_effectiveness_ratio(&self) -> f64 {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
         let completed = inner
             .actions
             .iter()
@@ -966,7 +979,7 @@ impl MetacognitiveController {
 
     /// Return a snapshot of the controller's runtime metrics.
     pub fn profile(&self) -> MetacognitiveProfile {
-        let inner = lock_guard(&self.inner);
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
 
         let total_observations = inner.observations.len();
         let unresolved_observations = inner.observations.iter().filter(|o| !o.is_resolved).count();
@@ -1032,7 +1045,7 @@ impl MetacognitiveController {
     ///
     /// Returns (adjusted_reward_multiplier, suggested_exploration_rate, key_insights).
     pub fn reflect_for_rl(&self) -> (f64, f64, Vec<String>) {
-        let guard = lock_guard(&self.inner);
+        let guard = crate::lock_or_recover!(&self.inner, "intelligence");
         let state = Inner::clone(&guard);
         drop(guard);
 
@@ -1567,7 +1580,7 @@ mod tests {
                 "Increase timeout to 30s".to_string(),
                 "Add circuit breaker".to_string(),
             ],
-            applied_at: now_ms(),
+            applied_at: crate::shared::timestamps::now_ts_ms() as u64,
         };
         ctrl.record_corrective_result(&action_id, result.clone())
             .unwrap();

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -28,7 +28,7 @@ pub struct TaskBudget {
     pub max_api_calls: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TenantResourceQuota {
     pub tenant_id: String,
     pub daily_token_limit: usize,
@@ -453,8 +453,8 @@ pub struct IdempotentResult {
 #[derive(Debug, Clone)]
 pub struct IdempotencyCache {
     results: HashMap<String, IdempotentResult>,
-    /// Per-tenant insertion order queue for LRU eviction.
-    tenant_keys: HashMap<String, Vec<String>>,
+    /// Per-tenant insertion order queue for LRU eviction (VecDeque for O(1) front removal).
+    tenant_keys: HashMap<String, VecDeque<String>>,
     ttl: Duration,
     /// Maximum entries per tenant before LRU eviction kicks in.
     /// Defaults to `MAX_ENTRIES_PER_TENANT` (1000).
@@ -589,6 +589,7 @@ impl IdempotencyCache {
 
         // Enforce per-tenant LRU cap: evict oldest entries for this tenant
         // until we're under the limit (plus one for the new entry).
+        // VecDeque::pop_front() is O(1), unlike Vec::remove(0).
         let keys_for_tenant = self.tenant_keys.entry(tenant.clone()).or_default();
         if keys_for_tenant.len() >= self.max_entries_per_tenant {
             let to_evict = keys_for_tenant
@@ -596,15 +597,14 @@ impl IdempotencyCache {
                 .saturating_sub(self.max_entries_per_tenant)
                 + 1;
             for _ in 0..to_evict {
-                if let Some(oldest) = keys_for_tenant.first().cloned() {
+                if let Some(oldest) = keys_for_tenant.pop_front() {
                     self.results.remove(&oldest);
-                    keys_for_tenant.remove(0);
                 }
             }
         }
 
         // Record the insertion order for LRU eviction.
-        keys_for_tenant.push(key.clone());
+        keys_for_tenant.push_back(key.clone());
 
         self.results.insert(
             key,
@@ -627,6 +627,7 @@ impl IdempotencyCache {
         for key in &expired_keys {
             let tenant = tenant_from_key(key).to_string();
             self.results.remove(key);
+            // VecDeque::retain is O(n) but only called during eviction, not on hot path.
             if let Some(keys_for_tenant) = self.tenant_keys.get_mut(&tenant) {
                 keys_for_tenant.retain(|k| k != key);
             }

@@ -338,12 +338,12 @@ pub(crate) fn build_approval_checkpoint(
     let checkpoint_id = format!(
         "approval-{}-{}",
         method.replace('.', "-"),
-        crate::acp::prelude::now_ts_ms()
+        crate::shared::timestamps::now_ts_ms()
     );
     let resume_token = format!(
         "resume-{}-{}",
         method.replace('.', "-"),
-        crate::acp::prelude::now_ts_ms()
+        crate::shared::timestamps::now_ts_ms()
     );
     json!({
         "required": required,

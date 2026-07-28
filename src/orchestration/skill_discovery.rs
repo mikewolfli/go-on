@@ -188,7 +188,11 @@ impl SkillIndex {
     }
 
     /// Search for skills matching the query, returning top-k results.
-    pub fn search(&self, query: &str, top_k: usize) -> Vec<ScoredSkill> {
+    ///
+    /// `min_score` optionally overrides the default `MIN_MATCH_SCORE` (0.40).
+    /// When `None`, the static default is used. Pass `Some(threshold)` to use
+    /// a dynamically learned threshold from `ThresholdLearner`.
+    pub fn search(&self, query: &str, top_k: usize, min_score: Option<f64>) -> Vec<ScoredSkill> {
         if query.is_empty() || self.entries.is_empty() {
             return Vec::new();
         }
@@ -214,7 +218,7 @@ impl SkillIndex {
                     average_latency_ms: 0.0,
                 }
             })
-            .filter(|s| s.score >= MIN_MATCH_SCORE)
+            .filter(|s| s.score >= min_score.unwrap_or(MIN_MATCH_SCORE))
             .collect();
 
         scored.sort_by(|a, b| {
@@ -277,11 +281,17 @@ impl SkillDiscovery {
     /// Discover skills matching the query, using the registry for runtime data.
     ///
     /// Returns scored results sorted by relevance (highest first).
+    /// Discover skills matching the query, using the registry for runtime data.
+    ///
+    /// `min_score` optionally overrides the default `MIN_MATCH_SCORE` (0.40).
+    /// When `None`, the static default is used. Pass `Some(threshold)` to use
+    /// a dynamically learned threshold from `ThresholdLearner`.
     pub fn discover(
         &mut self,
         query: &str,
         top_k: usize,
         registry: &SkillRegistry,
+        min_score: Option<f64>,
     ) -> Vec<ScoredSkill> {
         // Rebuild index if empty
         if self.index.is_empty() {
@@ -319,7 +329,7 @@ impl SkillDiscovery {
             all.truncate(top_k);
             all
         } else {
-            self.index.search(query, top_k)
+            self.index.search(query, top_k, min_score)
         };
 
         // Enrich with runtime stats from the registry
@@ -452,7 +462,7 @@ mod tests {
         let entry = SkillIndexEntry::from_descriptor(&skills[0]);
         index.entries.push(entry);
 
-        let results = index.search("fix code bugs", 5);
+        let results = index.search("fix code bugs", 5, None);
         assert!(!results.is_empty());
         assert_eq!(results[0].name, "code-fixer");
     }
@@ -465,14 +475,14 @@ mod tests {
         let entry = SkillIndexEntry::from_descriptor(&desc);
         index.entries.push(entry);
 
-        let results = index.search("", 5);
+        let results = index.search("", 5, None);
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_skill_index_search_no_match() {
         let index = SkillIndex::new();
-        let results = index.search("something completely unrelated", 5);
+        let results = index.search("something completely unrelated", 5, None);
         assert!(results.is_empty());
     }
 
@@ -485,11 +495,11 @@ mod tests {
         discovery.index.entries.push(entry);
 
         // First call populates cache
-        let r1 = discovery.discover("cache test", 5, &registry);
+        let r1 = discovery.discover("cache test", 5, &registry, None);
         assert_eq!(r1.len(), 1);
 
         // Second call should use cache
-        let r2 = discovery.discover("cache test", 5, &registry);
+        let r2 = discovery.discover("cache test", 5, &registry, None);
         assert_eq!(r2.len(), 1);
     }
 

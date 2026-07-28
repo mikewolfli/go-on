@@ -44,3 +44,11 @@ Decisions are stored in `docs/decisions/` as markdown files named `YYYY-MM-DD-sh
 - `/decisions list` — List all recorded decisions
 - `/decisions show <title>` — Show a specific decision
 - `/decisions related <topic>` — Find decisions related to a topic
+
+## Input
+
+When invoked, the user's request is available as:
+
+```
+{{input}}
+```
