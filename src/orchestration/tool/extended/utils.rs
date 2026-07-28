@@ -6,12 +6,18 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 
 // ── UUID Generator ──────────────────────────────────────────────────────────
+
+/// Input parameters for [`UuidGenTool`].
+#[derive(JsonSchema, Deserialize)]
+struct UuidGenInput {}
 
 pub struct UuidGenTool;
 
@@ -25,11 +31,7 @@ impl Tool for UuidGenTool {
     }
 
     fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
+        schemars::schema_for!(UuidGenInput).into()
     }
 
     fn run(&self, _input: &ToolInput) -> Result<ToolOutput> {
@@ -48,6 +50,17 @@ impl Tool for UuidGenTool {
 
 // ── Random Token Generator ──────────────────────────────────────────────────
 
+/// Input parameters for [`RandomTokenTool`].
+#[derive(JsonSchema, Deserialize)]
+struct RandomTokenInput {
+    /// Token length in characters (default: 32, range: 4–256).
+    #[serde(default)]
+    length: Option<u64>,
+    /// Token format (default: hex). One of: hex, base64, alphanumeric.
+    #[serde(default)]
+    format: Option<String>,
+}
+
 pub struct RandomTokenTool;
 
 impl Tool for RandomTokenTool {
@@ -63,28 +76,14 @@ impl Tool for RandomTokenTool {
     }
 
     fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "length": {
-                    "type": "integer",
-                    "description": "Token length in characters (default: 32)",
-                    "default": 32
-                },
-                "format": {
-                    "type": "string",
-                    "enum": ["hex", "base64", "alphanumeric"],
-                    "description": "Token format (default: hex)",
-                    "default": "hex"
-                }
-            },
-            "required": []
-        })
+        schemars::schema_for!(RandomTokenInput).into()
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
-        let length = input.payload["length"].as_u64().unwrap_or(32).clamp(4, 256) as usize;
-        let format = input.payload["format"].as_str().unwrap_or("hex");
+        let params: RandomTokenInput = serde_json::from_value(input.payload.clone())
+            .context("failed to deserialize random_token input")?;
+        let length = params.length.unwrap_or(32).clamp(4, 256) as usize;
+        let format = params.format.as_deref().unwrap_or("hex");
 
         let token = match format {
             "base64" => {

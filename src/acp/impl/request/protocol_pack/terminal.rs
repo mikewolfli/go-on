@@ -140,10 +140,7 @@ pub async fn terminal_output_payload(_server: &AcpServer, params: Value) -> Resu
 }
 
 /// Handle `terminal/release` — releases terminal resources.
-pub async fn handle_terminal_release(
-    _server: &AcpServer,
-    params: Value,
-) -> Result<DispatchOutput> {
+pub async fn handle_terminal_release(_server: &AcpServer, params: Value) -> Result<DispatchOutput> {
     let terminal_id = params
         .get("terminalId")
         .and_then(Value::as_str)
@@ -172,10 +169,7 @@ pub async fn handle_terminal_release(
 }
 
 /// Handle `terminal/kill` — kills a terminal process.
-pub async fn handle_terminal_kill(
-    _server: &AcpServer,
-    params: Value,
-) -> Result<DispatchOutput> {
+pub async fn handle_terminal_kill(_server: &AcpServer, params: Value) -> Result<DispatchOutput> {
     let terminal_id = params
         .get("terminalId")
         .and_then(Value::as_str)
@@ -197,10 +191,7 @@ pub async fn handle_terminal_kill(
 }
 
 /// Handle `terminal/wait_for_exit` — waits for a terminal process to exit.
-pub async fn terminal_wait_for_exit_payload(
-    _server: &AcpServer,
-    params: Value,
-) -> Result<Value> {
+pub async fn terminal_wait_for_exit_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let terminal_id = params
         .get("terminalId")
         .and_then(Value::as_str)

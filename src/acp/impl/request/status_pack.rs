@@ -405,7 +405,7 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
         .orchestration_deps
         .skill_registry
         .read()
-        .map(|registry| registry.list().len())
+        .map(|registry| registry.list(false).len())
         .unwrap_or(0);
     let skill_engine_core_gate = server.runtime_config.skills_enabled && registered_skill_total > 0;
     let workflow_to_skill_conversion_gate = server.runtime_config.skills_import_enabled

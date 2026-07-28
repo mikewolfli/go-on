@@ -101,6 +101,16 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
         }
     }
 
+    // 6. Register built-in skills that ship with go-on (e.g. create-skill).
+    //    Done after local discovery so that a locally discovered skill with the
+    //    same name takes precedence (built-in registration skips existing names).
+    if let Err(e) = skill_registry.register_builtin_skills() {
+        tracing::warn!(
+            target: "go_on::core::bootstrap",
+            "Built-in skill registration failed: {e}"
+        );
+    }
+
     info!("System bootstrap completed");
     Ok(skill_registry)
 }

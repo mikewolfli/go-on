@@ -121,7 +121,9 @@ impl LearningOptimizationBus {
             .events
             .iter()
             .filter(|e| e.agent == agent)
-            .fold((0usize, 0usize), |(t, s), e| (t + 1, s + e.success as usize));
+            .fold((0usize, 0usize), |(t, s), e| {
+                (t + 1, s + e.success as usize)
+            });
         if total == 0 {
             None
         } else {
@@ -135,7 +137,9 @@ impl LearningOptimizationBus {
             .events
             .iter()
             .filter(|e| e.task_type == task_type)
-            .fold((0usize, 0usize), |(t, s), e| (t + 1, s + e.success as usize));
+            .fold((0usize, 0usize), |(t, s), e| {
+                (t + 1, s + e.success as usize)
+            });
         if total == 0 {
             None
         } else {
@@ -220,7 +224,9 @@ impl LearningOptimizationBus {
             .max_by(|a, b| {
                 let a_rate = a.1 .1 as f64 / a.1 .0 as f64;
                 let b_rate = b.1 .1 as f64 / b.1 .0 as f64;
-                a_rate.partial_cmp(&b_rate).unwrap_or(std::cmp::Ordering::Equal)
+                a_rate
+                    .partial_cmp(&b_rate)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
 
         best_agent.map(|(agent, (total, successes, total_dur))| {
@@ -239,9 +245,7 @@ impl LearningOptimizationBus {
     fn analyze_for_prevention(&mut self, event: &LearningEvent) -> Option<PreventionRule> {
         // If this event is a failure, check if the task type has a high failure rate
         if !event.success {
-            let rate = self
-                .task_type_success_rate(&event.task_type)
-                .unwrap_or(1.0);
+            let rate = self.task_type_success_rate(&event.task_type).unwrap_or(1.0);
             if rate < 0.4 {
                 // >60% failure rate → create prevention rule
                 self.next_rule_id += 1;
@@ -331,7 +335,10 @@ mod tests {
 
         let suggestion = bus.suggestion_for("research");
         assert!(suggestion.is_some());
-        assert_eq!(suggestion.unwrap().recommended_agent.as_deref(), Some("agent_a"));
+        assert_eq!(
+            suggestion.unwrap().recommended_agent.as_deref(),
+            Some("agent_a")
+        );
     }
 
     #[test]

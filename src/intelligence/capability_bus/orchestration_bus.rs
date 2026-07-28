@@ -437,12 +437,14 @@ impl OrchestrationBus {
         id: &str,
         state: crate::orchestration::core_dag::ExNodeState,
     ) -> Result<()> {
-        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence").set_node_state(id, state)
+        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence")
+            .set_node_state(id, state)
     }
 
     /// Check if a fan-out group is complete.
     pub fn is_fan_out_complete(&self, group_id: &str) -> bool {
-        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence").is_fan_out_complete(group_id)
+        crate::lock_or_recover!(self.execution_graph.as_ref(), "intelligence")
+            .is_fan_out_complete(group_id)
     }
 
     /// Count graph nodes in a given state.

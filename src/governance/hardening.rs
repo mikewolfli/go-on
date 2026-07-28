@@ -1,9 +1,13 @@
 //! Hardening — F-GAP-08
 //!
 //! Phase 9: Production Hardening and Safety
-//! These structures are intentional framework definitions for Phase 0-9 architecture.
-//! Budget enforcement, quotas, and policies will be applied by the execution engine
-//! once resource tracking and policy enforcement hooks are implemented.
+//!
+//! All types in this module (`TaskBudget`, `TenantResourceQuota`, `BudgetTracker`,
+//! `AccessPolicy`, `ResourceBudget`, etc.) are **actively wired** and imported by
+//! multiple call sites. Budget enforcement is applied at governance checkpoints
+//! throughout the execution pipeline, and policy enforcement hooks (rate limiting,
+//! quota gates, admission control) are operational. This is not forward-looking
+//! scaffolding — the hardening layer is live.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

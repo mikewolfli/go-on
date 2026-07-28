@@ -648,6 +648,7 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
         // ── Register LLM-powered skills ─────────────────────────────────
         // These skills use the configured AI provider to perform semantic
         // operations (code review, classification, summarization, etc.).
+        use crate::orchestration::skill::execution::SkillPolicy;
         let llm_skills: Vec<crate::orchestration::skill::PromptBasedSkill> = vec![
             crate::orchestration::skill::PromptBasedSkill {
                 name: "semantic-diff".to_string(),
@@ -656,6 +657,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 120,
                 max_retries: 1,
+                disable_model_invocation: false,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(false),
+                    products: Vec::new(),
+                }),
             },
             crate::orchestration::skill::PromptBasedSkill {
                 name: "note-taking".to_string(),
@@ -664,6 +670,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 60,
                 max_retries: 1,
+                disable_model_invocation: false,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(true),
+                    products: Vec::new(),
+                }),
             },
             crate::orchestration::skill::PromptBasedSkill {
                 name: "classify-text".to_string(),
@@ -672,6 +683,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 60,
                 max_retries: 1,
+                disable_model_invocation: false,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(true),
+                    products: Vec::new(),
+                }),
             },
             crate::orchestration::skill::PromptBasedSkill {
                 name: "summarize-text".to_string(),
@@ -680,6 +696,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 60,
                 max_retries: 1,
+                disable_model_invocation: false,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(true),
+                    products: Vec::new(),
+                }),
             },
             crate::orchestration::skill::PromptBasedSkill {
                 name: "translate-text".to_string(),
@@ -688,6 +709,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 60,
                 max_retries: 1,
+                disable_model_invocation: false,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(true),
+                    products: Vec::new(),
+                }),
             },
             crate::orchestration::skill::PromptBasedSkill {
                 name: "review-pr".to_string(),
@@ -696,6 +722,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 120,
                 max_retries: 1,
+                disable_model_invocation: false,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(false),
+                    products: Vec::new(),
+                }),
             },
             crate::orchestration::skill::PromptBasedSkill {
                 name: "embed-text".to_string(),
@@ -704,6 +735,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 60,
                 max_retries: 1,
+                disable_model_invocation: false,
+                policy: Some(SkillPolicy {
+                    allow_implicit_invocation: Some(true),
+                    products: Vec::new(),
+                }),
             },
         ];
 

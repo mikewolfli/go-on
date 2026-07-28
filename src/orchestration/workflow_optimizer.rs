@@ -66,6 +66,7 @@ pub struct OptimizationSuggestion {
 /// The registry aggregates all suggestions and can apply the
 /// highest-impact ones.
 pub trait WorkflowOptimizerPlugin: Send + Sync {
+    fn name(&self) -> &str;
     fn optimize(&self, ctx: &OptimizationContext) -> OptimizationSuggestion;
 }
 
@@ -92,6 +93,10 @@ impl Default for ConcurrencyOptimizer {
 }
 
 impl WorkflowOptimizerPlugin for ConcurrencyOptimizer {
+    fn name(&self) -> &str {
+        "concurrency_optimizer"
+    }
+
     fn optimize(&self, ctx: &OptimizationContext) -> OptimizationSuggestion {
         // Compute average success rate from history.
         let total = ctx.history.len() as f64;
@@ -154,6 +159,10 @@ impl Default for CostOptimizer {
 }
 
 impl WorkflowOptimizerPlugin for CostOptimizer {
+    fn name(&self) -> &str {
+        "cost_optimizer"
+    }
+
     fn optimize(&self, ctx: &OptimizationContext) -> OptimizationSuggestion {
         let total = ctx.history.len() as f64;
         let successes = ctx.history.iter().filter(|r| r.success).count() as f64;
@@ -242,6 +251,10 @@ impl HistoryBasedOptimizer {
 }
 
 impl WorkflowOptimizerPlugin for HistoryBasedOptimizer {
+    fn name(&self) -> &str {
+        "history_based_optimizer"
+    }
+
     fn optimize(&self, ctx: &OptimizationContext) -> OptimizationSuggestion {
         // --- Phase reordering suggestion ---
         // If earlier phases have low success and later phases have high success,
@@ -435,20 +448,7 @@ impl OptimizerRegistry {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .map(|opt| {
-                // We forward to a small helper that extracts the name via optimize.
-                // This is a simple approach — in a production system you'd add a
-                // `fn name(&self) -> &str` to the trait.
-                let dummy_ctx = OptimizationContext {
-                    workflow_type: String::new(),
-                    phases: Vec::new(),
-                    history: Vec::new(),
-                    token_usage: 0,
-                    latency_ms: 0,
-                };
-                let suggestion = opt.optimize(&dummy_ctx);
-                suggestion.optimizer_name
-            })
+            .map(|opt| opt.name().to_string())
             .collect()
     }
 
@@ -692,6 +692,10 @@ mod tests {
     fn test_registry_custom_optimizer() {
         struct DummyOptimizer;
         impl WorkflowOptimizerPlugin for DummyOptimizer {
+            fn name(&self) -> &str {
+                "dummy"
+            }
+
             fn optimize(&self, _ctx: &OptimizationContext) -> OptimizationSuggestion {
                 OptimizationSuggestion {
                     optimizer_name: "dummy".into(),

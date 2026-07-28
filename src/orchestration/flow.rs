@@ -167,11 +167,10 @@ impl FlowManager {
         if resolved_phase.agent_names.is_empty() {
             // Path B: no agents configured — auto-map by using all registered agents.
             // Fallback is always enabled in this path.
-            for agent_name in registry.names() {
-                if let Some(agent) = registry.get(&agent_name) {
-                    resolved_agents.push((agent_name, agent));
-                }
-            }
+            //
+            // Uses batch `all()` instead of N× `names()` + `get()` to avoid
+            // N individual HashMap lookups and repeated token-cache lock acquisitions.
+            resolved_agents = registry.all();
             if resolved_agents.is_empty() {
                 return Err(ProxyError::AgentNotFound("(auto)".to_string()).into());
             }

@@ -26,6 +26,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
 fastrand = "2"
 toml = "1.1.0"
+schemars = { version = "1", features = ["chrono04"] }
 
 [package]
 name = "go-on"
@@ -316,6 +317,7 @@ zip = "2"
 tar = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 go-on-web-search = { path = "crates/go-on-web-search" }
+schemars.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { version = "8", features = ["macos_kqueue"] }

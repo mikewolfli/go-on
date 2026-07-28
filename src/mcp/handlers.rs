@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -9,6 +10,8 @@ use crate::acp::r#impl::request::{
     inject_platform_profiles_if_absent, record_tool_call_audit_with_protocol,
     tools_pack::build_mcp_tool_descriptors,
 };
+use crate::acp::server::AcpServer;
+
 use crate::protocol::rpc_protocol::RequestTraceContext;
 use crate::tool::ToolInput;
 
@@ -259,6 +262,29 @@ impl McpServer {
                         id: request.id,
                     });
                 }
+            }
+        }
+
+        // ── Two-phase initialization guard ──────────────────────────────
+        // Per the MCP spec, the server MUST reject all methods except
+        // "initialize", "ping", and "notifications/cancelled" before the
+        // client has sent a valid `initialize` request.
+        if !self.initialized.load(Ordering::SeqCst) {
+            let method = request.method.as_str();
+            let allowed = ["initialize", "ping", "notifications/cancelled"];
+            if !allowed.contains(&method) {
+                return Ok(JsonRpcResponse {
+                    jsonrpc: JSONRPC_VERSION.to_string(),
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: super::error_codes::SERVER_NOT_INITIALIZED,
+                        message: "Server not initialized. Send `initialize` first.".to_string(),
+                        data: Some(json!({
+                            "method": request.method,
+                        })),
+                    }),
+                    id: request.id,
+                });
             }
         }
 
@@ -592,6 +618,9 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .unwrap_or(MCP_VERSION);
 
+        // Mark the server as initialized so subsequent requests are allowed.
+        self.initialized.store(true, Ordering::SeqCst);
+
         // Negotiate the highest mutually supported version.
         let negotiated_version = SUPPORTED_MCP_VERSIONS
             .iter()
@@ -638,7 +667,9 @@ impl McpServer {
 
     async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Value {
         if let Some(acp_server) = self.acp_server.as_ref() {
-            let tools = build_mcp_tool_descriptors(Some(acp_server.as_ref()));
+            let mut tools = build_mcp_tool_descriptors(Some(acp_server.as_ref()));
+            // Filter to Direct-exposure tools only (deferred/hidden excluded).
+            filter_tools_by_exposure(&mut tools, acp_server.as_ref());
             let count = tools.len();
             info!("MCP: Listing {} tools/skills", count);
             let mut result =
@@ -660,7 +691,7 @@ impl McpServer {
                 tracing::warn!("MCP skill_registry lock poisoned – recovered");
                 poisoned.into_inner()
             });
-            for descriptor in guard.list() {
+            for descriptor in guard.list(false) {
                 tools.push(json!({
                     "name": descriptor.name,
                     "description": descriptor.description,
@@ -1356,4 +1387,87 @@ impl McpServer {
             }),
         ])
     }
+}
+
+/// Filter a list of MCP tool descriptors to only include Direct-exposure tools.
+///
+/// Niche/domain-specific tools (CAD, 3D, GIS, games, barcodes, etc.)
+/// are classified as `Deferred` — they are hidden from the default tool list
+/// but discoverable via the `tool_search` / `skill-finder` tools.
+///
+/// Infrastructure tools (goon_*, acp_*, prompts_*, skill-*) are always kept.
+fn filter_tools_by_exposure(tools: &mut Vec<Value>, _server: &AcpServer) {
+    // Deferred tool name prefixes — niche domains not needed in everyday use.
+    const DEFERRED_PREFIXES: &[&str] = &[
+        "stl_", "obj_", "dxf_", "step_", "ply_", "iges_", "gltf_", "gcode_", "gpx_", "geo_",
+        "svg_", "barcode_", "qrcode_", "game_", "cad_", "image_",
+    ];
+    // Deferred exact tool names.
+    const DEFERRED_NAMES: &[&str] = &[
+        "read_docx",
+        "read_excel",
+        "read_ppt",
+        "read_pdf",
+        "write_docx",
+        "write_excel",
+        "write_ppt",
+        "pdf_merge",
+        "pdf_split",
+        "email_parse",
+        "invoice_parse",
+        "rss_read",
+        "sqlite_query",
+        "dns_lookup",
+        "ping",
+        "port_scan",
+        "csv_analyze",
+        "csv_write",
+        "csv_transform",
+        "toml_write",
+        "yaml_write",
+        "web_scrape",
+        "container_build",
+        "container_run",
+        "container_stop",
+        "lint_run",
+        "template_render",
+        "search_packages",
+        "security_scan",
+        "uuid_gen",
+        "random_token",
+        "encode_decode",
+        "hash_file",
+        "file_watch",
+        "file_diff",
+        "read_file_lines",
+        "code_metrics",
+        "code_index_search",
+        "compile_and_run",
+    ];
+
+    tools.retain(|tool| {
+        let name = match tool.get("name").and_then(Value::as_str) {
+            Some(n) => n,
+            None => return true,
+        };
+        // Always keep infrastructure tools.
+        if name.starts_with("goon_")
+            || name.starts_with("acp_")
+            || name.starts_with("prompts_")
+            || name == "skill-finder"
+            || name == "skill-creator"
+            || name == "builtin.echo"
+            || name == "echo_skill"
+        {
+            return true;
+        }
+        // Check if this is a deferred (niche) tool.
+        if DEFERRED_NAMES.contains(&name) {
+            return false;
+        }
+        if DEFERRED_PREFIXES.iter().any(|p| name.starts_with(p)) {
+            return false;
+        }
+        true
+    });
 }

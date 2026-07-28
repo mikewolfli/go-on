@@ -44,7 +44,7 @@ mod tests {
         let mut registry = SkillRegistry::default();
         registry.register(Arc::new(EchoSkill)).unwrap();
 
-        let listed = registry.list();
+        let listed = registry.list(false);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "echo_skill");
 
@@ -218,7 +218,7 @@ mod tests {
             .discover_and_register_local_skills(Some(&tmp))
             .unwrap();
         assert_eq!(s1.registered, 1);
-        assert_eq!(registry.list().len(), 1);
+        assert_eq!(registry.list(true).len(), 1);
 
         // Second discovery — should skip (already registered)
         let s2 = registry

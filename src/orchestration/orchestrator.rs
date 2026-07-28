@@ -208,20 +208,24 @@ pub async fn execute_tool_pipeline(
     registry: &ToolRegistry,
     tool_steps: Vec<(String, Value)>,
 ) -> PipelineResult {
+    // Build sequential steps, then chunk them into parallel groups.
+    // Each group runs concurrently via `tokio::join!`; groups themselves
+    // run sequentially.  Consecutive tools are always independent because
+    // outputs go to the LLM, not to other tools, so a simple batch split
+    // is safe.
     let steps: Vec<PipelineStep> = tool_steps
         .into_iter()
         .map(|(tool_name, input)| PipelineStep { tool_name, input })
         .collect();
 
+    const MAX_PARALLEL: usize = 5;
+    let parallel_groups: Vec<Vec<PipelineStep>> =
+        steps.chunks(MAX_PARALLEL).map(|c| c.to_vec()).collect();
+
     let pipeline = ToolPipeline {
         name: "orchestrator-pipeline".to_string(),
         steps,
-        // TODO: Parallelize non-dependent tools by building dependency-aware parallel_groups.
-        // Currently all tools run sequentially because parallel_groups is empty.
-        // A dependency analysis step before this point could group independent tools
-        // for concurrent execution, significantly reducing wall-clock time for
-        // multi-tool operations.
-        parallel_groups: Vec::new(),
+        parallel_groups,
         on_error: crate::orchestration::tool_pipeline::PipelineErrorStrategy::Continue,
         sandbox_level: Some(crate::governance::hardening::SandboxLevel::Basic),
     };

@@ -39,12 +39,14 @@ impl CapabilityBus {
     pub fn sense(&self, task: &TaskContext) -> SensingOutput {
         // Include task risk score in heartbeat so `task` is unconditionally referenced
         // across all feature configurations.
-        let cap_agents = crate::lock_or_recover!(&self.capability_graph, "intelligence").total_agents();
+        let cap_agents =
+            crate::lock_or_recover!(&self.capability_graph, "intelligence").total_agents();
         // BLUE70: Read from UnifiedKnowledgeBus (replaces legacy ReputationStore)
         let rep_snapshot = {
             let ukb = crate::read_or_recover!(&self.unified_knowledge_bus, "intelligence");
-            ukb.all_reputations().into_iter().map(|r| {
-                crate::intelligence::reputation::ReputationRecord {
+            ukb.all_reputations()
+                .into_iter()
+                .map(|r| crate::intelligence::reputation::ReputationRecord {
                     agent: r.agent.clone(),
                     score: r.score,
                     total_tasks: r.total_tasks,
@@ -52,25 +54,31 @@ impl CapabilityBus {
                     failure_count: r.total_tasks.saturating_sub(r.successful_tasks),
                     consecutive_failures: 0,
                     last_updated_ms: 0,
-                }
-            }).collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
         };
         // BLUE70: Read from LearningOptimizationBus (replaces legacy WorkflowLearningBus)
         let _learning_rates = {
             let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
-            lob.events_snapshot().iter().map(|e| e.agent.clone()).collect::<Vec<_>>()
+            lob.events_snapshot()
+                .iter()
+                .map(|e| e.agent.clone())
+                .collect::<Vec<_>>()
         };
         let learning_snapshot: Vec<WorkflowLearningEvent> = {
             let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
-            lob.events_snapshot().into_iter().map(|e| WorkflowLearningEvent {
-                task_type: e.task_type,
-                agent: e.agent,
-                success: e.success,
-                duration_ms: e.duration_ms,
-                token_cost: e.token_cost,
-                quality_score: e.quality_score,
-                timestamp_ms: e.timestamp_ms,
-            }).collect()
+            lob.events_snapshot()
+                .into_iter()
+                .map(|e| WorkflowLearningEvent {
+                    task_type: e.task_type,
+                    agent: e.agent,
+                    success: e.success,
+                    duration_ms: e.duration_ms,
+                    token_cost: e.token_cost,
+                    quality_score: e.quality_score,
+                    timestamp_ms: e.timestamp_ms,
+                })
+                .collect()
         };
 
         // Phase 4: Query ObservabilityBus for healthy agents

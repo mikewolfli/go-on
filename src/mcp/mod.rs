@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) compatibility layer.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
@@ -47,6 +47,11 @@ pub struct McpServer {
     /// connected SSE clients (resource changes, tool list changes, etc.).
     /// Set by `McpHttpServer` during construction.
     pub(crate) sse_broadcaster: Option<Arc<crate::protocol::mcp_server::SseBroadcaster>>,
+
+    /// Tracks whether the client has sent a valid `initialize` request.
+    /// Used to enforce MCP two-phase initialization ordering — the server
+    /// MUST reject most requests before `initialize` has been received.
+    pub(crate) initialized: AtomicBool,
 }
 
 impl McpServer {
@@ -69,6 +74,7 @@ impl McpServer {
             resource_subscriptions: Arc::new(Mutex::new(HashMap::new())),
             acp_server: None,
             sse_broadcaster: None,
+            initialized: AtomicBool::new(false),
         }
     }
 
@@ -92,6 +98,7 @@ impl McpServer {
             resource_subscriptions: Arc::new(Mutex::new(HashMap::new())),
             acp_server,
             sse_broadcaster: None,
+            initialized: AtomicBool::new(false),
         }
     }
 

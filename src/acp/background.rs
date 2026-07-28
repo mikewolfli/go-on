@@ -741,7 +741,7 @@ pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
         .orchestration_deps
         .skill_registry
         .read()
-        .map(|r| r.list().len())
+        .map(|r| r.list(false).len())
         .unwrap_or(0)
         == 0
     {

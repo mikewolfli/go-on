@@ -182,7 +182,7 @@ pub(crate) async fn select_and_score_agents(
                 warn!("select_and_score_agents: skill_registry poisoned, recovering");
                 poisoned.into_inner()
             });
-        let skill_count = reg_guard.list().len();
+        let skill_count = reg_guard.list(false).len();
         let skill_instruction = tf(
             "prompts.skill_system",
             &[("count", &skill_count.to_string())],

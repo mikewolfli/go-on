@@ -55,6 +55,6 @@ pub mod sense;
 pub mod tool_bus;
 
 // BLUE70 consolidated buses (replacing 3 groups of legacy buses)
-pub mod unified_knowledge_bus;
-pub mod reinforcement_bus;
 pub mod learning_optimization_bus;
+pub mod reinforcement_bus;
+pub mod unified_knowledge_bus;

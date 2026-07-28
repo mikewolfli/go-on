@@ -40,6 +40,11 @@ impl From<serde_json::Error> for AuditError {
 // ─── AuditLogEntry (unchanged) ──────────────────────────────────────────────
 
 /// Audit log entry for all agent/tool/phase decisions
+///
+/// # Related types
+/// - [`super::security_governor::AuditEntry`] — a security-policy-specific audit
+///   entry used by [`super::security_governor::SecurityGovernor`]. This type is
+///   the general-purpose audit record; `AuditEntry` covers only policy evaluations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditLogEntry {
     pub timestamp: String,

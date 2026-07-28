@@ -954,7 +954,7 @@ impl Tool for SkillListTool {
         let skills = match SKILL_REGISTRY.get() {
             Some(registry) => match registry.read() {
                 Ok(guard) => {
-                    let descriptors = guard.list();
+                    let descriptors = guard.list(false);
                     descriptors
                         .into_iter()
                         .map(|d| {
@@ -1247,7 +1247,7 @@ impl Tool for SkillReloadTool {
             .discover_and_register_local_skills(agents_skills_dir.as_deref())
             .map_err(|e| anyhow::anyhow!("skill reload failed: {}", e))?;
 
-        let total = guard.list().len();
+        let total = guard.list(false).len();
 
         Ok(ToolOutput {
             success: true,

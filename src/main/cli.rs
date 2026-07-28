@@ -280,7 +280,7 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             let descriptors = skill_registry
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
-                .list();
+                .list(false);
             println!("Registered skills ({}):", descriptors.len());
             for desc in &descriptors {
                 println!(

@@ -3,7 +3,6 @@
 //! Matches incoming tasks against known scenarios to provide pre-configured
 //! routing decisions, tool selections, and execution strategies.
 
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};

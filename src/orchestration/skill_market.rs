@@ -404,6 +404,8 @@ impl SkillMarketRegistry {
                 input_schema: HashMap::new(),
                 timeout_secs: 120,
                 max_retries: 2,
+                disable_model_invocation: false,
+                policy: None,
             };
             if let Err(e) = registry.register(Arc::new(skill)) {
                 info!(

@@ -66,6 +66,12 @@ impl TaskDecomposer {
     ) -> TaskDecomposition {
         if let Some(agent) = llm_agent {
             // Attempt LLM-based decomposition
+            let now = std::time::SystemTime::now();
+            let ts = now
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+
             let prompt = format!(
                 r##"You are a task decomposition specialist. Break the following task into subtasks.
 
@@ -87,13 +93,7 @@ Return ONLY valid JSON, no markdown formatting.
             );
 
             let envelope = crate::agent::AgentTaskEnvelope {
-                task_id: format!(
-                    "decomp_{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()
-                ),
+                task_id: format!("decomp_{}", ts),
                 phase: "decomposition".to_string(),
                 role: "decomposer".to_string(),
                 objective: prompt,
@@ -136,13 +136,7 @@ Return ONLY valid JSON, no markdown formatting.
                                 if let Ok(subtasks) =
                                     serde_json::from_value::<Vec<Subtask>>(subtasks_val.clone())
                                 {
-                                    let task_id = format!(
-                                        "task_{}",
-                                        std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_millis()
-                                    );
+                                    let task_id = format!("task_{}", ts);
                                     let execution_phases =
                                         Self::compute_execution_phases(&subtasks);
                                     let total_duration_estimated: u32 =

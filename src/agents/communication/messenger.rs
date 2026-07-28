@@ -8,10 +8,10 @@
 //! `wait_for` now uses `notify.changed().await` instead of polling.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 use tokio::sync::watch;
+use tokio::sync::RwLock;
 
 use crate::agents::communication::message::AgentMessage;
 use crate::agents::communication::path::AgentPath;
@@ -78,7 +78,10 @@ impl AgentMessenger {
     pub async fn send_at_most_once(&self, msg: AgentMessage) -> Result<(), String> {
         let targets = self.resolve_targets(&msg).await;
         if targets.is_empty() {
-            return Err(format!("no receivers matched for message target: {}", msg.to));
+            return Err(format!(
+                "no receivers matched for message target: {}",
+                msg.to
+            ));
         }
         self.deliver_to_targets(msg, targets).await;
         Ok(())
@@ -91,7 +94,10 @@ impl AgentMessenger {
     pub async fn send_at_least_once(&self, msg: AgentMessage) -> Result<(), String> {
         let targets = self.resolve_targets(&msg).await;
         if targets.is_empty() {
-            return Err(format!("no receivers matched for message target: {}", msg.to));
+            return Err(format!(
+                "no receivers matched for message target: {}",
+                msg.to
+            ));
         }
 
         let max_attempts = 3;
@@ -104,7 +110,10 @@ impl AgentMessenger {
                 Err(e) => {
                     last_error = Some(e);
                     if attempt + 1 < max_attempts {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(
+                            100 * (attempt + 1) as u64,
+                        ))
+                        .await;
                     }
                 }
             }
@@ -112,8 +121,7 @@ impl AgentMessenger {
 
         Err(format!(
             "message delivery failed after {} attempts: {:?}",
-            max_attempts,
-            last_error
+            max_attempts, last_error
         ))
     }
 
@@ -135,7 +143,10 @@ impl AgentMessenger {
     /// Receive all pending messages for an agent path.
     pub async fn recv(&self, path: &AgentPath) -> Vec<AgentMessage> {
         let mut inboxes = self.inboxes.write().await;
-        inboxes.remove(path).map(|q| q.into_iter().collect()).unwrap_or_default()
+        inboxes
+            .remove(path)
+            .map(|q| q.into_iter().collect())
+            .unwrap_or_default()
     }
 
     /// Peek at pending messages without consuming them.
@@ -177,7 +188,10 @@ impl AgentMessenger {
         tokio::time::timeout(timeout_dur, async {
             loop {
                 // Wait for the next delivery notification (zero CPU).
-                notify_rx.changed().await.map_err(|_| "notification channel closed".to_string())?;
+                notify_rx
+                    .changed()
+                    .await
+                    .map_err(|_| "notification channel closed".to_string())?;
 
                 // Check inbox for matching messages.
                 let msgs = self.recv(path).await;
@@ -248,16 +262,24 @@ impl AgentMessenger {
     /// Deliver a single message to an inbox, with backpressure.
     async fn deliver_single(&self, msg: AgentMessage, path: &AgentPath) {
         let mut inboxes = self.inboxes.write().await;
-        let inbox = inboxes.entry(path.clone()).or_insert_with(|| VecDeque::with_capacity(64));
+        let inbox = inboxes
+            .entry(path.clone())
+            .or_insert_with(|| VecDeque::with_capacity(64));
         if inbox.len() < self.max_inbox_size {
             inbox.push_back(msg);
         }
         // Notify watchers that a new message has been delivered.
-        let _ = self.notify.send(NOTIFY_COUNTER.fetch_add(1, Ordering::Relaxed));
+        let _ = self
+            .notify
+            .send(NOTIFY_COUNTER.fetch_add(1, Ordering::Relaxed));
     }
 
     /// Deliver with verification (for AtLeastOnce).
-    async fn deliver_with_check(&self, msg: &AgentMessage, targets: &[AgentPath]) -> Result<(), String> {
+    async fn deliver_with_check(
+        &self,
+        msg: &AgentMessage,
+        targets: &[AgentPath],
+    ) -> Result<(), String> {
         for target in targets {
             self.deliver_single(msg.clone(), target).await;
             // Verify delivery by checking inbox growth.
@@ -282,9 +304,12 @@ mod tests {
 
     fn make_tree() -> Arc<RwLock<AgentTree>> {
         let mut tree = AgentTree::new();
-        tree.register(&make_path("root"), "main", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/a"), "agent_a", AgentNodeMetadata::new()).unwrap();
-        tree.register(&make_path("root/b"), "agent_b", AgentNodeMetadata::new()).unwrap();
+        tree.register(&make_path("root"), "main", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/a"), "agent_a", AgentNodeMetadata::new())
+            .unwrap();
+        tree.register(&make_path("root/b"), "agent_b", AgentNodeMetadata::new())
+            .unwrap();
         Arc::new(RwLock::new(tree))
     }
 
@@ -293,10 +318,8 @@ mod tests {
         let tree = make_tree();
         let messenger = AgentMessenger::new(tree);
 
-        let msg = AgentMessage::status_query(
-            make_path("root/a"),
-            AgentTarget::Direct(make_path("root")),
-        );
+        let msg =
+            AgentMessage::status_query(make_path("root/a"), AgentTarget::Direct(make_path("root")));
         messenger.send_at_most_once(msg).await.unwrap();
 
         let received = messenger.recv(&make_path("root")).await;
@@ -308,10 +331,7 @@ mod tests {
         let tree = make_tree();
         let messenger = AgentMessenger::new(tree);
 
-        let msg = AgentMessage::status_query(
-            make_path("root/a"),
-            AgentTarget::Broadcast,
-        );
+        let msg = AgentMessage::status_query(make_path("root/a"), AgentTarget::Broadcast);
         messenger.send_at_most_once(msg).await.unwrap();
 
         let b_msgs = messenger.recv(&make_path("root/b")).await;
@@ -326,9 +346,14 @@ mod tests {
         let msg = AgentMessage::result(
             make_path("root/a"),
             AgentTarget::ToParent,
-            true, Some("done".to_string()),
-            None, None, None, None,
-            "ok".to_string(), 100,
+            true,
+            Some("done".to_string()),
+            None,
+            None,
+            None,
+            None,
+            "ok".to_string(),
+            100,
         );
         messenger.send_at_most_once(msg).await.unwrap();
 
@@ -353,7 +378,9 @@ mod tests {
         let tree = make_tree();
         let messenger = AgentMessenger::new(tree);
 
-        messenger.cancel_subtree(&make_path("root"), "timeout").await;
+        messenger
+            .cancel_subtree(&make_path("root"), "timeout")
+            .await;
 
         let a_msgs = messenger.recv(&make_path("root/a")).await;
         assert!(!a_msgs.is_empty());
@@ -370,10 +397,8 @@ mod tests {
         let messenger = Arc::new(AgentMessenger::new(tree));
 
         // Spawn a task that sends a message after a short delay.
-        let msg = AgentMessage::status_query(
-            make_path("root/a"),
-            AgentTarget::Direct(make_path("root")),
-        );
+        let msg =
+            AgentMessage::status_query(make_path("root/a"), AgentTarget::Direct(make_path("root")));
         let m2 = messenger.clone();
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -408,7 +433,10 @@ mod tests {
         let delegate = AgentMessage::delegate(
             make_path("root"),
             AgentTarget::Direct(make_path("root/a")),
-            "task".to_string(), None, None, 300,
+            "task".to_string(),
+            None,
+            None,
+            300,
         );
         assert!(messenger.send(delegate).await.is_ok());
 
@@ -416,7 +444,8 @@ mod tests {
         let progress = AgentMessage::progress(
             make_path("root/a"),
             AgentTarget::ToParent,
-            "working...".to_string(), true,
+            "working...".to_string(),
+            true,
         );
         assert!(messenger.send(progress).await.is_ok());
     }
@@ -429,20 +458,15 @@ mod tests {
         let mut rx = messenger.subscribe_notify();
         assert_eq!(*rx.borrow_and_update(), 0);
 
-        let msg = AgentMessage::status_query(
-            make_path("root/a"),
-            AgentTarget::Direct(make_path("root")),
-        );
+        let msg =
+            AgentMessage::status_query(make_path("root/a"), AgentTarget::Direct(make_path("root")));
         let m2 = messenger.clone();
         tokio::spawn(async move {
             let _ = m2.send_at_most_once(msg).await;
         });
 
         // Notification should fire when message is delivered.
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            rx.changed(),
-        ).await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.changed()).await;
         assert!(result.is_ok());
     }
 }

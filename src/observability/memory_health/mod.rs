@@ -48,16 +48,25 @@ pub struct SystemMemoryInfo {
     /// Approximate free (available) memory in bytes.
     pub free_bytes: u64,
     /// Active memory in bytes.
-    // populated by query_system_memory; reserved for future pressure analysis
-    #[allow(dead_code, reason = "Reserved for future pressure analysis")]
+    // populated by query_system_memory; reserved for memory-pressure-level heuristics and macOS vm_page_free_count tracking
+    #[allow(
+        dead_code,
+        reason = "Reserved for memory-pressure-level heuristics and macOS vm_page_free_count tracking"
+    )]
     pub active_bytes: u64,
     /// Wired (unpageable) memory in bytes.
-    // populated by query_system_memory; reserved for future pressure analysis
-    #[allow(dead_code, reason = "Reserved for future pressure analysis")]
+    // populated by query_system_memory; reserved for wired-memory-aware OOM prediction on macOS
+    #[allow(
+        dead_code,
+        reason = "Reserved for wired-memory-aware OOM prediction on macOS"
+    )]
     pub wired_bytes: u64,
     /// Swap usage in bytes (0 if swap is disabled).
-    // populated by query_system_memory; reserved for future pressure analysis
-    #[allow(dead_code, reason = "Reserved for future pressure analysis")]
+    // populated by query_system_memory; reserved for swap-pressure triggers and early-warning thresholds
+    #[allow(
+        dead_code,
+        reason = "Reserved for swap-pressure triggers and early-warning thresholds"
+    )]
     pub swap_used_bytes: u64,
     /// Swap total capacity in bytes.
     pub swap_total_bytes: u64,
@@ -87,7 +96,10 @@ impl SystemMemoryInfo {
     }
 
     /// Whether the system has no swap available.
-    #[allow(dead_code, reason = "Reserved for future swap-awareness features")]
+    #[allow(
+        dead_code,
+        reason = "Reserved for swap-awareness features — returns true when no swap is configured, useful for AlertManager policy decisions"
+    )]
     pub fn swap_disabled(&self) -> bool {
         self.swap_total_bytes == 0
     }
@@ -400,13 +412,19 @@ pub fn runtime_free_mb() -> u64 {
 }
 
 /// Get the last known total memory in MB.
-#[allow(dead_code, reason = "Reserved for memory pressure awareness features")]
+#[allow(
+    dead_code,
+    reason = "Reserved for memory-pressure-awareness callers — returns last-known total RAM from the background monitor; wired once AlertManager rules reference it"
+)]
 pub fn runtime_total_mb() -> u64 {
     RUNTIME_MEMORY_TOTAL_MB.load(Ordering::Relaxed)
 }
 
 /// Get the last known macOS memory pressure level.
-#[allow(dead_code, reason = "Reserved for memory pressure awareness features")]
+#[allow(
+    dead_code,
+    reason = "Reserved for memory-pressure-awareness callers — returns last-known macOS pressure level; wired once AlertManager rules reference it"
+)]
 pub fn runtime_pressure_level() -> u8 {
     RUNTIME_PRESSURE_LEVEL.load(Ordering::Relaxed) as u8
 }

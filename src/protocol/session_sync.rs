@@ -654,7 +654,8 @@ impl SessionRegistry {
     /// write-lock deletion, yet still be removed. By using one write-lock
     /// transaction, we guarantee consistency.
     pub async fn cleanup_inactive_sessions(&self, max_age: Duration) -> usize {
-        let threshold = (crate::shared::timestamps::now_ts_ms() as u64).saturating_sub(max_age.as_millis() as u64);
+        let threshold = (crate::shared::timestamps::now_ts_ms() as u64)
+            .saturating_sub(max_age.as_millis() as u64);
 
         // Perform stale check AND deletion under a single write lock to
         // prevent TOCTOU races.

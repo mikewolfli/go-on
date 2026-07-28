@@ -80,7 +80,7 @@ impl FullAutoFlow {
             warn!("skill_registry lock poisoned – recovered data");
             poisoned.into_inner()
         });
-        let descriptors = registry.list();
+        let descriptors = registry.list(false);
         drop(registry); // Release the lock as early as possible.
 
         let effective_threshold = self.effective_min_match_score();

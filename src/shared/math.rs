@@ -1,40 +1,29 @@
 //! Shared math utilities.
 
-/// Compute cosine similarity between two equal-length `f64` vectors.
-///
-/// Returns `0.0` if either vector is empty, lengths differ, or either
-/// vector has zero norm.
-pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let norm_b: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a * norm_b)
-    }
+macro_rules! define_cosine_similarity {
+    ($name:ident, $float:ty) => {
+        /// Compute cosine similarity between two equal-length vectors.
+        ///
+        /// Returns `0.0` if either vector is empty, lengths differ, or either
+        /// vector has zero norm.
+        pub fn $name(a: &[$float], b: &[$float]) -> $float {
+            if a.len() != b.len() || a.is_empty() {
+                return 0.0;
+            }
+            let dot: $float = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+            let norm_a: $float = a.iter().map(|x| x * x).sum::<$float>().sqrt();
+            let norm_b: $float = b.iter().map(|x| x * x).sum::<$float>().sqrt();
+            if norm_a == 0.0 || norm_b == 0.0 {
+                0.0
+            } else {
+                dot / (norm_a * norm_b)
+            }
+        }
+    };
 }
 
-/// Compute cosine similarity between two equal-length `f32` vectors.
-///
-/// Returns `0.0` if either vector is empty, lengths differ, or either
-/// vector has zero norm.
-pub fn cosine_similarity_f32(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a * norm_b)
-    }
-}
+define_cosine_similarity!(cosine_similarity, f64);
+define_cosine_similarity!(cosine_similarity_f32, f32);
 
 #[cfg(test)]
 mod tests {

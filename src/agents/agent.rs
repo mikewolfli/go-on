@@ -841,6 +841,36 @@ impl AgentRegistry {
         self.agents.insert(name, agent);
     }
 
+    /// Get all registered agents as a batch.
+    ///
+    /// This is more efficient than calling `get()` in a loop because it
+    /// acquires the token cache lock at most once (rather than per-agent)
+    /// and avoids N individual `HashMap::get` lookups.
+    pub fn all(&self) -> Vec<(String, Arc<dyn Agent>)> {
+        let mut agents: Vec<(String, Arc<dyn Agent>)> = self
+            .agents
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        agents.sort_by(|a, b| a.0.cmp(&b.0));
+
+        if let Ok(guard) = self.token_cache.read() {
+            if let Some(ref cache) = *guard {
+                return agents
+                    .into_iter()
+                    .map(|(name, agent)| {
+                        (
+                            name,
+                            Arc::new(CachedAgentWrapper::new(agent, Arc::clone(cache)))
+                                as Arc<dyn Agent>,
+                        )
+                    })
+                    .collect();
+            }
+        }
+        agents
+    }
+
     pub fn names(&self) -> Vec<String> {
         let mut names = self.agents.keys().cloned().collect::<Vec<_>>();
         names.sort();
@@ -1054,11 +1084,24 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
                 client,
             )))
         }
+        // Chat-heavy streaming providers — SSE compression reduces bandwidth.
+        agent_type @ ("groq" | "llama" | "mistral" | "perplexity") => {
+            let api_key_env = required_field(agent_type, &config.api_key_env, "api_key_env")?;
+            let url = required_field(agent_type, &config.url, "url")?;
+            let model = required_field(agent_type, &config.model, "model")?;
+            Ok(Arc::new(OpenAiCompatibleAgent::new_with_compression(
+                url,
+                "/chat/completions".to_string(),
+                api_key_env,
+                model,
+                true,
+                client,
+            )))
+        }
         agent_type @ ("fireworks" | "ai21" | "aleph" | "deepquest" | "facewall" | "glm"
-        | "groq" | "hunyuan" | "kimi" | "langboat" | "llama" | "loopai"
-        | "minimax" | "mistral" | "moonshot" | "nim" | "perplexity" | "replicate"
-        | "siliconflow" | "skywork" | "stepfun" | "titan" | "together" | "xai"
-        | "xihu" | "yi") => {
+        | "hunyuan" | "kimi" | "langboat" | "loopai" | "minimax" | "moonshot"
+        | "nim" | "replicate" | "siliconflow" | "skywork" | "stepfun" | "titan"
+        | "together" | "xai" | "xihu" | "yi") => {
             let api_key_env = required_field(agent_type, &config.api_key_env, "api_key_env")?;
             let url = required_field(agent_type, &config.url, "url")?;
             let model = required_field(agent_type, &config.model, "model")?;

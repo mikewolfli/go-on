@@ -4,7 +4,6 @@
 //! version history, and performance trends. This module enables monitoring
 //! of agent capability maturity and automatic promotion/deprecation decisions.
 
-
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

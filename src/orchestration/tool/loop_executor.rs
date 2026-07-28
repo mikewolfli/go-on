@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use tokio::task::block_in_place;
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -646,13 +647,15 @@ pub async fn execute_loop_async(
     for iteration in 0..config.max_iterations {
         // ── Think ────────────────────────────────────────────────
         // Select the best tool candidate based on retry history.
-        let think_result = think(
-            task,
-            &tool_candidates,
-            &retry_counts,
-            config,
-            recommender.as_deref(),
-        );
+        let think_result = block_in_place(|| {
+            think(
+                task,
+                &tool_candidates,
+                &retry_counts,
+                config,
+                recommender.as_deref(),
+            )
+        });
 
         let Some(tr) = think_result else {
             let decision = LoopDecision::Failed {

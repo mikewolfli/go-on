@@ -42,11 +42,8 @@ impl FederatedCoordinator {
 
     /// Schedule a Q-table update for federation sync.
     pub fn schedule_sync(&mut self, state: &str, action: &str, value: f64) {
-        self.pending_syncs.push((
-            state.to_string(),
-            action.to_string(),
-            value,
-        ));
+        self.pending_syncs
+            .push((state.to_string(), action.to_string(), value));
     }
 
     /// Number of pending syncs.
@@ -265,7 +262,11 @@ mod tests {
     #[test]
     fn test_select_action() {
         let bus = ReinforcementBus::with_exploration_rate(ReinforcementBus::new(), 0.0);
-        let actions = vec!["code".to_string(), "research".to_string(), "review".to_string()];
+        let actions = vec![
+            "code".to_string(),
+            "research".to_string(),
+            "review".to_string(),
+        ];
         let selected = bus.select_action("state_1", &actions);
         assert!(selected.is_some());
         assert!(actions.contains(&selected.unwrap()));

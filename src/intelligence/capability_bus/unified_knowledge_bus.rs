@@ -101,12 +101,16 @@ impl UnifiedKnowledgeBus {
     pub fn query(&self, agent: &str, task_type: &str) -> UnifiedKnowledgeResult {
         UnifiedKnowledgeResult {
             reputation: self.reputation_scores.get(agent).cloned(),
-            relevant_experiences: self.experience_cases.iter()
+            relevant_experiences: self
+                .experience_cases
+                .iter()
                 .filter(|e| e.agent == agent || e.task_type == task_type)
                 .take(5)
                 .cloned()
                 .collect(),
-            applicable_knowledge: self.knowledge_by_task.get(task_type)
+            applicable_knowledge: self
+                .knowledge_by_task
+                .get(task_type)
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -196,17 +200,27 @@ impl UnifiedKnowledgeBus {
 
     /// Get recent experience cases for an agent.
     pub fn agent_experiences(&self, agent: &str) -> Vec<&ExperienceCase> {
-        self.experience_cases.iter().filter(|e| e.agent == agent).collect()
+        self.experience_cases
+            .iter()
+            .filter(|e| e.agent == agent)
+            .collect()
     }
 
     /// Get recent experience cases for a task type.
     pub fn task_experiences(&self, task_type: &str) -> Vec<&ExperienceCase> {
-        self.experience_cases.iter().filter(|e| e.task_type == task_type).collect()
+        self.experience_cases
+            .iter()
+            .filter(|e| e.task_type == task_type)
+            .collect()
     }
 
     /// Calculate success rate for an agent.
     pub fn agent_success_rate(&self, agent: &str) -> Option<f64> {
-        let cases: Vec<_> = self.experience_cases.iter().filter(|e| e.agent == agent).collect();
+        let cases: Vec<_> = self
+            .experience_cases
+            .iter()
+            .filter(|e| e.agent == agent)
+            .collect();
         if cases.is_empty() {
             return None;
         }
@@ -249,7 +263,8 @@ impl UnifiedKnowledgeBus {
     // ── Private helpers ──────────────────────────────────────────
 
     fn update_reputation(&mut self, agent: &str, success: bool, now_ms: u64) {
-        let entry = self.reputation_scores
+        let entry = self
+            .reputation_scores
             .entry(agent.to_string())
             .or_insert_with(|| ReputationScore {
                 agent: agent.to_string(),
@@ -273,7 +288,8 @@ impl UnifiedKnowledgeBus {
     fn is_novel_pattern(&self, task_type: &str, summary: &str) -> bool {
         // A pattern is novel if we have fewer than NOVELTY_THRESHOLD insights
         // for this task type, OR the summary doesn't match existing insights.
-        let count = self.knowledge_by_task
+        let count = self
+            .knowledge_by_task
             .get(task_type)
             .map(|v| v.len())
             .unwrap_or(0);
@@ -315,7 +331,12 @@ mod tests {
     #[test]
     fn test_record_outcome_updates_reputation() {
         let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_a", "research", true, "Completed research task".to_string());
+        bus.record_outcome(
+            "agent_a",
+            "research",
+            true,
+            "Completed research task".to_string(),
+        );
         let rep = bus.get_reputation("agent_a");
         assert!(rep.is_some());
         assert!(rep.unwrap() > 0.5); // Success should increase score
@@ -339,7 +360,12 @@ mod tests {
     #[test]
     fn test_successful_outcome_adds_knowledge() {
         let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_a", "research", true, "Found pattern: use BFS for graph traversal".to_string());
+        bus.record_outcome(
+            "agent_a",
+            "research",
+            true,
+            "Found pattern: use BFS for graph traversal".to_string(),
+        );
         assert_eq!(bus.insight_count(), 1);
 
         let matching = bus.find_matching(&["research".to_string()]);
@@ -356,7 +382,12 @@ mod tests {
     #[test]
     fn test_unified_query() {
         let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_a", "research", true, "Found useful pattern".to_string());
+        bus.record_outcome(
+            "agent_a",
+            "research",
+            true,
+            "Found useful pattern".to_string(),
+        );
 
         let result = bus.query("agent_a", "research");
         assert!(result.reputation.is_some());

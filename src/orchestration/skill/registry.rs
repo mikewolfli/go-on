@@ -84,6 +84,11 @@ pub struct SkillRegistry {
     /// Namespace records keyed by skill name (e.g., "community", "builtin", "custom").
     /// Set during registration; exposed via `list()` and `descriptor()`.
     namespaces: HashMap<String, String>,
+    /// Set of skill names that are hidden from model-facing discovery.
+    /// This is a post-registration override for skills whose trait-level
+    /// `disable_model_invocation()` returns `false` but should still be
+    /// hidden (e.g., utility skills registered as `Arc<dyn Skill>`).
+    hidden_skills: HashSet<String>,
 }
 
 impl std::fmt::Debug for SkillRegistry {
@@ -122,6 +127,10 @@ pub struct SkillDescriptor {
     pub average_latency_ms: f64,
     /// Provenance tracking — where this skill was installed from.
     pub provenance: Option<SkillProvenance>,
+    /// Whether this skill is hidden from model-facing discovery.
+    pub hidden: bool,
+    /// Optional policy for implicit invocation and product gating.
+    pub policy: Option<crate::orchestration::skill::execution::SkillPolicy>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -187,6 +196,15 @@ impl SkillRegistry {
         self.validate_and_insert(skill, None)
     }
 
+    /// Register a skill that should be hidden from model discovery.
+    /// Convenience wrapper around `register()` followed by `set_hidden()`.
+    pub fn register_hidden(&mut self, skill: Arc<dyn super::Skill>) -> Result<()> {
+        let name = skill.name().to_string();
+        self.validate_and_insert(skill, None)?;
+        self.set_hidden(&name, true);
+        Ok(())
+    }
+
     /// Set the namespace for an already-registered skill.
     ///
     /// Namespace is display/filter metadata (e.g., "community", "builtin", "custom")
@@ -196,6 +214,92 @@ impl SkillRegistry {
         if self.skills.contains_key(name) {
             self.namespaces.insert(name.to_string(), namespace);
         }
+    }
+
+    /// Mark a skill as hidden from or visible to model-facing discovery.
+    ///
+    /// Hidden skills are excluded from `list()` (unless `include_hidden` is true)
+    /// and the semantic skill index, but remain invocable via `get()`.
+    /// This is a convenience wrapper over `Skill::disable_model_invocation`
+    /// that allows changing the flag after registration.
+    pub fn set_hidden(&mut self, name: &str, hidden: bool) {
+        // The `Skill` trait exposes `disable_model_invocation()` as a read-only
+        // method. For post-registration changes, we track hidden status in
+        // this separate set. The listing filter checks both the trait method
+        // and this set.
+        //
+        // This is primarily useful for wrapping skills that don't have the
+        // field (e.g. `EchoSkill`, `SkillCreatorSkill`).
+        if hidden {
+            self.hidden_skills.insert(name.to_string());
+        } else {
+            self.hidden_skills.remove(name);
+        }
+    }
+
+    /// Returns `true` if the skill is hidden from model-facing discovery.
+    /// Checks both the `Skill` trait's `disable_model_invocation()` and the
+    /// registry-level `hidden_skills` override set.
+    pub fn is_hidden(&self, name: &str) -> bool {
+        self.hidden_skills.contains(name)
+            || self
+                .skills
+                .get(name)
+                .map(|s| s.disable_model_invocation())
+                .unwrap_or(false)
+    }
+
+    /// Register the set of built-in skills that ship with go-on.
+    ///
+    /// These skills are registered with `"builtin"` namespace and a provenance
+    /// source of `"builtin://<name>"`.  Built-in registration is skipped for any
+    /// skill whose name is already taken (e.g. by a locally discovered skill).
+    pub fn register_builtin_skills(&mut self) -> Result<()> {
+        let builtins: Vec<PromptBasedSkill> = vec![PromptBasedSkill {
+            name: "create-skill".to_string(),
+            description: "Creates a new reusable skill from a natural language description"
+                .to_string(),
+            prompt_template: [
+                "You are a skill creation assistant.",
+                "Given the user's description of a task they want to automate,",
+                "generate a complete skill definition: name, description, and",
+                "prompt_template that captures the steps needed to accomplish the task.",
+                "",
+                "User request: {description}",
+            ]
+            .join("\n"),
+            input_schema: HashMap::from([("description".to_string(), "string".to_string())]),
+            timeout_secs: 120,
+            max_retries: 2,
+            disable_model_invocation: false,
+            policy: None,
+        }];
+
+        for skill in builtins {
+            if self.skills.contains_key(&skill.name) {
+                tracing::trace!(
+                    "Built-in skill '{}' already registered — skipping",
+                    skill.name
+                );
+                continue;
+            }
+
+            let name = skill.name.clone();
+            self.register_with_provenance(
+                Arc::new(skill),
+                Some(SkillProvenance {
+                    source: format!("builtin://{name}"),
+                    content_digest: None,
+                    installed_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                }),
+            )?;
+            self.namespaces.insert(name, "builtin".to_string());
+        }
+
+        Ok(())
     }
 
     fn validate_and_insert(
@@ -261,22 +365,50 @@ impl SkillRegistry {
         Ok(())
     }
 
+    /// Look up a skill by name, supporting `namespace:name` syntax.
+    ///
+    /// When `name` contains a `:`, it is split into namespace and skill name,
+    /// and the lookup succeeds only if both match. Without `:`, performs an
+    /// exact name lookup as before.
     pub fn get(&self, name: &str) -> Option<Arc<dyn super::Skill>> {
-        self.skills.get(name).cloned()
+        if let Some((ns, skill_name)) = name.split_once(':') {
+            // Namespace-qualified lookup: verify both namespace and name
+            let skill = self.skills.get(skill_name)?;
+            let registered_ns = self.namespaces.get(skill_name)?;
+            if registered_ns == ns {
+                Some(skill.clone())
+            } else {
+                None
+            }
+        } else {
+            self.skills.get(name).cloned()
+        }
     }
 
     /// Unregister a skill by name and persist the change if persistence is enabled.
     ///
+    /// Supports `namespace:name` syntax for disambiguation.
     /// Returns `true` if the skill was found and removed, `false` if it did not exist.
     /// Persists prompt-skill data to disk after removal when a persistence path is set.
     pub fn unregister(&mut self, name: &str) -> bool {
-        let removed = self.skills.remove(name).is_some();
+        // Resolve the internal key — strip optional namespace prefix
+        let internal_name = if let Some((_ns, skill_name)) = name.split_once(':') {
+            // When namespace-qualified, verify the namespace matches
+            let registered_ns = self.namespaces.get(skill_name);
+            if registered_ns.map(|ns| ns.as_str()) != Some(_ns) {
+                return false;
+            }
+            skill_name
+        } else {
+            name
+        };
+        let removed = self.skills.remove(internal_name).is_some();
         if removed {
-            self.stats.remove(name);
-            self.evolution_history.remove(name); // Clean up history too
-            self.prompt_skill_data.remove(name);
-            self.provenances.remove(name);
-            self.namespaces.remove(name);
+            self.stats.remove(internal_name);
+            self.evolution_history.remove(internal_name);
+            self.prompt_skill_data.remove(internal_name);
+            self.provenances.remove(internal_name);
+            self.namespaces.remove(internal_name);
             // Persist the change if prompt skill persistence is enabled.
             if self.persistence_path.is_some() {
                 let _ = self.save_prompt_skills_to_disk();
@@ -285,11 +417,20 @@ impl SkillRegistry {
         removed
     }
 
-    /// List all skill descriptors sorted by score (comprehensive output).
-    pub fn list(&self) -> Vec<SkillDescriptor> {
+    /// List skill descriptors sorted by score (comprehensive output).
+    ///
+    /// When `include_hidden` is `false` (the normal case for model-facing
+    /// listings), skills with `disable_model_invocation()` returning `true`
+    /// are excluded. Pass `true` to include all skills regardless.
+    pub fn list(&self, include_hidden: bool) -> Vec<SkillDescriptor> {
         let mut items = self
             .skills
             .iter()
+            .filter(|(name, skill)| {
+                include_hidden
+                    || (!skill.disable_model_invocation()
+                        && !self.hidden_skills.contains(name.as_str()))
+            })
             .map(|(name, skill)| {
                 let stats = self.stats.get(name).cloned().unwrap_or_default();
                 SkillDescriptor {
@@ -303,6 +444,9 @@ impl SkillRegistry {
                     failure_calls: stats.failure_calls,
                     average_latency_ms: stats.average_latency_ms(),
                     provenance: self.provenances.get(name).cloned(),
+                    hidden: skill.disable_model_invocation()
+                        || self.hidden_skills.contains(name.as_str()),
+                    policy: skill.policy().cloned(),
                 }
             })
             .collect::<Vec<_>>();
@@ -342,6 +486,8 @@ impl SkillRegistry {
             failure_calls: stats.failure_calls,
             average_latency_ms: stats.average_latency_ms(),
             provenance: self.provenances.get(name).cloned(),
+            hidden: skill.disable_model_invocation() || self.hidden_skills.contains(name),
+            policy: skill.policy().cloned(),
         })
     }
 
@@ -400,6 +546,8 @@ impl SkillRegistry {
             input_schema: input_schema.clone(),
             timeout_secs: 120,
             max_retries: 2,
+            disable_model_invocation: false,
+            policy: None,
         };
 
         self.register(Arc::new(skill))?;
@@ -485,6 +633,8 @@ impl SkillRegistry {
                 input_schema: entry.input_schema.clone(),
                 timeout_secs: 120,
                 max_retries: 2,
+                disable_model_invocation: false,
+                policy: None,
             };
             // Use register() for proper validation instead of raw insertion.
             self.register(Arc::new(ps))?;
@@ -544,6 +694,14 @@ impl SkillRegistry {
             .unwrap_or_else(|| pf.manifest.description.clone());
 
         let parsed_schema = schema_value_to_map(&pf.manifest.input_schema);
+        let policy = if !pf.manifest.allow_implicit_invocation {
+            Some(crate::orchestration::skill::execution::SkillPolicy {
+                allow_implicit_invocation: Some(false),
+                products: Vec::new(),
+            })
+        } else {
+            None
+        };
         let skill = PromptBasedSkill {
             name: pf.manifest.name.clone(),
             description: pf.manifest.description.clone(),
@@ -551,6 +709,8 @@ impl SkillRegistry {
             input_schema: parsed_schema.clone(),
             timeout_secs: 30,
             max_retries: 2,
+            disable_model_invocation: pf.manifest.disable_model_invocation,
+            policy,
         };
 
         // Compute content digest from the raw SKILL.md bytes for provenance tracking
@@ -657,6 +817,11 @@ impl SkillRegistry {
             }
         };
 
+        // TODO(perf): this loop reads & parses every SKILL.md file sequentially.
+        // For directories with many entries (~50+), parallelizing with
+        // `std::thread::scope` or `tokio::task::spawn_blocking` would improve
+        // cold-start discovery time. Impact is minimal for typical usage so
+        // this is a low-priority optimization.
         for entry in read_dir.flatten() {
             let path = entry.path();
             if !path.is_dir() {
@@ -759,8 +924,20 @@ impl SkillRegistry {
     }
 
     /// Returns the set of currently registered skill names.
+    ///
+    /// When a skill has a namespace set, the returned name is formatted
+    /// as `<namespace>:<name>` to support namespace-qualified lookups.
     pub fn known_skill_names(&self) -> HashSet<String> {
-        self.skills.keys().cloned().collect()
+        self.skills
+            .keys()
+            .map(|name| {
+                if let Some(ns) = self.namespaces.get(name) {
+                    format!("{}:{}", ns, name)
+                } else {
+                    name.clone()
+                }
+            })
+            .collect()
     }
 
     /// Returns a map of prompt-based skill data (skills created via
@@ -768,6 +945,81 @@ impl SkillRegistry {
     /// into the imported skill list.
     pub fn prompt_skill_data(&self) -> HashMap<String, SavedPromptSkill> {
         self.prompt_skill_data.clone()
+    }
+
+    /// Discover skills matching `query` using token-based similarity scoring.
+    ///
+    /// Returns up to `top_k` scored results sorted by relevance (highest first).
+    /// Excludes hidden skills. Uses the same weight configuration as the original
+    /// `SkillDiscovery` for backward-compatible results.
+    ///
+    /// This consolidates the fuzzy-matching logic previously split between
+    /// `SkillRegistry::best_match_with_input` and `skill_discovery::SkillDiscovery`.
+    pub fn discover_skills(&self, query: &str, top_k: usize) -> Vec<super::SkillDescriptor> {
+        const MIN_SCORE: f64 = 0.40;
+        const W_NAME: f64 = 0.35;
+        const W_DESC: f64 = 0.40;
+        const W_RUNTIME: f64 = 0.25;
+
+        let query_trimmed = query.trim();
+        if query_trimmed.is_empty() {
+            let mut all = self.list(false);
+            all.sort_by(|a, b| a.name.cmp(&b.name));
+            all.truncate(top_k);
+            return all;
+        }
+
+        let query_tokens = tokenize(query_trimmed);
+        if query_tokens.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scored: Vec<(super::SkillDescriptor, f64)> = self
+            .list(false)
+            .into_iter()
+            .map(|desc| {
+                let name_tokens = tokenize(&desc.name);
+                let desc_tokens = tokenize(&desc.description);
+
+                // Jaccard similarity for name
+                let name_overlap = if name_tokens.is_empty() {
+                    0.0
+                } else {
+                    let intersect = name_tokens.intersection(&query_tokens).count() as f64;
+                    let union = name_tokens.union(&query_tokens).count() as f64;
+                    if union > 0.0 {
+                        intersect / union
+                    } else {
+                        0.0
+                    }
+                };
+
+                // Jaccard similarity for description
+                let desc_overlap = if desc_tokens.is_empty() {
+                    0.0
+                } else {
+                    let intersect = desc_tokens.intersection(&query_tokens).count() as f64;
+                    let union = desc_tokens.union(&query_tokens).count() as f64;
+                    if union > 0.0 {
+                        intersect / union
+                    } else {
+                        0.0
+                    }
+                };
+
+                // Runtime score — only contributes when there's semantic overlap
+                let has_semantic = name_overlap > 0.0 || desc_overlap > 0.0;
+                let runtime = if has_semantic { desc.score } else { 0.0 };
+
+                let composite = name_overlap * W_NAME + desc_overlap * W_DESC + runtime * W_RUNTIME;
+                (desc, composite)
+            })
+            .filter(|(_, score)| *score >= MIN_SCORE)
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+        scored.into_iter().map(|(desc, _)| desc).collect()
     }
 }
 
@@ -989,4 +1241,29 @@ pub fn spawn_skill_refresh_task(
             }
         }
     }))
+}
+
+/// Tokenize a string into lowercase word tokens, filtering short/common words.
+/// Shared between `SkillRegistry::discover_skills` and legacy `SkillDiscovery`.
+///
+/// Splits on non-alphanumeric characters, removes tokens shorter than 3 chars,
+/// and filters common English stop words.
+pub fn tokenize(text: &str) -> HashSet<String> {
+    let stop_words: HashSet<&str> = [
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
+        "during", "before", "after", "above", "below", "between", "out", "off", "over", "under",
+        "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all",
+        "each", "every", "both", "few", "more", "most", "other", "some", "such", "no", "nor",
+        "not", "only", "own", "same", "so", "than", "too", "very", "just", "because", "but", "and",
+        "or", "if", "while", "that", "this", "these", "those", "it", "its",
+    ]
+    .into_iter()
+    .collect();
+
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3 && !stop_words.contains(w))
+        .map(|w| w.to_ascii_lowercase())
+        .collect()
 }

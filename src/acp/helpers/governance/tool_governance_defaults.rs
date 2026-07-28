@@ -181,9 +181,17 @@ pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
 
             // High-risk keywords (destructive / execution operations)
             let high_risk_keywords = [
-                "delete", "remove", "drop",
-                "rm", "shutdown", "rollback", "revert",
-                "reset", "force", "truncate", "uninstall",
+                "delete",
+                "remove",
+                "drop",
+                "rm",
+                "shutdown",
+                "rollback",
+                "revert",
+                "reset",
+                "force",
+                "truncate",
+                "uninstall",
             ];
             for kw in &high_risk_keywords {
                 if lower.contains(kw) {
@@ -193,8 +201,7 @@ pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
 
             // Medium-risk keywords (write / edit / update operations)
             let medium_risk_keywords = [
-                "write", "edit", "modify", "update", "create",
-                "patch", "rename", "move", "copy",
+                "write", "edit", "modify", "update", "create", "patch", "rename", "move", "copy",
             ];
             for kw in &medium_risk_keywords {
                 if lower.contains(kw) {
@@ -204,8 +211,7 @@ pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
 
             // Low-risk keywords (read / search / query operations)
             let low_risk_keywords = [
-                "read", "list", "search", "grep", "find",
-                "view", "show", "get", "check", "test",
+                "read", "list", "search", "grep", "find", "view", "show", "get", "check", "test",
             ];
             for kw in &low_risk_keywords {
                 if lower.contains(kw) {

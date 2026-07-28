@@ -110,9 +110,7 @@ impl Tool for JsonQueryTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: path"))?;
 
-        let query = input.payload["query"]
-            .as_str()
-            .unwrap_or(".");
+        let query = input.payload["query"].as_str().unwrap_or(".");
 
         let file_path = sanitize_path(input, path)?;
         let query_str = query.to_string();
@@ -154,7 +152,10 @@ impl Tool for JsonQueryTool {
                         file_path.display(),
                         query_str
                     )),
-                    pua_report: Some(tool_execution_report("json_query", Some("json_query_success"))),
+                    pua_report: Some(tool_execution_report(
+                        "json_query",
+                        Some("json_query_success"),
+                    )),
                 })
             }
             None => {
@@ -171,17 +172,17 @@ impl Tool for JsonQueryTool {
                         "found": false,
                         "value": null,
                     })),
-                    error: Some(format!(
-                        "path '{}' not found in JSON document",
-                        query_str
-                    )),
+                    error: Some(format!("path '{}' not found in JSON document", query_str)),
                     verification: Some("json_query_not_found".to_string()),
                     audit_log: Some(format!(
                         "json_query '{}' query '{}' not found",
                         file_path.display(),
                         query_str
                     )),
-                    pua_report: Some(tool_execution_report("json_query", Some("json_query_not_found"))),
+                    pua_report: Some(tool_execution_report(
+                        "json_query",
+                        Some("json_query_not_found"),
+                    )),
                 })
             }
         }
@@ -218,9 +219,7 @@ impl Tool for YamlQueryTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required field: path"))?;
 
-        let query = input.payload["query"]
-            .as_str()
-            .unwrap_or(".");
+        let query = input.payload["query"].as_str().unwrap_or(".");
 
         let file_path = sanitize_path(input, path)?;
         let query_str = query.to_string();
@@ -262,7 +261,10 @@ impl Tool for YamlQueryTool {
                         file_path.display(),
                         query_str
                     )),
-                    pua_report: Some(tool_execution_report("yaml_query", Some("yaml_query_success"))),
+                    pua_report: Some(tool_execution_report(
+                        "yaml_query",
+                        Some("yaml_query_success"),
+                    )),
                 })
             }
             None => {
@@ -279,17 +281,17 @@ impl Tool for YamlQueryTool {
                         "found": false,
                         "value": null,
                     })),
-                    error: Some(format!(
-                        "path '{}' not found in YAML document",
-                        query_str
-                    )),
+                    error: Some(format!("path '{}' not found in YAML document", query_str)),
                     verification: Some("yaml_query_not_found".to_string()),
                     audit_log: Some(format!(
                         "yaml_query '{}' query '{}' not found",
                         file_path.display(),
                         query_str
                     )),
-                    pua_report: Some(tool_execution_report("yaml_query", Some("yaml_query_not_found"))),
+                    pua_report: Some(tool_execution_report(
+                        "yaml_query",
+                        Some("yaml_query_not_found"),
+                    )),
                 })
             }
         }

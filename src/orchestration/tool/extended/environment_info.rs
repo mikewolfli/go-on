@@ -5,9 +5,20 @@
 
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
-use anyhow::Result;
+use anyhow::{Context, Result};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
 use std::path::Path;
 use tracing::debug;
+
+/// Input parameters for [`EnvironmentInfoTool`].
+#[derive(JsonSchema, Deserialize)]
+struct EnvironmentInfoInput {
+    /// Project root directory path (defaults to allowed base dir or cwd).
+    #[serde(default)]
+    project_root: Option<String>,
+}
 
 /// Tool that returns contextual information about the runtime environment.
 ///
@@ -24,12 +35,17 @@ impl Tool for EnvironmentInfoTool {
         "Get OS family, architecture, hostname, project root, and available tooling"
     }
 
+    fn input_schema(&self) -> Value {
+        schemars::schema_for!(EnvironmentInfoInput).into()
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // Determine project root from payload or use an allowed base directory.
-        let project_root = input
-            .payload
-            .get("project_root")
-            .and_then(|v| v.as_str())
+        let params: EnvironmentInfoInput = serde_json::from_value(input.payload.clone())
+            .context("failed to deserialize environment_info input")?;
+        let project_root = params
+            .project_root
+            .as_deref()
             .or_else(|| input.allowed_base_dir.as_ref().and_then(|p| p.to_str()))
             .unwrap_or(".");
 

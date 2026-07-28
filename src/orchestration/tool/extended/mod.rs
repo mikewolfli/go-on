@@ -96,6 +96,7 @@ pub mod stl_tool;
 pub mod svg;
 pub mod template;
 pub mod time;
+pub mod tool_search;
 pub mod utils;
 #[cfg(feature = "document-html")]
 pub mod web;
@@ -107,7 +108,7 @@ pub use barcode::QrCodeTool;
 pub use build::{AddDependencyTool, LintCodeTool, RunBuildTool};
 #[cfg(feature = "cad-utils")]
 pub use cad::CadConvertTool;
-pub use cargo::{CargoCheckTool, CargoTestTool};
+pub use cargo::CargoCheckTool;
 pub use code_index::CodeIndexTool;
 pub use compress::{CompressTool, DecompressTool};
 pub use container::{
@@ -194,6 +195,7 @@ pub use stl_tool::StlReadTool;
 pub use svg::{SvgExportTool, SvgGenerateTool, SvgReadTool};
 pub use template::TemplateRenderTool;
 pub use time::DateTimeTool;
+pub use tool_search::ToolSearchTool;
 pub use utils::{EncodeDecodeTool, HashFileTool, RandomTokenTool, UuidGenTool};
 pub use watch::FileWatchTool;
 #[cfg(feature = "document-html")]
@@ -447,19 +449,19 @@ mod tests {
     }
 
     #[test]
-    fn cargo_test_rejects_invalid_filter() {
-        // Fast test: verify the tool rejects an invalid test filter.
-        // This exercises the filter sanitization logic without actually
-        // running `cargo test` (which would be very slow).
+    fn run_tests_rejects_invalid_command() {
+        // Fast test: verify the tool rejects an invalid command.
+        // This exercises the command whitelist logic without actually
+        // running any command (which would be very slow).
         let input = tool_input(serde_json::json!({
-            "filter": "../../etc/passwd",
+            "command": "rm",
             "directory": ".",
         }));
-        let tool = CargoTestTool;
+        let tool = crate::orchestration::tool::builtin_tools::RunTestsTool;
         let result = tool.run(&input);
         assert!(
             result.is_err(),
-            "cargo_test should reject invalid filter characters"
+            "run_tests should reject unauthorized commands"
         );
     }
 }

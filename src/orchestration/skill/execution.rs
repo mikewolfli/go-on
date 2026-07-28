@@ -23,6 +23,18 @@ pub trait PromptSkillAgent: Send + Sync {
 /// Set during server startup to enable real LLM-based skill execution.
 static PROMPT_SKILL_AGENT: OnceLock<Arc<dyn PromptSkillAgent>> = OnceLock::new();
 
+/// Policy for controlling how a skill is invoked and exposed.
+/// Mirrors codex's `SkillPolicy` concept.
+#[derive(Debug, Clone, Default)]
+pub struct SkillPolicy {
+    /// If false (default), the skill can be implicitly invoked when the
+    /// user's intent matches its description. Set to true to require
+    /// explicit invocation only.
+    pub allow_implicit_invocation: Option<bool>,
+    /// Optional product restriction — empty means available to all products.
+    pub products: Vec<String>,
+}
+
 /// Set the global prompt skill agent for LLM execution.
 /// Must be called before any PromptBasedSkill.execute() invocations that
 /// require real LLM execution.
@@ -42,6 +54,20 @@ pub trait Skill: Send + Sync {
         json!({"type": "object"})
     }
 
+    /// Whether this skill should be hidden from model-facing discovery
+    /// (e.g., the `skill_list` tool and semantic skill index).
+    /// Hidden skills are still invocable via explicit name lookup.
+    fn disable_model_invocation(&self) -> bool {
+        false
+    }
+
+    /// Optional policy controlling how this skill can be invoked.
+    /// Mirrors codex's `SkillPolicy` — enables implicit invocation detection
+    /// and product-based gating.
+    fn policy(&self) -> Option<&SkillPolicy> {
+        None
+    }
+
     async fn execute(&self, input: &Value) -> Result<Value>;
 }
 
@@ -56,6 +82,12 @@ pub struct PromptBasedSkill {
     /// Maximum number of retries on transient failure.
     /// Default: 2 retries.
     pub max_retries: u32,
+    /// When true, this skill is excluded from model-facing listings
+    /// (skill_list tool, semantic index) but remains invocable via
+    /// explicit name lookup or `/` command.
+    pub disable_model_invocation: bool,
+    /// Optional policy for controlling implicit invocation and product gating.
+    pub policy: Option<SkillPolicy>,
 }
 
 #[async_trait]
@@ -77,6 +109,14 @@ impl Skill for PromptBasedSkill {
             "type": "object",
             "properties": properties,
         })
+    }
+
+    fn disable_model_invocation(&self) -> bool {
+        self.disable_model_invocation
+    }
+
+    fn policy(&self) -> Option<&SkillPolicy> {
+        self.policy.as_ref()
     }
 
     async fn execute(&self, input: &Value) -> Result<Value> {

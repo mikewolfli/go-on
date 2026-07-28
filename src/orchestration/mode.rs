@@ -161,8 +161,10 @@ pub fn resolve_mode_runtime(
 
 /// Like `resolve_mode_runtime` but allows overriding the approval posture.
 ///
-/// When `posture` is `None`, the default posture for the mode is used.
-/// When `Some(p)`, the given posture overrides the mode default.
+/// Delegates to `ModeKind::from(mode)` for mode resolution (which defaults
+/// unrecognized strings to `ModeKind::Ask` with a warning). When `posture` is
+/// `None`, the default posture for the mode is used; when `Some(p)`, the given
+/// posture overrides the mode default.
 pub fn resolve_mode_runtime_with_posture(
     mode: &str,
     posture: Option<ApprovalPosture>,

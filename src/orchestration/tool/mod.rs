@@ -6,13 +6,17 @@
 
 // ── Sub-modules (moved from orchestration/ for cohesion) ───────────────────
 pub mod builtin_tools;
+pub mod events;
+pub mod exec_common;
 pub mod executor;
 pub mod extended;
 pub mod lock;
 pub mod loop_executor;
-pub mod native;
+// pub mod native; — removed: NativeToolBridge was superseded by shared::tool_descriptors
+// and all tests were already covered by autonomy_runtime tests.
 pub mod pipeline;
 pub mod recommender;
+pub mod registry_macro;
 pub mod types;
 use crate::i18n::runtime::tf;
 use anyhow::Result;
@@ -53,7 +57,7 @@ pub fn set_skill_registry(registry: Arc<RwLock<SkillRegistry>>) {
 
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tool_names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
+        let tool_names: Vec<&&str> = self.tools.keys().collect();
         f.debug_struct("ToolRegistry")
             .field("tools", &tool_names)
             .field("profiles", &self.profiles)
@@ -66,7 +70,7 @@ impl ToolRegistry {
     /// Create an empty tool registry (no built-in tools registered).
     pub fn new_empty() -> Self {
         Self {
-            tools: Vec::new(),
+            tools: HashMap::new(),
             profiles: HashMap::new(),
             aliases: HashMap::new(),
             hooks: ToolHookRegistry::default(),
@@ -235,19 +239,8 @@ impl ToolRegistry {
                 fallback_chain: Vec::new(),
             },
         );
-        registry.register_with_profile(
-            crate::orchestration::tool_extended::CargoTestTool,
-            ToolCapabilityProfile {
-                capability: "test_execution".to_string(),
-                risk_level: ToolRiskLevel::Medium,
-                timeout_budget_ms: 300_000,
-                retry_policy: RetryPolicy {
-                    max_retries: 1,
-                    retry_on_failure: true,
-                },
-                fallback_chain: vec!["cargo_check".to_string()],
-            },
-        );
+        // cargo_test is an alias for run_tests (registered via register_alias below).
+        // The canonical tool RunTestsTool is registered at line ~134 above.
         registry.register_with_profile(
             crate::orchestration::tool_extended::FileMoveTool,
             ToolCapabilityProfile {
@@ -981,7 +974,7 @@ impl ToolRegistry {
         // ── 3D model (STL) reader tool (feature-gated, not when cad-stl already provides it) ─
         #[cfg(all(feature = "model-3d", not(feature = "cad-stl")))]
         registry.register_with_profile(
-            crate::orchestration::tool_extended::StlReadTool,
+            crate::orchestration::tool_extended::StlCrateReadTool,
             ToolCapabilityProfile {
                 capability: "stl_read".to_string(),
                 risk_level: ToolRiskLevel::Low,
@@ -1642,6 +1635,22 @@ impl ToolRegistry {
             },
         );
 
+        // ── Tool search / discovery tool ──────────────────────────
+        // Direct-exposed so the model can discover Deferred tools.
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ToolSearchTool,
+            ToolCapabilityProfile {
+                capability: "tool_search".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+
         // ── Backward-compatibility aliases ───────────────────────
         // These names exist in the governance evaluator's allowlist.
         // Some now have their own Tool implementations; others alias
@@ -1655,6 +1664,8 @@ impl ToolRegistry {
         registry.register_alias("bash", "shell_exec");
         registry.register_alias("find_path", "search_files");
         registry.register_alias("semantic_search", "code_index_search");
+        registry.register_alias("cargo_test", "run_tests");
+        registry.register_alias("find_files", "search_files");
 
         registry
     }
@@ -1685,54 +1696,71 @@ impl ToolRegistry {
         // rejected as "unknown" — eliminates manual sync burden.
         crate::governance::status::register_tool(name);
         self.profiles.insert(name, profile);
-        self.tools.push(Arc::new(tool));
+        self.tools.insert(name, Arc::new(tool));
     }
 
-    /// Get a tool by name (with alias resolution).
+    /// Get a tool by name (with alias resolution) — O(1) via HashMap.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        // Direct lookup first
-        if let Some(tool) = self.tools.iter().find(|t| t.name() == name) {
+        // Direct HashMap lookup first (O(1))
+        if let Some(tool) = self.tools.get(name) {
             return Some(tool.as_ref());
         }
         // Alias resolution: look up the canonical name and find that tool
-        if let Some(&canonical) = self.aliases.get(name) {
-            self.tools
-                .iter()
-                .find(|t| t.name() == canonical)
-                .map(|b| b.as_ref())
-        } else {
-            None
-        }
+        self.aliases
+            .get(name)
+            .and_then(|canonical| self.tools.get(canonical))
+            .map(|b| b.as_ref())
     }
 
-    /// Get a tool by name (with alias resolution), returning an `Arc` for async usage.
+    /// Get a tool by name (with alias resolution), returning an `Arc` for async usage — O(1) via HashMap.
     /// The returned `Arc` can be used to call `run_async` on the tool.
     pub fn get_arc(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        // Direct lookup first
-        if let Some(tool) = self.tools.iter().find(|t| t.name() == name) {
+        // Direct HashMap lookup first (O(1))
+        if let Some(tool) = self.tools.get(name) {
             return Some(Arc::clone(tool));
         }
         // Alias resolution: look up the canonical name and find that tool
-        if let Some(&canonical) = self.aliases.get(name) {
-            self.tools
-                .iter()
-                .find(|t| t.name() == canonical)
-                .map(Arc::clone)
-        } else {
-            None
-        }
+        self.aliases
+            .get(name)
+            .and_then(|canonical| self.tools.get(canonical))
+            .map(Arc::clone)
     }
 
     pub fn names(&self) -> Vec<&'static str> {
-        self.tools.iter().map(|tool| tool.name()).collect()
+        self.tools.keys().copied().collect()
     }
 
     /// Return all tool names including aliases.
     pub fn all_names(&self) -> Vec<&'static str> {
-        let mut names: Vec<&str> = self.tools.iter().map(|tool| tool.name()).collect();
+        let mut names: Vec<&str> = self.tools.keys().copied().collect();
         names.extend(self.aliases.keys().copied());
         names
+    }
+
+    /// Return names of tools with the given exposure level.
+    /// Uses the Tool trait's `exposure()` method (which may differ from profile defaults).
+    pub fn tools_by_exposure(&self, exposure: ToolExposure) -> Vec<&'static str> {
+        self.tools
+            .iter()
+            .filter_map(|(name, tool)| {
+                if tool.exposure() == exposure {
+                    Some(*name)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Return names of tools directly visible to the AI model.
+    pub fn direct_tool_names(&self) -> Vec<&'static str> {
+        self.tools_by_exposure(ToolExposure::Direct)
+    }
+
+    /// Return names of deferred (search-discoverable) tools.
+    pub fn deferred_tool_names(&self) -> Vec<&'static str> {
+        self.tools_by_exposure(ToolExposure::Deferred)
     }
 
     /// Register an alias for a tool. When `alias` is looked up via `get()`,
@@ -1755,10 +1783,11 @@ impl ToolRegistry {
         let matrix = self
             .tools
             .iter()
-            .filter_map(|tool| {
-                self.profiles.get(tool.name()).map(|profile| {
+            .filter_map(|(name, tool)| {
+                self.profiles.get(name).map(|profile| {
                     serde_json::json!({
-                        "name": tool.name(),
+                        "name": name,
+                        "exposure": tool.exposure(),
                         "capability": profile.capability,
                         "risk_level": profile.risk_level,
                         "timeout_budget_ms": profile.timeout_budget_ms,
@@ -2118,7 +2147,7 @@ mod tests {
     #[test]
     fn tool_registry_runs_fallback_chain_when_primary_fails() {
         let mut registry = ToolRegistry {
-            tools: Vec::new(),
+            tools: HashMap::new(),
             profiles: HashMap::new(),
             aliases: HashMap::new(),
             hooks: Default::default(),

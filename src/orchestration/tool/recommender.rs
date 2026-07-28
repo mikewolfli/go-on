@@ -73,6 +73,13 @@ pub struct ToolRecommendation {
 
 /// Dynamic tool recommender that combines task‑pattern matching with
 /// historical usage statistics and co‑occurrence analysis.
+///
+/// For **skill‑based recommendations**, skills are **not** surfaced through this
+/// recommender. Instead, use [`SkillDiscovery`] to discover and score executable
+/// skills by query. Skills can be invoked at runtime via the built‑in
+/// `skill_execute` tool, which takes a skill name and input parameters.
+///
+/// [`SkillDiscovery`]: crate::orchestration::skill_discovery::SkillDiscovery
 pub struct ToolRecommender {
     /// Per‑tool usage statistics updated over time.
     pub tool_stats: HashMap<String, ToolUsageStats>,

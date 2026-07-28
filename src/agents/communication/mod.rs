@@ -13,14 +13,14 @@
 //! - `ExecutionGovernor` — budget-aware execution control
 //! - `CommunicationBus` — top-level bus aggregating all components
 
-pub mod path;
-pub mod message;
-pub mod context;
+pub mod agent_thread;
 pub mod budget;
-pub mod tree;
-pub mod messenger;
 pub mod bus;
+pub mod context;
 pub mod forker;
 pub mod governor;
-pub mod agent_thread;
 pub mod lifecycle;
+pub mod message;
+pub mod messenger;
+pub mod path;
+pub mod tree;

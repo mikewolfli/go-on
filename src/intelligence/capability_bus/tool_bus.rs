@@ -142,7 +142,7 @@ impl ToolBus {
                     poisoned.into_inner()
                 }
             };
-            for desc in reg.list() {
+            for desc in reg.list(false) {
                 stats.entry(desc.name.clone()).or_default();
             }
         }
@@ -199,7 +199,7 @@ impl ToolBus {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
-        for desc in reg.list() {
+        for desc in reg.list(false) {
             descriptors.push(ToolDescriptor {
                 name: desc.name.clone(),
                 capability: format!("skill:{}", desc.name),
@@ -409,7 +409,7 @@ impl ToolBus {
         let total_skills = self
             .skill_registry
             .read()
-            .map(|reg| reg.list().len() as u32)
+            .map(|reg| reg.list(false).len() as u32)
             .unwrap_or(0);
 
         let inner = self.inner.lock().unwrap_or_else(|poisoned| {

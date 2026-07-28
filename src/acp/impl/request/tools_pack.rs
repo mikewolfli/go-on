@@ -358,7 +358,7 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
             });
-        tools.extend(registry.list().into_iter().map(|skill| {
+        tools.extend(registry.list(false).into_iter().map(|skill| {
             json!({
                 "name": skill.name,
                 "description": skill.description,

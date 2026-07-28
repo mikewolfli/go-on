@@ -9,6 +9,12 @@ mod cli;
 mod core;
 mod fault_tolerance;
 mod governance;
+
+// Runtime Hub — reserved for multi-process architecture (daemon + client agents).
+// Only compiled in distributed-memory server builds.
+#[cfg(feature = "sub-bus-distributed-memory")]
+mod hub;
+
 mod i18n;
 mod intelligence;
 mod mcp;

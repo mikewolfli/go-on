@@ -133,8 +133,6 @@ impl VectorIndex {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

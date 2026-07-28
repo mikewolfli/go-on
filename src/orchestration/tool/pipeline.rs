@@ -15,6 +15,7 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 // ---------------------------------------------------------------------------
 
 /// A single step in a tool execution pipeline.
+#[derive(Debug, Clone)]
 pub struct PipelineStep {
     /// Name of the tool to execute.
     pub tool_name: String,
@@ -230,6 +231,36 @@ impl ToolPipeline {
             success: all_success,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Parallel group builder
+// ---------------------------------------------------------------------------
+
+/// Given a list of tool names, group independent tools into parallel groups.
+///
+/// Tools are independent when they don't read each other's output.
+/// In the current architecture, all tools are independent since outputs
+/// go to the LLM, not to other tools. This means we can safely split them
+/// into fixed-size parallel groups.
+///
+/// Each group will execute its member tools concurrently via `tokio::join!`
+/// inside `ToolPipeline::execute()`. Groups still execute sequentially
+/// relative to each other, so this respects any implicit ordering the caller
+/// intended while maximising throughput within each batch.
+///
+/// # Constants
+///
+/// `MAX_PARALLEL` controls the maximum number of tools in a single parallel
+/// group. This prevents resource exhaustion (file handles, network sockets,
+/// memory) when a pipeline has many steps. Tune this based on the runtime's
+/// concurrency limits.
+pub fn group_independent_tools(tool_names: &[String]) -> Vec<Vec<String>> {
+    const MAX_PARALLEL: usize = 5;
+    tool_names
+        .chunks(MAX_PARALLEL)
+        .map(|c| c.to_vec())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

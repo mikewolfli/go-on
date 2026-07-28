@@ -95,7 +95,7 @@ pub(crate) fn assemble_agent_options(
                 .collect::<String>()
         };
         let skill_tools: Vec<Value> = registry
-            .list()
+            .list(false)
             .iter()
             .map(|skill: &SkillDescriptor| {
                 let safe_name = sanitize_fn_name(&skill.name);

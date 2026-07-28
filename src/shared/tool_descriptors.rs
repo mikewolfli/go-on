@@ -51,18 +51,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["pattern"]
             })),
         },
-        "find_path" => McpTool {
-            name: name.to_string(),
-            description: Some("Find files and directories matching a glob pattern.".to_string()),
-            input_schema: Some(json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "Glob pattern to match file paths (e.g. '**/*.rs')"},
-                    "base_dir": {"type": "string", "description": "Optional base directory to search from"}
-                },
-                "required": ["pattern"]
-            })),
-        },
+
         "apply_patch" => McpTool {
             name: name.to_string(),
             description: Some("Apply a patch to a file or directory.".to_string()),
@@ -254,18 +243,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["pattern"]
             })),
         },
-        "find_files" => McpTool {
-            name: name.to_string(),
-            description: Some("Find files matching a glob pattern. Returns list of matching file paths.".to_string()),
-            input_schema: Some(json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "Glob pattern (e.g. '**/*.rs', '*.toml')"},
-                    "directory": {"type": "string", "description": "Search directory (default: current)"}
-                },
-                "required": ["pattern"]
-            })),
-        },
+
         "git" => McpTool {
             name: name.to_string(),
             description: Some("Execute git commands (status, diff, log, add, commit, etc.). Returns command output.".to_string()),
@@ -290,7 +268,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["path"]
             })),
         },
-        "move_path" | "file_move" => McpTool {
+        "move_path" => McpTool {
             name: name.to_string(),
             description: Some("Move or rename a file or directory.".to_string()),
             input_schema: Some(json!({
@@ -318,7 +296,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["path", "old_text", "new_text"]
             })),
         },
-        "delete_path" | "file_delete" => McpTool {
+        "delete_path" => McpTool {
             name: name.to_string(),
             description: Some("Delete a file (requires explicit confirmation).".to_string()),
             input_schema: Some(json!({
@@ -342,19 +320,7 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": []
             })),
         },
-        "cargo_test" => McpTool {
-            name: name.to_string(),
-            description: Some("Run 'cargo test' in a Rust project directory.".to_string()),
-            input_schema: Some(json!({
-                "type": "object",
-                "properties": {
-                    "directory": {"type": "string", "description": "Project directory containing Cargo.toml"},
-                    "filter": {"type": "string", "description": "Optional test name filter (alphanumeric only)"},
-                    "features": {"type": "string", "description": "Optional feature flags"}
-                },
-                "required": []
-            })),
-        },
+
         "compress" => McpTool {
             name: name.to_string(),
             description: Some("Compress a file or directory into a compressed archive (zip/tar.gz).".to_string()),
@@ -1084,6 +1050,18 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                     "reset": {"type": "boolean", "description": "Reset the baseline and start fresh", "default": false}
                 },
                 "required": []
+            })),
+        },
+        "tool_search" => McpTool {
+            name: name.to_string(),
+            description: Some("Search for available tools by name or description. Use this to discover niche or specialized tools that are not shown in the default tool list.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query to find relevant tools"},
+                    "top_k": {"type": "integer", "description": "Maximum number of results to return (default: 8, max: 20)", "default": 8}
+                },
+                "required": ["query"]
             })),
         },
         other => McpTool {

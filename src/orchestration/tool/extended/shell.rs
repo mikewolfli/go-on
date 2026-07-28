@@ -1,12 +1,14 @@
 //! Shell execution tool
 //!
-//! Optimized with:
-//! - Cached GNU timeout detection (OnceLock) — avoids re-checking every call
-//! - Shared command building (build_command_base) — eliminates ~30 lines of duplicated code
-//! - Direct string truncation instead of char-by-char — ~10x faster on large outputs
+//! Uses shared execution infrastructure from `exec_common` for timeout handling,
+//! output truncation, blocked-command filtering, and result building.
 
 use crate::governance::pua::tool_execution_report;
 use crate::i18n::runtime::t;
+use crate::orchestration::tool::exec_common::{
+    build_blocked_tool_output, build_shell_tool_output, build_timeout_tool_output,
+    cap_timeout_secs, is_blocked_command, truncate_output,
+};
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
 use anyhow::Result;
 use std::io::Write;
@@ -21,7 +23,6 @@ fn gnu_timeout_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
         if cfg!(target_os = "windows") {
-            // Windows timeout.exe is fundamentally different from GNU timeout.
             return false;
         }
         Command::new("timeout")
@@ -35,11 +36,7 @@ fn gnu_timeout_available() -> bool {
     })
 }
 
-/// Build a base Command with common settings (current_dir, stdio, env).
-/// Returns a child process that has NOT been spawned yet.
-///
-/// Used by both the GNU timeout path and the Rust-level fallback to eliminate
-/// the duplicated command construction that previously existed (~30 lines).
+/// Build a base Command with shared settings (current_dir, stdio, env).
 fn build_command_base(
     shell: &str,
     shell_arg: &str,
@@ -59,7 +56,6 @@ fn build_command_base(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
     for (key, val) in env_vars {
         cmd.env(key, val);
     }
@@ -72,57 +68,6 @@ fn write_stdin_if_needed(child: &mut std::process::Child, stdin_input: &Option<S
         if let Some(mut stdin_writer) = child.stdin.take() {
             let _ = stdin_writer.write_all(stdin_text.as_bytes());
         }
-    }
-}
-
-/// Sanitize output: truncate to MAX_OUTPUT_BYTES if necessary.
-/// Uses direct string truncation rather than char-by-char iteration for ~10x
-/// better performance on large outputs.
-const MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
-
-fn truncate_output(s: &mut String) {
-    if s.len() > MAX_OUTPUT_BYTES {
-        warn!(
-            "shell_exec TRUNCATED: {} bytes > {} max",
-            s.len(),
-            MAX_OUTPUT_BYTES
-        );
-        // truncate() is O(1) for the common case (ASCII-like content).
-        // For multi-byte UTF-8 boundaries, it may split a char, which is
-        // acceptable for a safety truncation boundary — the partial char
-        // will be displayed as the Unicode replacement char.
-        s.truncate(MAX_OUTPUT_BYTES);
-    }
-}
-
-/// Shared logic to build the ToolOutput for a successful/failed execution.
-fn build_shell_output(
-    success: bool,
-    stdout: String,
-    stderr: String,
-    exit_code: Option<i32>,
-    command: &str,
-    directory: &str,
-) -> ToolOutput {
-    ToolOutput {
-        success,
-        result: Some(serde_json::json!({
-            "stdout": stdout,
-            "stderr": stderr,
-            "exit_code": exit_code,
-            "command": command,
-            "directory": directory,
-        })),
-        error: (!success).then(|| stderr.trim().to_string()),
-        verification: Some("shell_command_executed".to_string()),
-        audit_log: Some(format!(
-            "Shell exec '{}' in '{}' (exit: {:?})",
-            command, directory, exit_code
-        )),
-        pua_report: Some(tool_execution_report(
-            "shell_exec",
-            Some("shell_command_executed"),
-        )),
     }
 }
 
@@ -144,49 +89,12 @@ impl Tool for ShellExecTool {
 
         // ── LAYER 2: Runtime sandbox ────────────────────────────────────
         // Block dangerous commands that could harm the system.
-        let command_lower = command.to_lowercase();
-        let blocked_patterns = [
-            "rm -rf /",
-            "rm -rf /*",
-            "mkfs.",
-            "dd if=",
-            "format ",
-            ":(){",
-            "fork bomb",
-            "chmod -R 000",
-            "> /dev/sda",
-            "> /dev/hda",
-            "| shutdown",
-            "| reboot",
-            "wget http://",
-            "curl http://",
-            "nmap ",
-            "hydra ",
-        ];
-        for pattern in &blocked_patterns {
-            if command_lower.contains(pattern) {
-                warn!(
-                    "shell_exec BLOCKED: command matches blocked pattern '{}' — cmd={}",
-                    pattern, command
-                );
-                return Ok(ToolOutput {
-                    success: false,
-                    result: None,
-                    error: Some(format!(
-                        "Command blocked by security policy: contains '{}'",
-                        pattern
-                    )),
-                    verification: Some("shell_sandbox_blocked".to_string()),
-                    audit_log: Some(format!(
-                        "BLOCKED shell exec (pattern '{}'): {}",
-                        pattern, command
-                    )),
-                    pua_report: Some(tool_execution_report(
-                        "shell_exec",
-                        Some("shell_sandbox_blocked"),
-                    )),
-                });
-            }
+        if let Some(pattern) = is_blocked_command(command) {
+            warn!(
+                "shell_exec BLOCKED: command matches blocked pattern '{}' — cmd={}",
+                pattern, command
+            );
+            return Ok(build_blocked_tool_output(pattern, command, "shell_exec"));
         }
 
         debug!(command = %command, timeout_ms = %timeout_ms, directory = %directory, "tool: executing shell command");
@@ -214,7 +122,7 @@ impl Tool for ShellExecTool {
         };
 
         let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
-        let max_timeout = std::cmp::min(timeout_secs, 300); // Cap at 5 minutes
+        let max_timeout = cap_timeout_secs(timeout_secs);
 
         // Use cached result — GNU timeout detection runs only once per process
         let use_gnu_timeout = gnu_timeout_available();
@@ -296,27 +204,14 @@ impl Tool for ShellExecTool {
                     timeout_ms = %timeout_ms,
                     "tool: shell command timed out"
                 );
-                return Ok(ToolOutput {
-                    success: false,
-                    result: Some(serde_json::json!({
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exit_code": null,
-                        "command": command,
-                        "directory": directory,
-                        "timeout": true,
-                    })),
-                    error: Some(format!("Command timed out after {}ms", timeout_ms)),
-                    verification: Some("shell_command_executed".to_string()),
-                    audit_log: Some(format!(
-                        "Shell exec '{}' in '{}' timed out after {}ms",
-                        command, directory, timeout_ms
-                    )),
-                    pua_report: Some(tool_execution_report(
-                        "shell_exec",
-                        Some("shell_command_executed"),
-                    )),
-                });
+                return Ok(build_timeout_tool_output(
+                    stdout,
+                    stderr,
+                    command,
+                    directory,
+                    timeout_ms,
+                    "shell_exec",
+                ));
             }
             result
         };
@@ -343,8 +238,14 @@ impl Tool for ShellExecTool {
                     info!(command = %command, exit_code = ?exit_code, "tool: shell command succeeded");
                 }
 
-                Ok(build_shell_output(
-                    success, stdout, stderr, exit_code, command, directory,
+                Ok(build_shell_tool_output(
+                    success,
+                    stdout,
+                    stderr,
+                    exit_code,
+                    command,
+                    directory,
+                    "shell_exec",
                 ))
             }
             Err(e) => {

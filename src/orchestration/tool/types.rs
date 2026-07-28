@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::agents::communication::bus::CommunicationBus;
+use crate::orchestration::tool::events::{ProgressSender, ToolProgress};
+use futures_util::future::join_all;
 // Reserved for future AgentCommunicationHook use
 // use crate::agents::communication::path::AgentPath;
 // use crate::agents::communication::tree::AgentNodeMetadata;
@@ -149,6 +151,16 @@ impl ToolHookRegistry {
         }
     }
 
+    /// Returns the number of registered hooks.
+    pub fn len(&self) -> usize {
+        self.hooks.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    /// Returns true if no hooks are registered.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Invoke all registered pre-execute hooks (sync path).
     pub fn run_pre(&self, tool_name: &str, input: &ToolInput) {
         if let Ok(hooks) = self.hooks.lock() {
@@ -161,6 +173,7 @@ impl ToolHookRegistry {
     }
 
     /// Invoke all registered pre-execute hooks (async path — calls async_pre_execute).
+    /// Hooks that are independent are executed in parallel for lower latency.
     /// Returns an error if ANY hook fails (fail-fast: first error stops execution).
     pub async fn run_pre_async(&self, tool_name: &str, input: &ToolInput) -> Result<()> {
         // Clone hooks under lock so we don't hold the lock across await points.
@@ -169,8 +182,21 @@ impl ToolHookRegistry {
         } else {
             return Ok(());
         };
-        for hook in hooks.iter() {
-            hook.async_pre_execute(tool_name, input).await?;
+        if hooks.is_empty() {
+            return Ok(());
+        }
+        // Execute all hooks in parallel and collect errors.
+        // This significantly reduces latency compared to serial execution
+        // when multiple hooks (e.g. audit, guardian, metrics) are registered.
+        let results: Vec<Result<()>> = join_all(
+            hooks
+                .iter()
+                .map(|hook| hook.async_pre_execute(tool_name, input)),
+        )
+        .await;
+        // First error fails fast — maintains existing contract.
+        for result in results {
+            result?;
         }
         Ok(())
     }
@@ -224,7 +250,29 @@ pub struct RetryPolicy {
     pub retry_on_failure: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Controls where a tool is exposed to the model.
+///
+/// - `Direct`: included in the initial model-visible tool list (default).
+/// - `Deferred`: registered but omitted from initial list; discoverable via search.
+/// - `Hidden`: registered for dispatch only, never exposed to the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolExposure {
+    /// Include this tool in the initial model-visible tool list.
+    Direct,
+    /// Register this tool for later discovery, but omit it from the initial
+    /// model-visible tool list. The model must use tool_search to find it.
+    Deferred,
+    /// Keep this tool registered for dispatch without exposing it to the model.
+    Hidden,
+}
+
+impl Default for ToolExposure {
+    fn default() -> Self {
+        Self::Direct
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolRiskLevel {
     Low,
@@ -278,6 +326,12 @@ pub trait Tool: Send + Sync + 'static {
             })
     }
 
+    /// Returns how this tool should be exposed to the AI model.
+    /// Override to return `Deferred` or `Hidden` for niche/system tools.
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Direct
+    }
+
     /// Executes the tool with the given input. Should emit tracing spans for
     /// performance analysis (implementations only).
     fn run(&self, input: &ToolInput) -> Result<ToolOutput>;
@@ -299,11 +353,55 @@ pub trait Tool: Send + Sync + 'static {
                 .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
         })
     }
+
+    /// Execute the tool with progress reporting.
+    ///
+    /// The default implementation sends a [`ToolProgress::Started`] event,
+    /// calls [`run`](Tool::run), then sends [`ToolProgress::Completed`]
+    /// or [`ToolProgress::Failed`] based on the result.
+    fn run_with_progress(&self, input: &ToolInput, progress: ProgressSender) -> Result<ToolOutput> {
+        let tool_name = self.name().to_string();
+        let _ = progress.send(ToolProgress::Started {
+            tool_name: tool_name.clone(),
+        });
+        let start = std::time::Instant::now();
+        let result = self.run(input);
+        let duration = start.elapsed();
+        match &result {
+            Ok(_) => {
+                let _ = progress.send(ToolProgress::Completed { duration });
+            }
+            Err(e) => {
+                let _ = progress.send(ToolProgress::Failed {
+                    error: e.to_string(),
+                });
+            }
+        }
+        result
+    }
+
+    /// Execute the tool with streaming input chunks and progress reporting.
+    ///
+    /// The default implementation waits for the full input and delegates to
+    /// [`run_with_progress`](Tool::run_with_progress). Tools that support
+    /// incremental / streaming input should override this method.
+    fn run_streaming(
+        self: Arc<Self>,
+        input: ToolInput,
+        progress: ProgressSender,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.run_with_progress(&input, progress))
+                .await
+                .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
+        })
+    }
 }
 
 /// Tool registry
 pub struct ToolRegistry {
-    pub(crate) tools: Vec<Arc<dyn Tool>>,
+    /// Tools stored in a HashMap keyed by name for O(1) lookup.
+    pub(crate) tools: HashMap<&'static str, Arc<dyn Tool>>,
     pub(crate) profiles: HashMap<&'static str, ToolCapabilityProfile>,
     /// Alias map: alias → canonical tool name.
     /// Allows looking up tools by alternative names

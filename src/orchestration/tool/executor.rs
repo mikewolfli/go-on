@@ -10,8 +10,77 @@
 //! - `cli/chat.rs` (CLI path — was already parallel but independently implemented)
 //! - `dag_driver.rs` (dead code, entire module to be deleted)
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
+
+/// A bounded, thread-safe cache for tool governance permission results.
+///
+/// Caches the result of `request_client_permission` for each
+/// `"{session_id}:{tool_name}"` key to avoid redundant network round-trips
+/// to the ACP client within the same session.
+struct GovernanceCache {
+    cache: HashMap<String, bool>,
+    order: std::collections::VecDeque<String>,
+    max_entries: usize,
+}
+
+impl GovernanceCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            cache: HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            max_entries,
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<bool> {
+        self.cache.get(key).copied()
+    }
+
+    fn insert(&mut self, key: String, value: bool) {
+        // If the key already exists, don't change insertion order.
+        if self.cache.contains_key(&key) {
+            return;
+        }
+        self.cache.insert(key.clone(), value);
+        self.order.push_back(key.clone());
+
+        // Evict oldest entries once we exceed the max.
+        while self.order.len() > self.max_entries {
+            if let Some(oldest) = self.order.pop_front() {
+                self.cache.remove(&oldest);
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn remove_session(&mut self, session_id: &str) {
+        let prefix = format!("{}:", session_id);
+        self.order.retain(|k| !k.starts_with(&prefix));
+        self.cache.retain(|k, _| !k.starts_with(&prefix));
+    }
+}
+
+/// Global governance cache, lazily initialized on first use.
+static GOVERNANCE_CACHE: OnceLock<Mutex<GovernanceCache>> = OnceLock::new();
+
+fn governance_cache() -> &'static Mutex<GovernanceCache> {
+    GOVERNANCE_CACHE.get_or_init(|| Mutex::new(GovernanceCache::new(1000)))
+}
+
+/// Clear all cached permission results for a given ACP session.
+#[allow(dead_code)]
+pub(crate) fn clear_session_cache(session_id: &str) {
+    if let Ok(mut cache) = governance_cache().lock() {
+        cache.remove_session(session_id);
+        tracing::debug!(
+            "executor: governance cache cleared for session '{}'",
+            session_id
+        );
+    }
+}
 
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
@@ -458,6 +527,10 @@ fn format_tool_output_for_response(tool_name: &str, output: &ToolOutput) -> Stri
 }
 
 /// Check tool permission via ACP session for governance gate (edit/safeguard mode).
+///
+/// Results are cached in a global [`GovernanceCache`] keyed by
+/// `"{session_id}:{tool_name}"` to avoid redundant network round-trips
+/// to the ACP client for repeated tool calls within the same session.
 async fn ensure_tool_permission(
     config: &ToolExecConfig,
     tool_name: &str,
@@ -471,11 +544,26 @@ async fn ensure_tool_permission(
         return true;
     };
 
+    let cache_key = format!("{}:{}", session_id, tool_name);
+
+    // Check cache first — avoids a 15 s network round-trip when the same
+    // tool has already been approved/denied in this session.
+    if let Ok(cache) = governance_cache().lock() {
+        if let Some(cached) = cache.get(&cache_key) {
+            tracing::debug!(
+                "executor: tool '{}' cache hit ({}), skipping permission request",
+                tool_name,
+                if cached { "approved" } else { "denied" }
+            );
+            return cached;
+        }
+    }
+
     // Short timeout: if the ACP client (Zed) doesn't show a permission
     // dialog within 15 seconds, we treat it as implicitly allowed rather
     // than blocking the entire tool execution flow.
     let timeout_secs = 15;
-    match server
+    let result = match server
         .request_client_permission(
             session_id,
             tool_name,
@@ -507,7 +595,14 @@ async fn ensure_tool_permission(
             );
             true
         }
+    };
+
+    // Populate cache on cache miss (only cache definitive allow/deny, not errors).
+    if let Ok(mut cache) = governance_cache().lock() {
+        cache.insert(cache_key, result);
     }
+
+    result
 }
 
 /// Look up a tool's input schema JSON string by name, at runtime.

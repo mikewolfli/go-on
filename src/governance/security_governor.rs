@@ -320,6 +320,12 @@ impl PolicyVerdict {
 // ---------------------------------------------------------------------------
 
 /// A recorded audit log entry for security policy evaluation.
+///
+/// # Related types
+/// - [`crate::governance::audit::AuditLogEntry`] — a general-purpose audit log
+///   entry for agent/tool/phase decisions. `AuditEntry` is security-policy-specific
+///   and is used internally by [`SecurityGovernor`], while `AuditLogEntry` covers
+///   the broader governance audit trail.
 #[derive(Debug, Clone)]
 pub struct AuditEntry {
     /// Unix timestamp (seconds since epoch).

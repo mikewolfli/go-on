@@ -971,7 +971,7 @@ async fn handle_load_command(
 fn display_skills() {
     let descriptor_list = crate::orchestration::tool::skill_registry()
         .and_then(|r| r.read().ok())
-        .map(|guard| guard.list())
+        .map(|guard| guard.list(false))
         .unwrap_or_default();
     if descriptor_list.is_empty() {
         eprintln!("{}", t("cli.chat.no_skills"));
@@ -2922,7 +2922,7 @@ fn build_cli_principles() -> Vec<String> {
     // Detect skill registry change by current skill count
     let current_skill_count = crate::orchestration::tool::skill_registry()
         .and_then(|r| r.read().ok())
-        .map(|g| g.list().len())
+        .map(|g| g.list(false).len())
         .unwrap_or(0);
 
     if let Ok(guard) = cache.read() {
@@ -2945,7 +2945,7 @@ fn build_cli_principles() -> Vec<String> {
 
     if let Some(registry) = crate::orchestration::tool::skill_registry() {
         if let Ok(guard2) = registry.read() {
-            let skill_list = guard2.list();
+            let skill_list = guard2.list(false);
             if !skill_list.is_empty() {
                 let skill_names: Vec<String> = skill_list
                     .iter()

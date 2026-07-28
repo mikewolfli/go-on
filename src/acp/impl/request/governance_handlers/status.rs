@@ -496,7 +496,7 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         .orchestration_deps
         .skill_registry
         .read()
-        .map(|registry| registry.list().len())
+        .map(|registry| registry.list(false).len())
         .unwrap_or(0);
     let skill_engine_core_ready =
         server.runtime_config.skills_enabled && registered_skill_total > 0;

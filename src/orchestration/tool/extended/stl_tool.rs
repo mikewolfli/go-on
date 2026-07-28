@@ -1,7 +1,8 @@
-//! 3D model tools (STL format)
+//! 3D model tools (STL format — crate-based variant)
 //!
-//! Provides `StlReadTool` for reading STL (stereolithography) 3D model files
-//! and extracting metadata. Only compiled when `feature = "model-3d"` is enabled.
+//! Provides `StlCrateReadTool` for reading binary STL files using the `stl` crate.
+//! This is an alternative to `stl.rs`'s native-parser `StlReadTool`.
+//! Only compiled when `feature = "model-3d"` is enabled (and `cad-stl` is not).
 
 #[cfg(feature = "model-3d")]
 use crate::governance::pua::tool_execution_report;
@@ -17,12 +18,12 @@ use std::io::Cursor;
 use tracing::info;
 
 #[cfg(feature = "model-3d")]
-pub struct StlReadTool;
+pub struct StlCrateReadTool;
 
 #[cfg(feature = "model-3d")]
-impl Tool for StlReadTool {
+impl Tool for StlCrateReadTool {
     fn name(&self) -> &'static str {
-        "stl_read"
+        "stl_crate_read"
     }
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {

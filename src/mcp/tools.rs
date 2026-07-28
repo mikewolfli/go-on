@@ -22,4 +22,6 @@ pub mod error_codes {
     pub const REQUEST_CANCELLED: i32 = -32800;
     /// Request timed out before producing a result.
     pub const REQUEST_TIMEOUT: i32 = -32801;
+    /// Server has not been initialized yet (MCP spec -32002).
+    pub const SERVER_NOT_INITIALIZED: i32 = -32002;
 }

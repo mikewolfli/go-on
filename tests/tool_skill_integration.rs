@@ -332,7 +332,7 @@ async fn skill_registry_full_cycle() {
         .expect("should register reverse_skill");
 
     // 1. List should return both skills
-    let listed = registry.list();
+    let listed = registry.list(true);
     assert_eq!(listed.len(), 2, "registry should contain 2 skills");
     let names: Vec<&str> = listed.iter().map(|d| d.name.as_str()).collect();
     assert!(names.contains(&"concat_skill"));
@@ -398,7 +398,7 @@ async fn skill_execution_timing_and_outcomes() {
     registry.record_outcome("reverse_skill", true, elapsed);
 
     // 4. Descriptor should reflect the recorded outcome
-    let descriptors = registry.list();
+    let descriptors = registry.list(true);
     let rev_desc = descriptors
         .iter()
         .find(|d| d.name == "reverse_skill")
@@ -438,7 +438,7 @@ async fn skill_descriptor_contains_metadata() {
     let mut registry = go_on::orchestration::skill::SkillRegistry::default();
     registry.register(Arc::new(ConcatSkill)).expect("register");
 
-    let descriptors = registry.list();
+    let descriptors = registry.list(true);
     let concat_desc = descriptors
         .iter()
         .find(|d| d.name == "concat_skill")

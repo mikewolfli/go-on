@@ -145,7 +145,8 @@ impl ProtocolBus {
     /// is incremented.
     pub fn set_active_transport(&self, transport: &str) {
         {
-            let mut current = crate::write_or_recover!(self.active_transport.as_ref(), "intelligence");
+            let mut current =
+                crate::write_or_recover!(self.active_transport.as_ref(), "intelligence");
             if *current != transport {
                 *current = transport.to_string();
             } else {
@@ -175,11 +176,13 @@ impl ProtocolBus {
     /// Returns a `ProtocolRecommendation` with the preferred protocol, a
     /// human-readable reason, and a confidence score.
     pub fn recommend_protocol(&self, task_type: &str, payload_size: u64) -> ProtocolRecommendation {
-        let transport = crate::read_or_recover!(self.active_transport.as_ref(), "intelligence").clone();
+        let transport =
+            crate::read_or_recover!(self.active_transport.as_ref(), "intelligence").clone();
 
         let health = crate::read_or_recover!(self.protocol_health.as_ref(), "intelligence").clone();
 
-        let latency = crate::read_or_recover!(self.protocol_latency.as_ref(), "intelligence").clone();
+        let latency =
+            crate::read_or_recover!(self.protocol_latency.as_ref(), "intelligence").clone();
 
         // 1. If the active transport is healthy, prefer it.
         if health.get(&transport).copied().unwrap_or(false) {

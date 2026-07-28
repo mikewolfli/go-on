@@ -130,8 +130,8 @@ where
 
 /// Main function - entry point for the application
 pub(crate) async fn main() {
-    // NativeToolBridge and CapabilityBus are wired inside the ACP runtime
-    // (transport_factory::dispatch_server → new_acp_server), where they are
+    // CapabilityBus is wired inside the ACP runtime
+    // (transport_factory::dispatch_server → new_acp_server), where it is
     // genuinely used for tool execution and cognitive orchestration.
     // No orphaned scaffolding needed here.
 

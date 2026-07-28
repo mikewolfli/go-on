@@ -59,6 +59,18 @@ pub struct SkillImportManifest {
     /// When present, the skill is registered as a prompt-based skill in SkillRegistry.
     #[serde(default)]
     pub prompt_template: Option<String>,
+    /// When true, the skill is hidden from model-facing discovery listings
+    /// but remains invocable via explicit name or `/` command.
+    #[serde(default)]
+    pub disable_model_invocation: bool,
+    /// Whether this skill allows implicit invocation based on user intent.
+    /// Default true. Set to false if the skill should only be invoked explicitly.
+    #[serde(default = "default_true")]
+    pub allow_implicit_invocation: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_manifest_schema() -> Value {
@@ -632,6 +644,7 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
     let mut description = String::new();
     let mut version = "1.0.0".to_string();
     let mut input_schema: Option<Value> = None;
+    let mut disable_model_invocation = false;
 
     // Try to parse YAML frontmatter (between --- delimiters)
     let remaining = if let Some(after_prefix) = text.strip_prefix("---") {
@@ -668,6 +681,10 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
                         "name" => name = value_clean,
                         "description" | "title" => description = value_clean,
                         "version" => version = value_clean,
+                        "disable-model-invocation" | "disable_model_invocation" => {
+                            disable_model_invocation =
+                                value_clean.eq_ignore_ascii_case("true") || value_clean == "1"
+                        }
                         _ => {}
                     }
                 }
@@ -755,6 +772,8 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
         input_schema: input_schema.unwrap_or_else(default_manifest_schema),
         endpoint: None,
         prompt_template: Some(full_text),
+        disable_model_invocation,
+        allow_implicit_invocation: !disable_model_invocation,
     })
 }
 
