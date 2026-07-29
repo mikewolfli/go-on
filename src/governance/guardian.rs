@@ -328,11 +328,12 @@ If unsure, reply DENY (fail closed).
         )
     }
 
-    /// Strip model-specific thinking tags (e.g. `__THINKING__`) from the response
+    /// Strip model-specific thinking tags from the response
     /// before parsing the decision. Some models wrap chain-of-thought in such tags.
     fn sanitize_response(response: &str) -> String {
-        // Remove __THINKING__ blocks (DeepSeek-style thinking tags)
-        response.replace("__THINKING__", "")
+        // Remove __thinking__ blocks (matching TOKEN_THINKING_PREFIX in agent runtime)
+        // These are inserted for streaming display but must be stripped for parsing.
+        response.replace("__thinking__", "")
     }
 
     /// Parse the review agent's response into a GuardianDecision.

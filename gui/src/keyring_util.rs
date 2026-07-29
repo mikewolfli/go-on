@@ -116,33 +116,48 @@ mod platform {
             return;
         }
 
-        // For each account, re-add with -A (allow all apps) to set proper ACL.
-        // This updates the ACL without changing the password.
+        // First pass: read all passwords (sequential — avoid multiple keychain dialogs)
+        let mut entries: Vec<(String, String)> = Vec::with_capacity(accounts.len());
         for account in &accounts {
-            // Read the current password first
             let entry = match keyring::Entry::new("go-on", account) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
-            let password = match entry.get_password() {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            // Re-add with -A flag to allow all apps to access without prompting
-            let _ = Command::new("security")
-                .args([
-                    "add-generic-password",
-                    "-U",
-                    "-s",
-                    "go-on",
-                    "-a",
-                    account,
-                    "-w",
-                    &password,
-                    "-A",
-                    "login.keychain",
-                ])
-                .output();
+            if let Ok(password) = entry.get_password() {
+                entries.push((account.clone(), password));
+            }
+        }
+
+        // Second pass: run all `security add-generic-password -A` commands in parallel.
+        // These are independent I/O operations, so parallel execution reduces total delay.
+        // Uses std::thread::scope for safe shared borrowing of entries.
+        let handles: Vec<_> = entries
+            .iter()
+            .map(|(account, password)| {
+                let account = account.clone();
+                let password = password.clone();
+                std::thread::spawn(move || {
+                    let _ = Command::new("security")
+                        .args([
+                            "add-generic-password",
+                            "-U",
+                            "-s",
+                            "go-on",
+                            "-a",
+                            &account,
+                            "-w",
+                            &password,
+                            "-A",
+                            "login.keychain",
+                        ])
+                        .output();
+                })
+            })
+            .collect();
+
+        // Wait for all security commands to complete
+        for h in handles {
+            let _ = h.join();
         }
     }
 
