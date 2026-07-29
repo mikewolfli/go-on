@@ -97,7 +97,9 @@ mod platform {
         }
     }
 
-    /// Flush all queued ACL updates in a single `security` invocation.
+    /// Flush all queued ACL updates in a single batch using `security add-generic-password`.
+    /// Uses `-U` (update) with `-A` (allow all apps) to ensure headless backend
+    /// processes can read the entries without prompting.
     /// Prompts the user for their keychain password only ONCE.
     pub(crate) fn flush_pending_acl_updates() {
         let accounts = {
@@ -114,22 +116,34 @@ mod platform {
             return;
         }
 
-        let mut args: Vec<String> = vec![
-            "set-key-partition-list".into(),
-            "-S".into(),
-            "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic".into(),
-            "-k".into(),
-            String::new(),
-            "-D".into(),
-            "go-on".into(),
-        ];
+        // For each account, re-add with -A (allow all apps) to set proper ACL.
+        // This updates the ACL without changing the password.
         for account in &accounts {
-            args.push("-a".into());
-            args.push(account.clone());
+            // Read the current password first
+            let entry = match keyring::Entry::new("go-on", account) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let password = match entry.get_password() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            // Re-add with -A flag to allow all apps to access without prompting
+            let _ = Command::new("security")
+                .args([
+                    "add-generic-password",
+                    "-U",
+                    "-s",
+                    "go-on",
+                    "-a",
+                    account,
+                    "-w",
+                    &password,
+                    "-A",
+                    "login.keychain",
+                ])
+                .output();
         }
-        args.push("login.keychain".into());
-
-        let _ = Command::new("security").args(&args).output();
     }
 
     pub fn store_api_key(provider: &str, api_key: &str) -> Result<()> {

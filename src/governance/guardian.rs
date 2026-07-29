@@ -303,6 +303,10 @@ impl GuardianReviewer {
             r#"You are a security review gate. Your task is to determine if the following
 tool action is consistent with the user's intent and conversation context.
 
+CRITICAL: Do NOT use any thinking tags, chain-of-thought, or markdown formatting.
+Your entire first line must be exactly one word: ALLOW or DENY (uppercase).
+Do NOT include any tags, prefixes, or extra text before or after.
+
 Conversation summary:
 {}
 
@@ -324,9 +328,17 @@ If unsure, reply DENY (fail closed).
         )
     }
 
+    /// Strip model-specific thinking tags (e.g. `__THINKING__`) from the response
+    /// before parsing the decision. Some models wrap chain-of-thought in such tags.
+    fn sanitize_response(response: &str) -> String {
+        // Remove __THINKING__ blocks (DeepSeek-style thinking tags)
+        response.replace("__THINKING__", "")
+    }
+
     /// Parse the review agent's response into a GuardianDecision.
     fn parse_decision(response: &str) -> GuardianDecision {
-        let first_line = response
+        let sanitized = Self::sanitize_response(response);
+        let first_line = sanitized
             .lines()
             .find(|l| !l.trim().is_empty())
             .map(|l| l.trim().to_uppercase())
@@ -335,7 +347,7 @@ If unsure, reply DENY (fail closed).
         if first_line == "ALLOW" {
             GuardianDecision::Allow { confidence: 0.8 }
         } else if first_line == "DENY" {
-            let reason = response
+            let reason = sanitized
                 .lines()
                 .skip(1)
                 .find(|l| !l.trim().is_empty())

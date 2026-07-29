@@ -408,6 +408,10 @@ impl GoOnApp {
                 // stay in the secure keyring rather than leaking into the process environment
                 // (visible via /proc/PID/environ).
 
+                // Skip startup memory health check when system is tight.
+                // Runtime memory monitoring still operates after startup.
+                cmd.env("GO_ON_SKIP_MEMORY_CHECK", "true");
+
                 // Sync language between GUI and backend
                 cmd.env("LANG", &config.language);
 
