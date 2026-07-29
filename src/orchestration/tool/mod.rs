@@ -11,6 +11,7 @@ pub mod events;
 pub mod exec_common;
 pub mod executor;
 pub mod extended;
+pub mod governance_gate;
 pub mod lock;
 pub mod loop_executor;
 // pub mod native; — removed: NativeToolBridge was superseded by shared::tool_descriptors
@@ -21,6 +22,9 @@ pub mod registry_macro;
 pub mod types;
 use crate::i18n::runtime::tf;
 use anyhow::Result;
+pub use governance_gate::{
+    check_tool_in_pipeline, governance_cache, is_low_risk_tool, ShardedGovernanceCache,
+};
 pub use loop_executor::*;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};

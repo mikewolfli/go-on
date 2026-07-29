@@ -37,38 +37,9 @@
 - Immediately fix any unclosed symbols, placeholders, or fake implementations
 
 ---
-## 3. SKILL SYSTEM USAGE
+## 3. SKILL SYSTEM
 
-The project includes a complete Skill system for agent capabilities. Skills can be listed, executed, and managed via tools.
-
-### Available Skill Tools
-- `skill_list` — Lists all registered skills with their name, description, score, and input_schema
-- `skill_execute` — Executes a registered skill by name with provided input parameters
-
-### Skill File Format (SKILL.md)
-Skills are defined as Markdown files with YAML frontmatter in `~/.agents/skills/`:
-```markdown
----
-name: my-skill
-description: Description of what this skill does
-version: 1.0.0
----
-Execute the following task with the given input: {{input}}
-```
-
-### Skill Locations
-- Built-in skills are registered automatically at startup
-- User skills are discovered from `~/.agents/skills/` (scanned every 60s)
-- Skills can also be created programmatically via `skill-creator` tool
-
-### Skill Scoring System
-Skills are scored (0.0–1.0) based on:
-- Success rate (higher is better)
-- Average latency (lower is better)
-- Skills with score < 0.55 are deprioritized
-
-### Creating New Skills
-To create a new skill, place a valid SKILL.md file in `~/.agents/skills/` or use the `skill-creator` meta-tool which takes a name, description, and prompt template.
+See `skills/README.md` for skill system usage.
 
 ---
 ## 4. ZED AGENT SERVER INTEGRATION

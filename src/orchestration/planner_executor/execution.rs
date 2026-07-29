@@ -8,10 +8,19 @@ use super::*;
 
 /// Executor: executes an execution plan through the mode runtime
 ///
+/// ⚠ **Deprecated** — use [`BrainLoop`](crate::orchestration::brain_loop::BrainLoop) instead.
+/// This struct will be removed in a future release.
+///
 /// Steps in the same parallel group are executed concurrently using
 /// `futures::future::join_all` for true parallel execution.
+#[deprecated(
+    since = "1.5.0",
+    note = "use crate::orchestration::brain_loop::BrainLoop instead"
+)]
+#[allow(deprecated)]
 pub struct Executor;
 
+#[allow(deprecated)]
 impl Executor {
     /// Execute an execution plan, running steps in dependency order.
     ///
@@ -20,11 +29,20 @@ impl Executor {
     /// executed in order as before.
     ///
     /// Returns results for each step in the order they appear in `plan.steps`.
+    ///
+    /// TODO: Delegate to [`BrainLoop::from_execution_plan`] + `run_async` and
+    /// convert the [`BrainLoopProfile`](crate::orchestration::brain_loop::BrainLoopProfile)
+    /// back to the legacy `Vec<(String, Result<AgentTaskResult, String>)>` return type.
     pub async fn execute(
         plan: &ExecutionPlan,
         _registry: &AgentRegistry,
         runtimes: &[(ModeKind, Arc<dyn ModeRuntime>)],
     ) -> Vec<(String, Result<AgentTaskResult, String>)> {
+        tracing::warn!(
+            target: "planner_executor",
+            "Executor::execute is deprecated — migrate to brain_loop::BrainLoop (plan_id={})",
+            plan.plan_id,
+        );
         Self::execute_with_cancel(plan, _registry, runtimes, CancellationToken::new()).await
     }
 
@@ -32,12 +50,22 @@ impl Executor {
     ///
     /// Parallel groups respect the `CancellationToken` — when cancelled,
     /// remaining steps are recorded as failures rather than spawned.
+    ///
+    /// TODO: Delegate to [`BrainLoop::from_execution_plan`] + `run_async` and
+    /// convert the [`BrainLoopProfile`](crate::orchestration::brain_loop::BrainLoopProfile)
+    /// back to the legacy return type, plumbing `CancellationToken` through
+    /// to the BrainLoop's own cancel support.
     pub async fn execute_with_cancel(
         plan: &ExecutionPlan,
         _registry: &AgentRegistry,
         runtimes: &[(ModeKind, Arc<dyn ModeRuntime>)],
         cancel: CancellationToken,
     ) -> Vec<(String, Result<AgentTaskResult, String>)> {
+        tracing::warn!(
+            target: "planner_executor",
+            "Executor::execute_with_cancel is deprecated — migrate to brain_loop::BrainLoop (plan_id={})",
+            plan.plan_id,
+        );
         let mut results: Vec<(String, Result<AgentTaskResult, String>)> = Vec::new();
         let mut completed: HashSet<String> = HashSet::new();
         let mut failed: HashSet<String> = HashSet::new();

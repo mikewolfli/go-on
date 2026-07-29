@@ -20,6 +20,11 @@ use tokio_util::sync::CancellationToken;
 
 pub mod execution;
 
+#[deprecated(
+    since = "1.5.0",
+    note = "use crate::orchestration::brain_loop::BrainLoop instead"
+)]
+#[allow(deprecated)]
 pub use execution::Executor;
 
 // ---------------------------------------------------------------------------
@@ -45,6 +50,9 @@ pub use crate::orchestration::brain_loop::plan_construction::TaskComplexity;
 pub use crate::orchestration::brain_loop::plan_construction::DagMetrics;
 
 /// A single step in an execution plan
+///
+/// Note: Will eventually be unified with [`BrainLoopStep`](crate::orchestration::brain_loop::BrainLoopStep).
+/// For now, this is the canonical step type used by `Planner::plan()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
     pub step_id: String,
@@ -56,6 +64,9 @@ pub struct PlanStep {
 }
 
 /// An execution plan produced by the Planner
+///
+/// Note: Will eventually be unified with [`BrainLoopPlan`](crate::orchestration::brain_loop::BrainLoopPlan).
+/// For now, this is the canonical plan type returned by `Planner::plan()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPlan {
     pub plan_id: String,
@@ -292,6 +303,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_parallel_groups_execute_concurrently() {
         // Create a plan with a parallel group to verify concurrent execution.
         // We use a ManualClock runtime that records execution order to prove concurrency.
@@ -361,6 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_execute_returns_results_for_all_steps() {
         let task = make_task();
         let plan = Planner::plan(&task).await;
@@ -377,6 +390,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_execute_with_missing_dependency() {
         // Create a plan where exec-1 depends on plan-1, but plan-1 will fail
         // because there's no runtime. The dependency should still be tracked.

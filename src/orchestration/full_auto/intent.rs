@@ -6,11 +6,13 @@
 //! free‑form description.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::{FullAutoFlow, IntentCacheValue};
+use crate::agent::Agent;
 
 // ---------------------------------------------------------------------------
 // TaskIntent
@@ -56,6 +58,56 @@ impl TaskIntent {
 // ---------------------------------------------------------------------------
 
 impl FullAutoFlow {
+    /// Parse a task description using LLM-driven decomposition (when available),
+    /// falling back to heuristic parsing.
+    ///
+    /// This unifies FullAutoFlow's intent detection with the general-purpose
+    /// [`TaskDecomposer`](crate::orchestration::task_decomposer::TaskDecomposer),
+    /// reducing duplicated decomposition logic.
+    pub async fn parse_task_with_llm(
+        &self,
+        task: &str,
+        llm_agent: Option<Arc<dyn Agent>>,
+    ) -> TaskIntent {
+        // Try LLM-based decomposition first
+        if let Some(agent) = llm_agent {
+            let characteristics = crate::orchestration::task_router::TaskCharacteristics {
+                description: task.to_string(),
+                task_type: crate::orchestration::task_router::TaskType::Unknown,
+                complexity: 3,
+                required_capabilities: vec![],
+                involves_multiple_modules: false,
+                is_time_critical: false,
+                needs_verification: false,
+                has_safety_concerns: false,
+            };
+            let decomposition =
+                crate::orchestration::task_decomposer::TaskDecomposer::decompose_with_llm(
+                    &characteristics,
+                    Some(agent),
+                )
+                .await;
+
+            // Convert TaskDecomposition subtasks to TaskIntent goals
+            let goals: Vec<String> = decomposition
+                .subtasks
+                .iter()
+                .map(|s| s.description.clone())
+                .collect();
+            if !goals.is_empty() {
+                return TaskIntent {
+                    goals,
+                    constraints: vec![],
+                    prerequisites: vec![],
+                    deliverables: vec![],
+                };
+            }
+        }
+
+        // Fallback to heuristic parsing
+        self.parse_task(task)
+    }
+
     /// Parse a free‑form task description into a structured `TaskIntent`.
     ///
     /// Uses lightweight heuristics to identify goals, constraints,

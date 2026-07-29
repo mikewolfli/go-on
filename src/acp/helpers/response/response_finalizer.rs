@@ -21,6 +21,7 @@ use crate::acp::helpers::autonomy_metrics::{
 use crate::acp::helpers::orchestration_alignment::derive_plan_trace_alignment;
 use crate::acp::helpers::vote_orchestration::derive_response_orchestration;
 use crate::acp::server::AcpServer;
+#[allow(deprecated)]
 use crate::orchestration::planner_executor::Planner;
 use crate::orchestration::workflow_optimizer::OptimizationContext;
 use crate::rpc_protocol::RequestTraceContext;

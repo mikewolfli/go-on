@@ -75,7 +75,6 @@ impl HubServer {
         discovery.write(&self.discovery_path)?;
         info!("Hub discovery: {}", self.discovery_path.display());
 
-        listener.set_nonblocking(true)?;
         let listener = tokio::net::TcpListener::from_std(listener)?;
 
         // Extract owned copies for the background task.

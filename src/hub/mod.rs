@@ -1,9 +1,12 @@
 //! Runtime Hub — reserved for future multi-process architecture.
 //!
-//! WARNING: This module is currently NOT wired into the production code path.
-//! It exists as a design reserve for when go-on transitions from a single-process
-//! CLI binary to a multi-process architecture (daemon + client agents), similar to
-//! how Zed / VS Code run a background runtime hub alongside the IDE.
+//! ## Status
+//! This module is **intentionally preserved** as a design reserve but is
+//! NOT wired into production code paths. It is gated behind the
+//! `sub-bus-distributed-memory` feature, which is only enabled in the
+//! `simple-server`, `multi-users-server`, and `full` profiles.
+//!
+//! In the `local` profile (default), this module is **not compiled**.
 //!
 //! ## Why not wired yet
 //!

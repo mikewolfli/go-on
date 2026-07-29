@@ -153,6 +153,54 @@ pub struct BrainLoopPlan {
     pub dag_metrics: Option<crate::orchestration::planner_executor::DagMetrics>,
 }
 
+impl BrainLoopPlan {
+    /// Create a BrainLoopPlan from a (deprecated) ExecutionPlan.
+    ///
+    /// This bridges the legacy PlannerExecutor path to the canonical
+    /// BrainLoop execution pipeline during the deprecation window.
+    pub fn from_execution_plan(
+        ep: &crate::orchestration::planner_executor::ExecutionPlan,
+        goal: String,
+    ) -> Self {
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
+        let steps = ep
+            .steps
+            .iter()
+            .map(|s| BrainLoopStep {
+                id: s.step_id.clone(),
+                phase: BrainLoopPhase::Executing,
+                description: s.description.clone(),
+                input: String::new(),
+                output: String::new(),
+                started_ms: 0,
+                completed_ms: 0,
+                duration_ms: 0,
+                status: StepStatus::Pending,
+                context: None,
+                depends_on: s.depends_on.clone(),
+                mode: format!("{:?}", s.mode),
+                agent: s.agent.clone(),
+                timeout_seconds: s.timeout_seconds,
+                parallel_group: None,
+            })
+            .collect();
+        Self {
+            id: ep.plan_id.clone(),
+            goal,
+            steps,
+            max_iterations: 1,
+            current_iteration: 0,
+            created_ms: now,
+            phase: BrainLoopPhase::Planning,
+            fail_reason: String::new(),
+            reasoning: None,
+            world_model_data: None,
+            parallel_groups: ep.parallel_groups.clone(),
+            dag_metrics: ep.dag_metrics.clone(),
+        }
+    }
+}
+
 /// A hint produced by the metacognitive feedback loop, carrying preventive
 /// measures or warnings for the planner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,6 +386,28 @@ impl BrainLoop {
             })),
             next_plan_id: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    /// Create a new BrainLoop from a legacy ExecutionPlan.
+    ///
+    /// This is the bridge from the deprecated PlannerExecutor to BrainLoop.
+    /// The plan is registered, and callers may then use [`run_async`](Self::run_async)
+    /// or step-level methods to execute it.
+    pub fn from_execution_plan(
+        ep: &crate::orchestration::planner_executor::ExecutionPlan,
+        goal: String,
+        config: BrainLoopConfig,
+    ) -> Self {
+        let plan = BrainLoopPlan::from_execution_plan(ep, goal);
+        let bl = Self::new(config);
+        // Register the plan synchronously. This is a bridge during the
+        // deprecation window — callers should transition to direct
+        // BrainLoop usage.
+        bl.inner
+            .blocking_write()
+            .plans
+            .insert(plan.id.clone(), plan);
+        bl
     }
 }
 

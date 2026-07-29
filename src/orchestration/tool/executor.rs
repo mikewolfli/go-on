@@ -10,102 +10,12 @@
 //! - `cli/chat.rs` (CLI path — was already parallel but independently implemented)
 //! - `dag_driver.rs` (dead code, entire module to be deleted)
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use crate::orchestration::cache_layer::{CacheLayer, CacheStats};
-
-/// A bounded, thread-safe cache for tool governance permission results.
-///
-/// Caches the result of `request_client_permission` for each
-/// `"{session_id}:{tool_name}"` key to avoid redundant network round-trips
-/// to the ACP client within the same session.
-struct GovernanceCache {
-    cache: HashMap<String, bool>,
-    order: std::collections::VecDeque<String>,
-    max_entries: usize,
-    hits: AtomicU64,
-    misses: AtomicU64,
-}
-
-impl GovernanceCache {
-    fn new(max_entries: usize) -> Self {
-        Self {
-            cache: HashMap::new(),
-            order: std::collections::VecDeque::new(),
-            max_entries,
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
-        }
-    }
-
-    fn get(&self, key: &str) -> Option<bool> {
-        let result = self.cache.get(key).copied();
-        if result.is_some() {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-        }
-        result
-    }
-
-    fn insert(&mut self, key: String, value: bool) {
-        // If the key already exists, don't change insertion order.
-        if self.cache.contains_key(&key) {
-            return;
-        }
-        self.cache.insert(key.clone(), value);
-        self.order.push_back(key.clone());
-
-        // Evict oldest entries once we exceed the max.
-        while self.order.len() > self.max_entries {
-            if let Some(oldest) = self.order.pop_front() {
-                self.cache.remove(&oldest);
-            }
-        }
-    }
-}
-
-/// Global governance cache, lazily initialized on first use.
-static GOVERNANCE_CACHE: OnceLock<Mutex<GovernanceCache>> = OnceLock::new();
-
-fn governance_cache() -> &'static Mutex<GovernanceCache> {
-    GOVERNANCE_CACHE.get_or_init(|| Mutex::new(GovernanceCache::new(1000)))
-}
-
-// ---------------------------------------------------------------------------
-// CacheLayer implementation for GovernanceCache
-// ---------------------------------------------------------------------------
-
-impl CacheLayer for GovernanceCache {
-    fn name(&self) -> &str {
-        "governance"
-    }
-
-    fn stats(&self) -> CacheStats {
-        let entry_count = self.cache.len();
-        // Rough estimate: each entry stores a String key plus a bool, plus
-        // VecDeque node overhead.  Assume ~48 bytes per entry on average.
-        let estimated_size_bytes = entry_count.saturating_mul(48);
-        CacheStats {
-            hits: self.hits.load(Ordering::Relaxed),
-            misses: self.misses.load(Ordering::Relaxed),
-            entries: entry_count,
-            max_entries: self.max_entries,
-            estimated_size_bytes,
-        }
-    }
-
-    fn clear(&mut self) {
-        self.cache.clear();
-        self.order.clear();
-        self.hits.store(0, Ordering::Relaxed);
-        self.misses.store(0, Ordering::Relaxed);
-    }
-}
+use crate::orchestration::tool::governance_gate::{
+    governance_cache, is_low_risk_tool, low_risk_audit_log,
+};
 
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
@@ -114,53 +24,6 @@ use tokio::sync::Semaphore;
 
 use crate::acp::r#impl::chat::streaming::{emit_tool_approval_event, StreamFrame};
 use crate::orchestration::tool::{RetryPolicy, ToolInput, ToolOutput, ToolRegistry};
-use std::time::SystemTime;
-/// Determine whether a tool is low-risk and can skip the blocking governance gate.
-///
-/// Low-risk tools are read-only, informational, or utility tools that pose
-/// minimal security or safety concern. For these tools, synchronous governance
-/// approval can be replaced by async audit logging.
-fn is_low_risk_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "read_file"
-            | "search_files"
-            | "list_directory"
-            | "grep"
-            | "environment_info"
-            | "time_util"
-            | "uuid_gen"
-            | "random_token"
-            | "encode_decode"
-            | "hash_file"
-            | "diagnostics"
-            | "diff"
-            | "format_code"
-            | "code_metrics"
-            | "svg_export"
-            | "rss_feed"
-            | "date_time"
-            | "dns_lookup"
-    )
-}
-
-/// Record an audit log entry for a low-risk tool access.
-///
-/// This replaces the blocking governance gate for low-risk tools,
-/// ensuring observability without blocking execution.
-fn low_risk_audit_log(tool_name: &str, operation_mode: &str) {
-    let timestamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
-    tracing::debug!(
-        target: "governance::low_risk",
-        timestamp = timestamp,
-        tool_name = tool_name,
-        operation_mode = operation_mode,
-        "low_risk_tool_access: governance gate skipped"
-    );
-}
 
 /// Configuration for concurrent tool execution.
 #[derive(Clone)]
@@ -608,7 +471,7 @@ fn format_tool_output_for_response(tool_name: &str, output: &ToolOutput) -> Stri
 
 /// Check tool permission via ACP session for governance gate (edit/safeguard mode).
 ///
-/// Results are cached in a global [`GovernanceCache`] keyed by
+/// Results are cached in a global [`ShardedGovernanceCache`] keyed by
 /// `"{session_id}:{tool_name}"` to avoid redundant network round-trips
 /// to the ACP client for repeated tool calls within the same session.
 async fn ensure_tool_permission(
@@ -628,15 +491,13 @@ async fn ensure_tool_permission(
 
     // Check cache first — avoids a 15 s network round-trip when the same
     // tool has already been approved/denied in this session.
-    if let Ok(cache) = governance_cache().lock() {
-        if let Some(cached) = cache.get(&cache_key) {
-            tracing::debug!(
-                "executor: tool '{}' cache hit ({}), skipping permission request",
-                tool_name,
-                if cached { "approved" } else { "denied" }
-            );
-            return cached;
-        }
+    if let Some(cached) = governance_cache().get(&cache_key) {
+        tracing::debug!(
+            "executor: tool '{}' cache hit ({}), skipping permission request",
+            tool_name,
+            if cached { "approved" } else { "denied" }
+        );
+        return cached;
     }
 
     // Short timeout: if the ACP client (Zed) doesn't show a permission
@@ -678,9 +539,7 @@ async fn ensure_tool_permission(
     };
 
     // Populate cache on cache miss (only cache definitive allow/deny, not errors).
-    if let Ok(mut cache) = governance_cache().lock() {
-        cache.insert(cache_key, result);
-    }
+    governance_cache().insert(cache_key, result);
 
     result
 }

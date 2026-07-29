@@ -309,6 +309,7 @@ pub struct GovernanceServerDeps {
 }
 
 /// Orchestration subsystems grouped together (scheduler + planner + executor + skill)
+#[allow(deprecated)]
 pub struct OrchestrationServerDeps {
     /// Dual-level task scheduler for priority queue and worker pool
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
@@ -1550,12 +1551,16 @@ impl ServerBuilder {
                     None
                 },
             },
-            orchestration_deps: OrchestrationServerDeps {
-                scheduler: self.scheduler,
-                planner: crate::orchestration::planner_executor::Planner,
-                executor: crate::orchestration::planner_executor::Executor,
-                planner_executor_config: self.planner_executor_config,
-                skill_registry,
+            orchestration_deps: {
+                #[allow(deprecated)]
+                let deps = OrchestrationServerDeps {
+                    scheduler: self.scheduler,
+                    planner: crate::orchestration::planner_executor::Planner,
+                    executor: crate::orchestration::planner_executor::Executor,
+                    planner_executor_config: self.planner_executor_config,
+                    skill_registry,
+                };
+                deps
             },
             runtime_config,
             config_path: self.config_path,
