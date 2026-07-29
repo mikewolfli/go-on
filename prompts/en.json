@@ -1112,6 +1112,48 @@
           "tags": ["metrics", "kpi", "continuous-improvement"]
         }
       ]
+    },
+    {
+      "id": "goon_agent",
+      "name": "Go-On Agent Skills",
+      "icon": "🤖",
+      "templates": [
+        {
+          "id": "skill_discovery",
+          "title": "Skill Discovery",
+          "description": "Find and select skills by task requirement",
+          "content": "Find the best skills from the registry for the following task. Determine which skills match best based on their name, description, and tags. Use skill_list to browse available skills, and use discover_skills to find skills matching the task description. Recommend the top 3 skills and explain why each is relevant.\n\nTask: {{input}}",
+          "tags": ["skills", "discovery", "go-on", "agent"]
+        },
+        {
+          "id": "tool_selection",
+          "title": "Tool Selection Guide",
+          "description": "Choose the right tool for the job from the registry",
+          "content": "Select the most appropriate tool(s) from the go-on tool registry for the following request. Consider the tool's capability, risk level, timeout budget, and fallback chain. Prefer async run_async over sync run for non-blocking execution. If the task requires file operations, prefer ReadFile/WriteFile over shell commands.\n\nRequest: {{input}}",
+          "tags": ["tools", "selection", "go-on", "registry"]
+        },
+        {
+          "id": "cache_layer_info",
+          "title": "Cache Layer Overview",
+          "description": "Understand the caching system for performance",
+          "content": "Explain the go-on caching architecture. Cover: GovernanceCache (session+tool permission caching), FastPathCache (task parsing, skill discovery, environment check caching with fingerprint-based keys and TTL), and the CacheLayer trait with CacheMetricsCollector for aggregation. For metrics, use get_aggregate_cache_stats to inspect cache efficiency.\n\nQuery: {{input}}",
+          "tags": ["cache", "performance", "go-on", "metrics"]
+        },
+        {
+          "id": "pipeline_flow",
+          "title": "Full-Auto Pipeline Flow",
+          "description": "Understand how FullAutoFlow processes tasks end-to-end",
+          "content": "Explain the FullAutoFlow pipeline: Task input → FastPathCache (intent parsing, skill discovery, environment check) → Skill matching via SkillRegistry::discover_skills → Execution environment preparation → Parallel skill execution with concurrency limits → Report generation with success/failure tracking. Use cache_metrics snapshot to monitor pipeline efficiency.\n\nQuery: {{input}}",
+          "tags": ["pipeline", "full-auto", "go-on", "skills"]
+        },
+        {
+          "id": "best_practices",
+          "title": "Agent Best Practices",
+          "description": "Optimize agent behavior for GO-ON",
+          "content": "Provide best practices for operating as a go-on agent. Cover: 1) Always prefer skill_execute/skill_list for reusable capabilities over ad-hoc tool chains. 2) Use the loop_executor for iterative think-act-observe cycles. 3) Leverage the brain_loop for plan-execute-reflect iteration with deep reasoning. 4) Register custom routes in FastPathCache for repeated task patterns. 5) Use the CacheLayer trait to expose cache metrics for governance.\n\nScenario: {{input}}",
+          "tags": ["best-practices", "go-on", "agent", "optimization"]
+        }
+      ]
     }
   ]
 }

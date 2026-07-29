@@ -39,8 +39,7 @@ impl Tool for ToolSearchTool {
             .get("top_k")
             .and_then(|v| v.as_i64())
             .unwrap_or(8)
-            .min(20)
-            .max(1) as usize;
+            .clamp(1, 20) as usize;
 
         // Access the global tool registry to discover deferred tools.
         let registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();

@@ -14,8 +14,13 @@ default_phase = "think"
 model_selection_mode = "adaptive"
 
 # ── Cache (PostgreSQL in production, SQLite fallback for dev) ──────────
-# In production with multi-users-server, set:
-#   cache.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_cache"
+# In production with multi-users-server, set connection_string:
+#   sslmode=verify-full — full TLS with CA verification
+#   sslmode=require     — TLS with self-signed certs
+#   (omit sslmode)      — unencrypted (dev only)
+# Example: cache.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_cache?sslmode=verify-full"
+# Optional read-replica for read/write splitting:
+# cache.read_replica_connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_REPLICA_HOST}/goon_cache?sslmode=verify-full"
 [cache]
 enabled = true
 path = "sqlite3/acp_cache.sqlite3"
@@ -23,8 +28,13 @@ default_ttl_seconds = 3600
 max_entries = 50000
 
 # ── Vector Store (pgvector in production, sqlite-vec fallback for dev) ─
-# In production with multi-users-server, set:
-#   vector.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_vector"
+# In production with multi-users-server, set connection_string:
+#   sslmode=verify-full — full TLS with CA verification
+#   sslmode=require     — TLS with self-signed certs
+#   (omit sslmode)      — unencrypted (dev only)
+# Example: vector.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_vector?sslmode=verify-full"
+# Optional read-replica for read/write splitting:
+# vector.read_replica_connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_REPLICA_HOST}/goon_vector?sslmode=verify-full"
 [vector]
 enabled = true
 auto_mode = false

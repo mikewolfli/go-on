@@ -758,6 +758,7 @@ mod tests {
             default_ttl_seconds: 30,
             max_entries: 20_000,
             connection_string: None,
+            read_replica_connection_string: None,
         });
         cfg.vector = Some(VectorConfig {
             enabled: false,
@@ -773,6 +774,7 @@ mod tests {
             summary_enabled: true,
             summary_trigger_messages: 8,
             summary_max_chars: 1200,
+            read_replica_connection_string: None,
         });
         cfg.runtime = Some(RuntimeConfig {
             maintenance_interval_seconds: 20,

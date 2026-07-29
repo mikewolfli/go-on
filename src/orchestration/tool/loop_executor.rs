@@ -12,7 +12,7 @@
 //! - All tool candidates exhausted (retry + fallback limits reached)
 //! - Maximum iteration count reached
 
-use crate::orchestration::tool::recommender;
+use crate::orchestration::tool::recommender::{self, ToolRecommendation};
 use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry};
 use anyhow::Result;
 use glob::Pattern;
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use tokio::task::block_in_place;
+
 use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -191,20 +191,18 @@ fn think(
     candidates: &[String],
     retry_counts: &HashMap<String, u32>,
     config: &LoopConfig,
-    recommender: Option<&recommender::ToolRecommender>,
+    recommendations: Option<&[ToolRecommendation]>,
 ) -> Option<ThinkResult> {
     if candidates.is_empty() {
         return None;
     }
 
-    // Phase 1: consult the ToolRecommender when available
-    if let Some(rec) = recommender {
-        let context: Vec<String> = Vec::new();
-        let recommendations = rec.recommend(task, &context);
+    // Phase 1: consult pre-computed recommendations when available
+    if let Some(recommendations) = recommendations {
         if !recommendations.is_empty() {
             // Find the highest-scored recommendation that is in our candidate list
             // and hasn't exhausted its retries.
-            for rec_candidate in &recommendations {
+            for rec_candidate in recommendations {
                 if candidates.contains(&rec_candidate.tool_name) {
                     let retries = retry_counts
                         .get(&rec_candidate.tool_name)
@@ -490,12 +488,13 @@ pub fn execute_loop(
     for iteration in 0..config.max_iterations {
         // ── Think ────────────────────────────────────────────────
         // Select the best tool candidate based on retry history.
+        let recs = recommender.as_deref().map(|rec| rec.recommend(task, &[]));
         let think_result = think(
             task,
             &tool_candidates,
             &retry_counts,
             config,
-            recommender.as_deref(),
+            recs.as_deref(),
         );
 
         let Some(tr) = think_result else {
@@ -647,15 +646,22 @@ pub async fn execute_loop_async(
     for iteration in 0..config.max_iterations {
         // ── Think ────────────────────────────────────────────────
         // Select the best tool candidate based on retry history.
-        let think_result = block_in_place(|| {
+        let recs = recommender.as_deref().map(|rec| rec.recommend(task, &[]));
+        let task_owned = task.to_string();
+        let candidates_owned = tool_candidates.clone();
+        let retry_counts_owned = retry_counts.clone();
+        let config_owned = config.clone();
+        let think_result = tokio::task::spawn_blocking(move || {
             think(
-                task,
-                &tool_candidates,
-                &retry_counts,
-                config,
-                recommender.as_deref(),
+                &task_owned,
+                &candidates_owned,
+                &retry_counts_owned,
+                &config_owned,
+                recs.as_deref(),
             )
-        });
+        })
+        .await
+        .unwrap();
 
         let Some(tr) = think_result else {
             let decision = LoopDecision::Failed {

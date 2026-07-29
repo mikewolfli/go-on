@@ -14,17 +14,35 @@ use crate::i18n::runtime::tf;
 use std::sync::Arc;
 
 use crate::orchestration::mode::{ModeKind, ModeRuntime};
-use crate::orchestration::planner_embedding::EmbeddingTaskClassifier;
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
 
 pub mod execution;
-pub mod plan_optimization;
 
 pub use execution::Executor;
-pub use plan_optimization::Planner;
+
+// ---------------------------------------------------------------------------
+// Deprecated re-exports — moved to brain_loop::plan_construction
+// ---------------------------------------------------------------------------
+
+#[deprecated(
+    since = "1.5.0",
+    note = "use crate::orchestration::brain_loop::plan_construction::Planner instead"
+)]
+pub use crate::orchestration::brain_loop::plan_construction::Planner;
+
+#[deprecated(
+    since = "1.5.0",
+    note = "use crate::orchestration::brain_loop::plan_construction::TaskComplexity instead"
+)]
+pub use crate::orchestration::brain_loop::plan_construction::TaskComplexity;
+
+#[deprecated(
+    since = "1.5.0",
+    note = "use crate::orchestration::brain_loop::plan_construction::DagMetrics instead"
+)]
+pub use crate::orchestration::brain_loop::plan_construction::DagMetrics;
 
 /// A single step in an execution plan
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,28 +53,6 @@ pub struct PlanStep {
     pub agent: Option<String>,
     pub depends_on: Vec<String>,
     pub timeout_seconds: u64,
-}
-
-/// DAG metrics for governance observability
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DagMetrics {
-    pub width: usize,
-    pub depth: usize,
-    pub parallel_group_count: usize,
-    pub total_steps: usize,
-    pub complexity_level: String,
-}
-
-impl Default for DagMetrics {
-    fn default() -> Self {
-        Self {
-            width: 0,
-            depth: 0,
-            parallel_group_count: 0,
-            total_steps: 0,
-            complexity_level: "Unknown".into(),
-        }
-    }
 }
 
 /// An execution plan produced by the Planner
@@ -75,28 +71,10 @@ pub struct ExecutionPlan {
 #[derive(Debug, Clone, Default)]
 pub struct PlannerExecutorConfig;
 
-/// Task complexity level for adaptive planning
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TaskComplexity {
-    #[default]
-    Simple,
-    Medium,
-    Complex,
-}
-
-/// Planning context carrying task features for adaptive decomposition
-#[derive(Debug, Clone, Default)]
-pub struct PlanningContext {
-    pub complexity: TaskComplexity,
-    pub has_code: bool,
-    pub has_research: bool,
-    pub has_multiple_subtasks: bool,
-    pub subtask_hints: Vec<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestration::brain_loop::plan_construction::PlanningContext;
 
     fn make_task() -> AgentTaskEnvelope {
         AgentTaskEnvelope {

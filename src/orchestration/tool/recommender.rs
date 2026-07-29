@@ -79,7 +79,7 @@ pub struct ToolRecommendation {
 /// skills by query. Skills can be invoked at runtime via the built‑in
 /// `skill_execute` tool, which takes a skill name and input parameters.
 ///
-/// [`SkillDiscovery`]: crate::orchestration::skill_discovery::SkillDiscovery
+/// [`SkillDiscovery`]: crate::orchestration::skill::discovery_cache::SkillDiscovery
 pub struct ToolRecommender {
     /// Per‑tool usage statistics updated over time.
     pub tool_stats: HashMap<String, ToolUsageStats>,

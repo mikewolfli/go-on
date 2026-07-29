@@ -1679,12 +1679,56 @@
         "id": "support_metric_review",
         "title": "客服指標復盤",
         "description": "解讀支援指標並提出改善行動",
-        "content": "分析以下客服指標並輸出可執行復盤。涵蓋：工單量趨勢、回應時長、解決時長、滿意度、積壓健康度、主要根因與優先改善行動。\n\n{{input}}",
+        "content": "分析以下客服指標並輸出可執行復盤。涵蓋：工單量趨勢、回應時長、解決時長、滿意度、積壓健康度、主要根因與優先改善行動。
+
+{{input}}",
         "tags": [
           "指標",
           "KPI",
           "持續改善"
         ]
+      }
+    ]
+  },
+  {
+    "id": "goon_agent",
+    "name": "Go-On 代理技能",
+    "icon": "🤖",
+    "templates": [
+      {
+        "id": "skill_discovery",
+        "title": "技能發現",
+        "description": "根據任務需求查找和選擇技能",
+        "content": "從技能註冊表中為以下任務找到最佳技能。根據技能名稱、描述和標籤確定最佳匹配。使用 skill_list 瀏覽可用技能，使用 discover_skills 查找與任務描述匹配的技能。推薦前三名技能並解釋每個技能的相關性。\n\n任務：{{input}}",
+        "tags": ["技能", "發現", "go-on", "代理"]
+      },
+      {
+        "id": "tool_selection",
+        "title": "工具選擇指南",
+        "description": "從註冊表中選擇合適的工具",
+        "content": "從 go-on 工具註冊表中為以下請求選擇最合適的工具。考慮工具的能力、風險級別、超時預算和回退鏈。優先使用 async run_async 而非 sync run 以實現非阻塞執行。如果任務涉及文件操作，應優先使用 ReadFile/WriteFile 而非 shell 命令。\n\n請求：{{input}}",
+        "tags": ["工具", "選擇", "go-on", "註冊表"]
+      },
+      {
+        "id": "cache_layer_info",
+        "title": "緩存層概述",
+        "description": "了解緩存系統以優化性能",
+        "content": "解釋 go-on 緩存架構。涵蓋：GovernanceCache（會話+工具權限緩存）、FastPathCache（任務解析、技能發現、環境檢查緩存，基於指紋的鍵值和 TTL）以及 CacheLayer trait 和 CacheMetricsCollector 用於聚合。如需查看指標，使用 get_aggregate_cache_stats 查看緩存效率。\n\n查詢：{{input}}",
+        "tags": ["緩存", "性能", "go-on", "指標"]
+      },
+      {
+        "id": "pipeline_flow",
+        "title": "Full-Auto 流水線流程",
+        "description": "了解 FullAutoFlow 如何處理端到端任務",
+        "content": "解釋 FullAutoFlow 流水線：任務輸入 → FastPathCache（意圖解析、技能發現、環境檢查）→ 通過 SkillRegistry::discover_skills 進行技能匹配 → 執行環境準備 → 帶並發限制的並行技能執行 → 生成帶成功/失敗追踪的報告。使用 cache_metrics 快照監控流水線效率。\n\n查詢：{{input}}",
+        "tags": ["流水線", "全自動", "go-on", "技能"]
+      },
+      {
+        "id": "best_practices",
+        "title": "代理最佳實踐",
+        "description": "優化 Go-On 代理行為",
+        "content": "提供 go-on 代理操作最佳實踐。涵蓋：1）優先使用 skill_execute/skill_list 進行可複用能力而非臨時工具鏈。2）使用 loop_executor 進行迭代式思考-行動-觀察循環。3）利用 brain_loop 進行規劃-執行-反思迭代和深度推理。4）在 FastPathCache 中為重複任務模式註冊自定義路由。5）使用 CacheLayer trait 暴露緩存指標用於治理。\n\n場景：{{input}}",
+        "tags": ["最佳實踐", "go-on", "代理", "優化"]
       }
     ]
   }

@@ -185,6 +185,13 @@ pub enum CliCommand {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    /// Start Hub daemon (distributed memory / multi-process mode)
+    #[cfg(feature = "sub-bus-distributed-memory")]
+    Hub {
+        /// Port to bind (0 = auto-assign)
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
 }
 
 #[derive(Debug, Subcommand)]

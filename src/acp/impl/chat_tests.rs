@@ -195,6 +195,7 @@ mod unit_tests {
                 summary_enabled: true,
                 summary_trigger_messages: 1,
                 summary_max_chars: 240,
+                read_replica_connection_string: None,
             }),
             autotune: None,
             security: crate::core::config::types::SecurityConfig::default(),

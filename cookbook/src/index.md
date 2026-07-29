@@ -1,6 +1,6 @@
 # go-on Documentation
 
-This book documents the current `1.4.1` architecture and usage model of `go-on`.
+This book documents the current `1.4.3` architecture and usage model of `go-on`.
 
 The runtime implements a **14-bus capability architecture** with **38 AI provider integrations**,
 **2069 unit tests** (zero failures), and **zero clippy warnings across all build profiles**.

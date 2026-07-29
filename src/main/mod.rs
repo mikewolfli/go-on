@@ -197,6 +197,13 @@ async fn run() -> Result<()> {
             cli::CliCommand::Skill { command } => {
                 return cli::handle_skill_command(command).await;
             }
+            #[cfg(feature = "sub-bus-distributed-memory")]
+            cli::CliCommand::Hub { port: _port } => {
+                let mut hub = crate::hub::server::HubServer::new()?;
+                hub.start().await?;
+                tokio::signal::ctrl_c().await?;
+                return Ok(());
+            }
         }
     }
 

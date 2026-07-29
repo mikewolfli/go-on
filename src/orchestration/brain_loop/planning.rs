@@ -12,6 +12,8 @@ use serde_json::Value;
 use crate::agent::AgentRegistry;
 use crate::intelligence::metacognitive::CorrectiveStatus;
 use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig};
+use crate::orchestration::brain_loop::grill::enhance_reflection_with_grill;
+use crate::orchestration::brain_loop::planner_bridge::{auto_decompose_task, PlanningStrategy};
 use crate::orchestration::core_dag::TaskContext;
 
 use super::{
@@ -49,6 +51,8 @@ impl BrainLoop {
             fail_reason: String::new(),
             reasoning: None,
             world_model_data: None,
+            parallel_groups: vec![],
+            dag_metrics: None,
         };
         inner.plans.insert(id.clone(), plan);
         inner.total_plans_started += 1;
@@ -197,6 +201,75 @@ impl BrainLoop {
         inner.reflections.push(reflection.clone());
 
         Ok(reflection)
+    }
+
+    /// Record a reflection, enhanced with GRILL-style interrogation if enabled.
+    ///
+    /// Wraps [`reflect`](Self::reflect) with optional GRILL probing questions
+    /// based on the configured `grill_mode`. The grill mode is read from the
+    /// runtime config at call time.
+    pub async fn reflect_with_grill(
+        &self,
+        plan_id: &str,
+        step_id: &str,
+        observations: Vec<String>,
+        issues: Vec<String>,
+        improvements: Vec<String>,
+    ) -> anyhow::Result<BrainLoopReflection> {
+        // Read the GRILL mode under a read lock.
+        let (grill_mode, step_description) = {
+            let inner = self.inner.read().await;
+            let mode = inner.config.grill_mode;
+            let desc = inner
+                .plans
+                .get(plan_id)
+                .and_then(|p| {
+                    p.steps
+                        .iter()
+                        .find(|s| s.id == step_id)
+                        .map(|s| s.description.clone())
+                })
+                .unwrap_or_default();
+            (mode, desc)
+        };
+
+        let mut reflection = self
+            .reflect(plan_id, step_id, observations, issues, improvements)
+            .await?;
+
+        enhance_reflection_with_grill(&mut reflection, grill_mode, &step_description);
+
+        Ok(reflection)
+    }
+
+    /// Run the BrainLoop with automatic task decomposition.
+    ///
+    /// If `BrainLoopConfig.planning_strategy` is `AutoDecompose`, the task
+    /// string is decomposed into steps via `planner_executor::Planner`.
+    /// Otherwise behaves identically to [`run_async`](Self::run_async).
+    pub async fn run_async_with_strategy(
+        &self,
+        task: &str,
+        steps: Vec<BrainLoopStep>,
+    ) -> anyhow::Result<BrainLoopProfile> {
+        let strategy = {
+            let inner = self.inner.read().await;
+            inner.config.planning_strategy
+        };
+
+        let final_steps = match strategy {
+            PlanningStrategy::ExplicitSteps => steps,
+            PlanningStrategy::AutoDecompose => {
+                if steps.is_empty() {
+                    auto_decompose_task(task).await
+                } else {
+                    // Explicit steps override auto-decompose.
+                    steps
+                }
+            }
+        };
+
+        self.run_async(task, final_steps).await
     }
 }
 
@@ -798,7 +871,7 @@ impl BrainLoop {
                         .reflect_with_reasoning("", &history, &plan, step_id)
                         .await;
                     if let Err(e) = self
-                        .reflect(
+                        .reflect_with_grill(
                             &plan_id,
                             step_id,
                             deep_reflection.observations,
@@ -810,9 +883,9 @@ impl BrainLoop {
                         tracing::warn!("BrainLoop: deep reflection for `{step_id}` failed: {e}");
                     }
                 } else {
-                    // Standard reflection.
+                    // Standard reflection (with optional GRILL enhancement).
                     if let Err(e) = self
-                        .reflect(&plan_id, step_id, vec![], vec![], vec![])
+                        .reflect_with_grill(&plan_id, step_id, vec![], vec![], vec![])
                         .await
                     {
                         tracing::warn!("BrainLoop: reflection for `{step_id}` failed: {e}");

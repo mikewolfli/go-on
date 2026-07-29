@@ -255,21 +255,16 @@ pub struct RetryPolicy {
 /// - `Direct`: included in the initial model-visible tool list (default).
 /// - `Deferred`: registered but omitted from initial list; discoverable via search.
 /// - `Hidden`: registered for dispatch only, never exposed to the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ToolExposure {
     /// Include this tool in the initial model-visible tool list.
+    #[default]
     Direct,
     /// Register this tool for later discovery, but omit it from the initial
     /// model-visible tool list. The model must use tool_search to find it.
     Deferred,
     /// Keep this tool registered for dispatch without exposing it to the model.
     Hidden,
-}
-
-impl Default for ToolExposure {
-    fn default() -> Self {
-        Self::Direct
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

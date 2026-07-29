@@ -23,11 +23,6 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use tracing::{info, warn};
 
-/// Default probability of a simulated recovery failure during drills.
-/// Set to 0.1 (10%) to model real-world chaos where not all recoveries succeed.
-#[allow(dead_code)]
-pub const RECOVERY_FAILURE_RATE: f64 = 0.1;
-
 /// Returns the deterministic recovery failure rate for a given fault type.
 ///
 /// Different fault types have fundamentally different recovery characteristics:
@@ -332,7 +327,11 @@ impl Default for ChaosEngine {
 // Built-in scenarios
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+/// Built-in network resilience drill scenario — reference implementation.
+///
+/// Demonstrates how to construct a `DrillScenario` for network-level faults
+/// (timeout, partition, rate-limit). Not currently wired into production tests;
+/// retained as documentation and quick-start template for chaos drills.
 pub fn network_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "network_resilience".to_string(),
@@ -366,7 +365,10 @@ pub fn network_resilience_scenario() -> DrillScenario {
     }
 }
 
-#[allow(dead_code)]
+/// Built-in storage resilience drill scenario — reference implementation.
+///
+/// Demonstrates file I/O fault injection. Not currently wired into production
+/// tests; retained as documentation for storage reliability drill design.
 pub fn storage_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "storage_resilience".to_string(),
@@ -400,7 +402,10 @@ pub fn storage_resilience_scenario() -> DrillScenario {
     }
 }
 
-#[allow(dead_code)]
+/// Built-in resource exhaustion drill scenario — reference implementation.
+///
+/// Demonstrates graceful degradation under resource pressure. Not currently
+/// wired into production tests; retained as documentation template.
 pub fn resource_exhaustion_scenario() -> DrillScenario {
     DrillScenario {
         name: "resource_exhaustion".to_string(),

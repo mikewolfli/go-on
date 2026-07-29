@@ -622,6 +622,10 @@ pub struct CacheConfig {
     /// Example: "postgres://user:pass@localhost/go_on"
     #[serde(default)]
     pub connection_string: Option<String>,
+    /// Optional read-replica PostgreSQL connection URL for read/write splitting.
+    /// When set, read queries use this pool instead of the primary connection.
+    #[serde(default)]
+    pub read_replica_connection_string: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -636,6 +640,10 @@ pub struct VectorConfig {
     /// Example: "postgres://user:pass@localhost/go_on"
     #[serde(default)]
     pub connection_string: Option<String>,
+    /// Optional read-replica PostgreSQL connection URL for read/write splitting.
+    /// When set, read queries use this pool instead of the primary connection.
+    #[serde(default)]
+    pub read_replica_connection_string: Option<String>,
     #[serde(default = "super::defaults::default_vector_dimensions")]
     pub dimensions: usize,
     #[serde(default = "super::defaults::default_vector_min_query_chars")]

@@ -24,6 +24,23 @@ fn resolve_path(config_path: &Path, raw_path: &str) -> PathBuf {
     }
 }
 
+/// Initialize a PostgreSQL backend with connection retry and health check.
+///
+/// Retries the `factory` closure up to 3 times with exponential backoff
+/// (1s, 2s, 4s). The `factory` receives the connection URL string and should
+/// perform connection + migration + health check internally.
+#[cfg(feature = "backend-postgres")]
+async fn initialize_postgres_backend<T, F>(url: &str, factory: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(String) -> Result<T> + Send + 'static,
+{
+    let url_owned = url.to_string();
+    tokio::task::spawn_blocking(move || factory(url_owned))
+        .await
+        .map_err(|e| anyhow::anyhow!("postgres init join error: {e}"))?
+}
+
 /// Initialize response cache.
 #[cfg_attr(not(feature = "backend-postgres"), allow(unused_variables))] // config_path unused in backend-postgres code path
 pub async fn initialize_cache(
@@ -42,13 +59,14 @@ pub async fn initialize_cache(
         let url = cfg
             .connection_string
             .ok_or_else(|| anyhow::anyhow!("cache.connection_string required"))?;
-        tokio::task::spawn_blocking(move || {
-            ResponseCache::new(&url, cfg.default_ttl_seconds, cfg.max_entries)
+        let default_ttl_seconds = cfg.default_ttl_seconds;
+        let max_entries = cfg.max_entries;
+        Ok(initialize_postgres_backend(&url, move |conn_str| {
+            ResponseCache::new(&conn_str, default_ttl_seconds, max_entries)
                 .map(Arc::new)
                 .map(Some)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("cache init: {e}"))?
+        .await?)
     }
 
     #[cfg(not(feature = "backend-postgres"))]
@@ -110,14 +128,15 @@ pub async fn initialize_vector_store(
             .connection_string
             .ok_or_else(|| anyhow::anyhow!("vector.connection_string required"))?;
         let provider = embedding_provider;
-        tokio::task::spawn_blocking(move || {
-            let store = VectorStore::new(&url, cfg.dimensions, cfg.max_entries)?
+        let dimensions = cfg.dimensions;
+        let max_entries = cfg.max_entries;
+        Ok(initialize_postgres_backend(&url, move |conn_str| {
+            let store = VectorStore::new(&conn_str, dimensions, max_entries)?
                 .with_embedding_provider(provider);
             tracing::info!("vector store: embedding provider injected");
             Ok::<_, anyhow::Error>(Some(Arc::new(store)))
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("vector init: {e}"))?
+        .await?)
     }
 
     #[cfg(not(feature = "backend-postgres"))]
@@ -395,6 +414,7 @@ mod tests {
             default_ttl_seconds: 3600,
             max_entries: 1000,
             connection_string: None,
+            read_replica_connection_string: None,
         };
         let result = initialize_cache(config_path, Some(cfg))
             .await
@@ -428,6 +448,7 @@ mod tests {
             summary_enabled: false,
             summary_trigger_messages: 5,
             summary_max_chars: 4096,
+            read_replica_connection_string: None,
         };
         let result = initialize_vector_store(config_path, Some(cfg))
             .await

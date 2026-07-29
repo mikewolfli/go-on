@@ -35,6 +35,10 @@
 // ---------------------------------------------------------------------------
 
 pub mod execution;
+pub mod full_auto_plugin;
+pub mod grill;
+pub mod plan_construction;
+pub mod planner_bridge;
 pub mod planning;
 pub mod reflection;
 
@@ -114,6 +118,16 @@ pub struct BrainLoopStep {
     pub status: StepStatus,
     /// Chain-of-Thought context associated with this step.
     pub context: Option<TaskContext>,
+    /// Step dependencies for DAG ordering.
+    pub depends_on: Vec<String>,
+    /// Execution mode hint ("auto", "manual", "supervised", etc.).
+    pub mode: String,
+    /// Optional agent override.
+    pub agent: Option<String>,
+    /// Per-step timeout in seconds.
+    pub timeout_seconds: u64,
+    /// Optional parallel group identifier.
+    pub parallel_group: Option<String>,
 }
 
 /// A plan being tracked by the brain loop.
@@ -133,6 +147,10 @@ pub struct BrainLoopPlan {
     /// World-model entity data queried during planning when
     /// `world_model_integration` is true (GAP-B50-06).
     pub world_model_data: Option<HashMap<String, Value>>,
+    /// Parallel groups for concurrent step execution (group name → step IDs).
+    pub parallel_groups: Vec<Vec<String>>,
+    /// DAG governance metrics from the planner-executor pipeline.
+    pub dag_metrics: Option<crate::orchestration::planner_executor::DagMetrics>,
 }
 
 /// A hint produced by the metacognitive feedback loop, carrying preventive
@@ -202,6 +220,13 @@ pub struct BrainLoopConfig {
     /// the async holder is stalled.
     /// Default: `5000` (5 seconds)
     pub max_spin_ms: u64,
+    /// Planning strategy: how plan steps are generated.
+    /// - `ExplicitSteps`: caller provides steps directly (default)
+    /// - `AutoDecompose`: `planner_executor::Planner` auto-decomposes the task
+    pub planning_strategy: crate::orchestration::brain_loop::planner_bridge::PlanningStrategy,
+    /// GRILL interrogation mode for the reflection phase.
+    /// When enabled, reflections are enhanced with probing questions.
+    pub grill_mode: crate::orchestration::brain_loop::grill::GrillMode,
 }
 
 impl Default for BrainLoopConfig {
@@ -219,6 +244,9 @@ impl Default for BrainLoopConfig {
             deep_reasoning_model: None,
             world_model_integration: true,
             max_spin_ms: 5000,
+            planning_strategy:
+                crate::orchestration::brain_loop::planner_bridge::PlanningStrategy::default(),
+            grill_mode: crate::orchestration::brain_loop::grill::GrillMode::default(),
         }
     }
 }
@@ -268,6 +296,9 @@ pub(crate) struct BrainLoopInner {
     pub(crate) error_counts: HashMap<String, u32>,
     /// B51-08: Optional agent registry for LLM-backed deep reasoning.
     pub(crate) agent_registry: Option<Arc<AgentRegistry>>,
+    /// Optional FullAutoFlow plugin for intent-aware planning.
+    pub(crate) full_auto_plugin:
+        Option<Arc<std::sync::Mutex<crate::orchestration::full_auto::FullAutoFlow>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +334,7 @@ impl BrainLoop {
                 planner_hints: Vec::new(),
                 error_counts: HashMap::new(),
                 agent_registry: None,
+                full_auto_plugin: None,
             })),
             next_plan_id: Arc::new(AtomicU64::new(1)),
         }
@@ -352,6 +384,11 @@ mod tests {
             duration_ms: 0,
             status: StepStatus::Pending,
             context: None,
+            depends_on: vec![],
+            mode: "auto".to_string(),
+            agent: None,
+            timeout_seconds: 60,
+            parallel_group: None,
         }
     }
 
@@ -369,6 +406,9 @@ mod tests {
             deep_reasoning_model: None,
             world_model_integration: true,
             max_spin_ms: 5000,
+            planning_strategy:
+                crate::orchestration::brain_loop::planner_bridge::PlanningStrategy::default(),
+            grill_mode: crate::orchestration::brain_loop::grill::GrillMode::default(),
         }
     }
 
@@ -1045,6 +1085,8 @@ mod tests {
             fail_reason: String::new(),
             reasoning: None,
             world_model_data: None,
+            parallel_groups: vec![],
+            dag_metrics: None,
         };
         let enriched = engine.plan_with_reasoning(&context, &plan).await;
         assert!(enriched.reasoning.is_none());
@@ -1102,6 +1144,8 @@ mod tests {
             fail_reason: String::new(),
             reasoning: None,
             world_model_data: None,
+            parallel_groups: vec![],
+            dag_metrics: None,
         };
 
         // plan_with_reasoning should enrich the plan.

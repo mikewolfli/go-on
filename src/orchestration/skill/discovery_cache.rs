@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::orchestration::skill::SkillRegistry;
+use super::registry::SkillRegistry;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -148,10 +148,6 @@ impl Default for SkillDiscovery {
         Self::new()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Tests

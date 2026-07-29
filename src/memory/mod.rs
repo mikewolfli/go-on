@@ -40,3 +40,8 @@ pub fn wire_memory_retrieval(
     crate::memory::memory_retrieval::MemoryRetrievalEngine::new(persistence)
 }
 pub mod vector;
+
+#[cfg(feature = "backend-postgres")]
+pub mod pg_migrate;
+#[cfg(feature = "backend-postgres")]
+pub mod pg_pool;

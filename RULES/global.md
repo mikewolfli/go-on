@@ -38,7 +38,7 @@ Compatibility bootstrap:
 - All user-facing strings must go through i18n runtime tr macro
 - Every change must compile and pass clippy D warnings under all three profiles
 - No test may be flaky; flaky tests must be investigated and fixed
-- All 38 capability dimensions must reach real starred rating with implementation tests and bus wiring
+- All capability dimensions must reach real starred rating with implementation tests and bus wiring
 - Dimensional ratings must be validated before any release
 - Never remove allow dead_code without verifying the annotated item is used in production code
 - Prefer cfg test over allow dead_code for test-only code

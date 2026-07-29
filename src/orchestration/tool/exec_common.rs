@@ -165,12 +165,10 @@ pub fn is_blocked_command(command: &str) -> Option<&'static str> {
         "nmap ",
         "hydra ",
     ];
-    for pattern in blocked_patterns {
-        if command_lower.contains(pattern) {
-            return Some(pattern);
-        }
-    }
-    None
+    blocked_patterns
+        .iter()
+        .find(|pattern| command_lower.contains(*pattern))
+        .copied()
 }
 
 // ---------------------------------------------------------------------------

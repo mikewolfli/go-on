@@ -73,3 +73,76 @@ pub fn value_to_id(value: &Value) -> String {
         other => other.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_chat_trace_context_with_number_id() {
+        let ctx = chat_trace_context(&Some(json!(42)), "test_method");
+        assert_eq!(ctx.request_id, "42");
+        assert_eq!(ctx.method, "test_method");
+        assert_eq!(ctx.span_id, "root-test_method");
+        // trace_id should be 8 hex chars
+        assert_eq!(ctx.trace_id.len(), 8);
+        assert!(ctx.trace_id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_chat_trace_context_with_string_id() {
+        let ctx = chat_trace_context(&Some(json!("abc")), "test_method");
+        assert_eq!(ctx.request_id, "abc");
+    }
+
+    #[test]
+    fn test_chat_trace_context_without_id() {
+        let ctx = chat_trace_context(&None, "test_method");
+        // trace_id should be 8 hex chars
+        assert_eq!(ctx.trace_id.len(), 8);
+        assert!(ctx.trace_id.chars().all(|c| c.is_ascii_hexdigit()));
+        // request_id should be auto-generated with "ts-" prefix
+        assert!(
+            ctx.request_id.starts_with("ts-"),
+            "expected auto-generated ts- ID, got {}",
+            ctx.request_id
+        );
+    }
+
+    #[test]
+    fn test_child_trace_context_inherits_trace_id() {
+        let parent = chat_trace_context(&Some(json!(42)), "parent_method");
+        let child = child_trace_context(&parent, "child_method");
+
+        assert_eq!(
+            child.trace_id, parent.trace_id,
+            "child should inherit trace_id from parent"
+        );
+        assert_eq!(child.span_id, "root-parent_method.child_method");
+        assert_eq!(child.method, "child_method");
+        assert_eq!(child.request_id, parent.request_id);
+    }
+
+    #[test]
+    fn test_value_to_id_number() {
+        assert_eq!(value_to_id(&json!(42)), "42");
+        assert_eq!(value_to_id(&json!(0)), "0");
+        assert_eq!(value_to_id(&json!(-1)), "-1");
+    }
+
+    #[test]
+    fn test_value_to_id_string() {
+        assert_eq!(value_to_id(&json!("hello")), "hello");
+        assert_eq!(value_to_id(&json!("")), "");
+    }
+
+    #[test]
+    fn test_value_to_id_other() {
+        // Non-string/non-number values are serialized via to_string()
+        assert_eq!(value_to_id(&json!(true)), "true");
+        assert_eq!(value_to_id(&json!(false)), "false");
+        assert_eq!(value_to_id(&json!(null)), "null");
+        assert_eq!(value_to_id(&json!([1, 2, 3])), "[1,2,3]");
+    }
+}

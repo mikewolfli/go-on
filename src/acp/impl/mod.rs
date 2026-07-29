@@ -26,7 +26,3 @@ pub mod chat_phases;
 #[allow(unused_imports)]
 pub use runtime::*; // re-exported for ACP consumer API surface
 pub use session::UserSession;
-
-// Note: During migration, this module serves as a bridge between
-// the old include! structure and the new modular structure.
-// Implementation modules will be added here as they are migrated.

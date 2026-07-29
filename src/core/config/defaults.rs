@@ -538,6 +538,7 @@ mod adaptive {
                     default_ttl_seconds: 3600,
                     max_entries: 5000,
                     connection_string: None,
+                    read_replica_connection_string: None,
                 })
             } else {
                 None
@@ -558,6 +559,7 @@ mod adaptive {
                     summary_enabled: true,
                     summary_trigger_messages: 8,
                     summary_max_chars: 1200,
+                    read_replica_connection_string: None,
                 })
             } else {
                 None

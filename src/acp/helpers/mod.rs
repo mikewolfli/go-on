@@ -43,6 +43,7 @@ pub mod autonomy_loop_adapter;
 #[path = "autonomy/autonomy_metrics.rs"]
 pub mod autonomy_metrics;
 #[path = "autonomy/execution_intelligence.rs"]
+#[cfg(any(feature = "execution-intelligence", test))]
 pub mod execution_intelligence;
 #[path = "autonomy/intelligence_bridge.rs"]
 pub mod intelligence_bridge;

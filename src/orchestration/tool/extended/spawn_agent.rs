@@ -128,8 +128,10 @@ impl Tool for SpawnAgentTool {
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // This tool is inherently async (agent chat is async). The sync `run()`
-        // uses a dedicated blocking runtime to avoid block_on on an async
-        // runtime (principle #23/#24). Async callers should always use run_async.
+        // uses Handle::try_current() to detect an existing runtime; if present,
+        // it uses block_in_place + handle.block_on (principle #24). Otherwise it
+        // falls back to a dedicated blocking runtime. Async callers should always
+        // use run_async.
         // Validate parameters FIRST so bad-input tests get a proper error.
         let task = input.payload["task"]
             .as_str()
@@ -158,17 +160,32 @@ impl Tool for SpawnAgentTool {
         let role = input.payload["role"].as_str().map(|s| s.to_string());
         let token_budget = input.payload["token_budget"].as_u64();
 
-        // Use a shared blocking runtime to avoid
-        // Handle::current().block_on() on an async runtime thread.
-        spawn_agent_runtime().block_on(execute_spawn(
-            registry,
-            task,
-            agent_name,
-            model_override,
-            timeout_secs,
-            role,
-            token_budget,
-        ))
+        // Prefer Handle::try_current() to detect if we are already running
+        // inside a tokio runtime. If so, use block_in_place + handle.block_on
+        // to avoid violating principle #24 (Handle::current().block_on()).
+        // If no runtime is active, fall back to the dedicated blocking runtime.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| {
+                handle.block_on(execute_spawn(
+                    registry,
+                    task,
+                    agent_name,
+                    model_override,
+                    timeout_secs,
+                    role,
+                    token_budget,
+                ))
+            }),
+            Err(_) => spawn_agent_runtime().block_on(execute_spawn(
+                registry,
+                task,
+                agent_name,
+                model_override,
+                timeout_secs,
+                role,
+                token_budget,
+            )),
+        }
     }
 
     fn run_async(
@@ -672,39 +689,7 @@ fn extract_section(response: &str, section_name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, Message, StreamingSender};
-    use async_trait::async_trait;
     use serde_json::json;
-
-    /// A minimal echo agent for testing.
-    #[allow(dead_code)]
-    struct EchoAgent;
-
-    #[async_trait]
-    impl Agent for EchoAgent {
-        async fn chat(
-            &self,
-            _messages: Vec<Message>,
-            _principles: Option<Vec<String>>,
-            _options: Option<std::collections::HashMap<String, serde_json::Value>>,
-            sender: StreamingSender,
-        ) -> std::result::Result<(), crate::core::error::AppError> {
-            let _ = sender.send("Hello from echo!".to_string());
-            let _ = sender.send("\nSUMMARY: task completed".to_string());
-            Ok(())
-        }
-
-        fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
-            vec![crate::agent::ModelInfo {
-                id: "echo-model".to_string(),
-                name: "Echo Model".to_string(),
-                description: "Test echo model".to_string(),
-                is_default: true,
-                capabilities: vec!["chat".to_string()],
-                context_window: None,
-            }]
-        }
-    }
 
     fn make_input(task: &str, agent_name: &str) -> ToolInput {
         ToolInput {

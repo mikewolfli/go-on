@@ -5,6 +5,7 @@
 //! * [`registry`] — Skill registry, stats, persistence
 //! * [`execution`] — Skill trait, prompt-based skills, composed skills, built-ins
 
+pub mod discovery_cache;
 pub mod execution;
 pub mod registry;
 

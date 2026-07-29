@@ -145,6 +145,11 @@ async fn run_acp_autonomy_loop_with_brain_loop(
             duration_ms: 0,
             status: StepStatus::Pending,
             context: None,
+            depends_on: vec![],
+            mode: "auto".to_string(),
+            agent: None,
+            timeout_seconds: 60,
+            parallel_group: None,
         })
         .collect();
 

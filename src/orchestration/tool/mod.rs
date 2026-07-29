@@ -5,6 +5,7 @@
 //! once orchestration logic integrates them.
 
 // ── Sub-modules (moved from orchestration/ for cohesion) ───────────────────
+pub mod builder;
 pub mod builtin_tools;
 pub mod events;
 pub mod exec_common;

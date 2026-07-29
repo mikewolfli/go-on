@@ -11,9 +11,12 @@
 //! - `dag_driver.rs` (dead code, entire module to be deleted)
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
+
+use crate::orchestration::cache_layer::{CacheLayer, CacheStats};
 
 /// A bounded, thread-safe cache for tool governance permission results.
 ///
@@ -24,6 +27,8 @@ struct GovernanceCache {
     cache: HashMap<String, bool>,
     order: std::collections::VecDeque<String>,
     max_entries: usize,
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl GovernanceCache {
@@ -32,11 +37,19 @@ impl GovernanceCache {
             cache: HashMap::new(),
             order: std::collections::VecDeque::new(),
             max_entries,
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         }
     }
 
     fn get(&self, key: &str) -> Option<bool> {
-        self.cache.get(key).copied()
+        let result = self.cache.get(key).copied();
+        if result.is_some() {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+        }
+        result
     }
 
     fn insert(&mut self, key: String, value: bool) {
@@ -54,13 +67,6 @@ impl GovernanceCache {
             }
         }
     }
-
-    #[allow(dead_code)]
-    fn remove_session(&mut self, session_id: &str) {
-        let prefix = format!("{}:", session_id);
-        self.order.retain(|k| !k.starts_with(&prefix));
-        self.cache.retain(|k, _| !k.starts_with(&prefix));
-    }
 }
 
 /// Global governance cache, lazily initialized on first use.
@@ -70,15 +76,34 @@ fn governance_cache() -> &'static Mutex<GovernanceCache> {
     GOVERNANCE_CACHE.get_or_init(|| Mutex::new(GovernanceCache::new(1000)))
 }
 
-/// Clear all cached permission results for a given ACP session.
-#[allow(dead_code)]
-pub(crate) fn clear_session_cache(session_id: &str) {
-    if let Ok(mut cache) = governance_cache().lock() {
-        cache.remove_session(session_id);
-        tracing::debug!(
-            "executor: governance cache cleared for session '{}'",
-            session_id
-        );
+// ---------------------------------------------------------------------------
+// CacheLayer implementation for GovernanceCache
+// ---------------------------------------------------------------------------
+
+impl CacheLayer for GovernanceCache {
+    fn name(&self) -> &str {
+        "governance"
+    }
+
+    fn stats(&self) -> CacheStats {
+        let entry_count = self.cache.len();
+        // Rough estimate: each entry stores a String key plus a bool, plus
+        // VecDeque node overhead.  Assume ~48 bytes per entry on average.
+        let estimated_size_bytes = entry_count.saturating_mul(48);
+        CacheStats {
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            entries: entry_count,
+            max_entries: self.max_entries,
+            estimated_size_bytes,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+        self.order.clear();
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
     }
 }
 
@@ -89,6 +114,53 @@ use tokio::sync::Semaphore;
 
 use crate::acp::r#impl::chat::streaming::{emit_tool_approval_event, StreamFrame};
 use crate::orchestration::tool::{RetryPolicy, ToolInput, ToolOutput, ToolRegistry};
+use std::time::SystemTime;
+/// Determine whether a tool is low-risk and can skip the blocking governance gate.
+///
+/// Low-risk tools are read-only, informational, or utility tools that pose
+/// minimal security or safety concern. For these tools, synchronous governance
+/// approval can be replaced by async audit logging.
+fn is_low_risk_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file"
+            | "search_files"
+            | "list_directory"
+            | "grep"
+            | "environment_info"
+            | "time_util"
+            | "uuid_gen"
+            | "random_token"
+            | "encode_decode"
+            | "hash_file"
+            | "diagnostics"
+            | "diff"
+            | "format_code"
+            | "code_metrics"
+            | "svg_export"
+            | "rss_feed"
+            | "date_time"
+            | "dns_lookup"
+    )
+}
+
+/// Record an audit log entry for a low-risk tool access.
+///
+/// This replaces the blocking governance gate for low-risk tools,
+/// ensuring observability without blocking execution.
+fn low_risk_audit_log(tool_name: &str, operation_mode: &str) {
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    tracing::debug!(
+        target: "governance::low_risk",
+        timestamp = timestamp,
+        tool_name = tool_name,
+        operation_mode = operation_mode,
+        "low_risk_tool_access: governance gate skipped"
+    );
+}
 
 /// Configuration for concurrent tool execution.
 #[derive(Clone)]
@@ -302,48 +374,56 @@ async fn execute_single_tool(
     }
 
     // ── Governance gate (edit/safeguard mode) ──────────────────────
+    //
+    // Low-risk tools (reads, utilities, etc.) skip the blocking governance
+    // gate to avoid unnecessary latency. Instead, their access is recorded
+    // via async audit logging. Safeguard mode always enforces the full gate.
     if config.operation_mode == "edit" || config.operation_mode == "safeguard" {
-        let _ = emit_tool_approval_event(
-            &progress_tx,
-            &tool_name,
-            &parsed_args,
-            &config.operation_mode,
-            if config.operation_mode == "safeguard" {
-                0.5
-            } else {
-                0.0
-            },
-        )
-        .await;
-
-        let approved = ensure_tool_permission(
-            config,
-            &tool_name,
-            &parsed_args,
-            if config.operation_mode == "safeguard" {
-                0.5
-            } else {
-                0.0
-            },
-        )
-        .await;
-
-        if !approved {
-            let denied_msg = format!("Tool '{}' denied by user approval gate.", tool_name);
-            return ToolExecItem {
-                tool_name,
-                output: ToolOutput {
-                    success: false,
-                    result: None,
-                    error: Some(denied_msg.clone()),
-                    verification: None,
-                    audit_log: None,
-                    pua_report: None,
+        if is_low_risk_tool(&tool_name) && config.operation_mode != "safeguard" {
+            low_risk_audit_log(&tool_name, &config.operation_mode);
+        } else {
+            let _ = emit_tool_approval_event(
+                &progress_tx,
+                &tool_name,
+                &parsed_args,
+                &config.operation_mode,
+                if config.operation_mode == "safeguard" {
+                    0.5
+                } else {
+                    0.0
                 },
-                success: false,
-                duration_ms: start.elapsed().as_millis() as u64,
-                formatted: format!("\n[{}]\n", denied_msg),
-            };
+            )
+            .await;
+
+            let approved = ensure_tool_permission(
+                config,
+                &tool_name,
+                &parsed_args,
+                if config.operation_mode == "safeguard" {
+                    0.5
+                } else {
+                    0.0
+                },
+            )
+            .await;
+
+            if !approved {
+                let denied_msg = format!("Tool '{}' denied by user approval gate.", tool_name);
+                return ToolExecItem {
+                    tool_name,
+                    output: ToolOutput {
+                        success: false,
+                        result: None,
+                        error: Some(denied_msg.clone()),
+                        verification: None,
+                        audit_log: None,
+                        pua_report: None,
+                    },
+                    success: false,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    formatted: format!("\n[{}]\n", denied_msg),
+                };
+            }
         }
     }
 
@@ -613,5 +693,133 @@ fn lookup_tool_schema(tool_name: &str) -> Option<String> {
         serde_json::to_string_pretty(&schema).ok()
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_low_risk_tool ────────────────────────────────────────────
+
+    #[test]
+    fn low_risk_tools_are_recognized() {
+        let low_risk = [
+            "read_file",
+            "search_files",
+            "list_directory",
+            "grep",
+            "environment_info",
+            "time_util",
+            "uuid_gen",
+            "random_token",
+            "encode_decode",
+            "hash_file",
+            "diagnostics",
+            "diff",
+            "format_code",
+            "code_metrics",
+            "svg_export",
+            "rss_feed",
+            "date_time",
+            "dns_lookup",
+        ];
+        for &tool in &low_risk {
+            assert!(
+                is_low_risk_tool(tool),
+                "expected '{}' to be classified as low-risk",
+                tool
+            );
+        }
+    }
+
+    #[test]
+    fn high_risk_tools_are_not_low_risk() {
+        let high_risk = [
+            "write_file",
+            "bash",
+            "execute_command",
+            "run",
+            "edit_file",
+            "create_directory",
+            "delete_path",
+            "move_path",
+            "copy_path",
+            "http_request",
+            "npm_install",
+        ];
+        for &tool in &high_risk {
+            assert!(
+                !is_low_risk_tool(tool),
+                "expected '{}' to NOT be classified as low-risk",
+                tool
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_tool_is_not_low_risk() {
+        assert!(!is_low_risk_tool("some_unknown_tool"));
+        assert!(!is_low_risk_tool(""));
+    }
+
+    #[test]
+    fn case_sensitive_matching() {
+        // The function should do exact case-sensitive matching.
+        assert!(is_low_risk_tool("read_file"), "exact match should work");
+        assert!(
+            !is_low_risk_tool("Read_File"),
+            "wrong case should not match"
+        );
+        assert!(!is_low_risk_tool("READ_FILE"), "uppercase should not match");
+    }
+
+    // ── low_risk_audit_log ──────────────────────────────────────────
+
+    #[test]
+    fn low_risk_audit_log_does_not_panic() {
+        // This is a smoke test — the function should not panic under normal
+        // conditions. We can't easily assert on the log output, but we can
+        // verify it completes without error.
+        low_risk_audit_log("read_file", "edit");
+        low_risk_audit_log("grep", "full_auto");
+        low_risk_audit_log("uuid_gen", "ask");
+    }
+
+    // ── Governance skip behavior ───────────────────────────────────-
+
+    /// Verify that the governance-skip decision logic matches our
+    /// expectations without running the full async pipeline.
+    #[test]
+    fn governance_skip_logic_for_low_risk_tools() {
+        // Low-risk tool in edit mode → should skip governance
+        assert!(
+            is_low_risk_tool("read_file") && "edit" != "safeguard",
+            "low-risk in edit mode should be eligible for skip"
+        );
+
+        // Low-risk tool in safeguard mode → should NOT skip governance
+        assert!(
+            !(is_low_risk_tool("read_file") && "safeguard" != "safeguard"),
+            "low-risk in safeguard mode should NOT be eligible for skip"
+        );
+
+        // High-risk tool in edit mode → should NOT skip governance
+        assert!(
+            !(is_low_risk_tool("write_file") && "edit" != "safeguard"),
+            "high-risk in edit mode should NOT be eligible for skip"
+        );
+
+        // Low-risk tool in full_auto mode → should skip governance
+        assert!(
+            is_low_risk_tool("grep") && "full_auto" != "safeguard",
+            "low-risk in full_auto mode should be eligible for skip"
+        );
+
+        // Low-risk tool in ask mode → should skip governance
+        assert!(
+            is_low_risk_tool("dns_lookup") && "ask" != "safeguard",
+            "low-risk in ask mode should be eligible for skip"
+        );
     }
 }

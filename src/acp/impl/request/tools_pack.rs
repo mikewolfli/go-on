@@ -9,7 +9,7 @@ use crate::acp::helpers::tool_governance::{
     record_tool_rbac_denied,
 };
 use crate::governance::hardening::{task_budget_for_target, BudgetTracker, GovernanceAction};
-use crate::orchestration::skill_discovery::SkillDiscovery;
+use crate::orchestration::skill::discovery_cache::SkillDiscovery;
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
 
 /// Shared HTTP client reused across all tool calls to avoid creating

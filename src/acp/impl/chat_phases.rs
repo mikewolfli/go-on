@@ -1755,6 +1755,11 @@ pub(crate) async fn reflect_phase(
                         duration_ms: 0,
                         status: crate::orchestration::brain_loop::StepStatus::Done,
                         context: None,
+                        depends_on: vec![],
+                        mode: "auto".to_string(),
+                        agent: None,
+                        timeout_seconds: 60,
+                        parallel_group: None,
                     }],
                 )
                 .await;

@@ -18,9 +18,7 @@ pub mod deepseek;
 ))]
 pub mod factory;
 pub mod gemini;
-/// OpenAI agent — superseded by `OpenAiCompatibleAgent` with compression.
-/// Retained for backward compatibility; no production code references this module.
-pub mod openai;
+// OpenAI agent removed — fully superseded by `OpenAiCompatibleAgent`. File deleted.
 pub mod openai_compatible;
 pub mod progress_reporter;
 pub mod qianfan;

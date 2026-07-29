@@ -27,23 +27,23 @@
 - HarnessBus evaluate must be called before ToolBus execute_tool for governance check
 - ObservabilityBus record must be called after every tool execution for latency tracking
 - Every fault tolerance and resilience module must include an E2E lifecycle test with 10 nodes or more
-- Fault tolerance E2E test must verify full state transition Online Offline Recovering Online
+- Fault tolerance E2E test must verify full state transition: Online → Degraded → Offline → Isolation → RecoveryPlan → Recovering → Online
 - Stress tests must include 500 nodes with batch fault injection and recovery verification
-- Fault tolerance modules must include an integration test connected to MultiChannelTransport
+- Fault tolerance modules must include an integration test connected to MultiChannelTransport (see `protocol/transport.rs`)
 - Checkpoint parent chain must auto-detect branch head when parent_checkpoint_id is None
 - After checkpoint pruning the chain must remain intact parent_id must resolve to existing record
 - Checkpoint rollback must restore exact checkpointed state not partial or default state
-- MultiChannelTransport must support 6 channels Heartbeat Control Data Event Log Admin
-- Messages must support 4 priority levels Low Normal High Critical
+- MultiChannelTransport must support 6 channels: Control, Data, Event, Stream, Backchannel, Heartbeat (see `protocol/transport.rs`)
+- Messages must support 4 priority levels: Low, Normal, High, Critical
 - ExactlyOnce QoS requires dedup via sent_ids HashSet
 - Peek non-destructive read must be available for queue inspection
-- Convenience methods send_control send_data send_event send_heartbeat are recommended
-- Node lifecycle must follow Online Degraded Offline Isolation RecoveryPlan Recovering Online
+- Convenience methods send_control, send_data, send_event, send_heartbeat are recommended
+- Node lifecycle must follow: Online → Degraded → Offline → Isolation → RecoveryPlan → Recovering → Online
 - reintegrate_node must auto-resolve all active faults for the reintegrated node
-- Cluster health scoring must use Healthy 10pct degraded Degraded 10-30pct Critical 30-50pct Down 50pct-plus
-- Recovery escalation must follow Auto Coordinated Manual
+- Cluster health scoring must use: Healthy (<10% degraded), Degraded (10-30%), Critical (30-50%), Down (>50%)
+- Recovery escalation must follow: Auto → Coordinated → Manual
 - Never remove allow dead_code without verifying the annotated item is actually used in production
 - Use cfg test instead of allow dead_code for test-only code
-- For Bucket D F G H I J code retain precise per-item allow dead_code with F-GAP reference comment
+
 - File-level allow dead_code is forbidden
 - Module-level allow dead_code is forbidden

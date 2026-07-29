@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
@@ -18,6 +19,18 @@ logger = logging.getLogger(__name__)
 
 class GoOnClientError(Exception):
     """Custom exception for go-on SDK client errors."""
+
+
+class GoOnRateLimitedError(GoOnClientError):
+    """Raised when the server responds with HTTP 429 (Too Many Requests)."""
+
+    retry_after: float | None
+
+    def __init__(self, retry_after: float | None = None) -> None:
+        self.retry_after = retry_after
+        super().__init__(
+            f"Rate limited by server (retry_after={retry_after})"
+        )
 
 
 class GoOnJsonRpcError(GoOnClientError):
@@ -169,6 +182,34 @@ class AgentInfo:
     healthy: bool = True
 
 
+@dataclass
+class ToolInfo:
+    """Descriptor for a tool exposed via the tools/list endpoint."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+@dataclass
+class ToolCallRequest:
+    """Request payload for executing a tool via tools/call."""
+
+    tool_name: str
+    arguments: dict[str, Any]
+    session_id: str | None = None
+
+
+@dataclass
+class ToolCallResult:
+    """Result of a tool execution via tools/call."""
+
+    success: bool
+    output: str | None = None
+    error: str | None = None
+    duration_ms: int = 0
+
+
 # ── Client ──────────────────────────────────────────────────────────
 
 
@@ -240,6 +281,17 @@ class GoOnClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def __aenter__(self) -> GoOnClient:
+        return self
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc_val: BaseException | None,
+        _exc_tb: object | None,
+    ) -> None:
+        await self.aclose()
+
     # ── Internal helpers ──────────────────────────────────────────────
 
     async def _json_rpc(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -282,9 +334,16 @@ class GoOnClient:
                 last_error = e
                 if attempt < self.max_retries:
                     await asyncio.sleep(self._retry_delay_for_attempt(attempt))
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                if status in (429, 502, 503):
+                    last_error = e
+                    if attempt < self.max_retries:
+                        await asyncio.sleep(self._retry_delay_for_attempt(attempt))
+                else:
+                    raise
             except (
                 GoOnClientError,
-                httpx.HTTPStatusError,
                 json.JSONDecodeError,
                 KeyboardInterrupt,
                 SystemExit,
@@ -293,6 +352,10 @@ class GoOnClient:
                 raise
             # No bare except Exception — only known retryable network errors are retried
 
+        if isinstance(last_error, httpx.HTTPStatusError):
+            http_err: httpx.HTTPStatusError = last_error
+            if http_err.response.status_code == 429:
+                raise GoOnRateLimitedError() from http_err
         raise GoOnClientError(
             f"Request failed after {self.max_retries} retries: {last_error}"
         ) from last_error
@@ -504,3 +567,75 @@ class GoOnClient:
         """harness.status — get test harness status."""
         result = await self._json_rpc("harness.status")
         return HarnessStatusResponse(harness=cast(dict[str, Any], result.get("harness", {})))
+
+    # ── Tools ────────────────────────────────────────────────────────────
+
+    async def tools_list(self) -> list[ToolInfo]:
+        """tools/list — list all available tools with their input schemas.
+
+        Returns
+        -------
+        list[ToolInfo]
+            A list of tool descriptors exposed by the server.
+        """
+        result = await self._json_rpc("tools/list")
+        raw_tools = cast(list[dict[str, Any]], result.get("tools", []))
+        tools: list[ToolInfo] = []
+        for raw in raw_tools:
+            tools.append(
+                ToolInfo(
+                    name=cast(str, raw.get("name", "")),
+                    description=cast(str, raw.get("description", "")),
+                    input_schema=cast(dict[str, Any], raw.get("input_schema", {})),
+                )
+            )
+        return tools
+
+    async def tools_call(self, request: ToolCallRequest) -> ToolCallResult:
+        """tools/call — execute a tool by name with the given arguments.
+
+        Parameters
+        ----------
+        request:
+            The tool call request specifying the tool name, arguments,
+            and optionally a session ID for progress streaming.
+
+        Returns
+        -------
+        ToolCallResult
+            The result of the tool execution, including success status,
+            output text, error details, and wall-clock duration.
+        """
+        params: dict[str, Any] = {
+            "name": request.tool_name,
+            "arguments": request.arguments,
+        }
+        if request.session_id is not None:
+            params["sessionId"] = request.session_id
+
+        start = time.monotonic()
+        try:
+            result = await self._json_rpc("tools/call", params)
+        except GoOnClientError as exc:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            return ToolCallResult(
+                success=False,
+                output=None,
+                error=str(exc),
+                duration_ms=elapsed_ms,
+            )
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+
+        # Extract text output from the MCP-style content array or structured field
+        content = cast(list[dict[str, Any]], result.get("content", []))
+        output: str | None = cast("str | None", result.get("structured"))
+        if output is None and content:
+            output = cast(str, content[0].get("text", ""))
+
+        return ToolCallResult(
+            success=True,
+            output=output,
+            error=None,
+            duration_ms=elapsed_ms,
+        )

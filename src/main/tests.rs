@@ -120,6 +120,7 @@ fn openai_config_with_inflight(
             default_ttl_seconds: 3600,
             max_entries: 5000,
             connection_string: None,
+            read_replica_connection_string: None,
         }),
         vector: Some(VectorConfig {
             enabled: true,
@@ -135,6 +136,7 @@ fn openai_config_with_inflight(
             summary_enabled: true,
             summary_trigger_messages: 8,
             summary_max_chars: 1200,
+            read_replica_connection_string: None,
         }),
         autotune: None,
         security: crate::core::config::types::SecurityConfig::default(),

@@ -78,13 +78,15 @@ impl HubServer {
         listener.set_nonblocking(true)?;
         let listener = tokio::net::TcpListener::from_std(listener)?;
 
+        // Extract owned copies for the background task.
         let vault = self.vault.clone();
         let api_token = self.api_token.clone();
         let hub_id = self.hub_id.clone();
-        let discovery_path = self.discovery_path.clone();
         let rpc_count = self.rpc_count.clone();
         let start_time = self.start_time;
+        let discovery_path = self.discovery_path.clone();
 
+        info!("Hub binding: {}", self.bind_addr);
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -127,6 +129,11 @@ impl HubServer {
     pub fn hub_id(&self) -> &str {
         &self.hub_id
     }
+
+    pub fn with_discovery_path(mut self, path: PathBuf) -> Self {
+        self.discovery_path = path;
+        self
+    }
 }
 
 /// Handle a single JSON-RPC request over HTTP.
@@ -134,7 +141,7 @@ async fn handle_rpc(
     mut stream: TcpStream,
     _peer: std::net::SocketAddr,
     vault: Arc<Mutex<HashMap<String, Value>>>,
-    _api_token: String,
+    api_token: String,
     hub_id: String,
     rpc_count: Arc<Mutex<u64>>,
     start_time: Instant,
@@ -149,7 +156,7 @@ async fn handle_rpc(
 
     // Parse headers.
     let mut content_length: usize = 0;
-    let mut _auth = String::new();
+    let mut auth = String::new();
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
@@ -166,8 +173,13 @@ async fn handle_rpc(
                 .unwrap_or(0);
         }
         if lower.starts_with("authorization:") {
-            _auth = line.split(':').nth(1).unwrap_or("").trim().to_string();
+            auth = line.split(':').nth(1).unwrap_or("").trim().to_string();
         }
+    }
+
+    // Validate Bearer token.
+    if !auth.contains(&format!("Bearer {}", &api_token)) {
+        return write_json(&mut stream, 401, json!({"error":"unauthorized"})).await;
     }
 
     // Read body.
@@ -231,19 +243,18 @@ async fn handle_rpc(
             if key.is_empty() || value.is_none() {
                 json_rpc_error(Some(req_id.clone()), -32602, "key and value required")
             } else {
-                vault
-                    .lock()
-                    .await
-                    .insert(key.to_string(), value.cloned().unwrap_or(json!(null)));
+                let value = value.cloned().unwrap_or(json!(null));
+                vault.lock().await.insert(key.to_string(), value);
                 json!({"ok": true, "key": key})
             }
         }
         "hub.retrieve" => {
             let key = params.get("key").and_then(|v| v.as_str()).unwrap_or("");
             let v = vault.lock().await;
-            match v.get(key) {
-                Some(val) => json!({"ok": true, "key": key, "value": val}),
-                None => json!({"ok": false, "key": key, "error": "not_found"}),
+            if let Some(val) = v.get(key) {
+                json!({"ok": true, "key": key, "value": val})
+            } else {
+                json!({"ok": false, "key": key, "error": "not_found"})
             }
         }
         "hub.list" => {

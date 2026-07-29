@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "gui", "sdk/rust", "test_i18n", "crates/mermaid-render", "crates/go-on-web-search", "crates/go-on-latex"]
+members = [".", "gui", "sdk/rust", "crates/mermaid-render", "crates/go-on-web-search", "crates/go-on-latex"]
 resolver = "2"
 
 [workspace.package]
@@ -220,7 +220,7 @@ full = [
 
 # Backend implementations
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
-backend-postgres = ["dep:postgres", "dep:pgvector"]
+backend-postgres = ["dep:postgres", "dep:pgvector", "dep:tokio-postgres-rustls", "dep:webpki-roots", "dep:deadpool"]
 
 
 
@@ -237,6 +237,10 @@ game-input = []
 game-agent = []
 game-state = []
 game-modding = []
+# Execution intelligence (F-GAP-25): future autonomy loop pre/post checks
+# Not in any profile by default — enable explicitly for advanced autonomy mode.
+execution-intelligence = []
+
 # Chaos engineering fault injection (opt-in, not in any profile by default)
 chaos-testing = []
 
@@ -274,12 +278,15 @@ tempfile.workspace = true
 base64.workspace = true
 ordered-float = "5"
 postgres = { version = "0.19", optional = true }
+tokio-postgres-rustls = { version = "0.14", features = ["ring", "webpki-roots"], optional = true }
+webpki-roots = { version = "1", optional = true }
 pgvector = { version = "0.4", features = ["postgres"], optional = true }
+deadpool = { version = "0.12", features = ["managed"], optional = true }
 sqlite-vec = { version = "0.1.9", optional = true }
 flate2 = "1"
 fastrand = "2"
 subtle = "2"
-# C7: notify is available on all platforms; macos_kqueue feature is macOS-only.
+# C7: notify — base dep (no features); macos_kqueue is added via target-specific override below.
 notify = "8"
 
 # ── Security / Signing / mTLS (GAP-B52) ────────────────────────────────────
@@ -319,8 +326,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 go-on-web-search = { path = "crates/go-on-web-search" }
 schemars.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
-notify = { version = "8", features = ["macos_kqueue"] }
+[target.'cfg(target_os = "macos")'.dependencies.notify]
+features = ["macos_kqueue"]
+version = "8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
@@ -330,6 +338,7 @@ windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win
 serial_test = "3"
 temp-env = "0.3"
 criterion = { version = "0.5", features = ["html_reports"] }
+rcgen = { version = "0.13", features = ["pem"] }
 
 # Benchmarks use the default test harness, but both criterion benchmarks
 # provide their own main() via the criterion_main! macro. Setting harness = false
@@ -340,6 +349,10 @@ harness = false
 
 [[bench]]
 name = "acp_bench"
+harness = false
+
+[[bench]]
+name = "pipeline_bench"
 harness = false
 
 # ── Optimisation profiles ──────────────────────────────────────────────────

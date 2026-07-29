@@ -1569,15 +1569,129 @@ mod tests {
 // client. Methods expose the same sync signature as the SQLite backend.
 #[cfg(feature = "backend-postgres")]
 use postgres::{Client, NoTls};
+#[cfg(feature = "backend-postgres")]
+use rustls::crypto::ring;
+#[cfg(feature = "backend-postgres")]
+use rustls::ClientConfig;
+#[cfg(feature = "backend-postgres")]
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 #[cfg(feature = "backend-postgres")]
 use crate::memory::embedding_provider::{
     local_hash_embed, ConfigurableEmbeddingProvider, EmbeddingProvider,
 };
+#[cfg(feature = "backend-postgres")]
+use crate::memory::pg_migrate::run_migrations;
+#[cfg(feature = "backend-postgres")]
+use crate::memory::pg_pool::{create_pool, create_pool_pair, pool_get, PgPoolPair};
+
+/// Parse the `sslmode` parameter from a PostgreSQL connection URL.
+///
+/// Returns `None` when no `sslmode` is present (defaults to NoTls).
+#[cfg(feature = "backend-postgres")]
+fn parse_sslmode(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    parsed
+        .query_pairs()
+        .find(|(k, _)| k == "sslmode")
+        .map(|(_, v)| v.to_string())
+}
+
+/// A [`ServerCertVerifier`] that accepts all certificates (for `sslmode=require`).
+#[cfg(feature = "backend-postgres")]
+#[derive(Debug)]
+struct PermissiveVerifier;
+
+#[cfg(feature = "backend-postgres")]
+impl rustls::client::danger::ServerCertVerifier for PermissiveVerifier {
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
+
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+}
+
+/// Connect to PostgreSQL with optional TLS based on the `sslmode` URL parameter.
+///
+/// Supports:
+/// - `sslmode=require`     — TLS, no server certificate verification
+/// - `sslmode=verify-ca`   — TLS, verify server certificate against CA
+/// - `sslmode=verify-full` — TLS, verify server certificate AND hostname
+/// - absent / `disable` / `allow` / `prefer` — No TLS (plain)
+#[cfg(feature = "backend-postgres")]
+fn connect_postgres(url: &str) -> Result<Client> {
+    let provider = Arc::new(ring::default_provider());
+    match parse_sslmode(url).as_deref() {
+        Some("require") => {
+            // TLS with no server certificate verification.
+            let config = ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|e| anyhow::anyhow!("TLS protocol config: {e}"))?
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(PermissiveVerifier))
+                .with_no_client_auth();
+            let tls = MakeRustlsConnect::new(config);
+            Ok(Client::connect(url, tls)?)
+        }
+        Some("verify-ca") | Some("verify-full") => {
+            // TLS with CA certificate verification.
+            let root_store =
+                rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let config = ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|e| anyhow::anyhow!("TLS protocol config: {e}"))?
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+            let tls = MakeRustlsConnect::new(config);
+            Ok(Client::connect(url, tls)?)
+        }
+        _ => {
+            // No TLS or sslmode=disable/allow/prefer
+            Ok(Client::connect(url, NoTls)?)
+        }
+    }
+}
 
 #[cfg(feature = "backend-postgres")]
 pub struct VectorStore {
-    client: Arc<Mutex<Client>>,
+    pool: PgPoolPair,
     dimensions: usize,
     max_entries: usize,
     /// Optional embedding provider — overrides the built-in `embed_text()`.
@@ -1592,7 +1706,7 @@ pub struct VectorStore {
 impl std::fmt::Debug for VectorStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VectorStore")
-            .field("client", &"<postgres Client>")
+            .field("pool", &"<PgPoolPair>")
             .field("dimensions", &self.dimensions)
             .field("max_entries", &self.max_entries)
             .field(
@@ -1612,44 +1726,78 @@ impl VectorStore {
     ///
     /// `url` — libpq-style connection string, e.g.
     /// `"postgres://user:pass@localhost/go_on"`
+    ///
+    /// Supports `sslmode` parameter in the URL:
+    /// - `sslmode=require`      — TLS with server verification disabled
+    /// - `sslmode=verify-ca`    — TLS with CA verification
+    /// - `sslmode=verify-full`  — TLS with CA + hostname verification
+    /// - absent, `disable`, `allow`, `prefer` — No TLS (plain connection)
     pub fn new(url: &str, dimensions: usize, max_entries: usize) -> Result<Self> {
+        Self::new_with_replica(url, None, dimensions, max_entries)
+    }
+
+    /// Create a new vector store with an optional read-replica connection for read/write splitting.
+    ///
+    /// When `read_replica_url` is `Some`, read queries use the replica pool;
+    /// when `None`, the primary pool is used for both reads and writes.
+    pub fn new_with_replica(
+        url: &str,
+        read_replica_url: Option<String>,
+        dimensions: usize,
+        max_entries: usize,
+    ) -> Result<Self> {
         if dimensions == 0 {
             anyhow::bail!("vector.dimensions must be greater than 0 for pgvector backend");
         }
 
-        let mut client = Client::connect(url, NoTls)?;
+        let max_pool_size = 8;
+        let write_url = url.to_string();
+        let write_connect = move || connect_postgres(&write_url);
 
-        let schema_sql = format!(
-            "CREATE TABLE IF NOT EXISTS vector_memory (
-                memory_key      TEXT PRIMARY KEY,
-                phase           TEXT NOT NULL,
-                query_text      TEXT NOT NULL,
-                response_text   TEXT NOT NULL,
-                embedding       vector({dimensions}) NOT NULL,
-                created_at      BIGINT NOT NULL,
-                updated_at      BIGINT NOT NULL,
-                hit_count       BIGINT NOT NULL DEFAULT 0,
-                last_hit_at     BIGINT,
-                user_id         TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_vector_memory_phase_updated_at
-                ON vector_memory(phase, updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_vector_memory_embedding_cosine
-                ON vector_memory USING hnsw (embedding vector_cosine_ops);
-            CREATE INDEX IF NOT EXISTS idx_vector_memory_user_id
-                ON vector_memory(user_id);
-            CREATE TABLE IF NOT EXISTS phase_summary (
-                phase           TEXT PRIMARY KEY,
-                summary_text    TEXT NOT NULL,
-                updated_at      BIGINT NOT NULL
-            );"
+        let pool = match &read_replica_url {
+            Some(replica_url) => {
+                let replica_url = replica_url.clone();
+                let read_connect = move || connect_postgres(&replica_url);
+                create_pool_pair(
+                    write_connect,
+                    read_replica_url.clone(),
+                    read_connect,
+                    max_pool_size,
+                )
+            }
+            None => {
+                let single = create_pool(write_connect, max_pool_size);
+                PgPoolPair {
+                    write: single.clone(),
+                    read: single,
+                }
+            }
+        };
+
+        // Run schema migrations on the write pool (creates base tables).
+        let mut conn = pool_get(&pool.write)?;
+
+        // Ensure pgvector extension is available.
+        conn.batch_execute("CREATE EXTENSION IF NOT EXISTS vector")?;
+
+        // Run base migrations (v2 creates vector_memory + phase_summary).
+        run_migrations(&mut conn, 2)?;
+
+        // Dynamic DDL: HNSW index uses the configured dimensions.
+        // The base table was created by the migration; the HNSW index
+        // is added here since its dimensions are configurable.
+        let dynamic_sql = format!(
+            "CREATE INDEX IF NOT EXISTS idx_vector_memory_embedding_cosine
+             ON vector_memory USING hnsw (embedding vector_cosine_ops);"
         );
+        conn.batch_execute(&dynamic_sql)?;
 
-        client.batch_execute("CREATE EXTENSION IF NOT EXISTS vector")?;
-        client.batch_execute(&schema_sql)?;
+        // Startup health check: verify the connection is alive.
+        conn.query_one("SELECT 1", &[])
+            .map_err(|e| anyhow::anyhow!("postgres health check (SELECT 1) failed: {e}"))?;
 
         Ok(Self {
-            client: Arc::new(Mutex::new(client)),
+            pool,
             dimensions,
             max_entries,
             embedding_provider: None,
@@ -1700,10 +1848,7 @@ impl VectorStore {
             let memory_key = build_memory_key(&phase, query);
             let now = now_ts();
             let max_entries = self.max_entries as i64;
-            let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'upsert', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&self.pool.write)?;
             client.execute(
                 "INSERT INTO vector_memory
                     (memory_key, phase, query_text, response_text, embedding,
@@ -1758,10 +1903,7 @@ impl VectorStore {
             let query_vec = embed_with_check(query, self.dimensions, &self.embedding_provider)?;
             let query_embedding = Vector::from(query_vec);
             let now = now_ts();
-            let mut client = self.client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'search', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&self.pool.read)?;
             let rows = client.query(
                 &format!(
                     "SELECT memory_key, response_text, updated_at,
@@ -1808,13 +1950,10 @@ impl VectorStore {
     }
 
     pub async fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
-        let client = self.client.clone();
+        let pool = self.pool.read.clone();
         let phase = phase.to_string();
         spawn_blocking_vec!(move || {
-            let mut client = client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&pool)?;
             Ok(client
                 .query_opt(
                     &format!(
@@ -1828,17 +1967,14 @@ impl VectorStore {
     }
 
     pub async fn upsert_phase_summary(&self, phase: &str, summary_text: &str) -> Result<()> {
-        let client = self.client.clone();
+        let pool = self.pool.write.clone();
         let phase = phase.to_string();
         let text = summary_text.trim().to_string();
         spawn_blocking_vec!(move || {
             if text.is_empty() {
                 return Ok(());
             }
-            let mut client = client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'upsert_phase_summary', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&pool)?;
             let now = now_ts();
             client.execute(
                 &format!(
@@ -1857,12 +1993,9 @@ impl VectorStore {
     }
 
     pub async fn memory_entry_count(&self) -> Result<u64> {
-        let client = self.client.clone();
+        let pool = self.pool.read.clone();
         spawn_blocking_vec!(move || {
-            let mut client = client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&pool)?;
             let row = client.query_one("SELECT COUNT(*) FROM vector_memory", &[])?;
             let count: i64 = row.get(0);
             Ok(count.max(0) as u64)
@@ -1870,12 +2003,9 @@ impl VectorStore {
     }
 
     pub async fn summary_entry_count(&self) -> Result<u64> {
-        let client = self.client.clone();
+        let pool = self.pool.read.clone();
         spawn_blocking_vec!(move || {
-            let mut client = client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&pool)?;
             let row = client.query_one("SELECT COUNT(*) FROM phase_summary", &[])?;
             let count: i64 = row.get(0);
             Ok(count.max(0) as u64)
@@ -1883,12 +2013,9 @@ impl VectorStore {
     }
 
     pub async fn clear_all(&self) -> Result<(usize, usize)> {
-        let client = self.client.clone();
+        let pool = self.pool.write.clone();
         spawn_blocking_vec!(move || {
-            let mut client = client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'clear_all', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&pool)?;
             let memory_deleted = client.execute("DELETE FROM vector_memory", &[])? as usize;
             let summaries_deleted = client.execute("DELETE FROM phase_summary", &[])? as usize;
             Ok((memory_deleted, summaries_deleted))
@@ -1903,12 +2030,9 @@ impl VectorStore {
     /// an explicit `VACUUM ANALYZE` after large deletions ensures immediate
     /// space reclamation and consistent test/benchmark behaviour.
     pub async fn vacuum(&self) -> Result<()> {
-        let client = self.client.clone();
+        let pool = self.pool.write.clone();
         spawn_blocking_vec!(move || {
-            let mut client = client.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
-                poisoned.into_inner()
-            });
+            let mut client = pool_get(&pool)?;
             client.batch_execute("VACUUM ANALYZE")?;
             Ok(())
         })

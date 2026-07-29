@@ -399,11 +399,125 @@ mod tests {
 // Internally this uses the synchronous `postgres` client, which fits the
 // existing sync API and the current `spawn_blocking` call sites.
 #[cfg(feature = "backend-postgres")]
+use crate::memory::pg_migrate::run_migrations;
+#[cfg(feature = "backend-postgres")]
+use crate::memory::pg_pool::{create_pool, create_pool_pair, pool_get, PgPoolPair};
+#[cfg(feature = "backend-postgres")]
 use postgres::{Client, NoTls};
+#[cfg(feature = "backend-postgres")]
+use rustls::crypto::ring;
+#[cfg(feature = "backend-postgres")]
+use rustls::ClientConfig;
+#[cfg(feature = "backend-postgres")]
+use tokio_postgres_rustls::MakeRustlsConnect;
+
+/// Parse the `sslmode` parameter from a PostgreSQL connection URL.
+///
+/// Returns `None` when no `sslmode` is present (defaults to NoTls).
+#[cfg(feature = "backend-postgres")]
+fn parse_sslmode(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    parsed
+        .query_pairs()
+        .find(|(k, _)| k == "sslmode")
+        .map(|(_, v)| v.to_string())
+}
+
+/// A [`ServerCertVerifier`] that accepts all certificates (for `sslmode=require`).
+#[cfg(feature = "backend-postgres")]
+#[derive(Debug)]
+struct PermissiveVerifier;
+
+#[cfg(feature = "backend-postgres")]
+impl rustls::client::danger::ServerCertVerifier for PermissiveVerifier {
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
+
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+}
+
+/// Connect to PostgreSQL with optional TLS based on the `sslmode` URL parameter.
+///
+/// Supports:
+/// - `sslmode=require`     — TLS, no server certificate verification
+/// - `sslmode=verify-ca`   — TLS, verify server certificate against CA
+/// - `sslmode=verify-full` — TLS, verify server certificate AND hostname
+/// - absent / `disable` / `allow` / `prefer` — No TLS (plain)
+#[cfg(feature = "backend-postgres")]
+fn connect_postgres(url: &str) -> Result<Client> {
+    let provider = Arc::new(ring::default_provider());
+    match parse_sslmode(url).as_deref() {
+        Some("require") => {
+            // TLS with no server certificate verification.
+            let config = ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|e| anyhow::anyhow!("TLS protocol config: {e}"))?
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(PermissiveVerifier))
+                .with_no_client_auth();
+            let tls = MakeRustlsConnect::new(config);
+            Ok(Client::connect(url, tls)?)
+        }
+        Some("verify-ca") | Some("verify-full") => {
+            // TLS with CA certificate verification.
+            let root_store =
+                rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let config = ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|e| anyhow::anyhow!("TLS protocol config: {e}"))?
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+            let tls = MakeRustlsConnect::new(config);
+            Ok(Client::connect(url, tls)?)
+        }
+        _ => {
+            // No TLS or sslmode=disable/allow/prefer
+            Ok(Client::connect(url, NoTls)?)
+        }
+    }
+}
 
 #[cfg(feature = "backend-postgres")]
 pub struct ResponseCache {
-    client: Arc<Mutex<Client>>,
+    pool: PgPoolPair,
     default_ttl_seconds: u64,
     max_entries: usize,
 }
@@ -412,7 +526,7 @@ pub struct ResponseCache {
 impl std::fmt::Debug for ResponseCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResponseCache")
-            .field("client", &"<postgres Client>")
+            .field("pool", &"<PgPoolPair>")
             .field("default_ttl_seconds", &self.default_ttl_seconds)
             .field("max_entries", &self.max_entries)
             .finish()
@@ -425,25 +539,60 @@ impl ResponseCache {
     ///
     /// `url` — libpq-style connection string, e.g.
     /// `"postgres://user:pass@localhost/go_on"`
+    ///
+    /// Supports `sslmode` parameter in the URL:
+    /// - `sslmode=require`      — TLS with server verification disabled
+    /// - `sslmode=verify-ca`    — TLS with CA verification
+    /// - `sslmode=verify-full`  — TLS with CA + hostname verification
+    /// - absent, `disable`, `allow`, `prefer` — No TLS (plain connection)
     pub fn new(url: &str, default_ttl_seconds: u64, max_entries: usize) -> Result<Self> {
-        let mut client = Client::connect(url, NoTls)?;
-        client.batch_execute(
-            "CREATE TABLE IF NOT EXISTS response_cache (
-                cache_key        TEXT    PRIMARY KEY,
-                response_text    TEXT    NOT NULL,
-                agent_name       TEXT,
-                created_at       BIGINT  NOT NULL,
-                updated_at       BIGINT  NOT NULL,
-                expires_at       BIGINT  NOT NULL,
-                hit_count        BIGINT  NOT NULL DEFAULT 0,
-                last_hit_at      BIGINT
-            );
-            CREATE INDEX IF NOT EXISTS idx_response_cache_expires_at
-                ON response_cache(expires_at);",
-        )?;
+        Self::new_with_replica(url, None, default_ttl_seconds, max_entries)
+    }
+
+    /// Create a new cache with an optional read-replica connection for read/write splitting.
+    ///
+    /// When `read_replica_url` is `Some`, read queries use the replica pool;
+    /// when `None`, the primary pool is used for both reads and writes.
+    pub fn new_with_replica(
+        url: &str,
+        read_replica_url: Option<String>,
+        default_ttl_seconds: u64,
+        max_entries: usize,
+    ) -> Result<Self> {
+        let max_pool_size = 8;
+        let write_url = url.to_string();
+        let write_connect = move || connect_postgres(&write_url);
+
+        let pool = match &read_replica_url {
+            Some(replica_url) => {
+                let replica_url = replica_url.clone();
+                let read_connect = move || connect_postgres(&replica_url);
+                create_pool_pair(
+                    write_connect,
+                    read_replica_url.clone(),
+                    read_connect,
+                    max_pool_size,
+                )
+            }
+            None => {
+                let single = create_pool(write_connect, max_pool_size);
+                PgPoolPair {
+                    write: single.clone(),
+                    read: single,
+                }
+            }
+        };
+
+        // Run schema migrations on the write pool.
+        let mut conn = pool_get(&pool.write)?;
+        run_migrations(&mut conn, 1)?; // target v1 (response_cache)
+
+        // Startup health check: verify the connection is alive.
+        conn.query_one("SELECT 1", &[])
+            .map_err(|e| anyhow::anyhow!("postgres health check (SELECT 1) failed: {e}"))?;
 
         Ok(Self {
-            client: Arc::new(Mutex::new(client)),
+            pool,
             default_ttl_seconds,
             max_entries,
         })
@@ -451,12 +600,10 @@ impl ResponseCache {
 
     pub async fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let client = self.client.clone();
+        let pool = self.pool.read.clone();
         let cache_key = cache_key.to_string();
         spawn_blocking(move || {
-            let mut client = client
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut client = pool_get(&pool)?;
             let now = now_ts();
             client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?;
 
@@ -493,7 +640,7 @@ impl ResponseCache {
         ttl_seconds: Option<u64>,
     ) -> Result<()> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let client = self.client.clone();
+        let pool = self.pool.write.clone();
         let cache_key = cache_key.to_string();
         let response_text = response_text.to_string();
         let agent_name = agent_name.to_string();
@@ -507,9 +654,7 @@ impl ResponseCache {
             if ttl == 0 {
                 return Ok(());
             }
-            let mut client = client
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut client = pool_get(&pool)?;
             let max_entries = max_entries as i64;
             let now = now_ts();
             let expires_at = now + ttl as i64;
@@ -542,11 +687,9 @@ impl ResponseCache {
 
     pub async fn purge_expired(&self) -> Result<usize> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let client = self.client.clone();
+        let pool = self.pool.write.clone();
         spawn_blocking(move || {
-            let mut client = client
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut client = pool_get(&pool)?;
             let now = now_ts();
             Ok(
                 client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?
@@ -559,11 +702,9 @@ impl ResponseCache {
 
     pub async fn clear_all(&self) -> Result<usize> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let client = self.client.clone();
+        let pool = self.pool.write.clone();
         spawn_blocking(move || {
-            let mut client = client
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut client = pool_get(&pool)?;
             Ok(client.execute("DELETE FROM response_cache", &[])? as usize)
         })
         .await
@@ -575,13 +716,20 @@ impl ResponseCache {
         Ok(())
     }
 
+    /// Health check: verify the connection is alive.
+    pub fn health_check(&self) -> Result<()> {
+        let mut client = pool_get(&self.pool.write)?;
+        client
+            .query_one("SELECT 1", &[])
+            .map_err(|e| anyhow::anyhow!("postgres health check failed: {e}"))?;
+        Ok(())
+    }
+
     pub async fn entry_count(&self) -> Result<u64> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let client = self.client.clone();
+        let pool = self.pool.read.clone();
         spawn_blocking(move || {
-            let mut client = client
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut client = pool_get(&pool)?;
             let row = client.query_one("SELECT COUNT(*) FROM response_cache", &[])?;
             let count: i64 = row.get(0);
             Ok(count.max(0) as u64)
@@ -592,12 +740,10 @@ impl ResponseCache {
 
     pub async fn stats(&self) -> Result<ResponseCacheStats> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let client = self.client.clone();
+        let pool = self.pool.read.clone();
         let max_entries = self.max_entries;
         spawn_blocking(move || {
-            let mut client = client
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut client = pool_get(&pool)?;
             let row = client.query_one(
                 "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
                 &[],

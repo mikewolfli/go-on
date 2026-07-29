@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::orchestration::cache_layer::{CacheLayer, CacheStats};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -484,6 +485,59 @@ impl FastPathCache {
             "Evicted {} oldest entries from cache (max={})",
             to_remove, max_entries
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CacheLayer implementation
+// ---------------------------------------------------------------------------
+
+impl CacheLayer for FastPathCache {
+    fn name(&self) -> &str {
+        "fast_path"
+    }
+
+    fn stats(&self) -> CacheStats {
+        let intent_count = {
+            let c = self.intent_cache.lock().expect("intent_cache poisoned");
+            (c.len(), c.values().map(|e| e.hit_count).sum::<u64>())
+        };
+        let skill_count = {
+            let c = self.skill_cache.lock().expect("skill_cache poisoned");
+            (c.len(), c.values().map(|e| e.hit_count).sum::<u64>())
+        };
+        let env_count = {
+            let c = self.env_cache.lock().expect("env_cache poisoned");
+            (c.len(), c.values().map(|e| e.hit_count).sum::<u64>())
+        };
+
+        let total_entries = intent_count.0 + skill_count.0 + env_count.0;
+        let total_hits = intent_count.1 + skill_count.1 + env_count.1;
+        // Estimate: each entry ~256 bytes (key 8 + value ~200 + overhead ~48)
+        let estimated_size_bytes = total_entries.saturating_mul(256);
+
+        CacheStats {
+            hits: total_hits,
+            misses: 0, // FastPathCache does not track misses separately
+            entries: total_entries,
+            max_entries: self.max_entries * 3, // 3 sub-caches × max each
+            estimated_size_bytes,
+        }
+    }
+
+    fn clear(&mut self) {
+        if let Ok(mut c) = self.intent_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.skill_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.env_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.route_cache.lock() {
+            c.clear();
+        }
     }
 }
 

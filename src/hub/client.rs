@@ -114,6 +114,27 @@ impl HubClient {
         Self::json_rpc_call(&self.client, &self.endpoint, "hub.list", json!({})).await
     }
 
+    /// Discover and connect to a running Hub with exponential backoff retry.
+    ///
+    /// Retries discovery with backoff: 50ms initial, 2s max, 30s total timeout.
+    pub async fn discover_with_retry() -> Result<Option<Self>> {
+        let start = std::time::Instant::now();
+        let mut delay = Duration::from_millis(50);
+        let max_delay = Duration::from_secs(2);
+        let timeout = Duration::from_secs(30);
+
+        loop {
+            if let Some(client) = Self::discover().await? {
+                return Ok(Some(client));
+            }
+            if start.elapsed() >= timeout {
+                return Ok(None);
+            }
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(max_delay);
+        }
+    }
+
     /// Low-level JSON-RPC call.
     async fn json_rpc_call(
         client: &reqwest::Client,

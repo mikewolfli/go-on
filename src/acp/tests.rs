@@ -28,7 +28,8 @@ mod test_suite {
             max_entries: 1000,
             summary_enabled: false,
             summary_trigger_messages: 12,
-            summary_max_chars: 1500,
+            summary_max_chars: 2400,
+            read_replica_connection_string: None,
         }
     }
 

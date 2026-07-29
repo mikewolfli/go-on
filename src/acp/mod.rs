@@ -28,8 +28,6 @@ pub mod session_persistence;
 
 // Explicit re-exports of items that external consumers need.
 // Avoid `pub use prelude::*;` to make dead-code detection easier.
-// Explicit re-exports of items that external consumers need.
-// Avoid `pub use prelude::*;` to make dead-code detection easier.
 #[allow(unused_imports)]
 pub use prelude::{
     // re-exported for ACP consumer public API surface

@@ -60,8 +60,9 @@ clean: ## Clean build artifacts
 
 lint: check clippy ## Run all lints (check + clippy)
 
-doc: ## Build documentation
-	cargo doc --no-deps
+doc: ## Build documentation for the go-on crate
+	cargo doc --no-deps --package go-on
+	@echo "Documentation generated at target/doc/go_on/index.html"
 
 audit: ## Check dependencies for vulnerabilities (requires cargo-audit)
 	cargo audit 2>/dev/null || echo "cargo-audit not installed. Run: cargo install cargo-audit"

@@ -59,20 +59,12 @@ Examples:
 
 ## Methodology Router
 
-When stuck, explicitly switch methodology:
-- Huawei: RCA and self-attack debugging.
-- Amazon: Working backwards architecture.
-- ByteDance: A/B metrics-driven iteration.
-- Baidu: Search-first investigation.
-- Musk: delete and simplify path.
-- Jobs: subtraction and quality focus.
-- Tencent: parallel multi-approach race.
-- Meituan: standardize and scale.
-- Pinduoduo: shorten dependency chain.
-- Netflix: high bar execution.
-- Xiaomi: single-focus breakthrough.
-- JD: execution red line.
-- Alibaba: goal-process-result closed loop.
+When stuck, explicitly switch to a different methodology:
+- **RCA & Self-attack** — root cause analysis + adversarial debugging
+- **Delete & Simplify** — remove non-essential parts before fixing
+- **Working Backwards** — start from desired outcome, derive required steps
+- **A/B Metrics** — data-driven comparison to choose the best approach
+- **Parallel Race** — try multiple approaches simultaneously
 
 ## Auto-trigger Phrases
 

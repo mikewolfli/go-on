@@ -595,6 +595,11 @@ impl FullAutoFlow {
                         completed_ms: s.timestamp_ms + s.duration_ms,
                         duration_ms: s.duration_ms,
                         status: StepStatus::Skipped,
+                        depends_on: vec![],
+                        mode: "auto".to_string(),
+                        agent: None,
+                        timeout_seconds: 60,
+                        parallel_group: None,
                     }
                 })
                 .collect();
