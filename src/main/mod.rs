@@ -291,28 +291,37 @@ async fn run() -> Result<()> {
     let cl_agent_handle = learning_center.agent_handle();
     let cl_shutdown = shutdown_notify.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 min
-        tracing::info!("ContinuousLearningCenter background task started");
+        // Adaptive polling: short interval (2 min) if recent activity detected,
+        // long interval (10 min) during idle periods — balances responsiveness
+        // with resource efficiency.
+        let mut last_activity = std::time::Instant::now();
         loop {
+            let base_secs = if last_activity.elapsed().as_secs() < 600 {
+                120
+            } else {
+                600
+            };
+            tokio::time::sleep(std::time::Duration::from_secs(base_secs)).await;
             tokio::select! {
-                _ = interval.tick() => {
-                    // Run a review cycle: detect forgetting, replay important memories,
-                    // and advance curriculum stage when ready.
-                    let (replayed, evicted, patterns) = learning_center.review_cycle("system").await;
-                    if replayed > 0 || evicted > 0 {
-                        tracing::debug!(
-                            "ContinuousLearningCenter review: {replayed} replayed, {evicted} evicted, {patterns} patterns"
-                        );
-                    }
-                }
                 _ = cl_shutdown.notified() => {
                     tracing::info!("ContinuousLearningCenter background task shutting down");
                     break;
                 }
+                _ = async {
+                    // Run a review cycle: detect forgetting, replay important memories,
+                    // and advance curriculum stage when ready.
+                    let (replayed, evicted, patterns) = learning_center.review_cycle("system").await;
+                    if replayed > 0 || evicted > 0 {
+                        last_activity = std::time::Instant::now();
+                        tracing::debug!(
+                            "ContinuousLearningCenter review: {replayed} replayed, {evicted} evicted, {patterns} patterns"
+                        );
+                    }
+                } => {}
             }
         }
     });
-    tracing::info!("ContinuousLearningCenter background task spawned");
+    tracing::info!("ContinuousLearningCenter background task spawned (adaptive interval)");
 
     // Delegate interactive agent onboarding to the onboarding module
     let onboarding_cfg = crate::core::onboarding::OnboardingConfig {

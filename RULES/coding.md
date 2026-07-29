@@ -26,72 +26,37 @@
 ## Phase 4 Coding Patterns
 
 ### F-GAP Module Template
-- Each F-GAP module file starts with `//! <ModuleName> — F-GAP-<NN>` doc comment.
-- Core types (structs, enums) come first, then public methods, then private helpers, then `#[cfg(test)] mod tests`.
-- Every public function must have a doc comment describing its purpose, arguments, and return value.
-- Every `#[allow(dead_code)]` must have a trailing comment explaining why (e.g., `// Bucket F — used by evolve() trait`).
+- Start each F-GAP file with `//! <Name> — F-GAP-<NN>` doc comment
+- Order: core types → public methods → private helpers → `#[cfg(test)] mod tests`
+- Every public function must have a doc comment (purpose, args, return)
+- Every `#[allow(dead_code)]` must have a trailing comment explaining why
 
 ### Bus Pattern
-- Each bus struct must have a `Profile` struct (returned by `profile()`) and a `Builder` struct (returned by `builder()`).
-- Health reporting: each bus must expose a method returning health status that integrates into `handle_health` endpoint.
-- Profile structs must derive `Serialize` for integration with governance.status and health endpoint.
+- Each bus struct must expose `Profile` (returned by `profile()`) and `Builder` (returned by `builder()`)
+- Health reporting: method returning status that integrates into `handle_health` endpoint
+- Profile structs must derive `Serialize`
 
-### Fault Tolerance Patterns
-```rust
-// Recovery plan lifecycle
-let plan = ft.create_recovery_plan(&node_id, &fault_type)?;
-ft.execute_recovery_plan(&plan.id)?;
-ft.complete_recovery_plan(&plan.id)?;
-ft.reintegrate_node(&node_id)?;
-// After reintegrate, verify all faults are resolved
-assert!(ft.node_faults(&node_id)?.is_empty());
-```
-
-### Transport Patterns
-```rust
-// ExactlyOnce with dedup
-transport.send_with_qos(&msg, QosLevel::ExactlyOnce)?;
-// Peek without dequeue
-let head = transport.peek(&ChannelId::Control)?;
-// Convenience send
-transport.send_heartbeat(&node_id, &status)?;
-```
-
-### Checkpoint Pattern
-```rust
-// Always auto-infer parent from branch head when not specified
-let parent_id = parent_checkpoint_id
-    .clone()
-    .or_else(|| state.branch_heads.get(&branch).cloned());
-```
+### Fault Tolerance, Transport, Checkpoint Patterns
+- **Fault Tolerance**: create→execute→complete→reintegrate lifecycle; verify all faults resolved after reintegrate
+- **Transport**: ExactlyOnce with dedup; peek without dequeue; convenience heartbeat send
+- **Checkpoint**: auto-infer parent from branch head when not specified
 
 ### Test Pattern
-- Unit tests at the bottom of the source file in a `#[cfg(test)] mod tests` block.
-- E2E tests in dedicated test files under `src/` (not `tests/`) for internal access.
-- Stress tests use `#[ignore]` or a separate binary target to avoid slowing normal runs.
-- Use `tempfile` crate for any file-system-based test fixtures.
+- Unit tests at bottom of source file in `#[cfg(test)] mod tests` block
+- E2E tests under `src/` for internal access (not `tests/`)
+- Stress tests use separate binary target (not `#[ignore]`)
+- Use `tempfile` for filesystem-based fixtures
 
 ### i18n Pattern
-```rust
-// Use tr!() macro for all user-facing strings
-tr!("agent.connection_timeout", &[("provider", provider_name), ("timeout_s", &timeout_str)]);
-// Always add new keys to all three language files simultaneously
-// en_US.json: "agent.connection_timeout": "Connection to {provider} timed out after {timeout_s}s"
-// zh_CN.json: "agent.connection_timeout": "连接到 {provider} 超时（{timeout_s}秒）"
-// zh_TW.json: "agent.connection_timeout": "連線到 {provider} 逾時（{timeout_s}秒）"
-```
-
-### CLI Message Pattern
-```rust
-// Use tr!() for setup/init messages too — not just error responses
-tr!("setup.directory_created", &[("path", dir_path)]);
-```
+- Use `tr!()` macro for all user-facing strings
+- Add new keys to all three language files simultaneously (en-US, zh-CN, zh-TW)
+- Key format: `module.descriptive_name`
 
 ### Forbidden Patterns (Phase 4 additions)
-- No hardcoded string literals in error responses (must use `tr!()`).
-- No `let _ =` ignoring of errors from critical operations (checkpoint save, fault recovery, transport send).
-- No `Mutex::lock()` calls that could cause double-lock deadlocks — prefer single lock scope with `.get_mut()`.
-- No bridge-stub test modules that duplicate production interfaces.
+- No hardcoded string literals in error responses (use `tr!()`)
+- No `let _ =` ignoring errors from critical ops (checkpoint, fault recovery, transport send)
+- No `Mutex::lock()` that could cause double-lock — prefer single lock scope with `.get_mut()`
+- No bridge-stub test modules that duplicate production interfaces
 
 ## Strict Structural Safety Rules
 

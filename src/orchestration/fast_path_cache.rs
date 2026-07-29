@@ -5,6 +5,7 @@
 //! across `FullAutoFlow` invocations.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -541,9 +542,53 @@ impl CacheLayer for FastPathCache {
     }
 }
 
+// Inherent methods for FastPathCache.
+impl FastPathCache {
+    /// Same as [`CacheLayer::clear`] but takes `&self` — safe because all
+    /// sub-caches are behind `Mutex`. Used by [`FastPathCacheMetrics`] wrapper.
+    pub fn clear_shared(&self) {
+        if let Ok(mut c) = self.intent_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.skill_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.env_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.route_cache.lock() {
+            c.clear();
+        }
+    }
+}
+
 impl Default for FastPathCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FastPathCacheMetrics — CacheLayer wrapper for metrics registration
+// ---------------------------------------------------------------------------
+
+/// Wraps an `Arc<FastPathCache>` as a [`CacheLayer`] so it can be registered
+/// with [`CacheMetricsCollector`] without cloning or re-architecting ownership.
+///
+/// Registration happens in `FullAutoFlow::new()` via `register_cache()`.
+pub struct FastPathCacheMetrics(pub Arc<FastPathCache>);
+
+impl CacheLayer for FastPathCacheMetrics {
+    fn name(&self) -> &str {
+        "fast_path"
+    }
+
+    fn stats(&self) -> CacheStats {
+        self.0.stats()
+    }
+
+    fn clear(&mut self) {
+        self.0.clear_shared();
     }
 }
 

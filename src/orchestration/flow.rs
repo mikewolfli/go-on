@@ -12,9 +12,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
-use crate::agent::{Agent, AgentRegistry};
+use crate::agent::{Agent, AgentRegistry, ModelInfo};
 use crate::config::{AppConfig, PhaseConfig, PhaseOptions};
 use crate::error::ProxyError;
+use crate::model_selector::{AutomaticModePolicy, ModelSelectionStrategy, SelectionCriteria};
+use crate::orchestration::orchestrator::{
+    select_model_for_task, select_model_semantic, OrchestrationContext,
+};
 use crate::pua::merge_phase_principles;
 
 /// Resolved phase information
@@ -205,6 +209,173 @@ impl FlowManager {
             agents: resolved_agents,
         })
     }
+
+    // ── Model selection (merged from FlowModelSelector) ────────────────
+
+    /// Resolve phase and select model in a single call.
+    /// Replaces the two-step pattern of `resolve()` + `FlowModelSelector::resolve_with_model_selection()`.
+    pub fn resolve_with_model(
+        &self,
+        ctx: &OrchestrationContext,
+        requested_phase: Option<String>,
+        registry: &AgentRegistry,
+        task_description: Option<&str>,
+    ) -> Result<ResolvedRoutingWithModel> {
+        let routing = self.resolve(requested_phase, registry)?;
+        let agent_selection = routing
+            .agents
+            .first()
+            .map(|(_, agent_arc)| {
+                Self::select_model_for_agent(
+                    ctx,
+                    agent_arc.as_ref(),
+                    &self.config,
+                    task_description,
+                )
+            })
+            .unwrap_or_else(|| AgentModelSelection {
+                selected_model: None,
+                selection_strategy: Self::selection_strategy(&self.config),
+                task_complexity: Self::analyze_task_complexity(task_description),
+            });
+
+        Ok(ResolvedRoutingWithModel {
+            routing,
+            selected_model: agent_selection.selected_model,
+            selection_strategy: agent_selection.selection_strategy,
+            task_complexity: agent_selection.task_complexity,
+        })
+    }
+
+    pub(crate) fn select_model_for_agent(
+        ctx: &OrchestrationContext,
+        agent: &dyn Agent,
+        config: &AppConfig,
+        task_description: Option<&str>,
+    ) -> AgentModelSelection {
+        let task_complexity = Self::analyze_task_complexity(task_description);
+        let strategy = Self::selection_strategy(config);
+        let selected_model = if agent.supports_model_override() {
+            let available = agent.available_models();
+            if !available.is_empty() && strategy != ModelSelectionStrategy::Explicit {
+                if let Some(desc) = task_description {
+                    if config.model_selection_mode() == "semantic" {
+                        let semantic =
+                            select_model_semantic(ctx, &available, desc, strategy.clone());
+                        if semantic.is_some() {
+                            return AgentModelSelection {
+                                selected_model: semantic,
+                                selection_strategy: strategy,
+                                task_complexity,
+                            };
+                        }
+                    }
+                }
+                let criteria = Self::build_selection_criteria(task_complexity, task_description);
+                select_model_for_task(ctx, &available, &criteria, strategy.clone())
+            } else if !available.is_empty() {
+                agent.default_model()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        AgentModelSelection {
+            selected_model,
+            selection_strategy: strategy,
+            task_complexity,
+        }
+    }
+
+    pub(crate) fn selection_strategy(config: &AppConfig) -> ModelSelectionStrategy {
+        match config.model_selection_mode() {
+            "explicit" => ModelSelectionStrategy::Explicit,
+            "capable" => ModelSelectionStrategy::MostCapable,
+            "cost" => ModelSelectionStrategy::Cheapest,
+            "speed" => ModelSelectionStrategy::Fastest,
+            "semantic" => ModelSelectionStrategy::MostCapable,
+            _ => ModelSelectionStrategy::Balanced,
+        }
+    }
+
+    pub(crate) fn analyze_task_complexity(task_description: Option<&str>) -> u8 {
+        let desc = task_description.unwrap_or("");
+        let lower = desc.to_lowercase();
+        let mut complexity = 2u8;
+        if lower.contains("complex")
+            || lower.contains("multi-step")
+            || lower.contains("algorithm")
+            || lower.contains("refactor")
+        {
+            complexity = 4;
+        }
+        if lower.contains("simple")
+            || lower.contains("quick")
+            || lower.contains("comment")
+            || lower.contains("format")
+        {
+            complexity = 1;
+        }
+        if lower.contains("code") || lower.contains("function") {
+            complexity = complexity.max(3);
+        }
+        complexity.clamp(1, 5)
+    }
+
+    pub(crate) fn build_selection_criteria(
+        complexity: u8,
+        task_description: Option<&str>,
+    ) -> SelectionCriteria {
+        let desc = task_description.unwrap_or("");
+        let lower = desc.to_lowercase();
+        SelectionCriteria {
+            complexity_level: complexity,
+            requires_vision: lower.contains("image")
+                || lower.contains("vision")
+                || lower.contains("screenshot"),
+            requires_function_calling: lower.contains("function")
+                || lower.contains("api")
+                || lower.contains("tool"),
+            requires_code: lower.contains("code")
+                || lower.contains("generate")
+                || lower.contains("implement"),
+            min_context_window: if complexity >= 4 { Some(4096) } else { None },
+            max_cost_cents: None,
+            prefer_speed: lower.contains("quick") || lower.contains("fast"),
+        }
+    }
+
+    /// Get recommended policy based on system configuration.
+    pub fn recommended_model_policy(config: &AppConfig) -> AutomaticModePolicy {
+        match config.model_selection_mode() {
+            "cost" => AutomaticModePolicy::CostOptimized,
+            "speed" => AutomaticModePolicy::SpeedOptimized,
+            "capable" => AutomaticModePolicy::AlwaysMostCapable,
+            _ => AutomaticModePolicy::AdaptiveCapability,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Model selection types (merged from flow_with_models.rs)
+// ---------------------------------------------------------------------------
+
+/// Extended routing information with selected model.
+/// Returned by [`FlowManager::resolve_with_model`].
+pub struct ResolvedRoutingWithModel {
+    pub routing: ResolvedRouting,
+    pub selected_model: Option<ModelInfo>,
+    pub selection_strategy: ModelSelectionStrategy,
+    pub task_complexity: u8,
+}
+
+/// Intermediate result for model selection per agent.
+pub struct AgentModelSelection {
+    pub selected_model: Option<ModelInfo>,
+    pub selection_strategy: ModelSelectionStrategy,
+    pub task_complexity: u8,
 }
 
 /// Build a resolved phase from configuration

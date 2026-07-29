@@ -2,9 +2,12 @@
 //!
 //! Builds on the tool registry to execute steps sequentially.
 
-use futures_util::future::join_all;
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::Semaphore;
 use tracing;
 
 use crate::governance::hardening::SandboxLevel;
@@ -179,40 +182,42 @@ impl ToolPipeline {
                 break;
             }
 
-            // Execute all steps in the group concurrently using join_all.
-            // Each spawned future owns its data (no borrow of `group` across await).
-            let group_owned: Vec<(String, Value)> = group
-                .iter()
-                .map(|s| (s.tool_name.clone(), s.input.clone()))
-                .collect();
+            // Execute all steps in the group concurrently using FuturesUnordered
+            // with a Semaphore for bounded concurrency. Shares governance cache
+            // with executor.rs via governance_gate::governance_cache().
+            let semaphore = Arc::new(Semaphore::new(16));
             let sandbox = self.sandbox_level;
-            let registry_ref: &ToolRegistry = registry;
 
-            let futs: Vec<_> = group_owned
-                .into_iter()
-                .map(|(tool_name, input)| {
-                    async move {
-                        // Check governance individually
-                        if let Err(e) = check_tool_in_pipeline(&tool_name, sandbox) {
-                            tracing::warn!(
-                                target: "tool_pipeline",
-                                tool = %tool_name,
-                                error = %e,
-                                "parallel step blocked by sandbox policy"
-                            );
-                            return PipelineStepResult {
-                                tool_name,
-                                output: None,
-                                error: Some(e),
-                                duration_ms: 0,
-                            };
-                        }
-                        run_single_tool(registry_ref, &tool_name, &input).await
+            let mut futs = FuturesUnordered::new();
+            for step in group {
+                let tool_name = step.tool_name.clone();
+                let input = step.input.clone();
+                let sem = semaphore.clone();
+                futs.push(async move {
+                    let _permit = sem.acquire().await.expect("semaphore closed");
+                    // Check governance individually
+                    if let Err(e) = check_tool_in_pipeline(&tool_name, sandbox) {
+                        tracing::warn!(
+                            target: "tool_pipeline",
+                            tool = %tool_name,
+                            error = %e,
+                            "parallel step blocked by sandbox policy"
+                        );
+                        return PipelineStepResult {
+                            tool_name,
+                            output: None,
+                            error: Some(e),
+                            duration_ms: 0,
+                        };
                     }
-                })
-                .collect();
+                    run_single_tool(registry, &tool_name, &input).await
+                });
+            }
 
-            let group_results: Vec<PipelineStepResult> = join_all(futs).await;
+            let mut group_results = Vec::with_capacity(futs.len());
+            while let Some(result) = futs.next().await {
+                group_results.push(result);
+            }
 
             let group_success = group_results.iter().all(|r| r.error.is_none());
             if !group_success {

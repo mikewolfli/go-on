@@ -33,19 +33,21 @@ pub use intent::TaskIntent;
 pub use report::{AutoExecutionReport, ExecutionStep, SkillMatch};
 use std::sync::{Arc, Mutex, RwLock as StdRwLock};
 
+use crate::orchestration::complexity_estimator::ComplexityEstimator;
+
+use crate::orchestration::tool_recommender::ToolRecommender;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
-use crate::orchestration::complexity_estimator::ComplexityEstimator;
+use crate::orchestration::cache_layer::register_cache;
 use crate::orchestration::fast_path_cache::{
-    EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
+    EnvCacheValue, FastPathCache, FastPathCacheMetrics, IntentCacheValue, SkillCacheValue,
 };
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::threshold_learner::ThresholdLearner;
 use crate::orchestration::tool::ToolRegistry;
-use crate::orchestration::tool_recommender::ToolRecommender;
 
 /// Default minimum composite score for a skill to be considered a match.
 pub(crate) const DEFAULT_MIN_MATCH_SCORE: f64 = 0.40;
@@ -155,7 +157,12 @@ impl FullAutoFlow {
             skill_registry,
             tool_registry,
             config: FullAutoConfig::default(),
-            cache: Arc::new(FastPathCache::with_default_routes()),
+            cache: {
+                let cache = Arc::new(FastPathCache::with_default_routes());
+                // Register with global cache metrics collector for observability.
+                register_cache(Box::new(FastPathCacheMetrics(cache.clone())));
+                cache
+            },
             threshold_learner: None,
             complexity_estimator: ComplexityEstimator::new(),
             tool_recommender: Mutex::new(ToolRecommender::new()),

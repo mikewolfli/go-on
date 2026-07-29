@@ -26,30 +26,21 @@
 
 ## Phase 4 Review Standards
 
-- Verify the change compiles and passes clippy D warnings under all three profiles
-- Feature-gated code must be reviewed under the gate condition cfg blocks must be correct
-- All three language files must be updated for new i18n keys rejection if any missing
-- i18n keys must follow naming convention module dot descriptive_name
-- Review must reject any file-level allow dead_code
-- Review must reject any module-level allow dead_code
-- Per-item allow dead_code must have a justification comment referencing target F-GAP or phase
-- cfg test is the preferred alternative to allow dead_code for test-only code
-- New F-GAP modules must have minimum 9 tests covering normal edge error and boundary paths
-- Fault tolerance changes must include an E2E lifecycle test
-- Transport changes must include QoS dedup and peek tests
-- Stress tests with 500 or more iterations are required for scalability-sensitive changes
-- Review must verify tests pass under all three profiles
-- New sub-buses must integrate into CapabilityBus via with_ name _bus and sense decide profile extensions
-- Health reporting must be added to handle_health endpoint under modules harness_bus or capability_bus
-- Profile struct must derive Serialize
-- All new modules must map to a documented F-GAP or blueprint item
-- No orphan modules every module must be registered in its parent mod.rs and the bus system if applicable
-- Starred ratings must be real verify implementation tests dead_code status and bus wiring
-- Reject any change that inflates star ratings without corresponding code changes
-- Before any release perform a 38-dimension audit verify each dimension has dedicated module or integration
-- Check for false starred claims must verify code not just documentation
-- Validate zero dead_code files and zero module-level dead_code
-- Ensure all dimensions with public RPC methods have integration tests
+Review must enforce all rules from `RULES/global.md` Phase 4 Architecture Rules.
+Additionally, review must verify:
+- New F-GAP modules have minimum 9 tests covering normal/edge/error/boundary paths
+- Fault tolerance changes include an E2E lifecycle test
+- Transport changes include QoS dedup and peek tests
+- Stress tests with 500+ iterations for scalability-sensitive changes
+- Tests pass under all three build profiles
+- New sub-buses integrate into CapabilityBus via `with_<name>_bus` + sense/decide/profile extensions
+- Health reporting added to `handle_health` endpoint (harness_bus or capability_bus)
+- Profile struct derives Serialize
+- All new modules map to a documented F-GAP or blueprint item
+- No orphan modules — every module registered in parent mod.rs and bus system
+- Starred ratings verified against code (impl tests, dead_code status, bus wiring), not documentation alone
+- Before release: 38-dimension audit, zero dead_code files, zero module-level dead_code
+- Dimensions with public RPC methods have integration tests
 
 ## Mandatory Review Standards (merged from copilot-instructions)
 
