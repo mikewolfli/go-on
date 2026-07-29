@@ -71,28 +71,6 @@ pub fn enhance_reflection_with_grill(
     }
 }
 
-/// Build a GRILL prompt string for the reflection phase.
-///
-/// This can be used as input to a GRILL SKILL.md execution when the
-/// LLM-based skill system is active.
-// Reserved for future LLM-based GRILL skill system integration;
-// tested but not yet wired into production reflection flow.
-#[allow(dead_code)]
-pub fn build_grill_prompt(step_description: &str, mode: GrillMode) -> String {
-    match mode {
-        GrillMode::Disabled => String::new(),
-        GrillMode::Light => format!(
-            "Lightly grill the step: '{}'. Ask one probing question about the approach.",
-            step_description
-        ),
-        GrillMode::Full => format!(
-            "Deeply grill the step: '{}'. Analyze assumptions, counterfactuals, \
-             and suggest structural improvements. Identify potential blind spots.",
-            step_description
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,25 +112,5 @@ mod tests {
         assert!(reflection.observations.len() >= 3);
         assert!(reflection.improvements.len() >= 2);
         assert!(!reflection.issues.is_empty());
-    }
-
-    #[test]
-    fn test_build_grill_prompt_disabled_returns_empty() {
-        assert!(build_grill_prompt("test", GrillMode::Disabled).is_empty());
-    }
-
-    #[test]
-    fn test_build_grill_prompt_light_returns_probe() {
-        let prompt = build_grill_prompt("sort the array", GrillMode::Light);
-        assert!(prompt.contains("Lightly grill"));
-        assert!(prompt.contains("sort the array"));
-    }
-
-    #[test]
-    fn test_build_grill_prompt_full_returns_deep_analysis() {
-        let prompt = build_grill_prompt("implement cache", GrillMode::Full);
-        assert!(prompt.contains("Deeply grill"));
-        assert!(prompt.contains("assumptions"));
-        assert!(prompt.contains("counterfactuals"));
     }
 }

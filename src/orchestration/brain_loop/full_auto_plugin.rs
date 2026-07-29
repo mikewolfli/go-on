@@ -15,15 +15,6 @@ use crate::orchestration::brain_loop::{BrainLoop, BrainLoopPhase, BrainLoopStep,
 use crate::orchestration::full_auto::FullAutoFlow;
 use std::sync::{Arc, Mutex};
 
-/// Optional FullAutoFlow plugin state stored inside BrainLoopInner.
-/// When set, the BrainLoop can use FullAutoFlow for intent-aware planning.
-#[allow(dead_code)]
-// Struct exists as a named type for future plugin-level state.
-// Instantiation bypassed: set_full_auto_plugin() stores Arc<Mutex<FullAutoFlow>> directly.
-pub(crate) struct FullAutoPlugin {
-    pub flow: Arc<Mutex<FullAutoFlow>>,
-}
-
 impl BrainLoop {
     /// Attach a FullAutoFlow instance as the BrainLoop's full-auto plugin.
     ///

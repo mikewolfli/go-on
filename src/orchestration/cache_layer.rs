@@ -22,10 +22,6 @@
 //! [`register_cache`] / [`get_aggregate_cache_stats`] helper functions let
 //! caches participate without creating their own collector.
 
-// BLUE65: Utility module — items are deliberately kept for opt-in caching.
-// Caches (GovernanceCache, FastPathCache, etc.) implement CacheLayer from this module.
-// The metrics collector and helpers become active when wired in production.
-// This is NOT dead code — it's a library that caches can optionally adopt.
 #![allow(dead_code)]
 
 use std::sync::Mutex;

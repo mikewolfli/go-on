@@ -576,6 +576,7 @@ impl Default for FastPathCache {
 /// with [`CacheMetricsCollector`] without cloning or re-architecting ownership.
 ///
 /// Registration happens in `FullAutoFlow::new()` via `register_cache()`.
+#[allow(dead_code)]
 pub struct FastPathCacheMetrics(pub Arc<FastPathCache>);
 
 impl CacheLayer for FastPathCacheMetrics {

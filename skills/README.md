@@ -47,46 +47,73 @@ Every PR that modifies `skills/` triggers the `skill-market.yml` workflow:
 4. Submit a Pull Request
 4. After review and merge, the index is auto-updated
 
-## Available Skills (39 skills)
+## Available Skills (49 skills)
+
+### Built-in Skills (37)
 
 | Skill | Tags | Description |
 |-------|------|-------------|
+| [**analyze-text**](classify-text/SKILL.md) | classify, embed, text, nlp | Classify text or generate semantic embeddings — merged from classify-text + embed-text |
 | [api-docs-generator](api-docs-generator/SKILL.md) | api, docs, generation | Generates API documentation from code |
 | [api-tester](api-tester/SKILL.md) | api, testing, validation | Tests API endpoints and validates responses |
 | [architecture-diagrammer](architecture-diagrammer/SKILL.md) | architecture, diagram, visualization | Generates architecture diagrams from code |
-| [changelog-generator](changelog-generator/SKILL.md) | changelog, release, docs | Generates changelogs from git history |
-| [classify-text](classify-text/SKILL.md) | classify, text, nlp | Classify text into predefined categories with confidence scores |
+| [**conventional-commits-toolkit**](changelog-generator/SKILL.md) | changelog, commit, git, release | Generates changelogs and conventional commit messages — merged from changelog-generator + commit-message-generator |
 | [ci-pipeline-generator](ci-pipeline-generator/SKILL.md) | ci, pipeline, devops | Generates CI/CD pipeline configurations |
 | [code-execution-sandbox](code-execution-sandbox/SKILL.md) | execution, sandbox, safety | Executes untrusted code in a sandboxed environment |
-| [code-reviewer](code-reviewer/SKILL.md) | code, review, quality | Reviews code for bugs, style, and best practices |
-| [commit-message-generator](commit-message-generator/SKILL.md) | git, commit, message | Generates conventional commit messages from diffs |
+| [code-review](code-review/SKILL.md) | code, review, quality, pr | Two-mode code review: git diff review (Standards + Spec) + static snippet analysis |
 | [context-summarizer](context-summarizer/SKILL.md) | context, summary, compression | Summarizes long conversations and context windows |
 | [data-pipeline-optimizer](data-pipeline-optimizer/SKILL.md) | data, pipeline, etl | Optimizes data processing pipelines |
 | [data-transformer](data-transformer/SKILL.md) | data, transform, conversion | Transforms data between formats and schemas |
-| [decision-logger](decision-logger/SKILL.md) | decision, logging, audit | Logs architectural and design decisions |
-| [dependency-analyzer](dependency-analyzer/SKILL.md) | dependency, analysis, graph | Analyzes project dependency graphs |
 | [dockerfile-generator](dockerfile-generator/SKILL.md) | docker, container, devops | Generates optimized Dockerfiles |
-| [embed-text](embed-text/SKILL.md) | embed, text, vector | Generate a semantic embedding/vector representation of text for similarity search |
 | [env-config-validator](env-config-validator/SKILL.md) | env, config, validation | Validates environment configuration |
 | [error-recovery-planner](error-recovery-planner/SKILL.md) | error, recovery, resilience | Plans error recovery strategies |
 | [knowledge-retriever](knowledge-retriever/SKILL.md) | knowledge, retrieval, search | Retrieves knowledge from documentation and codebase |
 | [log-analyzer](log-analyzer/SKILL.md) | log, analysis, debugging | Analyzes application logs for errors and patterns |
-| [note-taking](note-taking/SKILL.md) | note, writing, organization | Maintain structured working notes across sessions for project context and decisions |
+| [**note-taking**](note-taking/SKILL.md) | note, decision, writing, organization | Maintain notes + architectural decision records — now includes decision-logger functionality |
 | [performance-analyzer](performance-analyzer/SKILL.md) | performance, profiling, optimization | Analyzes code performance and bottlenecks |
 | [progress-tracker](progress-tracker/SKILL.md) | progress, tracking, status | Tracks progress across tasks and milestones |
-| [project-analyzer](project-analyzer/SKILL.md) | project, analysis, structure | Analyzes project structure and conventions |
+| [**project-analyzer**](project-analyzer/SKILL.md) | project, dependency, analysis, security | Analyzes project structure AND deep-audits dependencies — merged from project-analyzer + dependency-analyzer |
 | [**prompt-optimizer**](prompt-optimizer/SKILL.md) | prompt, optimization, LLM | Analyzes and improves LLM prompts for clarity and efficiency |
 | [refactoring-advisor](refactoring-advisor/SKILL.md) | refactoring, code-quality, improvement | Advises on code refactoring opportunities |
 | [regex-builder](regex-builder/SKILL.md) | regex, pattern, text | Builds and tests regular expressions |
-| [review-pr](review-pr/SKILL.md) | review, pr, quality | Review a pull request diff and provide comprehensive feedback |
 | [security-auditor](security-auditor/SKILL.md) | security, audit, vulnerability | Audits code for security vulnerabilities |
 | [**self-reviewer**](self-reviewer/SKILL.md) | review, code-quality, self-improvement | Performs structured self-review of agent work |
-| [semantic-diff](semantic-diff/SKILL.md) | diff, semantic, comparison | Analyze code changes semantically — understand what changed, why, and potential impacts |
+| [semantic-diff](semantic-diff/SKILL.md) | diff, semantic, comparison | Analyze code changes semantically |
 | [skill-creator](skill-creator/SKILL.md) | skill, meta, creation | Guides creation of new Go-On skills |
 | [sql-query-helper](sql-query-helper/SKILL.md) | sql, database, query | Helps write and optimize SQL queries |
 | [summarize-text](summarize-text/SKILL.md) | summarize, text, compression | Summarize long text into concise, structured summaries |
 | [task-planner](task-planner/SKILL.md) | task, planning, execution | Plans and decomposes complex tasks |
 | [test-generator](test-generator/SKILL.md) | test, generation, quality | Generates unit and integration tests |
-| [translate-text](translate-text/SKILL.md) | translate, i18n, language | Translate text between languages with natural-sounding results |
+| [translate-text](translate-text/SKILL.md) | translate, i18n, language | Translate text between languages |
 | [web-scraper](web-scraper/SKILL.md) | web, scraping, data-extraction | Scrapes and extracts data from websites |
 | [**workflow-optimizer**](workflow-optimizer/SKILL.md) | workflow, optimization, pipeline | Analyzes and optimizes multi-step workflows |
+
+### GRILL Skills (12)
+
+| Skill | Source | Description |
+|-------|--------|-------------|
+| [grilling](grilling/SKILL.md) | productivity | Relentless one-at-a-time interview to stress-test plans/decisions |
+| [batch-grill-me](batch-grill-me/SKILL.md) | productivity | Batch-mode grilling — all frontier questions per round with sub-agent dispatch |
+| [grill-with-docs](grill-with-docs/SKILL.md) | engineering | Grilling + domain-modeling that produces ADRs and glossary |
+| [loop-me](loop-me/SKILL.md) | productivity | Grilling specialized for recurring life/workflow design |
+| [handoff](handoff/SKILL.md) | productivity | Compact session handoff documents for cross-session continuity |
+| [code-review](code-review/SKILL.md) | engineering | Two-axis (Standards + Spec) code review with parallel sub-agents |
+| [diagnosing-bugs](diagnosing-bugs/SKILL.md) | engineering | 6-phase structured debugging protocol |
+| [domain-modeling](domain-modeling/SKILL.md) | engineering | Build and sharpen domain model with glossary + ADRs |
+| [wayfinder](wayfinder/SKILL.md) | engineering | Multi-session work planning via decision-ticket maps |
+| [research](research/SKILL.md) | engineering | Sub-agent based fact-finding from primary sources |
+| [triage](triage/SKILL.md) | engineering | Issue tracker state machine: triage, verify, route, close |
+| [implement](implement/SKILL.md) | engineering | TDD-based spec execution with code review and commit |
+
+### Removed (merged into others)
+
+| Removed Skill | Merged Into | Reason |
+|---------------|-------------|--------|
+| commit-message-generator | conventional-commits-toolkit | Same domain, same Conventional Commits taxonomy |
+| decision-logger | note-taking | Decision-logger is schema'd note-taking with ADR format |
+| dependency-analyzer | project-analyzer | Overlapping dependency analysis at different depths |
+| embed-text | analyze-text | Same input pipeline, different output schemas |
+| code-reviewer | code-review | Merged into code-review as `snippet` mode |
+| review-pr | code-review | code-review is superset (2-axis + sub-agents) |
+| grill-me | grilling | 100% command alias wrapper |
+| claude-handoff | handoff | 90% duplicate, only delivery method differs |

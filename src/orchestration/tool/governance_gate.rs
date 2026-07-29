@@ -78,6 +78,7 @@ impl GovernanceCache {
 /// simultaneously.
 pub struct ShardedGovernanceCache {
     shards: Vec<Mutex<GovernanceCache>>,
+    #[allow(dead_code)]
     total_max_entries: usize,
     hits: AtomicU64,
     misses: AtomicU64,
@@ -144,6 +145,7 @@ impl ShardedGovernanceCache {
     }
 
     /// Return the number of live entries across all shards.
+    #[allow(dead_code)]
     fn entry_count(&self) -> usize {
         self.shards
             .iter()

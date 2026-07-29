@@ -55,6 +55,7 @@ gui/src-tauri/gen/
 scheduler_queue.db
 libchat_tests.rlib
 libbarcode.rlib
+librust_out.rlib
 go-on_check*.txt
 
 *.tmp

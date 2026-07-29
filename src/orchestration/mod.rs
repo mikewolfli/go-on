@@ -4,7 +4,7 @@ pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
 pub mod bulkhead;
 pub mod cache_layer; // BLUE65: Unified CacheLayer trait and global metrics collector
-pub mod capability;
+
 pub mod plan_output; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
 
 pub mod complexity_estimator;

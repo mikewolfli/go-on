@@ -5,6 +5,8 @@
 //! loop's metric-driven observations to feed into the brain loop's reflection phase,
 //! and brain loop reflections to trigger evolution cycles.
 
+#![allow(dead_code)]
+
 use crate::orchestration::brain_loop::BrainLoopReflection;
 use crate::orchestration::self_evolution::evolution_loop::observe::EvolutionTrigger;
 
@@ -15,8 +17,6 @@ use crate::orchestration::self_evolution::evolution_loop::observe::EvolutionTrig
 /// brain loop's reflection phase, enabling plan-level awareness of system
 /// health trends.
 ///
-/// Reserved for future wiring between self-evolution and brain loop.
-#[allow(dead_code)]
 pub fn evolution_trigger_to_reflections(trigger: &EvolutionTrigger) -> Vec<String> {
     match trigger {
         EvolutionTrigger::PerformanceRegression {
@@ -76,8 +76,6 @@ pub fn evolution_trigger_to_reflections(trigger: &EvolutionTrigger) -> Vec<Strin
 /// system and are skipped. Other observations are packaged as `ManualRequest`
 /// triggers so the evolution loop can process them.
 ///
-/// Reserved for future wiring between brain loop and self-evolution.
-#[allow(dead_code)]
 pub fn brain_reflection_to_evolution_triggers(
     reflection: &BrainLoopReflection,
 ) -> Vec<EvolutionTrigger> {

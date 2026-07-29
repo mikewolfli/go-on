@@ -676,19 +676,7 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                     products: Vec::new(),
                 }),
             },
-            crate::orchestration::skill::PromptBasedSkill {
-                name: "classify-text".to_string(),
-                description: "Classify text into predefined categories with confidence scores".to_string(),
-                prompt_template: include_str!("../../../../skills/classify-text/SKILL.md").to_string(),
-                input_schema: [("input".to_string(), "string".to_string())].into(),
-                timeout_secs: 60,
-                max_retries: 1,
-                disable_model_invocation: false,
-                policy: Some(SkillPolicy {
-                    allow_implicit_invocation: Some(true),
-                    products: Vec::new(),
-                }),
-            },
+
             crate::orchestration::skill::PromptBasedSkill {
                 name: "summarize-text".to_string(),
                 description: "Summarize long text into concise, structured summaries".to_string(),
@@ -716,9 +704,9 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 }),
             },
             crate::orchestration::skill::PromptBasedSkill {
-                name: "review-pr".to_string(),
-                description: "Review a pull request diff and provide comprehensive, actionable feedback".to_string(),
-                prompt_template: include_str!("../../../../skills/review-pr/SKILL.md").to_string(),
+                name: "code-review".to_string(),
+                description: "Two-mode code review — diff review (git PR/branch changes) and snippet review (static code quality analysis with language-aware scoring)".to_string(),
+                prompt_template: include_str!("../../../../skills/code-review/SKILL.md").to_string(),
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 120,
                 max_retries: 1,
@@ -729,9 +717,9 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 }),
             },
             crate::orchestration::skill::PromptBasedSkill {
-                name: "embed-text".to_string(),
-                description: "Generate a semantic embedding/vector representation of text for similarity search".to_string(),
-                prompt_template: include_str!("../../../../skills/embed-text/SKILL.md").to_string(),
+                name: "analyze-text".to_string(),
+                description: "Classify text into predefined categories or generate semantic embeddings/vector representations for similarity search".to_string(),
+                prompt_template: include_str!("../../../../skills/classify-text/SKILL.md").to_string(),
                 input_schema: [("input".to_string(), "string".to_string())].into(),
                 timeout_secs: 60,
                 max_retries: 1,
