@@ -98,27 +98,6 @@ pub async fn new_acp_server(
         }
     };
 
-    // ── BLUE71 §11: Wire GuardianReviewer for independent model review ──
-    // Uses the first registered agent as the review model. GuardianReviewer
-    // is optional (None = review skipped). Fail-closed on any error.
-    {
-        let names = registry.names();
-        if let Some(first_name) = names.first() {
-            if let Some(agent) = registry.get(first_name) {
-                let guardian = Arc::new(crate::governance::guardian::GuardianReviewer::new(
-                    agent, None,
-                ));
-                if let Ok(mut g) = harness_bus.guardian.write() {
-                    *g = Some(guardian);
-                }
-                tracing::info!(
-                    agent = %first_name,
-                    "BLUE71: GuardianReviewer wired into HarnessBus"
-                );
-            }
-        }
-    }
-
     // Inject RBAC enforcer into the harness bus and create HTTP-level enforcer (GAP-B58-D05)
     use crate::governance::rbac::{Permission, RbacEnforcer};
     let rbac_enforcer: Arc<std::sync::RwLock<RbacEnforcer>> = {
@@ -464,18 +443,47 @@ pub async fn new_acp_server(
     tool_registry.hooks.register(communication_hook);
     tracing::info!("BLUE70: AgentCommunicationHook registered with ToolHookRegistry");
 
-    // ── BLUE71 §11: Register GuardianHook for model-based tool review ──
-    if let Some(agent) = server.agent_registry() {
-        if let Some(reviewer) =
-            crate::governance::guardian::GuardianReviewer::from_registry(&agent, "guardian", None)
-        {
-            let guardian_hook = std::sync::Arc::new(
-                crate::orchestration::tool::types::GuardianHook::new(std::sync::Arc::new(reviewer)),
-            );
-            tool_registry.hooks.register(guardian_hook);
-            tracing::info!("BLUE71: GuardianHook registered for model-based tool review");
+    // ── GuardianHook: config-gated model-based tool review ──────────
+    // Enabled via `guardian_enabled = true` + `guardian_agent = "agent_name"` in config.
+    // When enabled, every tool call is reviewed by the specified LLM agent before
+    // execution. The reviewer operates at the ToolHook level, not at the HarnessBus
+    // level — it does NOT intercept "chat.execute" or other non-tool operations.
+    {
+        let guardian_enabled = app_config
+            .as_ref()
+            .map(|cfg| cfg.security.guardian_enabled)
+            .unwrap_or(false);
+        if guardian_enabled {
+            let agent_name = app_config
+                .as_ref()
+                .map(|cfg| cfg.security.guardian_agent.as_str())
+                .unwrap_or("");
+            if !agent_name.is_empty() {
+                if let Some(agent) = registry.get(agent_name) {
+                    let reviewer = std::sync::Arc::new(
+                        crate::governance::guardian::GuardianReviewer::new(agent, None),
+                    );
+                    let guardian_hook = std::sync::Arc::new(
+                        crate::orchestration::tool::types::GuardianHook::new(reviewer),
+                    );
+                    tool_registry.hooks.register(guardian_hook);
+                    tracing::info!(
+                        "BLUE71: GuardianHook registered with agent '{}'",
+                        agent_name
+                    );
+                } else {
+                    tracing::warn!(
+                        "BLUE71: guardian_agent '{}' not found in registry — GuardianHook disabled",
+                        agent_name
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    "BLUE71: guardian_enabled=true but guardian_agent is empty — GuardianHook disabled"
+                );
+            }
         } else {
-            tracing::info!("BLUE71: Guardian agent not found — guardian review disabled");
+            tracing::debug!("BLUE71: GuardianHook disabled (guardian_enabled=false)");
         }
     }
 

@@ -99,6 +99,16 @@ pub struct SecurityConfig {
     /// Security is enforced at runtime (Layer 3), not via LLM pre-policy.
     #[serde(default)]
     pub url_policy: UrlPolicyConfig,
+    /// Enable GuardianReviewer for model-based tool review (BLUE71 §11).
+    /// When enabled, every tool call is reviewed by a separate LLM agent
+    /// before execution. Fail-closed: any review failure denies the tool.
+    /// Default: false.
+    #[serde(default)]
+    pub guardian_enabled: bool,
+    /// Agent name to use for GuardianReviewer.
+    /// Must be set when `guardian_enabled = true`.
+    #[serde(default)]
+    pub guardian_agent: String,
 }
 
 /// URL access policy for the http_request tool.

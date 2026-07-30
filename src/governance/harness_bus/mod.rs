@@ -51,7 +51,6 @@ use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::drift::drift_protection::{
     DriftProfile, DriftProtectionConfig, DriftProtectionEngine,
 };
-use crate::governance::guardian::GuardianReviewer;
 use crate::governance::hardening::{
     BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle, SandboxLevel, TaskBudget,
 };
@@ -103,12 +102,6 @@ pub struct HarnessBus {
     pub structured_audit_trail: Arc<Mutex<crate::orchestration::audit::AuditTrail>>,
     /// Canonical thread-safe audit log with NDJSON persistence (canonical sink).
     pub audit_log: Arc<ThreadSafeAuditLog>,
-    /// Independent model reviewer for tool action safety (BLUE71 §11).
-    /// When configured, all tool actions are reviewed by a separate model
-    /// before execution. Fail-closed: any error results in Deny.
-    /// Uses RwLock for interior mutability so the field can be set after
-    /// the HarnessBus is wrapped in an Arc.
-    pub guardian: std::sync::RwLock<Option<Arc<GuardianReviewer>>>,
     /// Consecutive allow-count for PUA de-escalation.
     consecutive_allows: AtomicU32,
 }
@@ -156,7 +149,6 @@ impl HarnessBus {
             structured_audit_trail: Arc::new(Mutex::new(
                 crate::orchestration::audit::AuditTrail::new("harness-bus", 1000),
             )),
-            guardian: std::sync::RwLock::new(None),
             audit_log,
             consecutive_allows: AtomicU32::new(0),
         };
@@ -365,16 +357,15 @@ impl HarnessBus {
         verdict
     }
 
-    /// Pre-tool-call validation with optional GuardianReviewer check (BLUE71 §11).
+    /// Pre-tool-call validation against sandbox/budget/RBAC policies.
     ///
-    /// First evaluates the tool against sandbox/budget/RBAC policies via
-    /// `check_tool_call()`. If allowed and a `GuardianReviewer` is configured,
-    /// additionally reviews the action using an independent model. Fail-closed:
-    /// any Guardian error results in a Deny.
+    /// Evaluates the tool via `check_tool_call()` and updates profile
+    /// metrics. This is the single validation entry point used by
+    /// `observe_phase()` and other callers.
     pub async fn validate_action(&self, tool: &str, args: &Value) -> ToolVerdict {
         let verdict = self.evaluator.check_tool_call(tool, args);
 
-        // Phase 1: sync profile update (must drop MutexGuard before any await)
+        // Sync profile update (scope ensures MutexGuard is dropped before any await)
         {
             let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("[harness_bus] lock poisoned, recovering");
@@ -388,59 +379,6 @@ impl HarnessBus {
             }
         } // MutexGuard dropped here
 
-        // Phase 2: GuardianReviewer check (async, no MutexGuard held)
-        if verdict.is_allowed() {
-            let guardian_opt = self.guardian.read().ok().and_then(|g| g.clone());
-            if let Some(ref guardian) = guardian_opt {
-                let summary = format!(
-                    "Tool call validation for {} with {} args",
-                    tool,
-                    args.as_object().map(|o| o.len()).unwrap_or(0)
-                );
-                let action = crate::orchestration::tool::ToolInput {
-                    task_id: format!("guardian-{}", tool),
-                    phase: "governance".into(),
-                    agent_role: "guardian".into(),
-                    objective: format!("Validate tool call: {}", tool),
-                    constraints: None,
-                    evidence: None,
-                    payload: args.clone(),
-                    allowed_base_dir: None,
-                };
-                match guardian.review_action(tool, &action, &summary).await {
-                    crate::governance::guardian::GuardianDecision::Allow { .. } => {
-                        tracing::debug!(tool = %tool, "Guardian: allowed");
-                    }
-                    crate::governance::guardian::GuardianDecision::Deny { reason } => {
-                        tracing::warn!(tool = %tool, reason = %reason, "Guardian: denied");
-                        {
-                            let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-                                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                                poisoned.into_inner()
-                            });
-                            p.sandbox_denials = p.sandbox_denials.saturating_add(1);
-                        }
-                        return ToolVerdict {
-                            allowed: false,
-                            require_review: false,
-                            idempotent: verdict.idempotent,
-                            budget_ok: verdict.budget_ok,
-                            permitted: verdict.permitted,
-                        };
-                    }
-                    crate::governance::guardian::GuardianDecision::EscalateToUser { reason } => {
-                        tracing::warn!(tool = %tool, reason = %reason, "Guardian: escalated");
-                        return ToolVerdict {
-                            allowed: false,
-                            require_review: true,
-                            idempotent: verdict.idempotent,
-                            budget_ok: verdict.budget_ok,
-                            permitted: verdict.permitted,
-                        };
-                    }
-                }
-            }
-        }
         verdict
     }
 

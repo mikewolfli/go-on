@@ -83,10 +83,11 @@ impl AgentCommunicationHook {
     }
 }
 
-// ── BLUE71 §11: GuardianHook — async model-based review ─────────────
+// ── BLUE71 §11: GuardianHook — async model-based tool review ───────────
 
 /// Tool hook that uses GuardianReviewer to review tool actions before execution.
 /// Only takes effect on the async tool path (run_with_fallback_async).
+/// Activated via config: `guardian_enabled = true` + `guardian_agent = "..."`
 pub struct GuardianHook {
     reviewer: std::sync::Arc<crate::governance::guardian::GuardianReviewer>,
 }
@@ -187,7 +188,7 @@ impl ToolHookRegistry {
         }
         // Execute all hooks in parallel and collect errors.
         // This significantly reduces latency compared to serial execution
-        // when multiple hooks (e.g. audit, guardian, metrics) are registered.
+        // when multiple hooks (e.g. audit, metrics) are registered.
         let results: Vec<Result<()>> = join_all(
             hooks
                 .iter()

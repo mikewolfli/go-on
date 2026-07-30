@@ -1,21 +1,21 @@
 //! GuardianReviewer — independent model review for action safety (BLUE71 §11)
 //!
-//! Uses a separate model instance (typically a cheaper/faster model) to review
-//! tool actions before execution. Fail-closed: any error, timeout, or parse failure
-//! results in a Deny decision. A circuit breaker prevents repeated denials from
-//! overwhelming the review system.
+//! Provides an optional independent model review for tool actions before execution.
+//! The GuardianReviewer uses a dedicated "guardian" agent to semantically verify
+//! that each tool action is consistent with user intent.
 //!
 //! Architecture:
 //! - `GuardianReviewer` — the main review orchestrator
 //! - `GuardianCircuitBreaker` — prevents review cycles on persistent denials
 //! - `GuardianDecision` — structured review outcome
 //!
-//! Integration: plugs into the governance tool chain via `check_tool_action()`.
-//! Feed-closed: GuardianReviewer::new() returns None when no review agent is configured,
-//! allowing callers to skip review when the feature is not available.
+//! Fail-closed: any error, timeout, or parse failure results in Deny.
 //!
-//! Convenience: `GuardianReviewer::from_registry()` looks up an agent by name from
-//! an `AgentRegistry`, returning `None` if the agent is not found.
+//! NOTE: GuardianReviewer operates at the ToolHook level only — it reviews
+//! individual tool calls (write_file, bash, etc.) during tool execution.
+//! It does NOT intercept "chat.execute" or other non-tool operations.
+//! The HarnessBus-level guardian field was removed to avoid redundant LLM
+//! review on every chat message.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::agent::{Agent, AgentRegistry};
+use crate::agent::{Agent, AgentRegistry, Message};
 use crate::orchestration::tool::ToolInput;
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ pub enum GuardianDecision {
         /// Reason for denial.
         reason: String,
     },
-    /// Escalate to human (circuit breaker tripped or uncertainty).
+    /// Action requires escalation to user for manual approval.
     EscalateToUser {
         /// Reason for escalation.
         reason: String,
@@ -64,8 +64,8 @@ impl GuardianDecision {
 
 /// Circuit breaker for the GuardianReviewer (BLUE71 §11.2).
 ///
-/// Tracks consecutive denials and recent denial rate. When thresholds are
-/// exceeded, `should_skip_review()` returns true, forcing escalation.
+/// Tracks consecutive and recent denials. When thresholds are exceeded, the
+/// breaker "trips" and escalates to the user instead of calling the LLM again.
 pub struct GuardianCircuitBreaker {
     /// Maximum consecutive denials before tripping.
     max_consecutive_denials: u32,
@@ -88,26 +88,26 @@ impl GuardianCircuitBreaker {
         }
     }
 
-    /// Whether review should be skipped (circuit breaker tripped).
+    /// Returns true if the breaker is tripped and review should be skipped.
     pub fn should_skip_review(&self) -> bool {
         if self.consecutive_denials >= self.max_consecutive_denials {
             return true;
         }
-        let recent_denials: u32 = self.denials.iter().map(|&d| d as u32).sum();
-        recent_denials >= self.max_recent_denials
+        let recent: u32 = self.denials.iter().map(|&d| d as u32).sum();
+        recent >= self.max_recent_denials
     }
 
     /// Record a decision outcome.
-    pub fn record_decision(&mut self, denied: bool) {
-        if denied {
-            self.consecutive_denials += 1;
+    pub fn record_decision(&mut self, is_denial: bool) {
+        if is_denial {
+            self.consecutive_denials = self.consecutive_denials.saturating_add(1);
         } else {
             self.consecutive_denials = 0;
         }
         if self.denials.len() >= self.denials.capacity() {
             self.denials.pop_front();
         }
-        self.denials.push_back(denied);
+        self.denials.push_back(is_denial);
     }
 }
 
@@ -123,9 +123,11 @@ impl Default for GuardianCircuitBreaker {
 
 /// Independent model reviewer for tool action safety (BLUE71 §11).
 ///
-/// Uses a separate agent (typically a cheaper, faster model) to review
-/// tool actions before they are executed. Fail-closed: any error results
-/// in a Deny decision.
+/// Uses a dedicated "guardian" agent to review tool actions semantically
+/// before execution. Operates at the ToolHook level only — does not intercept
+/// non-tool operations like "chat.execute".
+///
+/// Fail-closed: timeout, error, or parse failure → Deny.
 pub struct GuardianReviewer {
     /// The review agent — typically a cheap/fast model.
     review_agent: Arc<dyn Agent>,
@@ -234,7 +236,7 @@ impl GuardianReviewer {
 
         // Build review prompt
         let prompt = Self::build_review_prompt(tool_name, action, summary);
-        let messages = vec![crate::agent::Message {
+        let messages = vec![Message {
             role: "system".to_string(),
             content: prompt,
         }];
@@ -380,103 +382,73 @@ pub struct GuardianBreakerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, Message, ModelInfo, StreamingSender};
+    use crate::agent::{Agent, StreamingSender};
     use async_trait::async_trait;
-    use serde_json::json;
+    use std::sync::Arc;
 
-    /// A test agent that always allows.
     struct AllowAgent;
-
     #[async_trait]
     impl Agent for AllowAgent {
         async fn chat(
             &self,
             _messages: Vec<Message>,
-            _principles: Option<Vec<String>>,
-            _options: Option<std::collections::HashMap<String, serde_json::Value>>,
+            _id: Option<serde_json::Value>,
+            _options: Option<crate::config::PhaseOptions>,
             sender: StreamingSender,
-        ) -> std::result::Result<(), crate::core::error::AppError> {
-            let _ = sender.send("ALLOW\nAction is consistent with user intent.".to_string());
+        ) -> Result<(), anyhow::Error> {
+            let _ = sender.send("ALLOW\naction is safe".to_string());
             Ok(())
         }
-
-        fn available_models(&self) -> Vec<ModelInfo> {
-            vec![ModelInfo {
-                id: "allow-agent".to_string(),
-                name: "Allow Agent".to_string(),
-                description: "Test agent that always allows".to_string(),
-                is_default: true,
-                capabilities: vec!["chat".to_string()],
-                context_window: None,
-            }]
+        fn available_models(&self) -> Vec<String> {
+            vec!["test".to_string()]
         }
     }
 
-    /// A test agent that always denies.
     struct DenyAgent;
-
     #[async_trait]
     impl Agent for DenyAgent {
         async fn chat(
             &self,
             _messages: Vec<Message>,
-            _principles: Option<Vec<String>>,
-            _options: Option<std::collections::HashMap<String, serde_json::Value>>,
+            _id: Option<serde_json::Value>,
+            _options: Option<crate::config::PhaseOptions>,
             sender: StreamingSender,
-        ) -> std::result::Result<(), crate::core::error::AppError> {
+        ) -> Result<(), anyhow::Error> {
             let _ = sender.send("DENY\nAction not requested by user.".to_string());
             Ok(())
         }
-
-        fn available_models(&self) -> Vec<ModelInfo> {
-            vec![ModelInfo {
-                id: "deny-agent".to_string(),
-                name: "Deny Agent".to_string(),
-                description: "Test agent that always denies".to_string(),
-                is_default: true,
-                capabilities: vec!["chat".to_string()],
-                context_window: None,
-            }]
+        fn available_models(&self) -> Vec<String> {
+            vec!["test".to_string()]
         }
     }
 
-    /// A test agent that returns invalid output.
     struct InvalidAgent;
-
     #[async_trait]
     impl Agent for InvalidAgent {
         async fn chat(
             &self,
             _messages: Vec<Message>,
-            _principles: Option<Vec<String>>,
-            _options: Option<std::collections::HashMap<String, serde_json::Value>>,
+            _id: Option<serde_json::Value>,
+            _options: Option<crate::config::PhaseOptions>,
             sender: StreamingSender,
-        ) -> std::result::Result<(), crate::core::error::AppError> {
-            let _ = sender.send("MAYBE\nI'm not sure.".to_string());
+        ) -> Result<(), anyhow::Error> {
+            let _ = sender.send("MAYBE\nUnclear intent".to_string());
             Ok(())
         }
-
-        fn available_models(&self) -> Vec<ModelInfo> {
-            vec![ModelInfo {
-                id: "invalid-agent".to_string(),
-                name: "Invalid Agent".to_string(),
-                description: "Test agent that returns invalid output".to_string(),
-                is_default: true,
-                capabilities: vec!["chat".to_string()],
-                context_window: None,
-            }]
+        fn available_models(&self) -> Vec<String> {
+            vec!["test".to_string()]
         }
     }
 
     fn make_tool_input() -> ToolInput {
         ToolInput {
             task_id: "test-task".to_string(),
-            phase: "execute".to_string(),
-            agent_role: "general".to_string(),
+            phase: "code-gen".to_string(),
+            agent_role: "coder".to_string(),
             objective: "Write a file".to_string(),
             constraints: None,
             evidence: None,
-            payload: json!({}),
+            payload: serde_json::json!({"path": "src/main.rs", "content": "fn main() {}"}),
             allowed_base_dir: None,
         }
     }
