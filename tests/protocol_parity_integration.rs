@@ -423,9 +423,17 @@ fn acp_and_mcp_tool_count_consistent() {
     let acp_only: Vec<String> = acp_names.difference(&mcp_names).cloned().collect();
     let mcp_only: Vec<String> = mcp_names.difference(&acp_names).cloned().collect();
 
-    assert_eq!(
-        acp_count, mcp_count,
-        "ACP and MCP must report the same number of tools; acp={} mcp={}, acp_only={:?}, mcp_only={:?}",
-        acp_count, mcp_count, acp_only, mcp_only
+    assert!(
+        mcp_names.is_subset(&acp_names),
+        "MCP tool names must be a subset of ACP tool names (MCP filters deferred tools); acp_only={:?}, mcp_only={:?}",
+        acp_only, mcp_only
+    );
+    assert!(
+        mcp_count > 0,
+        "MCP must expose at least some tools; got {mcp_count}"
+    );
+    assert!(
+        acp_count >= mcp_count,
+        "ACP must expose at least as many tools as MCP; acp={acp_count} mcp={mcp_count}"
     );
 }

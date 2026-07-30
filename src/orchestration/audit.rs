@@ -16,6 +16,10 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::VecDeque;
 
+// Re-export the unified audit record so both modules can access it.
+#[allow(unused_imports)]
+pub use crate::governance::audit::AuditRecord;
+
 /// A single audit entry recording one decision step in an agent workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {

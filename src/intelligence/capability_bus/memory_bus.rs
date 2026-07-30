@@ -96,8 +96,9 @@ pub struct MemoryBus {
     vector_store: Option<Arc<VectorStore>>,
     /// In-memory memory store (wrapped in StdMutex for sync access).
     memory_store: Option<Arc<StdMutex<MemoryStore>>>,
-    /// In-memory response cache (L1).
-    memory_response_cache: Option<Arc<StdMutex<MemoryResponseCache>>>,
+    /// In-memory response cache (L1).  `MemoryResponseCache` is internally
+    /// thread-safe via its own `RwLock`, so no outer mutex is needed.
+    memory_response_cache: Option<Arc<MemoryResponseCache>>,
     /// Runtime profile / metrics.
     profile: Arc<Mutex<MemoryBusProfile>>,
 }
@@ -110,7 +111,7 @@ impl MemoryBus {
         response_cache: Option<Arc<ResponseCache>>,
         vector_store: Option<Arc<VectorStore>>,
         memory_store: Option<Arc<StdMutex<MemoryStore>>>,
-        memory_response_cache: Option<Arc<StdMutex<MemoryResponseCache>>>,
+        memory_response_cache: Option<Arc<MemoryResponseCache>>,
     ) -> Self {
         Self {
             response_cache,
@@ -131,8 +132,7 @@ impl MemoryBus {
     /// which would silently discard all data.
     pub fn with_default_backends(mut self) -> Self {
         if self.memory_response_cache.is_none() {
-            self.memory_response_cache =
-                Some(Arc::new(StdMutex::new(MemoryResponseCache::default())));
+            self.memory_response_cache = Some(Arc::new(MemoryResponseCache::default()));
         }
         if self.memory_store.is_none() {
             self.memory_store = Some(Arc::new(StdMutex::new(MemoryStore::new(
@@ -149,7 +149,7 @@ impl MemoryBus {
         response_cache: Option<Option<Arc<ResponseCache>>>,
         vector_store: Option<Option<Arc<VectorStore>>>,
         memory_store: Option<Option<Arc<StdMutex<MemoryStore>>>>,
-        memory_response_cache: Option<Option<Arc<StdMutex<MemoryResponseCache>>>>,
+        memory_response_cache: Option<Option<Arc<MemoryResponseCache>>>,
     ) {
         if let Some(rc) = response_cache {
             self.response_cache = rc;
@@ -173,15 +173,7 @@ impl MemoryBus {
         // ---- L1: In-memory response cache ----
         if strategy.use_l1_memory {
             if let Some(ref mrc) = self.memory_response_cache {
-                let cached = {
-                    let guard = mrc.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!(
-                            "memory_response_cache lock poisoned in lookup L1 – recovered"
-                        );
-                        poisoned.into_inner()
-                    });
-                    guard.get(key).map(|s| s.into_bytes())
-                };
+                let cached = mrc.get(key).map(|s| s.into_bytes());
                 if cached.is_some() {
                     let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
                     profile.total_cache_hits += 1;
@@ -259,11 +251,7 @@ impl MemoryBus {
         // ---- L1: In-memory response cache ----
         if strategy.use_l1_memory {
             if let Some(ref mrc) = self.memory_response_cache {
-                let guard = mrc.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("memory_response_cache lock poisoned in store L1 – recovered");
-                    poisoned.into_inner()
-                });
-                guard.put(key.to_string(), value_str.clone(), strategy.ttl_seconds);
+                mrc.put(key.to_string(), value_str.clone(), strategy.ttl_seconds);
             }
         }
 
@@ -339,14 +327,7 @@ impl MemoryBus {
         }
 
         if let Some(ref mrc) = self.memory_response_cache {
-            let guard = match mrc.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("[B48] mrc lock poisoned, recovering");
-                    poisoned.into_inner()
-                }
-            };
-            snapshot.vector_docs_count = guard.prune_and_count() as u32;
+            snapshot.vector_docs_count = mrc.prune_and_count() as u32;
         }
 
         snapshot
@@ -356,14 +337,7 @@ impl MemoryBus {
     pub async fn clear_expired(&self) {
         // L1: In-memory response cache — purge_expired does this inline.
         if let Some(ref mrc) = self.memory_response_cache {
-            let guard = match mrc.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("[B48] mrc lock poisoned, recovering");
-                    poisoned.into_inner()
-                }
-            };
-            guard.purge_expired();
+            mrc.purge_expired();
         }
 
         // L2: SQLite / Postgres response cache.
@@ -449,11 +423,9 @@ mod tests {
     use super::*;
     use crate::memory_module::{MemoryPolicy, MemoryStore};
     use crate::memory_response_cache::MemoryResponseCache;
-    use std::sync::Mutex as StdMutex;
-
     fn make_test_bus() -> MemoryBus {
         // Create minimal backends for testing.
-        let mrc = Arc::new(StdMutex::new(MemoryResponseCache::default()));
+        let mrc = Arc::new(MemoryResponseCache::default());
         let ms = Arc::new(Mutex::new(MemoryStore::new(MemoryPolicy::default())));
 
         // L2 and L3 are left as None to test L1-only path.

@@ -37,6 +37,192 @@ impl From<serde_json::Error> for AuditError {
     }
 }
 
+// ─── Unified AuditRecord ─────────────────────────────────────────────────────
+
+/// Unified audit record that spans both operational compliance and decision-path
+/// tracing concerns.  This type is a superset of every field in
+/// [`AuditLogEntry`] and [`crate::orchestration::audit::AuditEntry`]; use the
+/// `From` / `Into` impls to convert between types without changing existing call
+/// sites.
+///
+/// # Interop
+///
+/// | Direction | Conversion |
+/// |-----------|-----------|
+/// | `AuditLogEntry → AuditRecord` | `From` — all fields map directly |
+/// | `AuditRecord → AuditLogEntry` | `From` — default for missing optional fields |
+/// | `orchestration::AuditEntry → AuditRecord` | `From` — decision-path preserved |
+/// | `AuditRecord → orchestration::AuditEntry` | `From` — event_type required |
+///
+/// # Related types
+/// - [`DecisionPoint`] — steps within `decision_path`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditRecord {
+    /// ISO-8601 timestamp of the event.
+    pub timestamp: String,
+    /// Task identifier this record belongs to.
+    pub task_id: String,
+    /// Agent that made the decision (if applicable).
+    pub agent_id: Option<String>,
+    /// Workflow phase at the time of recording.
+    pub phase: Option<String>,
+    /// Event type (e.g. "tool_call", "llm_completion", "agent_decision").
+    pub event_type: String,
+    /// Tool that was invoked (if applicable).
+    pub tool: Option<String>,
+    /// Decision outcome (e.g. "allow", "deny", "proceed").
+    pub decision: Option<String>,
+    /// Confidence score (0.0–1.0).
+    pub confidence: Option<f64>,
+    /// Snapshot of input state at decision time.
+    pub input_snapshot: Option<serde_json::Value>,
+    /// Snapshot of output state after the decision.
+    pub output_snapshot: Option<serde_json::Value>,
+    /// Data classification label (e.g. "pii", "internal").
+    pub data_classification: Option<String>,
+    /// Compliance tags for regulatory tracking.
+    #[serde(default)]
+    pub compliance_tags: Vec<String>,
+    /// Retention policy for this record.
+    pub retention_policy: Option<String>,
+    /// Correlation ID for linking related audit events.
+    pub correlation_id: Option<String>,
+    /// Ordered list of decision points that led to this outcome.
+    #[serde(default)]
+    pub decision_path: Vec<DecisionPoint>,
+    /// Error message if this record captures a failure.
+    pub error: Option<String>,
+}
+
+/// A single decision point, enriched with agent and outcome metadata.
+///
+/// This type is a superset of the field set found in
+/// [`crate::orchestration::audit::DecisionPoint`]; see the `From` impl for
+/// lossy conversion in that direction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionPoint {
+    /// Step index within the decision path.
+    pub step: usize,
+    /// Agent that made this decision.
+    pub agent: String,
+    /// Action taken at this step.
+    pub action: String,
+    /// Rationale or reasoning for this decision.
+    pub rationale: Option<String>,
+    /// Outcome of the action (e.g. "success", "retry", "abort").
+    pub outcome: String,
+    /// Confidence score (0.0–1.0) at this step.
+    pub confidence: Option<f64>,
+}
+
+// ── Conversions ────────────────────────────────────────────────────────────
+
+impl From<AuditLogEntry> for AuditRecord {
+    fn from(e: AuditLogEntry) -> Self {
+        AuditRecord {
+            timestamp: e.timestamp,
+            task_id: e.task_id,
+            agent_id: e.agent,
+            phase: Some(e.phase),
+            event_type: e.decision.clone(),
+            tool: e.tool,
+            decision: Some(e.decision),
+            confidence: e.confidence.map(|c| c as f64),
+            input_snapshot: Some(e.inputs),
+            output_snapshot: e.outputs,
+            data_classification: e.data_classification,
+            compliance_tags: e.compliance_tags,
+            retention_policy: e.retention_policy,
+            correlation_id: e.correlation_id,
+            decision_path: Vec::new(),
+            error: e.error,
+        }
+    }
+}
+
+impl From<AuditRecord> for AuditLogEntry {
+    fn from(r: AuditRecord) -> Self {
+        AuditLogEntry {
+            timestamp: r.timestamp,
+            task_id: r.task_id,
+            phase: r.phase.unwrap_or_default(),
+            agent: r.agent_id,
+            tool: r.tool,
+            decision: r.decision.unwrap_or_default(),
+            inputs: r.input_snapshot.unwrap_or(serde_json::Value::Null),
+            outputs: r.output_snapshot,
+            error: r.error,
+            confidence: r.confidence.map(|c| c as f32),
+            data_classification: r.data_classification,
+            compliance_tags: r.compliance_tags,
+            retention_policy: r.retention_policy,
+            correlation_id: r.correlation_id,
+        }
+    }
+}
+
+// ── Orchestration interop conversions ─────────────────────────────────────
+
+impl From<crate::orchestration::audit::AuditEntry> for AuditRecord {
+    fn from(e: crate::orchestration::audit::AuditEntry) -> Self {
+        let decision_path: Vec<DecisionPoint> = e
+            .decision_path
+            .into_iter()
+            .map(|dp| DecisionPoint {
+                step: dp.step,
+                agent: String::new(),
+                action: dp.action,
+                rationale: dp.rationale,
+                outcome: String::new(),
+                confidence: dp.confidence,
+            })
+            .collect();
+        AuditRecord {
+            timestamp: e.timestamp,
+            task_id: e.task_id,
+            agent_id: Some(e.agent_id),
+            phase: None,
+            event_type: e.event_type,
+            tool: None,
+            decision: None,
+            confidence: None,
+            input_snapshot: Some(e.input_snapshot),
+            output_snapshot: Some(e.output_snapshot),
+            data_classification: None,
+            compliance_tags: vec![],
+            retention_policy: None,
+            correlation_id: None,
+            decision_path,
+            error: None,
+        }
+    }
+}
+
+impl From<AuditRecord> for crate::orchestration::audit::AuditEntry {
+    fn from(r: AuditRecord) -> Self {
+        use crate::orchestration::audit::DecisionPoint as Odp;
+        let decision_path: Vec<Odp> = r
+            .decision_path
+            .into_iter()
+            .map(|dp| Odp {
+                step: dp.step,
+                action: dp.action,
+                rationale: dp.rationale,
+                confidence: dp.confidence,
+            })
+            .collect();
+        crate::orchestration::audit::AuditEntry {
+            timestamp: r.timestamp,
+            event_type: r.event_type,
+            agent_id: r.agent_id.unwrap_or_default(),
+            task_id: r.task_id,
+            input_snapshot: r.input_snapshot.unwrap_or(serde_json::Value::Null),
+            output_snapshot: r.output_snapshot.unwrap_or(serde_json::Value::Null),
+            decision_path,
+        }
+    }
+}
+
 // ─── AuditLogEntry (unchanged) ──────────────────────────────────────────────
 
 /// Audit log entry for all agent/tool/phase decisions

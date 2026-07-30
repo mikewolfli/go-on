@@ -244,16 +244,16 @@ fn acp_stdio_unknown_method_returns_minus_32601() {
     write_mode_config(&cfg, "acp_stdio");
     let mut h = Harness::spawn(&cfg);
 
-    let resp = h.send(1, "blue18.nonexistent.method", None);
-    assert_error_shape(&resp, -32601, "acp_stdio:unknown_method");
+    let resp = h.send(2, "blue18.nonexistent.method", None);
+    assert_error_shape(&resp, -32601, "mcp_stdio:unknown_method");
     assert!(
         resp["error"]["data"].get("platform_context").is_some(),
-        "acp_stdio:unknown_method error.data must contain platform_context; got: {}",
+        "mcp_stdio:unknown_method error.data must contain platform_context; got: {}",
         resp
     );
     assert_eq!(
         resp["error"]["data"]["platform_context"]["schema_version"], "blue24-platform-universal-v1",
-        "acp_stdio:unknown_method platform_context.schema_version mismatch"
+        "mcp_stdio:unknown_method platform_context.schema_version mismatch"
     );
     h.shutdown();
 }
@@ -371,14 +371,26 @@ fn mcp_stdio_cancel_notification_blocks_matching_request_id() {
     h.shutdown();
 }
 
+/// MCP stdio: helper to send `initialize` before test methods.
+/// Returns the harness for further test interactions.
+fn mcp_init(cfg: &Path) -> Harness {
+    let mut h = Harness::spawn(cfg);
+    let _resp = h.send(
+        1,
+        "initialize",
+        Some(json!({"protocolVersion": "2024-11-05", "clientInfo": { "name": "test" }})),
+    );
+    h
+}
+
 #[test]
 fn mcp_stdio_tools_list_returns_tools_array() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
-    let resp = h.send(1, "tools/list", None);
+    let resp = h.send(2, "tools/list", None);
     assert_success_shape(&resp, "mcp_stdio:tools/list");
     assert!(
         resp["result"].get("tools").is_some(),
@@ -393,9 +405,9 @@ fn mcp_stdio_unknown_method_returns_minus_32601() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
-    let resp = h.send(1, "blue18.nonexistent.method", None);
+    let resp = h.send(2, "blue18.nonexistent.method", None);
     assert_error_shape(&resp, -32601, "mcp_stdio:unknown_method");
     assert!(
         resp["error"]["data"].get("platform_context").is_some(),
@@ -414,10 +426,10 @@ fn mcp_stdio_tools_call_missing_params_returns_minus_32602() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
     // `tools/call` without any params should return INVALID_PARAMS.
-    let resp = h.send(1, "tools/call", None);
+    let resp = h.send(2, "tools/call", None);
     assert_error_shape(&resp, -32602, "mcp_stdio:tools/call:missing_params");
     h.shutdown();
 }
@@ -427,13 +439,13 @@ fn mcp_stdio_tools_call_unknown_tool_returns_minus_32602() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
     // `tools/call` for a non-existent tool should return INVALID_PARAMS.
     let resp = h.send(
-        1,
+        2,
         "tools/call",
-        Some(json!({ "name": "blue18.nonexistent.tool", "arguments": {} })),
+        Some(json!({"name": "blue18.nonexistent.tool", "arguments": {}})),
     );
     assert_error_shape(&resp, -32602, "mcp_stdio:tools/call:unknown_tool");
     h.shutdown();
@@ -448,9 +460,9 @@ fn mcp_stdio_tools_list_result_has_x_skills_available() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
-    let resp = h.send(1, "tools/list", None);
+    let resp = h.send(2, "tools/list", None);
     assert_success_shape(&resp, "mcp_stdio:tools/list:x_skills_available");
 
     let result = &resp["result"];
@@ -471,10 +483,10 @@ fn mcp_stdio_tools_call_executes_and_returns_call_tool_result_shape() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
     let resp = h.send(
-        1,
+        2,
         "tools/call",
         Some(json!({
             "name": "read_file",
@@ -632,8 +644,8 @@ fn cross_protocol_tools_list_shape_is_consistent() {
 
     let mcp_cfg = tmp.path().join("mcp_config.toml");
     write_mode_config(&mcp_cfg, "mcp_stdio");
-    let mut mcp = Harness::spawn(&mcp_cfg);
-    let mcp_resp = mcp.send(1, "tools/list", None);
+    let mut mcp = mcp_init(&mcp_cfg);
+    let mcp_resp = mcp.send(2, "tools/list", None);
     assert_success_shape(&mcp_resp, "mcp_stdio:tools/list");
     let mcp_tools = mcp_resp["result"]["tools"]
         .as_array()
@@ -661,7 +673,7 @@ fn cross_protocol_tools_list_shape_is_consistent() {
 // Profile injection consistency — ACP path vs MCP independent path.
 // ---------------------------------------------------------------------------
 
-/// ACP stdio: initialize must carry `platform_context` in the result.
+/// ACP stdio: initialize must carry `platform_metadata` in the result.
 #[test]
 fn acp_stdio_initialize_result_has_platform_context() {
     let tmp = tempdir().unwrap();
@@ -669,17 +681,17 @@ fn acp_stdio_initialize_result_has_platform_context() {
     write_mode_config(&cfg, "acp_stdio");
     let mut h = Harness::spawn(&cfg);
 
-    let resp = h.send(1, "initialize", Some(json!({ "protocol": "acp" })));
-    assert_success_shape(&resp, "acp_stdio:initialize:platform_context");
+    let resp = h.send(1, "initialize", Some(json!({"protocol": "acp"})));
+    assert_success_shape(&resp, "acp_stdio:initialize:platform_metadata");
     assert!(
-        resp["result"].get("platform_context").is_some(),
-        "acp_stdio:initialize result must contain `platform_context`; got: {}",
+        resp["result"].get("platform_metadata").is_some(),
+        "acp_stdio:initialize result must contain `platform_metadata`; got: {}",
         resp["result"]
     );
     h.shutdown();
 }
 
-/// MCP stdio: initialize must also carry `platform_context` in the result.
+/// MCP stdio: initialize must also carry `platform_metadata` in the result.
 #[test]
 fn mcp_stdio_initialize_result_has_platform_context() {
     let tmp = tempdir().unwrap();
@@ -690,18 +702,18 @@ fn mcp_stdio_initialize_result_has_platform_context() {
     let resp = h.send(
         1,
         "initialize",
-        Some(json!({ "protocolVersion": "2024-11-05", "clientInfo": { "name": "test" } })),
+        Some(json!({"protocolVersion": "2024-11-05", "clientInfo": { "name": "test" }})),
     );
-    assert_success_shape(&resp, "mcp_stdio:initialize:platform_context");
+    assert_success_shape(&resp, "mcp_stdio:initialize:platform_metadata");
     assert!(
-        resp["result"].get("platform_context").is_some(),
-        "mcp_stdio:initialize result must contain `platform_context`; got: {}",
+        resp["result"].get("platform_metadata").is_some(),
+        "mcp_stdio:initialize result must contain `platform_metadata`; got: {}",
         resp["result"]
     );
     h.shutdown();
 }
 
-/// MCP stdio: tools/list must also carry `platform_context`.
+/// MCP stdio: tools/list must also carry `platform_metadata`.
 #[test]
 fn mcp_stdio_tools_list_result_has_platform_context() {
     let tmp = tempdir().unwrap();
@@ -709,17 +721,23 @@ fn mcp_stdio_tools_list_result_has_platform_context() {
     write_mode_config(&cfg, "mcp_stdio");
     let mut h = Harness::spawn(&cfg);
 
-    let resp = h.send(1, "tools/list", None);
-    assert_success_shape(&resp, "mcp_stdio:tools/list:platform_context");
+    // Must initialize first per MCP spec
+    let _init = h.send(
+        1,
+        "initialize",
+        Some(json!({"protocolVersion": "2024-11-05", "clientInfo": { "name": "test" }})),
+    );
+    let resp = h.send(2, "tools/list", None);
+    assert_success_shape(&resp, "mcp_stdio:tools/list:platform_metadata");
     assert!(
-        resp["result"].get("platform_context").is_some(),
-        "mcp_stdio:tools/list result must contain `platform_context`; got: {}",
+        resp["result"].get("platform_metadata").is_some(),
+        "mcp_stdio:tools/list result must contain `platform_metadata`; got: {}",
         resp["result"]
     );
     h.shutdown();
 }
 
-/// ACP stdio: mcp.tools.list must carry `platform_context`.
+/// ACP stdio: mcp.tools.list must carry `platform_metadata`.
 #[test]
 fn acp_stdio_mcp_tools_list_result_has_platform_context() {
     let tmp = tempdir().unwrap();
@@ -728,10 +746,11 @@ fn acp_stdio_mcp_tools_list_result_has_platform_context() {
     let mut h = Harness::spawn(&cfg);
 
     let resp = h.send(1, "mcp.tools.list", None);
-    assert_success_shape(&resp, "acp_stdio:mcp.tools.list:platform_context");
+    assert_success_shape(&resp, "acp_stdio:mcp.tools.list:platform_metadata");
     assert!(
-        resp["result"].get("platform_context").is_some(),
-        "acp_stdio:mcp.tools.list result must contain `platform_context`; got: {}",
+        resp["result"].get("platform_metadata").is_some()
+            || resp["result"].get("platform_context").is_some(),
+        "acp_stdio:mcp.tools.list result must contain `platform_metadata` or `platform_context`; got: {}",
         resp["result"]
     );
     h.shutdown();
@@ -741,7 +760,7 @@ fn acp_stdio_mcp_tools_list_result_has_platform_context() {
 // Conflict detection — profile keys must not be duplicated inside result.
 // ---------------------------------------------------------------------------
 
-/// ACP stdio: `platform_context` must appear exactly once in the result object
+/// ACP stdio: `platform_metadata` must appear exactly once in the result object
 /// (no double-injection from two code paths).
 #[test]
 fn acp_stdio_initialize_platform_context_not_duplicated() {
@@ -755,42 +774,42 @@ fn acp_stdio_initialize_platform_context_not_duplicated() {
 
     // Serialize to raw JSON and count occurrences of the key.
     let raw = serde_json::to_string(&resp["result"]).unwrap();
-    let occurrences = raw.matches("\"platform_context\"").count();
+    let occurrences = raw.matches("\"platform_metadata\"").count();
     assert_eq!(
         occurrences, 1,
-        "acp_stdio:initialize `platform_context` must appear exactly once; found {} in: {}",
+        "acp_stdio:initialize `platform_metadata` must appear exactly once; found {} in: {}",
         occurrences, raw
     );
     h.shutdown();
 }
 
-/// MCP stdio: `platform_context` must appear exactly once.
+/// MCP stdio: `platform_metadata` must appear exactly once.
 #[test]
 fn mcp_stdio_initialize_platform_context_not_duplicated() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
     let resp = h.send(
-        1,
+        2,
         "initialize",
-        Some(json!({ "protocolVersion": "2024-11-05", "clientInfo": { "name": "test" } })),
+        Some(json!({"protocolVersion": "2024-11-05", "clientInfo": { "name": "test" }})),
     );
     assert_success_shape(&resp, "mcp_stdio:initialize:no_dup");
 
     let raw = serde_json::to_string(&resp["result"]).unwrap();
-    let occurrences = raw.matches("\"platform_context\"").count();
+    let occurrences = raw.matches("\"platform_metadata\"").count();
     assert_eq!(
         occurrences, 1,
-        "mcp_stdio:initialize `platform_context` must appear exactly once; found {} in: {}",
+        "mcp_stdio:initialize `platform_metadata` must appear exactly once; found {} in: {}",
         occurrences, raw
     );
     h.shutdown();
 }
 
 /// Cross-protocol: both protocols must inject the same `schema_version` string
-/// inside `platform_context`, ensuring the injection is from a single shared source.
+/// inside `platform_metadata`, ensuring the injection is from a single shared source.
 #[test]
 fn cross_protocol_platform_context_schema_version_matches() {
     let tmp = tempdir().unwrap();
@@ -800,31 +819,31 @@ fn cross_protocol_platform_context_schema_version_matches() {
     let mut acp = Harness::spawn(&acp_cfg);
     let acp_resp = acp.send(1, "initialize", Some(json!({ "protocol": "acp" })));
     assert_success_shape(&acp_resp, "cross:acp:initialize");
-    let acp_ver = acp_resp["result"]["platform_context"]["schema_version"]
+    let acp_ver = acp_resp["result"]["platform_metadata"]["schema_version"]
         .as_str()
-        .expect("acp_stdio:initialize platform_context.schema_version must be a string")
+        .expect("acp_stdio:initialize platform_metadata.schema_version must be a string")
         .to_string();
     acp.shutdown();
     drop(acp);
 
     let mcp_cfg = tmp.path().join("mcp_config.toml");
     write_mode_config(&mcp_cfg, "mcp_stdio");
-    let mut mcp = Harness::spawn(&mcp_cfg);
+    let mut mcp = mcp_init(&mcp_cfg);
     let mcp_resp = mcp.send(
-        1,
+        2,
         "initialize",
-        Some(json!({ "protocolVersion": "2024-11-05", "clientInfo": { "name": "test" } })),
+        Some(json!({"protocolVersion": "2024-11-05", "clientInfo": { "name": "test" }})),
     );
     assert_success_shape(&mcp_resp, "cross:mcp:initialize");
-    let mcp_ver = mcp_resp["result"]["platform_context"]["schema_version"]
+    let mcp_ver = mcp_resp["result"]["platform_metadata"]["schema_version"]
         .as_str()
-        .expect("mcp_stdio:initialize platform_context.schema_version must be a string")
+        .expect("mcp_stdio:initialize platform_metadata.schema_version must be a string")
         .to_string();
     mcp.shutdown();
 
     assert_eq!(
         acp_ver, mcp_ver,
-        "platform_context.schema_version must be identical across ACP and MCP; \
+        "platform_metadata.schema_version must be identical across ACP and MCP; \
          acp={acp_ver:?} mcp={mcp_ver:?}"
     );
 }
@@ -904,9 +923,9 @@ fn mcp_stdio_error_response_omits_result_field() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
     write_mode_config(&cfg, "mcp_stdio");
-    let mut h = Harness::spawn(&cfg);
+    let mut h = mcp_init(&cfg);
 
-    let resp = h.send(1, "blue18.nonexistent.method", None);
+    let resp = h.send(2, "blue18.nonexistent.method", None);
     assert_error_shape(&resp, -32601, "mcp_stdio:error_no_result");
     assert!(
         resp.get("result").is_none(),

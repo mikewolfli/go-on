@@ -304,6 +304,8 @@ pub(crate) async fn run_agent_collecting(
                         max_concurrency: 10,
                         circuit_breaker_limit: 5,
                         operation_mode: "edit".to_string(),
+                        governance_required: true,
+                        is_safeguard: false,
                         acp_session_id: None,
                     },
                     None, // no progress_tx in ACP secondary path

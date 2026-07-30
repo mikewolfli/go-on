@@ -420,6 +420,9 @@ pub async fn run_autonomy_loop(
                 max_concurrency: 10,
                 circuit_breaker_limit: MAX_CONSECUTIVE_TOOL_FAILURES,
                 operation_mode: config.operation_mode.clone(),
+                governance_required: config.operation_mode == "edit"
+                    || config.operation_mode == "safeguard",
+                is_safeguard: config.operation_mode == "safeguard",
                 acp_session_id: config.acp_session_id.clone(),
             },
             config.progress_tx.clone(),

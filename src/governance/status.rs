@@ -660,7 +660,9 @@ mod tests {
     #[test]
     fn test_unknown_tool_blocked() {
         let args = json!({"path": "foo"});
-        let r = quick_check_tool("delete_world", &args);
+        // Use a name that does NOT match any keyword-based fallback
+        // ("delete" → Write, "read" → Read, etc.)
+        let r = quick_check_tool("zzz_unknown_tool", &args);
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("Unknown tool"));
     }

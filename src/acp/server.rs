@@ -219,8 +219,9 @@ impl Default for DrainGuard {
 pub struct CacheLayer {
     /// Response cache (SQLite-based)
     pub response_cache: Option<Arc<ResponseCache>>,
-    /// Memory response cache (std::sync::Mutex for consistency with memory_bus set_backends)
-    pub memory_response_cache: Arc<StdMutex<MemoryResponseCache>>,
+    /// Memory response cache (L1).  `MemoryResponseCache` is internally thread-safe
+    /// via its own `RwLock`, so no outer mutex is needed.
+    pub memory_response_cache: Arc<MemoryResponseCache>,
     /// Vector store for similarity search and memory
     pub vector_store: Option<Arc<VectorStore>>,
     /// Multi-level token cache for Agent output reuse (L1 exact, L2 semantic, L3 template)
@@ -1277,9 +1278,7 @@ impl ServerBuilder {
             }
         }
         let failure_prevention = Arc::new(StdMutex::new(failure_prevention_state));
-        let memory_response_cache = Arc::new(StdMutex::new(
-            self.memory_response_cache.unwrap_or_default(),
-        ));
+        let memory_response_cache = Arc::new(self.memory_response_cache.unwrap_or_default());
         let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
 
         // Initialize skill registry — use pre-loaded from bootstrap if available,

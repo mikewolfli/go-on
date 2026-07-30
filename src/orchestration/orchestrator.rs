@@ -441,7 +441,9 @@ mod tests {
         let registry = Arc::new(AgentRegistry::new());
         let safeguard = select_mode_runtime_with_registry("safeguard", registry);
         assert_eq!(safeguard.kind(), ModeKind::SafeGuard);
-        assert_eq!(safeguard.posture(), ApprovalPosture::Auto);
+        // SafeGuard mode defaults to Suggest posture (requires approval
+        // at high-risk nodes) per mode.rs default_posture_for().
+        assert_eq!(safeguard.posture(), ApprovalPosture::Suggest);
     }
 
     #[test]

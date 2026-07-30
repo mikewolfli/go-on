@@ -27,6 +27,7 @@ use anyhow::Result;
 use opentelemetry::Context as OtelContext;
 use serde_json::{json, Value};
 use tracing::{debug, info};
+use futures_util::future::join_all;
 
 use crate::acp::helpers::autonomy_metrics::{
     record_cache_bypass_for_execution, record_cache_shortcircuit_refused,
@@ -314,7 +315,8 @@ pub(crate) async fn observe_phase(
             emit_status_event(stream_observer, "Pre-fetching URLs...", "analyzing").await?;
         }
 
-        for (msg_idx, url) in url_entries {
+        // Phase 1: Fetch all URLs in parallel
+        let fetch_futures: Vec<_> = url_entries.iter().filter_map(|(msg_idx, url)| {
             let url_lower = url.to_lowercase();
             if url_lower.starts_with("http://localhost")
                 || url_lower.starts_with("http://127.0.0.1")
@@ -329,30 +331,39 @@ pub(crate) async fn observe_phase(
                     "observe_phase: skipping pre-fetch for local/private URL: {}",
                     url
                 );
-                continue;
+                return None;
             }
 
-            tracing::info!("observe_phase: auto-detected URL, pre-fetching: {}", url);
-            let fetch_url = url.split('#').next().unwrap_or(&url).to_string();
+            let fetch_url = url.split('#').next().unwrap_or(url).to_string();
+            let url_owned = url.clone();
+            let msg_idx = *msg_idx;
+            Some(async move {
+                tracing::info!("observe_phase: auto-detected URL, pre-fetching: {}", url_owned);
 
-            // Phase 1: Fetch the page HTML (aggressive 3s timeout)
-            let fetch_result: Option<(String, String)> = match tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                reqwest::get(&fetch_url),
-            )
-            .await
-            {
-                Ok(Ok(resp)) => {
-                    let status = resp.status().to_string();
-                    match tokio::time::timeout(std::time::Duration::from_secs(2), resp.text()).await
-                    {
-                        Ok(Ok(body)) => Some((status, body)),
-                        _ => None,
+                let result = match tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    reqwest::get(&fetch_url),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) => {
+                        let status = resp.status().to_string();
+                        match tokio::time::timeout(std::time::Duration::from_secs(2), resp.text()).await
+                        {
+                            Ok(Ok(body)) => Some((status, body)),
+                            _ => None,
+                        }
                     }
-                }
-                _ => None,
-            };
+                    _ => None,
+                };
+                (msg_idx, url_owned, fetch_url, result)
+            })
+        }).collect();
 
+        let fetch_results = join_all(fetch_futures).await;
+
+        // Phase 2: Process each result sequentially (SPA detection, API probing, message insertion)
+        for (msg_idx, url, fetch_url, fetch_result) in fetch_results {
             if let Some((status, body)) = fetch_result {
                 let truncated = if body.len() > 8192 {
                     format!("{}...\n[Response truncated at 8192 bytes]", &body[..8192])

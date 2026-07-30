@@ -3,7 +3,7 @@
 //! This module contains background task implementations for the ACP server,
 //! including maintenance cycles, health checks, and periodic operations.
 
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -36,7 +36,7 @@ pub struct MaintenanceCycleResult {
 /// into a single struct, eliminating the previous 12-parameter function signature.
 #[derive(Debug)]
 pub struct BackgroundContext {
-    pub memory_cache: Arc<StdMutex<MemoryResponseCache>>,
+    pub memory_cache: Arc<MemoryResponseCache>,
     pub memory_store: Arc<tokio::sync::Mutex<MemoryStore>>,
     pub maintenance: Arc<tokio::sync::Mutex<MaintenanceTracker>>,
     pub shutdown_notify: Arc<Notify>,
@@ -77,7 +77,7 @@ pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
 
 /// Perform maintenance cycle
 pub async fn perform_maintenance_cycle(
-    memory_cache: Arc<StdMutex<MemoryResponseCache>>,
+    memory_cache: Arc<MemoryResponseCache>,
     memory_store: Arc<TokioMutex<MemoryStore>>,
     maintenance: Arc<TokioMutex<MaintenanceTracker>>,
     source: &str,
@@ -85,10 +85,7 @@ pub async fn perform_maintenance_cycle(
     let _ = with_acp_lock_async(maintenance.as_ref(), |guard| guard.note_started()).await;
 
     let mut result = MaintenanceCycleResult {
-        memory_expired_removed: {
-            let guard = memory_cache.lock().unwrap_or_else(|e| e.into_inner());
-            guard.purge_expired()
-        },
+        memory_expired_removed: memory_cache.purge_expired(),
         ..MaintenanceCycleResult::default()
     };
 
@@ -714,7 +711,7 @@ pub async fn run_maintenance_cycle(
     }
 
     // Fallback: create fresh state (before start_background_tasks is called).
-    let memory_cache = Arc::new(StdMutex::new(MemoryResponseCache::default()));
+    let memory_cache = Arc::new(MemoryResponseCache::default());
     let memory_store = Arc::new(tokio::sync::Mutex::new(
         MemoryStore::new(Default::default()),
     ));

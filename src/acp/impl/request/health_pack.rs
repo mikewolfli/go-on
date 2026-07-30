@@ -208,13 +208,7 @@ pub(super) async fn breaker_recovery_payload(server: &AcpServer, params: Value) 
 // ---------------------------------------------------------------------------
 
 pub(super) async fn cache_clear_payload(server: &AcpServer) -> Result<Value> {
-    let memory_removed = server
-        .cache_deps
-        .cache
-        .memory_response_cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear_all();
+    let memory_removed = server.cache_deps.cache.memory_response_cache.clear_all();
     let persistent_removed = if let Some(cache) = server.cache_deps.cache.response_cache.clone() {
         cache.clear_all().await?
     } else {

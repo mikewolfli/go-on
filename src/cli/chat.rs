@@ -2383,6 +2383,8 @@ async fn run_tool_execution_phase(
             max_concurrency: MAX_CONCURRENT_TOOLS,
             circuit_breaker_limit: 0, // CLI handles failures inline
             operation_mode: "ask".to_string(),
+            governance_required: false,
+            is_safeguard: false,
             acp_session_id: None,
         },
         None, // no SSE progress in CLI

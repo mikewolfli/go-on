@@ -10,7 +10,10 @@
 //! - `cli/chat.rs` (CLI path — was already parallel but independently implemented)
 //! - `dag_driver.rs` (dead code, entire module to be deleted)
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::orchestration::tool::governance_gate::{
@@ -34,6 +37,11 @@ pub(crate) struct ToolExecConfig {
     pub circuit_breaker_limit: usize,
     /// Operation mode for governance gate ("edit", "safeguard", "full_auto", etc.).
     pub operation_mode: String,
+    /// Pre-computed: whether this mode requires governance gate checks.
+    /// Avoids repeated string comparison in the per-tool hot path.
+    pub governance_required: bool,
+    /// Pre-computed: whether this mode is safeguard (stricter checks).
+    pub is_safeguard: bool,
     /// ACP session ID for tool call notifications.
     pub acp_session_id: Option<String>,
 }
@@ -44,6 +52,8 @@ impl Default for ToolExecConfig {
             max_concurrency: 10,
             circuit_breaker_limit: 5,
             operation_mode: "ask".to_string(),
+            governance_required: false,
+            is_safeguard: false,
             acp_session_id: None,
         }
     }
@@ -241,34 +251,24 @@ async fn execute_single_tool(
     // Low-risk tools (reads, utilities, etc.) skip the blocking governance
     // gate to avoid unnecessary latency. Instead, their access is recorded
     // via async audit logging. Safeguard mode always enforces the full gate.
-    if config.operation_mode == "edit" || config.operation_mode == "safeguard" {
-        if is_low_risk_tool(&tool_name) && config.operation_mode != "safeguard" {
+    // The `governance_required` and `is_safeguard` fields are pre-computed
+    // at config construction time to avoid string comparison on every call.
+    if config.governance_required {
+        if is_low_risk_tool(&tool_name) && !config.is_safeguard {
             low_risk_audit_log(&tool_name, &config.operation_mode);
         } else {
+            let risk_score = if config.is_safeguard { 0.5 } else { 0.0 };
             let _ = emit_tool_approval_event(
                 &progress_tx,
                 &tool_name,
                 &parsed_args,
                 &config.operation_mode,
-                if config.operation_mode == "safeguard" {
-                    0.5
-                } else {
-                    0.0
-                },
+                risk_score,
             )
             .await;
 
-            let approved = ensure_tool_permission(
-                config,
-                &tool_name,
-                &parsed_args,
-                if config.operation_mode == "safeguard" {
-                    0.5
-                } else {
-                    0.0
-                },
-            )
-            .await;
+            let approved =
+                ensure_tool_permission(config, &tool_name, &parsed_args, risk_score).await;
 
             if !approved {
                 let denied_msg = format!("Tool '{}' denied by user approval gate.", tool_name);
@@ -545,11 +545,31 @@ async fn ensure_tool_permission(
 }
 
 /// Look up a tool's input schema JSON string by name, at runtime.
+/// Cache of pre-computed tool schema strings, populated on first use.
+/// Avoids repeated `serde_json::to_string_pretty` calls for the same tool.
+static SCHEMA_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn schema_cache() -> &'static Mutex<HashMap<String, String>> {
+    SCHEMA_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn lookup_tool_schema(tool_name: &str) -> Option<String> {
+    // Check cache first.
+    if let Ok(cache) = schema_cache().lock() {
+        if let Some(cached) = cache.get(tool_name) {
+            return Some(cached.clone());
+        }
+    }
+
     let registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
     if let Some(tool) = registry.get(tool_name) {
         let schema = tool.input_schema();
-        serde_json::to_string_pretty(&schema).ok()
+        let schema_str = serde_json::to_string_pretty(&schema).ok()?;
+        // Populate cache for future lookups.
+        if let Ok(mut cache) = schema_cache().lock() {
+            cache.insert(tool_name.to_string(), schema_str.clone());
+        }
+        Some(schema_str)
     } else {
         None
     }

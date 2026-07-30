@@ -277,6 +277,14 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    /// Install the Rustls CryptoProvider once for all tests in this module.
+    /// Required by rustls 0.23+ — without this, server config / acceptor
+    /// construction will panic with "Could not automatically determine the
+    /// process-level CryptoProvider".
+    fn ensure_crypto_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────
 
     /// Generates a CA, a server cert+key, and a client cert signed by the CA,
@@ -292,6 +300,7 @@ mod tests {
 
     impl TestCertFixture {
         fn new() -> Self {
+            ensure_crypto_provider();
             use rcgen::*;
 
             // ── CA ──────────────────────────────────────────────────────
