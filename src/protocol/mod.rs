@@ -1,5 +1,4 @@
 pub mod access_mode;
-pub mod acp_methods;
 
 pub mod mcp_server;
 

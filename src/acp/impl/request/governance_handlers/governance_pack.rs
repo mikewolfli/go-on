@@ -56,7 +56,7 @@ pub(crate) fn infer_risk_score(method: &str, task_type: &TaskType) -> f64 {
         return 0.9;
     }
     // Unknown/novel methods carry elevated risk (fail-closed principle)
-    if !crate::protocol::acp_methods::AcpMethodNames::is_known(method) {
+    if !crate::acp::method_names::AcpMethodNames::is_known(method) {
         // Only apply elevated baseline for non-infrastructure, non-MCP methods
         let is_mcp = method.starts_with("mcp.");
         let is_infra = matches!(

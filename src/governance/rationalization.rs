@@ -7,7 +7,7 @@
 //!
 //! # Status
 //! Fully wired. `SelfRationalizationGuard` is actively called from four locations:
-//! `PolicyEvaluator` (P1-11), `HarnessBus`, `init_intel_voters` in the intelligence hub,
+//! `PolicyEvaluator` (P1-11), `HarnessBus`, `init_intelligence_hub` in the intelligence hub,
 //! and `RationalizationGuardVoter` in the voting subsystem.
 
 use serde::{Deserialize, Serialize};

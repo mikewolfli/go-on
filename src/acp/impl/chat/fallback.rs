@@ -92,11 +92,25 @@ pub(crate) async fn execute_fallback_agents(
     let mut quota_failed_agents: Vec<String> = Vec::with_capacity(agent_list.len());
     let mut high_risk_vote_jobs: Vec<HighRiskVoteJob> = Vec::with_capacity(max_vote_agents);
 
+    // When the user explicitly selected a model, skip fallback entirely.
+    // Only the matching agent(s) are in agent_list after filter_agents_by_model;
+    // if the first agent fails, report the error directly instead of trying
+    // other agents (which would be the wrong provider for the selected model).
+    let model_is_specific = base_agent_options
+        .get("model")
+        .and_then(|v| v.as_str())
+        .is_some_and(|m| !m.is_empty() && m != "auto");
+
     use futures_util::future::join_all;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(5));
     let mut futures = Vec::with_capacity(agent_list.len());
 
     for (agent_name, agent) in agent_list.into_iter() {
+        // When model is specific, only try the first matching agent.
+        // If it fails, return the error directly — no automatic fallback.
+        if model_is_specific && !futures.is_empty() {
+            break;
+        }
         // High-risk multi-agent vote collection: skip regular execution
         if enable_high_risk_multi_agent_vote {
             let strong_model = if agent.supports_model_override() {
@@ -154,7 +168,13 @@ pub(crate) async fn execute_fallback_agents(
         // to fallback agents causes errors (e.g., "deepseek-v4-pro" sent to copilot).
         // Each fallback agent should use its own configured default model.
         let mut per_attempt_options = base_agent_options.clone();
-        per_attempt_options.remove("model");
+        // When the user explicitly selected a model, keep it for the matching
+        // agent. Only strip model override when falling back to other agents
+        // (model_is_specific = false) so each fallback agent uses its own
+        // configured default model instead of a wrong provider override.
+        if !model_is_specific {
+            per_attempt_options.remove("model");
+        }
         let stream_obs = stream_observer.clone();
         let msg_clone = agent_messages.clone();
         let principles = phase.principles.clone();

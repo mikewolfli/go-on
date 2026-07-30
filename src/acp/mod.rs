@@ -16,6 +16,7 @@
 pub mod background;
 pub mod helpers;
 pub mod r#impl;
+pub mod method_names;
 pub mod prelude;
 pub mod server;
 pub mod transport;

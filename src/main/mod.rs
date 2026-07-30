@@ -73,9 +73,6 @@ pub(crate) use report::{build_completeness_report, RecommendationLevel};
 
 use crate::config::AppConfig;
 use crate::i18n::runtime::tf;
-use crate::intelligence::continuous_learning::{
-    ContinuousLearningCenter, ContinuousLearningConfig,
-};
 
 /// Get the default configuration file path
 ///
@@ -234,7 +231,9 @@ async fn run() -> Result<()> {
             }
         };
 
-    // GAP-B50-33: Check startup memory and start background memory monitor
+    // GAP-B50-33: Check startup memory (critical check only)
+    // Background monitoring is deferred to wire_server() to avoid
+    // competing with the critical stdio initialization path.
     //
     // Integration tests can bypass this check by setting
     // GO_ON_SKIP_MEMORY_CHECK=true — useful when the test environment has
@@ -253,7 +252,7 @@ async fn run() -> Result<()> {
             );
         }
     }
-    crate::observability::memory_health::start_memory_monitor();
+    // Memory background monitor starts in wire_server() (deduplicated).
 
     // Handle secret management commands, local model setup, and onboarding
     if server::handle_secret_commands(&cli, &config_path)? {
@@ -281,47 +280,16 @@ async fn run() -> Result<()> {
         sig_shutdown.notify_waiters();
     });
 
-    // ── ContinuousLearningCenter background task ─────────────────────
-    // Start a periodic review cycle that consolidates experiences, detects
-    // forgetting, and advances the curriculum in the background.
-    // The center starts without an LLM agent; once agents are initialised by
-    // `start_server`, the first available agent is injected for true LLM-based
-    // semantic distillation (instead of TF-IDF fallback).
-    let learning_center = ContinuousLearningCenter::new(ContinuousLearningConfig::default());
-    let cl_agent_handle = learning_center.agent_handle();
-    let cl_shutdown = shutdown_notify.clone();
-    tokio::spawn(async move {
-        // Adaptive polling: short interval (2 min) if recent activity detected,
-        // long interval (10 min) during idle periods — balances responsiveness
-        // with resource efficiency.
-        let mut last_activity = std::time::Instant::now();
-        loop {
-            let base_secs = if last_activity.elapsed().as_secs() < 600 {
-                120
-            } else {
-                600
-            };
-            tokio::time::sleep(std::time::Duration::from_secs(base_secs)).await;
-            tokio::select! {
-                _ = cl_shutdown.notified() => {
-                    tracing::info!("ContinuousLearningCenter background task shutting down");
-                    break;
-                }
-                _ = async {
-                    // Run a review cycle: detect forgetting, replay important memories,
-                    // and advance curriculum stage when ready.
-                    let (replayed, evicted, patterns) = learning_center.review_cycle("system").await;
-                    if replayed > 0 || evicted > 0 {
-                        last_activity = std::time::Instant::now();
-                        tracing::debug!(
-                            "ContinuousLearningCenter review: {replayed} replayed, {evicted} evicted, {patterns} patterns"
-                        );
-                    }
-                } => {}
-            }
-        }
-    });
-    tracing::info!("ContinuousLearningCenter background task spawned (adaptive interval)");
+    // ── Agent injector handle for ContinuousLearningCenter ────────────
+    // The ContinuousLearningCenter itself is created inside CapabilityBus::new()
+    // (in ServerBuilder::build → new_acp_server). We only need the agent
+    // injector handle here so start_server() can write the first agent into
+    // the center's agent field for LLM-based semantic distillation.
+    // Creating the full center here would be wasteful since it's never used;
+    // its review loop starts inside run_acp_server() via the CapabilityBus.
+    let cl_agent_handle: std::sync::Arc<
+        std::sync::Mutex<Option<std::sync::Arc<dyn crate::agents::agent::Agent>>>,
+    > = std::sync::Arc::new(std::sync::Mutex::new(None));
 
     // Delegate interactive agent onboarding to the onboarding module
     let onboarding_cfg = crate::core::onboarding::OnboardingConfig {

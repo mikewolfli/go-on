@@ -75,7 +75,6 @@ pub(crate) use knowledge::{
     persist_chat_knowledge, persist_session_distillation, persist_vector_memory, round_metric,
     truncate_chars,
 };
-pub use streaming::pre_init_sse_buffer_pool;
 pub(crate) use streaming::{
     acquire_sse_buffer, emit_status_event, emit_stream_chunk, emit_stream_done,
     emit_stream_token_economy, release_sse_buffer, StreamEventMeta, StreamFrame,
@@ -716,22 +715,39 @@ pub(crate) async fn resolve_request_phase(
         })
         .collect::<Vec<_>>();
 
-    let selector = AgentSelector::default();
-    if let Some(selection) = selector.reorder_agents_by_selection(
-        &mut resolved.agents,
-        None,
-        &reputation_scores,
-        &online_scores,
-        &phase_name,
-    ) {
-        if !reputation_scores.is_empty() {
-            record_reputation_routing_applied();
+    // When the user explicitly selected a model (not "auto"),
+    // skip the agent capability scoring and keep the original
+    // phase agent ordering. The matching will be done later by
+    // filter_agents_by_model in select_and_score_agents.
+    let user_model = params
+        .options
+        .as_ref()
+        .and_then(|opts| opts.extra.get("model"))
+        .and_then(|v| v.as_str())
+        .filter(|m| !m.is_empty() && *m != "auto")
+        .map(|m| m.to_string());
+    let skip_scoring = user_model.is_some();
+
+    if !skip_scoring {
+        let selector = AgentSelector::default();
+        if let Some(selection) = selector.reorder_agents_by_selection(
+            &mut resolved.agents,
+            None,
+            &reputation_scores,
+            &online_scores,
+            &phase_name,
+        ) {
+            if !reputation_scores.is_empty() {
+                record_reputation_routing_applied();
+            }
+            routing_provenance.push(format!("agent_selector_winner:{}", selection.winner));
+            routing_provenance.push(format!(
+                "agent_selector_reason:{}",
+                selection.selection_reason
+            ));
         }
-        routing_provenance.push(format!("agent_selector_winner:{}", selection.winner));
-        routing_provenance.push(format!(
-            "agent_selector_reason:{}",
-            selection.selection_reason
-        ));
+    } else {
+        routing_provenance.push("model_selected_skip_scoring".to_string());
     }
 
     // ── SchemaRegistry task envelope validation (activated, formerly F-GAP-07) ─

@@ -559,6 +559,7 @@
     "error.chat.agent_unhealthy": "agent unhealthy by capability bus",
     "error.chat.lifecycle_lock_failed": "Failed to lock lifecycle state",
     "error.chat.agent_error_prefix": "{agent}: {error}",
+    "error.chat.model_no_matching_agent": "No configured agent matches the selected model '{model}'. Choose 'auto' or pick a model from a configured provider.",
     "status.chat.quota_fallback_notice": "Some agents reached token/quota limits ({agents}). Active agent switched to '{agent}'. You can choose agent via options.extra.preferred_agent.",
     "status.chat.auto_recover_notice": "primary agent is probed first on subsequent requests; if recovered, routing switches back automatically",
     "status.review_controls.approve": "APPROVE",

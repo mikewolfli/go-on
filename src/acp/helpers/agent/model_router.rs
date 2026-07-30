@@ -126,23 +126,19 @@ pub(crate) fn filter_agents_by_model(
                 .cloned(),
         );
 
-        let removed_any = agents.len() < before.len();
-
         if agents.is_empty() {
-            // Restore original agents — no model matched, fall back to phase candidates.
-            // Clone is acceptable here since this is a rare fallback path.
-            agents.extend(before.iter().cloned());
+            // When model is specific but no agent matches, DO NOT restore all
+            // agents. The caller (select_and_score_agents) will return a clear
+            // error telling the user the model didn't match any configured agent.
             warn!(
                 model = %model,
-                "model filter did not match any agent, falling back to phase candidate agents"
+                "model filter did not match any agent — will report error"
             );
-        }
-
-        if removed_any && !agents.is_empty() {
-            debug!(
-                "filter_agents_by_model: removed {} agent(s)",
-                before.len() - agents.len()
-            );
+        } else {
+            let removed = before.len() - agents.len();
+            if removed > 0 {
+                debug!("filter_agents_by_model: removed {} agent(s)", removed);
+            }
         }
     }
 

@@ -10,6 +10,9 @@ compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabl
 #[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
 compile_error!("one of 'backend-sqlite' or 'backend-postgres' must be enabled");
 
+#[cfg(feature = "backend-postgres")]
+use std::sync::Arc;
+#[cfg(feature = "backend-sqlite")]
 use std::sync::{Arc, Mutex};
 
 use crate::acp::prelude::now_ts;

@@ -313,23 +313,39 @@ pub(super) fn build_chat_params_from_acp(params: Value, session_state: &AcpSessi
         .get("sessionId")
         .and_then(|s| s.as_str())
         .map(|s| s.to_string());
-    let options = session_state.cwd.as_ref().map(|cwd| {
+    let options = {
+        let cwd = session_state.cwd.as_ref();
         let mut extra = serde_json::Map::new();
-        extra.insert("cwd".to_string(), Value::String(cwd.clone()));
-        extra.insert(
-            "additional_directories".to_string(),
-            Value::Array(
-                session_state
-                    .additional_directories
-                    .iter()
-                    .map(|d| Value::String(d.clone()))
-                    .collect(),
-            ),
-        );
+        if let Some(cwd) = cwd {
+            extra.insert("cwd".to_string(), Value::String(cwd.clone()));
+            extra.insert(
+                "additional_directories".to_string(),
+                Value::Array(
+                    session_state
+                        .additional_directories
+                        .iter()
+                        .map(|d| Value::String(d.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        // Pass the user's model selection from session config_options
+        // so filter_agents_by_model can match the correct agent
+        // (only relevant when model is specific, not "auto").
+        if let Some(model) = session_state
+            .config_options
+            .get("model")
+            .and_then(|v| v.as_str())
+        {
+            let m = model.trim();
+            if !m.is_empty() && m != "auto" {
+                extra.insert("model".to_string(), Value::String(m.to_string()));
+            }
+        }
         let mut options = serde_json::Map::new();
         options.insert("extra".to_string(), Value::Object(extra));
-        Value::Object(options)
-    });
+        Some(Value::Object(options))
+    };
 
     serde_json::to_value(InternalChatParams {
         mode: normalize_acp_mode(Some(session_state.mode.as_str())),

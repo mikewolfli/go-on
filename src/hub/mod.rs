@@ -34,6 +34,9 @@ pub mod client;
 pub mod discovery;
 pub mod server;
 
+#[allow(unused_imports)]
 pub use client::HubClient;
+#[allow(unused_imports)]
 pub use discovery::HubDiscovery;
+#[allow(unused_imports)]
 pub use server::HubServer;

@@ -19,6 +19,10 @@ use tracing::info;
 #[cfg(feature = "document-pdf")]
 pub struct ReadPdfTool;
 
+/// Alias for backward compatibility with builder.rs.
+#[cfg(feature = "document-pdf")]
+pub type PdfReadTool = ReadPdfTool;
+
 #[cfg(feature = "document-pdf")]
 impl Tool for ReadPdfTool {
     fn name(&self) -> &'static str {

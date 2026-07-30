@@ -7,8 +7,8 @@
 //!   - terminal/create, terminal/output, terminal/release, terminal/kill,
 //!     terminal/wait_for_exit — full terminal process management
 //!
-//! BLUE56-GAP-A09: Moved from `schema/mod.rs` to `protocol/acp_methods.rs`
-//! because method names are a protocol concern, not a schema concern.
+//! Moved from `protocol::acp_methods` to `acp::method_names` because
+//! these are ACP-specific constants, not general protocol types.
 
 /// ACP method name constants.
 ///

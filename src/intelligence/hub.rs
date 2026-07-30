@@ -60,7 +60,7 @@ static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
     LazyLock::new(|| Mutex::new(SelfRationalizationGuard::new(0.3)));
 
 /// Global voters for the Delphi debate / weighted-vote system.
-/// Initialised via [`init_intel_voters`] at server startup.
+/// Initialised via [`init_intelligence_hub`] at server startup.
 static GLOBAL_VOTERS: OnceLock<Vec<Box<dyn AgentVoter + Send + Sync>>> = OnceLock::new();
 
 static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
@@ -81,87 +81,52 @@ pub fn hub_metrics() -> serde_json::Value {
     })
 }
 
-// ── Default node addresses ───────────────────────────────────────────────
-
-/// Default address for the local agent consensus node.
-/// Uses `internal://` scheme because these are in-process logical nodes
-/// with no network transport — the consensus engine routes votes entirely
-/// within the same memory space. No DNS / TCP resolution is required.
-pub const DEFAULT_LOCAL_AGENT_ADDRESS: &str = "internal://local";
-
-/// Default address for the capability bus consensus node.
-/// Same rationale as `DEFAULT_LOCAL_AGENT_ADDRESS` — the capability bus
-/// is an in-process component, not a remote service, so an `internal://`
-/// scheme avoids unnecessary network overhead and keeps the consensus
-/// loop zero-allocation for local decisions.
-pub const DEFAULT_CAPABILITY_BUS_ADDRESS: &str = "internal://capability_bus";
-
 // ── Public API ──────────────────────────────────────────────────────────────
 
-/// Initialize intelligence hub at server startup.
-/// Registers local nodes in the consensus engine.
+/// Initialize intelligence hub at server startup — single entry point.
+///
+/// Registers local nodes in the consensus engine and initialises the 5
+/// AgentVoter impls (CapabilityBusVoter, LocalVoter x2,
+/// RationalizationGuardVoter, DeepSeekVoter) for the Delphi debate /
+/// weighted-vote system.
 ///
 /// `enable_delphi_debate` — when `true`, `rationalize_decision` will
 /// use the weighted reputation + Delphi debate voting path instead of
 /// the basic rationalization guard.
 ///
-/// Addresses default to `internal://local` and `internal://capability_bus`
-/// because both consensus nodes are in-process logical entities with no
-/// network transport. Override by passing custom addresses if the consensus
-/// engine needs to reference external or multi-process nodes.
-pub fn init_intel_hub(enable_delphi_debate: bool) {
-    init_intel_hub_with_addrs(
-        enable_delphi_debate,
-        DEFAULT_LOCAL_AGENT_ADDRESS,
-        DEFAULT_CAPABILITY_BUS_ADDRESS,
-    )
-}
-
-/// Initialize intelligence hub with configurable consensus node addresses.
+/// `capability_bus` — when `Some`, registers a CapabilityBusVoter;
+/// pass `None` to skip it.
 ///
-/// `local_agent_address` — address for the local agent consensus node.
-/// Initialise the intelligence hub modules.
-pub fn init_intel_hub_with_addrs(
+/// This replaces the previous two-step `init_intel_hub()` +
+/// `init_intel_voters()` pattern with a single call.
+pub fn init_intelligence_hub(
     enable_delphi_debate: bool,
-    _local_agent_address: &str,
-    _capability_bus_address: &str,
+    capability_bus: Option<Arc<CapabilityBus>>,
 ) {
+    // Phase 1: Store Delphi debate flag
     USE_DELPHI_DEBATE.store(enable_delphi_debate, Ordering::Relaxed);
     if enable_delphi_debate {
         tracing::info!("intel_hub: Delphi debate voting enabled");
     }
     tracing::info!("intel_hub: initialized rationalization, audit");
-}
 
-/// Initialise the 3 internal voters (CapabilityBusVoter, LocalVoter,
-/// RationalizationGuardVoter) and store them so that
-/// [`consensus_vote_with_reputation`] can delegate to their async
-/// `AgentVoter::vote()` implementations.
-///
-/// Call this once during server startup, *after* `init_intel_hub()`.
-/// When `capability_bus` is `None`, only the `LocalVoter` and
-/// `RationalizationGuardVoter` are stored.
-pub fn init_intel_voters(capability_bus: Option<Arc<CapabilityBus>>) {
+    // Phase 2: Register voters
     let mut voters: Vec<Box<dyn AgentVoter + Send + Sync>> = Vec::new();
 
-    // CapabilityBusVoter — only when a capability bus is available.
     if let Some(bus) = capability_bus {
         voters.push(Box::new(CapabilityBusVoter::new("capability-bus", bus)));
     }
 
-    // LocalVoter — keyword-heuristic voter with default config.
     voters.push(Box::new(LocalVoter::new(
         "local-agent",
         AgentConfig::default(),
     )));
 
-    // RationalizationGuardVoter — safety-guard voter.
     voters.push(Box::new(RationalizationGuardVoter::new(
         "rationalization-guard",
         Arc::new(SelfRationalizationGuard::new(0.6)),
     )));
 
-    // DeepSeekVoter — LLM-based voter via DeepSeek API.
     let deepseek_api_key = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
     voters.push(Box::new(DeepSeekVoter::new(
         "deepseek",
@@ -170,7 +135,6 @@ pub fn init_intel_voters(capability_bus: Option<Arc<CapabilityBus>>) {
         deepseek_api_key,
     )));
 
-    // LocalVoter — configurable local model voter.
     voters.push(Box::new(LocalVoter::new("local", AgentConfig::default())));
 
     let _ = GLOBAL_VOTERS.set(voters).map_err(|_| {

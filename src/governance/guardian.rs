@@ -382,8 +382,11 @@ pub struct GuardianBreakerStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{Agent, StreamingSender};
+    use crate::agent::{Agent, ModelInfo, StreamingSender};
+    use crate::core::error::Result as AppResult;
     use async_trait::async_trait;
+    use serde_json::Value;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     struct AllowAgent;
@@ -392,15 +395,22 @@ mod tests {
         async fn chat(
             &self,
             _messages: Vec<Message>,
-            _id: Option<serde_json::Value>,
-            _options: Option<crate::config::PhaseOptions>,
-            sender: StreamingSender,
-        ) -> Result<(), anyhow::Error> {
-            let _ = sender.send("ALLOW\naction is safe".to_string());
+            _principles: Option<Vec<String>>,
+            _options: Option<HashMap<String, Value>>,
+            _sender: StreamingSender,
+        ) -> AppResult<()> {
+            let _ = _sender.send("ALLOW\naction is safe".to_string());
             Ok(())
         }
-        fn available_models(&self) -> Vec<String> {
-            vec!["test".to_string()]
+        fn available_models(&self) -> Vec<ModelInfo> {
+            vec![ModelInfo {
+                id: "test-agent".to_string(),
+                name: "test".to_string(),
+                description: "Test allow agent".to_string(),
+                is_default: true,
+                capabilities: vec!["chat".to_string()],
+                context_window: None,
+            }]
         }
     }
 
@@ -410,15 +420,22 @@ mod tests {
         async fn chat(
             &self,
             _messages: Vec<Message>,
-            _id: Option<serde_json::Value>,
-            _options: Option<crate::config::PhaseOptions>,
-            sender: StreamingSender,
-        ) -> Result<(), anyhow::Error> {
-            let _ = sender.send("DENY\nAction not requested by user.".to_string());
+            _principles: Option<Vec<String>>,
+            _options: Option<HashMap<String, Value>>,
+            _sender: StreamingSender,
+        ) -> AppResult<()> {
+            let _ = _sender.send("DENY\nAction not requested by user.".to_string());
             Ok(())
         }
-        fn available_models(&self) -> Vec<String> {
-            vec!["test".to_string()]
+        fn available_models(&self) -> Vec<ModelInfo> {
+            vec![ModelInfo {
+                id: "test-deny".to_string(),
+                name: "test".to_string(),
+                description: "Test deny agent".to_string(),
+                is_default: true,
+                capabilities: vec!["chat".to_string()],
+                context_window: None,
+            }]
         }
     }
 
@@ -428,15 +445,22 @@ mod tests {
         async fn chat(
             &self,
             _messages: Vec<Message>,
-            _id: Option<serde_json::Value>,
-            _options: Option<crate::config::PhaseOptions>,
-            sender: StreamingSender,
-        ) -> Result<(), anyhow::Error> {
-            let _ = sender.send("MAYBE\nUnclear intent".to_string());
+            _principles: Option<Vec<String>>,
+            _options: Option<HashMap<String, Value>>,
+            _sender: StreamingSender,
+        ) -> AppResult<()> {
+            let _ = _sender.send("MAYBE\nUnclear intent".to_string());
             Ok(())
         }
-        fn available_models(&self) -> Vec<String> {
-            vec!["test".to_string()]
+        fn available_models(&self) -> Vec<ModelInfo> {
+            vec![ModelInfo {
+                id: "test-invalid".to_string(),
+                name: "test".to_string(),
+                description: "Test invalid agent".to_string(),
+                is_default: true,
+                capabilities: vec!["chat".to_string()],
+                context_window: None,
+            }]
         }
     }
 

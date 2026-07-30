@@ -11,7 +11,7 @@
 //! | [`LocalVoter`] | Configurable local model voter using `AgentConfig` |
 //!
 //! **Wiring**: The `#[async_trait]` AgentVoter trait allows all voters to run
-//! asynchronously. Voters are registered in `hub::init_intel_voters()` and
+//! asynchronously. Voters are registered in `hub::init_intelligence_hub()` and
 //! participate in the Delphi debate path via
 //! `hub::consensus_vote_with_reputation()`.
 
@@ -45,7 +45,7 @@ impl CapabilityBusVoter {
     /// Create a new voter wrapping the given capability bus.
     ///
     /// **Wiring status**: The async `AgentVoter` trait is now integrated via
-    /// `#[async_trait]`, and this voter is registered in `hub::init_intel_voters()`.
+    /// `#[async_trait]`, and this voter is registered in `hub::init_intelligence_hub()`.
     /// The Delphi debate path (`consensus_vote_with_reputation` with
     /// `VoteMode::DelphiDebate`) delegates to the stored voters. The TODO-BLUE64
     /// wiring is **complete**.

@@ -7,6 +7,11 @@
 //!   1. $GO_ON_HUB_DISCOVERY_FILE (env)
 //!   2. $XDG_RUNTIME_DIR/go-on/hub/discovery.json
 //!   3. $TMPDIR/go-on-hub/discovery.json
+//!
+//! # Dead-code note
+//! This module is a design reserve for future multi-process architecture.
+//! See parent `hub/mod.rs` for the full rationale.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

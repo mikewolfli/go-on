@@ -543,9 +543,10 @@ pub async fn new_acp_server(
         });
     }
 
-    // BLUE48 Step 2: Pre-initialize SSE buffer pool at startup to
+    // ── BLUE48 Step 2: Pre-initialize SSE buffer pool at startup to
     // avoid first-request latency penalty from lazy initialization.
-    crate::acp::r#impl::chat::pre_init_sse_buffer_pool();
+    // NOP in stdio mode — only relevant for HTTP/SSE transports.
+    // pre_init_sse_buffer_pool() — deferred to first SSE use.
 
     // PERF-FIX: Removed init_memory_persistence_with_auto_migrate(None) from
     // the critical startup path.  This call created a *third* MemoryPersistence
@@ -812,11 +813,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
 
     // BLUE48 Step 19: Initialize intelligence hub at startup so consensus
     // voting, rationalization, and audit are wired into the request path.
-    crate::intelligence::hub::init_intel_hub(false);
-
-    // Initialise the 3 concrete AgentVoter impls for the Delphi debate /
-    // weighted-vote system.
-    crate::intelligence::hub::init_intel_voters(server.governance_deps.capability_bus.clone());
+    // Single call replaces old init_intel_hub() + init_intel_voters() pattern.
+    crate::intelligence::hub::init_intelligence_hub(
+        false,
+        server.governance_deps.capability_bus.clone(),
+    );
 
     // BLUE51 Step 1: Wire WebSocket hub to SessionRegistry for real-time sync
     let session_registry = Arc::new(crate::protocol::session_sync::SessionRegistry::new());

@@ -102,6 +102,7 @@
     "error.chaos.recovery.reroute": "重新路由",
     "error.chaos.recovery.retry": "重試",
     "error.chat.agent_error_prefix": "{agent}: {error}",
+    "error.chat.model_no_matching_agent": "沒有配置的代理匹配所選模型 '{model}'。請選擇 'auto' 或從配置的提供商中選擇模型。",
     "error.chat.agent_request_timeout": "代理請求逾時 {seconds} 秒後",
     "error.chat.agent_task_panicked": "代理任務崩潰: {error}",
     "error.chat.agent_unhealthy": "能力總線標記代理不健康",

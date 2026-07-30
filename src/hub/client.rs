@@ -6,6 +6,12 @@
 //!   3. Verify the hub process is alive.
 //!   4. Perform JSON-RPC handshake.
 //!   5. Return a connected client handle.
+//!
+//! # Dead-code note
+//! This module is a design reserve for future multi-process architecture.
+//! It compiles but is not yet wired into any runtime code path.
+//! See parent `hub/mod.rs` for the full rationale.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};

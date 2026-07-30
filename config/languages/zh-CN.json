@@ -554,6 +554,7 @@
     "error.chat.agent_unhealthy": "能力总线标记代理不健康",
     "error.chat.lifecycle_lock_failed": "无法锁定生命周期状态",
     "error.chat.agent_error_prefix": "{agent}: {error}",
+    "error.chat.model_no_matching_agent": "没有配置的代理匹配所选模型 '{model}'。请选择 'auto' 或从配置的提供商中选择模型。",
     "status.chat.quota_fallback_notice": "部分代理达到令牌/配额限制 ({agents})。当前活跃代理已切换至 '{agent}'。您可以通过 options.extra.preferred_agent 选择代理。",
     "status.chat.auto_recover_notice": "后续请求会优先探测主代理; 如果恢复, 路由会自动切回",
     "status.review_controls.approve": "批准",

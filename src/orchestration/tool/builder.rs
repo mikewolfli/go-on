@@ -368,7 +368,7 @@ impl ToolRegistryBuilder {
         );
         #[cfg(feature = "document-excel")]
         self.registry.register_with_profile(
-            tool_extended::OfficeConvertTool,
+            tool_extended::ReadExcelTool,
             ToolCapabilityProfile {
                 capability: "office_convert".to_string(),
                 risk_level: ToolRiskLevel::Low,
@@ -382,7 +382,7 @@ impl ToolRegistryBuilder {
         );
         #[cfg(feature = "document-pdf")]
         self.registry.register_with_profile(
-            tool_extended::PdfReadTool,
+            tool_extended::ReadPdfTool,
             ToolCapabilityProfile {
                 capability: "pdf_read".to_string(),
                 risk_level: ToolRiskLevel::Low,
@@ -452,7 +452,7 @@ impl ToolRegistryBuilder {
         );
         #[cfg(feature = "document-email")]
         self.registry.register_with_profile(
-            tool_extended::EmailTool,
+            tool_extended::EmailParseTool,
             ToolCapabilityProfile {
                 capability: "email".to_string(),
                 risk_level: ToolRiskLevel::Medium,
@@ -466,7 +466,7 @@ impl ToolRegistryBuilder {
         );
         #[cfg(feature = "document-invoice")]
         self.registry.register_with_profile(
-            tool_extended::InvoiceTool,
+            tool_extended::InvoiceParseTool,
             ToolCapabilityProfile {
                 capability: "invoice".to_string(),
                 risk_level: ToolRiskLevel::Medium,
@@ -527,7 +527,49 @@ impl ToolRegistryBuilder {
         );
         #[cfg(feature = "data-export")]
         self.registry.register_with_profile(
-            tool_extended::DataSerDeTool,
+            tool_extended::TomlReadTool,
+            ToolCapabilityProfile {
+                capability: "toml_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        self.registry.register_with_profile(
+            tool_extended::TomlWriteTool,
+            ToolCapabilityProfile {
+                capability: "toml_write".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        self.registry.register_with_profile(
+            tool_extended::YamlReadTool,
+            ToolCapabilityProfile {
+                capability: "yaml_read".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "data-export")]
+        self.registry.register_with_profile(
+            tool_extended::YamlWriteTool,
             ToolCapabilityProfile {
                 capability: "data_serialization".to_string(),
                 risk_level: ToolRiskLevel::Low,
@@ -643,9 +685,37 @@ impl ToolRegistryBuilder {
     pub fn with_image_tools(&mut self) -> &mut Self {
         #[cfg(feature = "image-processing")]
         self.registry.register_with_profile(
-            tool_extended::ImageTool,
+            tool_extended::ImageResizeTool,
             ToolCapabilityProfile {
-                capability: "image_processing".to_string(),
+                capability: "image_resize".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "image-processing")]
+        self.registry.register_with_profile(
+            tool_extended::ImageConvertTool,
+            ToolCapabilityProfile {
+                capability: "image_convert".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "image-processing")]
+        self.registry.register_with_profile(
+            tool_extended::ImageAnalyzeTool,
+            ToolCapabilityProfile {
+                capability: "image_analyze".to_string(),
                 risk_level: ToolRiskLevel::Low,
                 timeout_budget_ms: 60_000,
                 retry_policy: RetryPolicy {
@@ -802,7 +872,7 @@ impl ToolRegistryBuilder {
         );
         #[cfg(feature = "model-3d")]
         self.registry.register_with_profile(
-            tool_extended::StlModelReadTool,
+            tool_extended::StlReadTool,
             ToolCapabilityProfile {
                 capability: "stl_model_read".to_string(),
                 risk_level: ToolRiskLevel::Low,
@@ -861,24 +931,156 @@ impl ToolRegistryBuilder {
 
     // ── Category: game tools (feature-gated) ―――――――――――――――――――――――
     pub fn with_game_tools(&mut self) -> &mut Self {
-        #[cfg(any(
-            feature = "game-online",
-            feature = "game-process",
-            feature = "game-screen",
-            feature = "game-input",
-            feature = "game-agent",
-            feature = "game-state",
-            feature = "game-modding"
-        ))]
+        #[cfg(feature = "game-online")]
         self.registry.register_with_profile(
-            tool_extended::GameTool,
+            tool_extended::GameServerQueryTool,
             ToolCapabilityProfile {
-                capability: "game_automation".to_string(),
-                risk_level: ToolRiskLevel::High,
+                capability: "game_server_query".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-online")]
+        self.registry.register_with_profile(
+            tool_extended::GamePriceTrackerTool,
+            ToolCapabilityProfile {
+                capability: "game_price_tracker".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-online")]
+        self.registry.register_with_profile(
+            tool_extended::GameMatchmakingTool,
+            ToolCapabilityProfile {
+                capability: "game_matchmaking".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-process")]
+        self.registry.register_with_profile(
+            tool_extended::GameLaunchTool,
+            ToolCapabilityProfile {
+                capability: "game_launch".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-process")]
+        self.registry.register_with_profile(
+            tool_extended::GameMonitorTool,
+            ToolCapabilityProfile {
+                capability: "game_monitor".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-screen")]
+        self.registry.register_with_profile(
+            tool_extended::GameScreenCaptureTool,
+            ToolCapabilityProfile {
+                capability: "game_screen_capture".to_string(),
+                risk_level: ToolRiskLevel::Medium,
                 timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-input")]
+        self.registry.register_with_profile(
+            tool_extended::GameKeyboardInputTool,
+            ToolCapabilityProfile {
+                capability: "game_keyboard_input".to_string(),
+                risk_level: ToolRiskLevel::High,
+                timeout_budget_ms: 10_000,
                 retry_policy: RetryPolicy {
                     max_retries: 0,
                     retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-input")]
+        self.registry.register_with_profile(
+            tool_extended::GameMouseInputTool,
+            ToolCapabilityProfile {
+                capability: "game_mouse_input".to_string(),
+                risk_level: ToolRiskLevel::High,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-agent")]
+        self.registry.register_with_profile(
+            tool_extended::GameCoachingAssistantTool,
+            ToolCapabilityProfile {
+                capability: "game_coaching".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-state")]
+        self.registry.register_with_profile(
+            tool_extended::GameSaveManagerTool,
+            ToolCapabilityProfile {
+                capability: "game_save_manager".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        #[cfg(feature = "game-modding")]
+        self.registry.register_with_profile(
+            tool_extended::GameModInstallTool,
+            ToolCapabilityProfile {
+                capability: "game_mod_install".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
                 },
                 fallback_chain: Vec::new(),
             },

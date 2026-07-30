@@ -1,7 +1,13 @@
 //! Shared math utilities.
 
+// The f32 cosine similarity variant is only used by the SQLite HNSW index.
+// In postgres mode, pgvector handles similarity natively via SQL.
+// Allow dead_code here to prevent warnings when only backend-postgres is enabled.
+#![cfg_attr(feature = "backend-postgres", allow(dead_code))]
+
 macro_rules! define_cosine_similarity {
     ($name:ident, $float:ty) => {
+        #[allow(dead_code)]
         /// Compute cosine similarity between two equal-length vectors.
         ///
         /// Returns `0.0` if either vector is empty, lengths differ, or either

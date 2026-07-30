@@ -10,6 +10,11 @@
 //! - hub.store      — persist a value
 //! - hub.retrieve   — read a persisted value
 //! - hub.list       — list persisted keys
+//!
+//! # Dead-code note
+//! This module is a design reserve for future multi-process architecture.
+//! See parent `hub/mod.rs` for the full rationale.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};

@@ -135,6 +135,21 @@ pub use filesystem::{
     ListDirectoryTool,
 };
 pub use format::FormatCodeTool;
+#[cfg(any(
+    feature = "game-online",
+    feature = "game-process",
+    feature = "game-screen",
+    feature = "game-input",
+    feature = "game-agent",
+    feature = "game-state",
+    feature = "game-modding"
+))]
+pub use game::{
+    GameAchievementTool, GameAutoGrindTool, GameCoachingAssistantTool, GameKeyboardInputTool,
+    GameLaunchTool, GameMatchmakingTool, GameModInstallTool, GameModListTool, GameMonitorTool,
+    GameMouseInputTool, GamePriceTrackerTool, GameReplayRecorderTool, GameSaveManagerTool,
+    GameScreenCaptureTool, GameServerQueryTool,
+};
 #[cfg(feature = "cam-gcode")]
 pub use gcode::GcodeReadTool;
 #[cfg(feature = "cad-geo")]

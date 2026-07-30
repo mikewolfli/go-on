@@ -12,6 +12,7 @@ use crate::acp::prelude::now_ts;
 #[cfg(not(feature = "backend-postgres"))]
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(not(feature = "backend-postgres"))]
 use std::sync::Mutex;
 #[cfg(not(feature = "backend-postgres"))]
 use std::sync::Mutex as StdMutex;

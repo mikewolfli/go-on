@@ -208,6 +208,8 @@ pub async fn initialize_autotune(
 
 /// Dispatch to the correct protocol-mode server implementation.
 #[allow(clippy::too_many_arguments)]
+/// P0 optimization: `app_config` when `Some` avoids a redundant AppConfig::load()
+/// in `flow_manager()`, saving ~15-30ms of startup time.
 pub async fn dispatch_server(
     registry: Arc<AgentRegistry>,
     cache: Option<Arc<ResponseCache>>,
@@ -221,8 +223,9 @@ pub async fn dispatch_server(
     autotune_state_path: Option<String>,
     _client: reqwest::Client,
     skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
+    app_config: Option<Arc<crate::config::AppConfig>>,
 ) -> Result<()> {
-    let runtime_flow = flow_manager(config_path);
+    let runtime_flow = flow_manager(config_path, app_config);
 
     // MCP arms need registry after new_acp_server consumes it, so clone here
     let mcp_registry = Arc::clone(&registry);
@@ -285,23 +288,35 @@ pub async fn dispatch_server(
 // the TOML file is read only once, not on every dispatch_server() call.
 // This eliminates a blocking std::fs::read on every request path that
 // invokes dispatch_server (saves ~1-5ms per call).
+//
+// P0: When `pre_loaded` is Some, it is used directly, avoiding a redundant
+// AppConfig::load() from disk (~15-30ms savings).
 static FLOW_MANAGER_CACHE: OnceLock<Arc<FlowManager>> = OnceLock::new();
 
-fn flow_manager(config_path: &Path) -> Arc<FlowManager> {
+fn flow_manager(
+    config_path: &Path,
+    pre_loaded: Option<Arc<crate::config::AppConfig>>,
+) -> Arc<FlowManager> {
     // Note: OnceLock::get_or_init returns &T, so we clone the Arc.
     // The clone is cheap (refcount bump only); the first call constructs.
     FLOW_MANAGER_CACHE
         .get_or_init(|| {
-            let app_config = match crate::config::AppConfig::load(config_path) {
-                Ok(config) => Arc::new(config),
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to load app config for flow manager from {}: {}; falling back to defaults",
-                        config_path.display(),
-                        err
-                    );
-                    Arc::new(crate::config::AppConfig::default())
+            let app_config = match pre_loaded {
+                Some(config) => {
+                    tracing::debug!("flow_manager: using pre-loaded config (P0)");
+                    config
                 }
+                None => match crate::config::AppConfig::load(config_path) {
+                    Ok(config) => Arc::new(config),
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to load app config for flow manager from {}: {}; falling back to defaults",
+                            config_path.display(),
+                            err
+                        );
+                        Arc::new(crate::config::AppConfig::default())
+                    }
+                },
             };
             Arc::new(FlowManager::new(app_config, None))
         })
@@ -340,7 +355,7 @@ mod tests {
     #[test]
     fn flow_manager_falls_back_on_missing_config() {
         let missing = Path::new("/nonexistent/path/config.toml");
-        let fm = flow_manager(missing);
+        let fm = flow_manager(missing, None);
         assert!(
             Arc::strong_count(&fm) >= 1,
             "flow_manager should return a valid Arc<FlowManager>"
@@ -351,7 +366,7 @@ mod tests {
     fn flow_manager_returns_arc() {
         let temp = std::env::temp_dir().join("go-on-test-config.toml");
         // Config doesn't exist — falls back to default
-        let fm = flow_manager(&temp);
+        let fm = flow_manager(&temp, None);
         assert!(Arc::strong_count(&fm) >= 1);
     }
 
@@ -383,6 +398,7 @@ mod tests {
                     None,
                     client,
                     None,
+                    None, // app_config
                 )
                 .await;
 

@@ -35,6 +35,12 @@ static SSE_BUFFER_POOL: OnceLock<SseBufferPool> = OnceLock::new();
 
 /// Pre-initialize the SSE buffer pool at server startup.
 /// Call once during server initialization to avoid first-request latency.
+/// Kept as public API for HTTP/SSE mode reactivation; currently unused
+/// in stdio mode to save startup time (deferred to first SSE use).
+#[allow(
+    dead_code,
+    reason = "Available for HTTP/SSE mode reactivation; not called in stdio mode (deferred to first use as startup optimization)"
+)]
 pub fn pre_init_sse_buffer_pool() {
     SSE_BUFFER_POOL.get_or_init(|| SseBufferPool::new(4, 4096));
     tracing::info!("SSE buffer pool pre-initialized (4 buffers x 4096 bytes)");

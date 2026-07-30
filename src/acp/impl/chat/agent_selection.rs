@@ -109,31 +109,50 @@ pub(crate) async fn select_and_score_agents(
     let capability_risk_policy = build_risk_vote_policy(&HashMap::new());
     let capability_risk = assess_high_risk(&params.messages, &params.mode, &capability_risk_policy);
 
+    // ── Determine if user specified an explicit model ────────────────
+    // When the user explicitly selects a model (not "auto"), skip the
+    // capability bus agent selection and rely on filter_agents_by_model
+    // to match the correct agent. This applies to GUI chat, Zed agent_servers,
+    // and VS Code addon alike — only when BOTH agent and model are "auto"
+    // does the capability bus scoring take effect.
+    let user_model_specific = params
+        .options
+        .as_ref()
+        .and_then(|opts| opts.extra.get("model"))
+        .and_then(|v| v.as_str())
+        .map(|m| !m.is_empty() && m != "auto")
+        .unwrap_or(false);
+
     // ── CapabilityBus agent selection ──────────────────────────────────
+    // SKIP when a specific model was chosen by the user.
     let mut capability_selected_agent: Option<String> = None;
     let mut capability_recommended_mode: Option<String> = None;
     let mut capability_candidate_count: Option<u64> = None;
     let mut capability_decision_confidence: Option<f64> = None;
     let mut capability_selection_reason: Option<String> = None;
     let mut capability_optimization_hint: Option<Value> = None;
-    if let Some(ref cb) = server.governance_deps.capability_bus {
-        let result = crate::acp::helpers::capability_selector::apply_capability_bus_selection(
-            cb,
-            phase_name,
-            &params.messages,
-            &params.mode,
-            &mut resolved.agents,
-            &capability_risk,
-            &trace.request_id,
-            routing_provenance,
-        )
-        .await;
-        capability_selected_agent = result.capability_selected_agent;
-        capability_recommended_mode = result.recommended_mode;
-        capability_candidate_count = Some(result.candidate_count as u64);
-        capability_decision_confidence = Some(result.confidence);
-        capability_selection_reason = Some(result.capability_selection_reason);
-        capability_optimization_hint = result.optimization_hint;
+    if !user_model_specific {
+        if let Some(ref cb) = server.governance_deps.capability_bus {
+            let result = crate::acp::helpers::capability_selector::apply_capability_bus_selection(
+                cb,
+                phase_name,
+                &params.messages,
+                &params.mode,
+                &mut resolved.agents,
+                &capability_risk,
+                &trace.request_id,
+                routing_provenance,
+            )
+            .await;
+            capability_selected_agent = result.capability_selected_agent;
+            capability_recommended_mode = result.recommended_mode;
+            capability_candidate_count = Some(result.candidate_count as u64);
+            capability_decision_confidence = Some(result.confidence);
+            capability_selection_reason = Some(result.capability_selection_reason);
+            capability_optimization_hint = result.optimization_hint;
+        }
+    } else {
+        routing_provenance.push("capability_bus_skipped_model_selected".to_string());
     }
 
     // ── Agent Switch State & Preferred Agent Resolution ──────────────
@@ -196,6 +215,23 @@ pub(crate) async fn select_and_score_agents(
 
     let filter_result =
         model_router::filter_agents_by_model(&mut resolved.agents, &base_agent_options);
+
+    // When the user explicitly selected a model but no configured agent
+    // matches, report the error directly instead of silently falling back
+    // to all phase agents (which would use the wrong provider/model).
+    if filter_result.model_is_specific && resolved.agents.is_empty() {
+        let model_val = base_agent_options
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        anyhow::bail!(
+            "{}",
+            tf(
+                "error.chat.model_no_matching_agent",
+                &[("model", model_val)]
+            )
+        );
+    }
 
     let risk_policy = build_risk_vote_policy(&base_agent_options);
     let risk_assessment = assess_high_risk(&params.messages, &params.mode, &risk_policy);

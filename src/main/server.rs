@@ -16,7 +16,6 @@ use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
 };
-use crate::security::{start_secret_rotation_if_configured, wire_cert_monitor};
 use crate::setup::{
     add_local_model, apply_recommended_to_config, parse_secret_action, parse_secret_mode,
     parse_setup_level, parse_setup_profile, LocalModelOptions, SetupOptions,
@@ -131,12 +130,14 @@ pub(crate) async fn start_server(
     );
 
     // ── Security wiring (GAP-B52) ──────────────────────────────────────────
-    // Wire security components into the server startup path.
-    // Only call wire functions when runtime config is available.
-    if let Some(ref rt) = config.runtime {
-        let _secret_rotation_handle = start_secret_rotation_if_configured(rt);
-        wire_cert_monitor(rt);
-    }
+    // DEFERRED to wire_server() where runtime_config is available and
+    // all security subsystems are initialized once, not twice.
+    // See: src/acp/impl/runtime/server_builder.rs wire_server() L845-847.
+    // The security init was previously duplicated in both start_server()
+    // and wire_server(). This saves ~5ms of startup time.
+    //
+    // let _secret_rotation_handle = start_secret_rotation_if_configured(rt);
+    // wire_cert_monitor(rt); — REMOVED (duplicate, handled in wire_server)
 
     // Initialize StartupContext (load project context once per process)
     let startup_cfg = crate::orchestration::startup_context::StartupContextConfig {
@@ -251,6 +252,7 @@ pub(crate) async fn start_server(
     info!("dispatch mode resolved: {}", dispatch_mode);
 
     // Delegate to the transport factory for protocol-mode-specific server construction
+    // P0 optimization: pass pre-loaded config to avoid double-load in flow_manager().
     crate::acp::transport_factory::dispatch_server(
         registry,
         cache,
@@ -264,6 +266,7 @@ pub(crate) async fn start_server(
         autotune_state_path,
         http_client,
         skill_registry,
+        Some(Arc::clone(&config)),
     )
     .await
 }
