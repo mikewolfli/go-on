@@ -21,6 +21,7 @@ use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
+use crate::intelligence::quality_models::QualityVerdict;
 use crate::rpc_protocol::RequestTraceContext;
 use crate::verification::DeterministicVerifier;
 
@@ -73,6 +74,9 @@ pub struct ReviewGateOutcome {
     pub reviewer: String,
     /// Review duration in milliseconds
     pub duration_ms: u64,
+    /// Semantic verdict (Approve/Reject/Invalid etc.)
+    #[allow(dead_code)]
+    pub verdict: QualityVerdict,
 }
 
 /// Run dual review gate
@@ -303,6 +307,11 @@ fn aggregate_review_results(
             comments: all_comments,
             reviewer: final_reviewer,
             duration_ms: started.elapsed().as_millis() as u64,
+            verdict: if passed {
+                QualityVerdict::Approve
+            } else {
+                QualityVerdict::Reject
+            },
         },
         timeout_detected,
     )
@@ -493,6 +502,11 @@ async fn run_single_review(
         comments,
         reviewer: reviewer.to_string(),
         duration_ms: started.elapsed().as_millis() as u64,
+        verdict: if passed {
+            QualityVerdict::Approve
+        } else {
+            QualityVerdict::Reject
+        },
     })
 }
 
@@ -517,7 +531,5 @@ fn routing_handles(
 
 /// Extract extra u64 value from phase options
 fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
-    options
-        .and_then(|opts| opts.extra.get(key))
-        .and_then(|value| value.as_u64())
+    crate::acp::helpers::misc::extra_u64(options, key)
 }

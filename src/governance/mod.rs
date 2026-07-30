@@ -18,3 +18,4 @@ pub mod review_controls;
 pub mod runtime_controls;
 pub mod security_governor;
 pub mod status;
+pub mod tool_capability;

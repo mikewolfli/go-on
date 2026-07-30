@@ -10,7 +10,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -33,6 +33,8 @@ struct CacheEntry {
     ttl: Duration,
     /// When this entry was last accessed (for LRU eviction)
     last_accessed: Instant,
+    /// Precomputed bigram set for Jaccard similarity (avoids recomputing on every get)
+    bigram_set: Option<HashSet<Vec<u8>>>,
 }
 
 /// Semantic response cache configuration
@@ -76,6 +78,11 @@ fn simple_request_hash(request: &str, max_len: usize) -> u64 {
     hasher.finish()
 }
 
+/// Compute the set of bigrams for a string (owned, so it can be cached)
+fn bigrams_set(s: &str) -> HashSet<Vec<u8>> {
+    s.as_bytes().windows(2).map(|w| w.to_vec()).collect()
+}
+
 /// Simple Jaccard similarity for request comparison
 fn jaccard_similarity(a: &str, b: &str) -> f64 {
     let a_bigrams: Vec<&[u8]> = a.as_bytes().windows(2).collect();
@@ -88,8 +95,34 @@ fn jaccard_similarity(a: &str, b: &str) -> f64 {
         return 0.0;
     }
 
-    let set_a: std::collections::HashSet<&[u8]> = a_bigrams.iter().copied().collect();
-    let set_b: std::collections::HashSet<&[u8]> = b_bigrams.iter().copied().collect();
+    let set_a: HashSet<&[u8]> = a_bigrams.iter().copied().collect();
+    let set_b: HashSet<&[u8]> = b_bigrams.iter().copied().collect();
+
+    let intersection = set_a.intersection(&set_b).count();
+    let union = set_a.union(&set_b).count();
+
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    }
+}
+
+/// Jaccard similarity with one side's bigram set precomputed.
+/// Only computes bigrams for `a`; reuses `b_bigrams` from cache.
+fn jaccard_with_precomputed(a: &str, b_bigrams: &HashSet<Vec<u8>>) -> f64 {
+    let a_bigrams: Vec<&[u8]> = a.as_bytes().windows(2).collect();
+
+    if a_bigrams.is_empty() && b_bigrams.is_empty() {
+        return 1.0;
+    }
+    if a_bigrams.is_empty() || b_bigrams.is_empty() {
+        return 0.0;
+    }
+
+    let set_a: HashSet<&[u8]> = a_bigrams.iter().copied().collect();
+    // Convert b_bigrams (HashSet<Vec<u8>>) to HashSet<&[u8]> for intersection
+    let set_b: HashSet<&[u8]> = b_bigrams.iter().map(|v| v.as_slice()).collect();
 
     let intersection = set_a.intersection(&set_b).count();
     let union = set_a.union(&set_b).count();
@@ -144,7 +177,10 @@ impl SemanticResponseCache {
                     bucket.iter().position(|entry| {
                         // Both exact and similarity lookups must respect TTL.
                         now.duration_since(entry.created_at) < entry.ttl && {
-                            let similarity = jaccard_similarity(request, &entry.request_text);
+                            let similarity = match &entry.bigram_set {
+                                Some(pre) => jaccard_with_precomputed(request, pre),
+                                None => jaccard_similarity(request, &entry.request_text),
+                            };
                             similarity >= self.config.similarity_threshold
                         }
                     })
@@ -170,26 +206,25 @@ impl SemanticResponseCache {
             .write()
             .expect("SemanticCache entries poisoned");
 
-        // LRU eviction if over max entries (consolidated into single lock)
+        // LRU eviction if over max entries — evict the entry with oldest
+        // last_accessed from the bucket with the most entries (avoids O(n)
+        // scan of ALL entries).
         if guard.len() >= self.config.max_entries {
-            // Evict oldest entry across all buckets
-            let mut lru_key = None;
-            let mut lru_idx = 0;
-            let mut oldest = now;
-            for (key, bucket) in guard.iter() {
-                for (i, entry) in bucket.iter().enumerate() {
-                    if entry.last_accessed < oldest {
-                        oldest = entry.last_accessed;
-                        lru_key = Some(*key);
-                        lru_idx = i;
-                    }
-                }
-            }
-            if let Some(key) = lru_key {
-                if let Some(bucket) = guard.get_mut(&key) {
-                    bucket.remove(lru_idx);
-                    if bucket.is_empty() {
-                        guard.remove(&key);
+            if let Some(largest_bucket_key) =
+                guard.iter().max_by_key(|(_, b)| b.len()).map(|(k, _)| *k)
+            {
+                if let Some(bucket) = guard.get_mut(&largest_bucket_key) {
+                    // Remove oldest entry in the largest bucket (constant per-bucket time)
+                    if let Some(oldest_idx) = bucket
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, e)| e.last_accessed)
+                        .map(|(i, _)| i)
+                    {
+                        bucket.remove(oldest_idx);
+                        if bucket.is_empty() {
+                            guard.remove(&largest_bucket_key);
+                        }
                     }
                 }
             }
@@ -202,9 +237,23 @@ impl SemanticResponseCache {
             created_at: now,
             ttl: Duration::from_secs(self.config.default_ttl_seconds),
             last_accessed: now,
+            bigram_set: Some(bigrams_set(request)),
         };
 
         guard.entry(hash).or_default().push(entry);
+    }
+
+    /// Store a string response (convenience wrapper for `put`).
+    pub fn put_string(&self, request: &str, response_text: String) {
+        self.put(request, Value::String(response_text));
+    }
+
+    /// Retrieve a string response (convenience wrapper for `get`).
+    pub fn get_string(&self, request: &str) -> Option<String> {
+        self.get(request).and_then(|v| match v {
+            Value::String(s) => Some(s),
+            _ => v.as_str().map(String::from),
+        })
     }
 
     /// Warm up the cache with known entries

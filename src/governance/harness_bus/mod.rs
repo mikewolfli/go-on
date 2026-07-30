@@ -294,29 +294,39 @@ impl HarnessBus {
             .await;
 
         // PUA de-escalation: after 3 consecutive clean evaluations, de-escalate.
+        // Uses compare_exchange for atomic reset to prevent double-de-escalation
+        // when two concurrent evaluations both pass (principle #15: no races).
         match &verdict {
             PolicyVerdict::Allow | PolicyVerdict::AllowWithConstraints(_) => {
                 let prev = self.consecutive_allows.fetch_add(1, Ordering::SeqCst);
                 if prev >= 2 {
-                    self.consecutive_allows.store(0, Ordering::SeqCst);
-                    let engine = self
-                        .evaluator
-                        .rule_engine
-                        .lock()
-                        .unwrap_or_else(|poisoned| {
-                            tracing::warn!("[harness_bus] lock poisoned, recovering");
-                            poisoned.into_inner()
-                        });
-                    let level =
-                        engine.de_escalate("No violations detected for 3 consecutive evaluations");
-                    tracing::info!(
-                        new_level = level,
-                        "PUA de-escalated after 3 consecutive clean evaluations"
-                    );
-                    // The PUA rule engine learning from evaluation patterns
-                    // constitutes a learning update.
-                    if let Ok(mut p) = self.profile.lock() {
-                        p.record_learning_update();
+                    // Atomic reset: only the thread that successfully moves
+                    // from (prev + 1) → 0 wins the de-escalation right.
+                    // All others see a stale expected value and skip.
+                    if self
+                        .consecutive_allows
+                        .compare_exchange(prev + 1, 0, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                    {
+                        let engine = self
+                            .evaluator
+                            .rule_engine
+                            .lock()
+                            .unwrap_or_else(|poisoned| {
+                                tracing::warn!("[harness_bus] lock poisoned, recovering");
+                                poisoned.into_inner()
+                            });
+                        let level = engine
+                            .de_escalate("No violations detected for 3 consecutive evaluations");
+                        tracing::info!(
+                            new_level = level,
+                            "PUA de-escalated after 3 consecutive clean evaluations"
+                        );
+                        // The PUA rule engine learning from evaluation patterns
+                        // constitutes a learning update.
+                        if let Ok(mut p) = self.profile.lock() {
+                            p.record_learning_update();
+                        }
                     }
                 }
             }

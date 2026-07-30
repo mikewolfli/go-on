@@ -180,9 +180,7 @@ impl MemoryBus {
                         );
                         poisoned.into_inner()
                     });
-                    guard
-                        .get(key)
-                        .map(|entry| entry.response_text.clone().into_bytes())
+                    guard.get(key).map(|s| s.into_bytes())
                 };
                 if cached.is_some() {
                     let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());

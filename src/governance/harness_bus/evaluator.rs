@@ -5,6 +5,7 @@
 //! SelfRationalizationGuard, SecurityGovernor, RBAC enforcer) into a single
 //! evaluate/validate/verify suite.
 
+use crate::acp::r#impl::agent::ReviewGateOutcome;
 use crate::governance::approval_engine::ApprovalEngine;
 use crate::governance::approval_learning::ApprovalPreferenceLearner;
 use crate::governance::drift::drift_protection::DriftProtectionEngine;
@@ -21,7 +22,7 @@ use crate::governance::rationalization::{RationalizationAnnotation, SelfRational
 use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 use crate::governance::reloadable_policy::PolicyReloader;
 use crate::governance::review_controls::{
-    review_verdict, ReviewGateOutcome, ReviewTimeoutPolicyKind, ReviewVerdict,
+    review_verdict, verdict_as_str, verdict_is_approved, ReviewTimeoutPolicyKind,
 };
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{
@@ -29,6 +30,7 @@ use crate::governance::security_governor::{
     PolicyCondition, PolicySeverity, SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
 };
 use crate::i18n::runtime::tf;
+use crate::intelligence::quality_models::QualityVerdict;
 use crate::security::content_safety::SafetyChecker;
 use crate::security::prompt_injection::InjectionDetector;
 
@@ -223,6 +225,31 @@ impl PolicyEvaluator {
 
     /// Pre-route composite evaluation.
     /// Returns a PolicyVerdict that the caller (CapabilityBus) should respect.
+    ///
+    /// # Lock acquisition sequence
+    ///
+    /// This method acquires up to **9 locks sequentially** (worst-case path):
+    ///
+    /// | # | Lock | Kind | Scope |
+    /// |---|------|------|-------|
+    /// | 1 | `self.policies` | `RwLock::read` | Step 0 — quick scan for runtime-registered policies |
+    /// | 2 | `reloader` | `Mutex` | P1-1 — hot-reload policies from `RULES/` (conditional, only when `policy_reloader` is set) |
+    /// | 3 | `self.policies` | `RwLock::write` | P1-1 — merge reloaded policies (nested inside reloader lock) |
+    /// | 4 | `self.rule_engine` | `Mutex` | Steps 1–2 — red-line check + stage validation |
+    /// | 5 | `self.budget` | `Mutex` | Step 3 — wall-clock budget check |
+    /// | 6 | `self.runtime_control` | `Mutex` | Step 4 — adaptive sliding window / P95 / UCB escalate check (scoped, re-acquired at step 8) |
+    /// | 7 | `self.guard` | `Mutex` | Step 6 — self-rationalization low-confidence guard (scoped) |
+    /// | 8–9 | `security_governor` | internal | Step 7 — security policy `evaluate()` + `record_audit()` |
+    ///
+    /// **Deferred scoping**: Locks 6 and 7 are scoped to the narrowest possible
+    /// block so they do not overlap with unrelated work (review gate at step 5,
+    /// security governor at step 7). Lock 6 is re-acquired briefly at step 8
+    /// to record the success outcome. All other locks are held for exactly one
+    /// step and released before the next.
+    ///
+    /// Each critical section is documented to be brief (sub-millisecond).
+    /// Replacing `std::sync::Mutex` with `tokio::sync::Mutex` would add overhead
+    /// with no benefit since no critical section is held across an `.await` point.
     pub fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
         let _start = Instant::now();
 
@@ -309,18 +336,27 @@ impl PolicyEvaluator {
         }
 
         // 4. Runtime control check (adaptive sliding window / P95 / UCB)
-        let mut runtime_ctrl = Some(self.runtime_control.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("[harness_bus] lock poisoned, recovering");
-            poisoned.into_inner()
-        }));
-        if let Some(ref mut ctrl) = runtime_ctrl {
+        //    Scope-limited: the MutexGuard is dropped immediately after the
+        //    escalate check so it does not serialize subsequent unrelated steps
+        //    (review gate at step 5, rationalization at step 6, security governor
+        //    at step 7). Re-acquired briefly at step 8.
+        let runtime_should_escalate = {
+            let mut ctrl = self.runtime_control.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("[harness_bus] lock poisoned, recovering");
+                poisoned.into_inner()
+            });
             if ctrl.should_escalate() {
                 ctrl.record(false, _start.elapsed().as_millis() as u64);
-                return PolicyVerdict::Escalate(EscalationReason {
-                    reason: tf("error.harness_bus.runtime_escalation", &[]),
-                    suggested_level: 3,
-                });
+                true
+            } else {
+                false
             }
+        };
+        if runtime_should_escalate {
+            return PolicyVerdict::Escalate(EscalationReason {
+                reason: tf("error.harness_bus.runtime_escalation", &[]),
+                suggested_level: 3,
+            });
         }
 
         // 5. Review policy check (verify verdict from review_controls)
@@ -344,60 +380,45 @@ impl PolicyEvaluator {
         let verdict = Self::resolve_review_policy(&review_response, 8);
         // Detect review override: manual review was required but the gate
         // resolved to Approve (e.g., via a customized review_verdict impl).
-        if requires_review && verdict.is_approved() {
+        if requires_review && verdict_is_approved(verdict) {
             self.review_override_occurred.store(true, Ordering::Release);
         }
-        let outcome = match verdict {
-            ReviewVerdict::Approve => ReviewGateOutcome::Approved(vec![
-                crate::governance::review_controls::ReviewDecision {
-                    reviewer: "governance-policy".to_string(),
-                    verdict: verdict.as_str().to_string(),
-                    response: review_response.to_string(),
-                },
-            ]),
-            ReviewVerdict::Reject => ReviewGateOutcome::Rejected(vec![
-                crate::governance::review_controls::ReviewDecision {
-                    reviewer: "governance-policy".to_string(),
-                    verdict: verdict.as_str().to_string(),
-                    response: review_response.to_string(),
-                },
-            ]),
-            ReviewVerdict::Invalid => ReviewGateOutcome::Degraded(vec![
-                crate::governance::review_controls::ReviewDecision {
-                    reviewer: "governance-policy".to_string(),
-                    verdict: verdict.as_str().to_string(),
-                    response: review_response.to_string(),
-                },
-            ]),
+        let outcome = ReviewGateOutcome {
+            passed: matches!(verdict, QualityVerdict::Approve),
+            comments: vec![
+                format!("governance-policy: {}", review_response),
+                verdict_as_str(verdict),
+            ],
+            reviewer: "governance-policy".to_string(),
+            duration_ms: 0,
+            verdict,
         };
-        let review_result = match &outcome {
-            ReviewGateOutcome::Approved(decisions)
-            | ReviewGateOutcome::Rejected(decisions)
-            | ReviewGateOutcome::Degraded(decisions) => decisions
-                .first()
-                .map(|d| d.reviewer.as_str())
-                .unwrap_or("none"),
-        };
+        let review_result = outcome.reviewer.as_str();
         tracing::debug!(
             reviewer = review_result,
-            verdict = verdict.as_str(),
+            verdict = verdict_as_str(verdict),
             timeout_policy = ?timeout_policy,
             timeout_duration = ?timeout_duration,
             "review gate evaluated"
         );
-        if !verdict.is_approved() {
+        if !verdict_is_approved(verdict) {
             return PolicyVerdict::Review(ReviewReason {
                 reason: tf("error.harness_bus.review_gate_manual", &[]),
             });
         }
 
         // 6. Self-rationalization guard (low confidence check)
-        let mut guard = self.guard.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("[harness_bus] lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let mut annotation = RationalizationAnnotation::default();
-        if guard.evaluate(&mut annotation, ctx.risk_score as f32, false) {
+        //    Scope-limited: the MutexGuard is dropped immediately after
+        //    evaluate() so it does not overlap with the security governor step.
+        let guard_blocked = {
+            let mut guard = self.guard.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("[harness_bus] lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let mut annotation = RationalizationAnnotation::default();
+            guard.evaluate(&mut annotation, ctx.risk_score as f32, false)
+        };
+        if guard_blocked {
             self.rationalization_block_occurred
                 .store(true, Ordering::Release);
             return PolicyVerdict::Review(ReviewReason {
@@ -492,7 +513,13 @@ impl PolicyEvaluator {
         }
 
         // 8. All checks passed — record success for adaptive control
-        if let Some(mut ctrl) = runtime_ctrl {
+        //    Re-acquire runtime_control briefly (the earlier scope at step 4
+        //    already released the guard).
+        {
+            let mut ctrl = self.runtime_control.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("[harness_bus] lock poisoned, recovering");
+                poisoned.into_inner()
+            });
             ctrl.record(true, _start.elapsed().as_millis() as u64);
         }
         PolicyVerdict::Allow
@@ -606,154 +633,25 @@ impl PolicyEvaluator {
         // Each tool is classified by its dominant operation class so that
         // the sandbox level check is fine-grained.  Tools not explicitly
         // listed fall through to require user review.
+        use crate::governance::tool_capability::{ToolCapabilityRegistry, ToolOperation};
         let mut recognized = true;
-        let allowed = match tool {
-            // ── Read / Query tools (safe at ALL sandbox levels) ───────
-            "read_file"
-            | "search_files"
-            | "inspect_git_diff"
-            | "list_directory"
-            | "date_time"
-            | "skill_list"
-            | "skill-finder"
-            // chat.execute is an ACP protocol entry point (no ToolRegistry impl)
-            | "chat.execute"
-            | "acp_trace_get"
-            | "acp_debug_panel_get"
-            | "goon_workflow_run_list"
-            | "goon_workflow_run_get"
-            | "goon_metrics_window_query"
-            | "goon_metrics_errors_summary"
-            | "goon_provider_capabilities"
-            | "prompts_list"
-            | "prompts_get"
-            | "workflow_execute"
-            | "workflow_ask"
-            | "workflow_generate"
-            | "import_skill"
-            | "archive_inspect"
-            | "jsonl_read"
-            // ── Environment info tool (safe at ALL sandbox levels) ─
-            | "environment_info"
-            // ── Skill query / echo tools (safe at ALL sandbox levels) ─
-            | "echo_skill"
-            | "builtin.echo"
-            | "goon_skill_version_list"
-            // ── Document readers ──────────────────────────────
-            | "read_pdf"
-            | "pdf_merge"
-            | "pdf_split"
-            | "read_docx"
-            | "read_excel"
-            | "read_ppt"
-            | "email_parse"
-            | "invoice_parse"
-            | "web_scrape"
-            // ── CAD / 3D readers ──────────────────────────────
-            | "dxf_read"
-            | "cad_convert"
-            | "step_read"
-            | "obj_read"
-            | "obj_model_read"
-            | "stl_read"
-            | "gltf_read"
-            | "iges_read"
-            | "ply_read"
-            | "geo_util"
-            | "gcode_read"
-            | "gpx_read"
-            // ── Image / Drawing readers ────────────────────────
-            | "image_analyze"
-            | "svg_read"
-            // ── Data readers ──────────────────────────────────
-            | "csv_read"
-            | "csv_analyze"
-            | "toml_read"
-            | "yaml_read"
-            // ── Database ───────────────────────────────────────
-            | "sqlite_query"
-            // ── Game readers ───────────────────────────────────
-            | "game_server_query"
-            | "game_price_tracker"
-            | "game_matchmaking"
-            | "game_achievements"
-            | "game_mod_list"
-            | "game_coaching_assistant"
-            // ── Compilation check (read-only, may invoke compiler) ─
-            | "cargo_check"
-            | "diagnostics"
-            // ── Skill execution ──────────────────────────────────
-            | "skill_execute" => SandboxPolicy::can_execute_read_file(level),
-            // ── Game process / automation (shell) — requires unrestricted ─
-            "game_launch"
-            | "game_keyboard_input"
-            | "game_mouse_input"
-            | "game_auto_grind" => SandboxPolicy::can_execute_shell(level),
-            // ── Game file operations (write) — restricted at Strict+ ─
-            "game_screen_capture"
-            | "game_replay_recorder"
-            | "game_save_manager"
-            | "game_mod_install" => SandboxPolicy::can_execute_write(level),
-            // ── Search / Discovery tools ──────────────────────────
-            "grep" | "find_path" | "semantic_search" | "code_index_search" | "find_files" => {
-                SandboxPolicy::can_execute_search(level)
-            }
-            // ── Network / Outbound tools ─────────────────────────
-            "http_request"
-            | "dns_lookup"
-            | "ping"
-            | "port_scan"
-            | "git"
-            | "github_search_skills"
-            | "rss_read"
-            | "game_monitor"
-            | "goon_provider_test_connection"
-            | "goon_provider_test_completion" => SandboxPolicy::can_execute_network(level),
-            // ── Write / Admin tools (restricted in stricter sandbox levels) ─
-            "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path"
-            | "copy_path" | "file_move" | "file_delete" | "compress" | "decompress"
-            | "archive_extract" | "jsonl_write"
-            // ── Image write tools (includes aliases) ─────────────────
-            | "goon_skill_update"
-            | "goon_skill_version_rollback"
-            | "skill-creator"
-            // ── Workflow admin tools (write operations) ────────────────
-            | "goon_workflow_run_cancel"
-            | "goon_workflow_run_pause"
-            | "goon_workflow_run_resume"
-            // ── CSV / Data write tools ────────────────────────────────
-            | "csv_write"
-            | "csv_transform"
-            | "toml_write"
-            | "yaml_write"
-            // ── Image write tools ─────────────────────────────────────
-            | "image_convert"
-            | "image_resize"
-            | "image_generate"
-            // ── Drawing / SVG write tools ─────────────────────────────
-            | "svg_generate"
-            | "svg_export"
-            // ── 3D / CAD write tools ──────────────────────────────────
-            | "stl_generate"
-            // ── Barcode tools ─────────────────────────────────────────
-            | "qrcode_generate"
-            // ── Document write tools ──────────────────────────────────
-            | "write_docx"
-            | "write_ppt"
-            | "write_excel" => SandboxPolicy::can_execute_write(level),
-            // ── Shell / Execution tools (restricted at Basic+) ─────────
-            "run_tests" | "execute_command" | "terminal" | "bash" | "cargo_test" | "shell_exec" => {
-                SandboxPolicy::can_execute_shell(level)
-            }
+        let allowed = match ToolCapabilityRegistry::operation(tool) {
+            ToolOperation::Read => SandboxPolicy::can_execute_read_file(level),
+            ToolOperation::Search => SandboxPolicy::can_execute_search(level),
+            ToolOperation::Network => SandboxPolicy::can_execute_network(level),
+            ToolOperation::Write => SandboxPolicy::can_execute_write(level),
+            ToolOperation::Shell => SandboxPolicy::can_execute_shell(level),
             // ── Unknown tools — require user review (not auto-allowed) ─
-            _ => {
+            ToolOperation::Unknown => {
                 // Check user-approved tools first (bypasses require_review)
-                let is_approved = self.user_approved_tools.lock()
+                let is_approved = self
+                    .user_approved_tools
+                    .lock()
                     .map(|approved| approved.contains(tool))
                     .unwrap_or(false);
                 if is_approved {
                     recognized = true;
-                    true  // User explicitly approved, bypass sandbox
+                    true // User explicitly approved, bypass sandbox
                 } else {
                     recognized = false;
                     false
@@ -875,7 +773,8 @@ impl PolicyEvaluator {
                     .violations
                     .iter()
                     .filter(|v| {
-                        v.severity == crate::security::prompt_injection::InjectionSeverity::High
+                        v.base.severity
+                            == crate::security::prompt_injection::InjectionSeverity::High
                     })
                     .count();
                 if high_sev_count > 0 {
@@ -957,16 +856,8 @@ impl PolicyEvaluator {
     /// Permission check (delegates to RBAC enforcer when configured, otherwise
     /// applies an explicit fallback policy based on the active sandbox level).
     fn check_permission(&self, tool: &str, _args: &Value) -> bool {
-        let action = match tool {
-            "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path"
-            | "copy_path" | "file_move" | "file_delete" => GovernanceAction::Write,
-            "run_tests" | "execute_command" | "terminal" | "bash" | "shell_exec" | "cargo_test" => {
-                GovernanceAction::Shell
-            }
-            "search" | "find" | "grep" | "semantic_search" | "code_index_search" | "find_path"
-            | "find_files" => GovernanceAction::Search,
-            _ => GovernanceAction::Read,
-        };
+        use crate::governance::tool_capability::ToolCapabilityRegistry;
+        let action = ToolCapabilityRegistry::action(tool);
 
         let shared_arc = self
             .rbac_enforcer
@@ -1125,7 +1016,7 @@ impl PolicyEvaluator {
     }
 
     /// Resolve a raw response string into a governance-level review verdict.
-    fn resolve_review_policy(response: &str, min_response_chars: usize) -> ReviewVerdict {
+    fn resolve_review_policy(response: &str, min_response_chars: usize) -> QualityVerdict {
         review_verdict(response, min_response_chars)
     }
 }

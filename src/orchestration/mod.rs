@@ -20,7 +20,6 @@ pub mod diagnostic_feedback;
 pub mod evolution_bridge;
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
-pub mod flow_with_models;
 pub mod fork_registry;
 pub mod full_auto;
 pub mod intermediate; // BLUE43 Step 10: Full-auto flow orchestrator

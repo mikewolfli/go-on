@@ -47,6 +47,21 @@ pub struct TripleFusionBridge {
 // ── Global singleton ──────────────────────────────────────────────────────
 
 /// Global singleton bridge shared across all requests so fusion cycles accumulate.
+///
+/// # Locking notes
+///
+/// Uses `tokio::sync::Mutex` (not `std::sync::Mutex`) because the singleton
+/// is accessed from async contexts (`tokio::spawn` in `chat_phases.rs`,
+/// `EvolutionLoop::run` in `evolution_loop/mod.rs`).  A `std::sync::Mutex`
+/// held across an `.await` point would be a runtime error.
+///
+/// **Read/write ratio**: The primary entry point is `run_fusion_cycle()`
+/// (&mut self — write), which calls the read-only helper
+/// `consciousness_to_evolution_triggers()` internally.  Standalone reads
+/// (`fusion_cycles()`, `consciousness_to_evolution_triggers()`) are rare.
+/// Switching to `tokio::sync::RwLock` is not beneficial because the
+/// write path dominates and the additional complexity does not justify
+/// the marginal gain.
 static GLOBAL_TRIPLE_FUSION: OnceLock<Arc<Mutex<TripleFusionBridge>>> = OnceLock::new();
 
 /// Returns a reference to the global `TripleFusionBridge` singleton, initialising

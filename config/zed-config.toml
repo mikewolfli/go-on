@@ -64,9 +64,6 @@ enabled = true
 readme_max_chars = 2000
 recent_commits = 5
 
-[autotune]
-enabled = false
-
 # ── Agents ───────────────────────────────────────────────────────────
 [agents]
 

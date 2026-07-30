@@ -46,6 +46,7 @@ pub mod autonomy_metrics;
 #[cfg(any(feature = "execution-intelligence", test))]
 pub mod execution_intelligence;
 #[path = "autonomy/intelligence_bridge.rs"]
+#[cfg(any(feature = "execution-intelligence", test))]
 pub mod intelligence_bridge;
 
 // ── Governance & policy ────────────────────────────────────────────────────
@@ -61,9 +62,6 @@ pub mod tool_governance;
 pub mod tool_governance_defaults;
 #[path = "governance/vote_executor.rs"]
 pub mod vote_executor;
-#[path = "governance/vote_orchestration.rs"]
-pub mod vote_orchestration;
-
 // ── Planning & orchestration ───────────────────────────────────────────────
 #[path = "planning/context.rs"]
 pub mod context;
@@ -100,5 +98,6 @@ pub mod requirement_continuation;
 pub mod cache_strategy;
 pub mod conversation;
 pub mod metrics;
+pub mod misc;
 
 // Re-export for convenience

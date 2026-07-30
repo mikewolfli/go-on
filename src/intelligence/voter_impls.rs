@@ -6,7 +6,6 @@
 //! | Voter | Strategy |
 //! |---|---|
 //! | [`CapabilityBusVoter`] | Wraps `Arc<CapabilityBus>`, votes via capability matching |
-//! | [`LocalAgentVoter`] | Keyword-heuristic voter using `contains` checks |
 //! | [`RationalizationGuardVoter`] | Safety-guard voter based on confidence thresholds |
 //! | [`DeepSeekVoter`] | LLM-based voter via DeepSeek API |
 //! | [`LocalVoter`] | Configurable local model voter using `AgentConfig` |
@@ -102,79 +101,6 @@ impl AgentVoter for CapabilityBusVoter {
         } else {
             coverage
         };
-
-        Vote {
-            approves,
-            reasoning,
-            confidence,
-        }
-    }
-}
-
-// ── LocalAgentVoter ────────────────────────────────────────────────────
-
-/// A simple heuristic-based voter that assesses proposals using local keyword
-/// analysis and a weighted scoring model.
-///
-/// Useful as a baseline / default voter when no external coordinator is
-/// available.
-pub struct LocalAgentVoter {
-    /// Name of this voter.
-    name: String,
-}
-
-impl LocalAgentVoter {
-    /// Create a new local agent voter.
-    pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
-    }
-}
-
-#[async_trait]
-impl AgentVoter for LocalAgentVoter {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Vote by applying a weighted keyword heuristic to the context.
-    async fn vote(&self, context: &str) -> Vote {
-        let lower = context.to_lowercase();
-
-        // Positive signals — increase confidence.
-        let has_positive = lower.contains("optimize")
-            || lower.contains("improve")
-            || lower.contains("fix")
-            || lower.contains("upgrade");
-
-        // Negative signals — decrease confidence.
-        let has_risk =
-            lower.contains("breaking") || lower.contains("unsafe") || lower.contains("deprecate");
-
-        // Neutral signals — indicate a well-defined request.
-        let has_structure = lower.contains("proposal")
-            || lower.contains("spec")
-            || lower.contains("design")
-            || lower.contains("plan");
-
-        let mut confidence: f64 = 0.5; // baseline
-
-        if has_positive {
-            confidence += 0.15;
-        }
-        if has_risk {
-            confidence -= 0.20;
-        }
-        if has_structure {
-            confidence += 0.10;
-        }
-
-        confidence = confidence.clamp(0.0, 1.0);
-
-        let approves = confidence >= 0.45;
-        let reasoning = format!(
-            "LocalAgentVoter: confidence={:.2}, positive={}, risk={}, structured={}",
-            confidence, has_positive, has_risk, has_structure,
-        );
 
         Vote {
             approves,
@@ -400,8 +326,8 @@ impl AgentVoter for DeepSeekVoter {
 /// Uses a local model configuration to vote on proposals.
 ///
 /// Evaluates proposals using config-driven thresholds and local agent config.
-/// Unlike `LocalAgentVoter` (keyword heuristic), this voter respects the
-/// `AgentConfig` thresholds for more configurable voting behaviour.
+/// A keyword-heuristic voter that respects `AgentConfig` thresholds for
+/// configurable voting behaviour.
 pub struct LocalVoter {
     name: String,
     /// Agent configuration for threshold tuning.

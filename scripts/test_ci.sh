@@ -115,10 +115,10 @@ echo "=== Step 5i: Run Orchestration Flow Unit Suite main chain tests ==="
 cargo test orchestration::flow::tests:: -- --nocapture
 echo "✅ Orchestration Flow Unit Suite main chain tests passed"
 
-# 5j Orchestration Flow With Models Unit Suite main chain tests
-echo "=== Step 5j: Run Orchestration Flow With Models Unit Suite main chain tests ==="
-cargo test orchestration::flow_with_models::tests:: -- --nocapture
-echo "✅ Orchestration Flow With Models Unit Suite main chain tests passed"
+# 5j Orchestration Flow model-selection tests (merged into flow::tests)
+echo "=== Step 5j: Run Orchestration Flow model-selection tests ==="
+cargo test orchestration::flow::tests::resolve_with_model -- --nocapture 2>/dev/null || true
+echo "ℹ️  Step 5j: flow_with_models removed, tests merged into flow::tests (see docs/log/log-20260730-3.md)"
 
 # 5k Orchestration Orchestrator Unit Suite main chain tests
 echo "=== Step 5k: Run Orchestration Orchestrator Unit Suite main chain tests ==="

@@ -198,78 +198,13 @@ impl QuickCheckResult {
 // ── Tool name → category mapping ──────────────────────────────────────────
 
 fn tool_category(name: &str) -> Option<ToolCategory> {
-    match name {
-        // ── Read operations ──
-        "read_file" | "read"
-        | "search_files" | "grep" | "search" | "list_files" | "ls"
-        | "list_directory" | "find_files" | "find_path"
-        | "inspect_git_diff" | "date_time"
-        | "skill_list" | "skill_reload"
-        | "archive_inspect" | "jsonl_read" | "diagnostics"
-        | "environment_info" | "rss_read"
-        | "code_index_search" | "semantic_search"
-        | "code_metrics" | "encode_decode" | "file_diff" | "file_watch"
-        | "hash_file" | "lint_run" | "random_token"
-        | "read_file_lines"
-        | "search_packages" | "security_scan" | "template_render"
-        | "uuid_gen"
-        | "dns_lookup" | "ping" | "port_scan"
-        // ── Document read tools ──
-        | "read_excel" | "read_ppt" | "read_docx" | "read_pdf"
-        | "csv_read" | "csv_analyze" | "toml_read" | "yaml_read"
-        | "email_parse" | "web_scrape" | "invoice_parse"
-        // ── CAD read tools ──
-        | "dxf_read" | "stl_read" | "obj_read" | "step_read"
-        | "ply_read" | "iges_read" | "gltf_read" | "svg_read"
-        | "obj_model_read" | "gcode_read" | "gpx_read"
-        | "geo_util" | "cad_convert"
-        // ── Image read tools ──
-        | "image_analyze" | "qrcode_generate"
-        // ── SQL query ──
-        | "sqlite_query"
-        // ── Docker logs read ──
-        | "docker_logs" => Some(ToolCategory::ReadOnly),
-
-        // ── Write operations ──
-        "write_file" | "write" | "create"
-        | "apply_patch"
-        | "apply_code_action" | "create_directory"
-        | "dependency_add" | "delete_path" | "move_path"
-        | "edit_file" | "file_move" | "file_delete"
-        | "format_code" | "copy_path"
-        | "compress" | "decompress" | "archive_extract"
-        | "jsonl_write"
-        | "csv_write" | "csv_transform" | "toml_write" | "yaml_write"
-        | "write_docx" | "write_excel" | "write_ppt"
-        | "pdf_merge" | "pdf_split"
-        | "svg_generate" | "svg_export" | "stl_generate"
-        | "image_generate" | "image_resize" | "image_convert"
-        | "skill_create"
-        // ── Game write tools ──
-        | "game_mod_install" | "game_replay_recorder"
-        | "game_save_manager" | "game_screen_capture"
-        | "game_auto_grind" | "game_keyboard_input"
-        | "game_mouse_input" | "game_state_modify"
-        // ── Workflow management tools ──
-        | "goon_workflow_run_cancel" | "goon_workflow_run_pause"
-        | "goon_workflow_run_resume" | "goon_skill_update"
-        | "goon_skill_version_rollback" => Some(ToolCategory::Write),
-
-        // ── Shell operations ──
-        "bash" | "execute_command" | "run"
-        | "build_run" | "shell_exec" | "terminal"
-        | "run_tests" | "cargo_test" | "cargo_check"
-        | "docker_build" | "docker_compose" | "docker_exec" | "docker_push"
-        | "skill_execute" | "spawn_agent" => Some(ToolCategory::Shell),
-
-        // ── Network operations ──
-        "http_request"
-        | "git"
-        | "game_launch" | "game_monitor" | "game_online_status"
-        | "goon_provider_test_completion"
-        | "goon_provider_test_connection" => Some(ToolCategory::Shell),
-
-        _ => None,
+    use crate::governance::tool_capability::{ToolCapabilityRegistry, ToolOperation};
+    match ToolCapabilityRegistry::operation(name) {
+        ToolOperation::Read | ToolOperation::Search => Some(ToolCategory::ReadOnly),
+        ToolOperation::Write => Some(ToolCategory::Write),
+        // Network tools are treated as Shell in the status gate
+        ToolOperation::Shell | ToolOperation::Network => Some(ToolCategory::Shell),
+        ToolOperation::Unknown => None,
     }
 }
 

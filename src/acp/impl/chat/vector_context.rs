@@ -722,7 +722,7 @@ pub(crate) async fn generate_phase_summary_text(
             trace_id: "summary",
         },
         agent,
-        summary_prompt,
+        &summary_prompt,
         None,
         Some(summary_options),
         Some(Duration::from_secs(timeout_seconds)),

@@ -68,21 +68,26 @@ pub(crate) struct PgPoolPair {
 /// Uses `Handle::try_current()` with a fallback to a temporary runtime when
 /// no Tokio context is active (principle #24). Callers in async contexts should
 /// use `spawn_blocking` + `pool_get`; sync callers during startup call it directly.
+/// Shared fallback runtime for callers outside any Tokio context.
+/// Created once and reused to avoid per-call runtime construction overhead.
+#[cfg(feature = "backend-postgres")]
+static FALLBACK_RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
 #[cfg(feature = "backend-postgres")]
 pub(crate) fn pool_get(pool: &PgPool) -> Result<deadpool::managed::Object<PgClientManager>> {
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| {
-            handle
-                .block_on(pool.get())
-                .map_err(|e| anyhow::anyhow!("pool get failed: {e}"))
-        }),
+        Ok(handle) => handle
+            .block_on(pool.get())
+            .map_err(|e| anyhow::anyhow!("pool get failed: {e}")),
         Err(_) => {
-            // No runtime active — create a temporary one for this one call.
-            // This can happen during early-startup sync init before the runtime is built.
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| anyhow::anyhow!("failed to build temp runtime for pool get: {e}"))?;
+            // No runtime active — use the shared fallback runtime.
+            // Created once and reused for all subsequent sync-path calls.
+            let rt = FALLBACK_RT.get_or_init(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build fallback runtime for pool get")
+            });
             rt.block_on(pool.get())
                 .map_err(|e| anyhow::anyhow!("pool get failed: {e}"))
         }

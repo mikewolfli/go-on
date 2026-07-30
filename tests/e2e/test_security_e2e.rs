@@ -90,8 +90,8 @@ async fn test_security_all_controls() {
     );
     // If violations were detected, verify they have the required fields.
     for violation in &malicious_result.violations {
-        assert!(!violation.description.is_empty());
-        assert!(violation.start_pos < violation.end_pos);
+        assert!(!violation.base.description.is_empty());
+        assert!(violation.base.start_pos < violation.base.end_pos);
     }
     // Contamination score should also be positive since the prompt contains
     // contamination indicators like "ignore all previous" and "you are now".

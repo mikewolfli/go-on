@@ -86,15 +86,15 @@ pub struct InjectionResult {
     pub contamination_score: f64,
 }
 
+/// Prompt injection violation.
+///
+/// Shared fields (`severity`, `match_text`, `start_pos`, `end_pos`, `description`)
+/// are stored in the [`SafetyViolationBase`] embed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyViolation {
     pub category: InjectionCategory,
     pub pattern_id: Option<String>,
-    pub severity: InjectionSeverity,
-    pub match_text: String,
-    pub start_pos: usize,
-    pub end_pos: usize,
-    pub description: String,
+    pub base: crate::security::severity::SafetyViolationBase,
 }
 
 // ---------------------------------------------------------------------------
@@ -208,11 +208,13 @@ impl InjectionDetector {
                     violations.push(SafetyViolation {
                         category: pattern.category.clone(),
                         pattern_id: Some(pattern.id.clone()),
-                        severity: pattern.severity.clone(),
-                        match_text: cap.as_str().to_string(),
-                        start_pos: cap.start(),
-                        end_pos: cap.end(),
-                        description: pattern.description.clone(),
+                        base: crate::security::severity::SafetyViolationBase {
+                            severity: pattern.severity.clone(),
+                            match_text: cap.as_str().to_string(),
+                            start_pos: cap.start(),
+                            end_pos: cap.end(),
+                            description: pattern.description.clone(),
+                        },
                     });
                 }
             }
@@ -247,7 +249,10 @@ impl InjectionDetector {
     /// Determine whether any violation has severity >= the given threshold.
     /// Use this to decide if a request should be blocked entirely.
     pub fn should_block(&self, result: &InjectionResult, min_severity: InjectionSeverity) -> bool {
-        result.violations.iter().any(|v| v.severity >= min_severity)
+        result
+            .violations
+            .iter()
+            .any(|v| v.base.severity >= min_severity)
     }
 
     /// Sanitize text that contains injection: wrap each injection span with
@@ -266,7 +271,7 @@ impl InjectionDetector {
         let mut ranges: Vec<(usize, usize)> = result
             .violations
             .iter()
-            .map(|v| (v.start_pos, v.end_pos))
+            .map(|v| (v.base.start_pos, v.base.end_pos))
             .collect();
         ranges.sort_by_key(|r| r.0);
 

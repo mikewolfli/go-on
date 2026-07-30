@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::acp::server::AcpServer;
 use crate::agent::Agent;
-use crate::intelligence::reputation::ReputationStore;
+use crate::intelligence::reputation::reputation_score;
 use serde::{Deserialize, Serialize};
 
 /// Result of a single agent selection
@@ -97,7 +97,7 @@ impl AgentSelector {
         &self,
         agents: &[(String, Arc<dyn Agent>)],
         preferred_agent: Option<&str>,
-        reputation: Option<&ReputationStore>,
+        _reputation: Option<()>,
         online_scores: &[(String, f64)],
         task_type: &str,
     ) -> Vec<ScoredAgent> {
@@ -124,7 +124,7 @@ impl AgentSelector {
                 } else {
                     0.5
                 };
-                let rep_score = reputation.map(|r| r.score(name)).unwrap_or(0.5);
+                let rep_score = reputation_score(name);
                 let mut hist_score = online_scores
                     .iter()
                     .find(|(n, _)| n == name)

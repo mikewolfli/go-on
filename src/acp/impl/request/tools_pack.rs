@@ -893,34 +893,7 @@ pub(super) fn estimate_argument_tokens(arguments: &Value) -> usize {
 }
 
 pub(super) fn governance_action_for_tool(name: &str) -> GovernanceAction {
-    let normalized = name.to_ascii_lowercase();
-    if normalized.contains("shell")
-        || normalized.contains("command")
-        || normalized.contains("docker")
-    {
-        return GovernanceAction::Shell;
-    }
-    if normalized.contains("write")
-        || normalized.contains("edit")
-        || normalized.contains("create")
-        || normalized.contains("delete")
-        || normalized.contains("move")
-        || normalized.contains("rename")
-        || normalized.contains("patch")
-        || normalized.contains("apply")
-    {
-        return GovernanceAction::Write;
-    }
-    if normalized.contains("search") || normalized.contains("find") {
-        return GovernanceAction::Search;
-    }
-    if normalized.contains("http")
-        || normalized.contains("request")
-        || normalized.contains("network")
-    {
-        return GovernanceAction::Network;
-    }
-    GovernanceAction::Read
+    crate::governance::tool_capability::ToolCapabilityRegistry::action(name)
 }
 
 pub(super) fn local_tool_descriptor(name: &'static str) -> Value {

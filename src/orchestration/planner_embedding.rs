@@ -4,7 +4,7 @@
 //! a global `VectorStore` to classify task complexity and detect task types.
 //! Falls back to keyword matching when the vector store is unavailable.
 
-use crate::orchestration::planner_executor::TaskComplexity;
+use crate::orchestration::brain_loop::plan_construction::TaskComplexity;
 use std::sync::Arc;
 
 /// Embedding-based task classifier that uses an optional `VectorStore`

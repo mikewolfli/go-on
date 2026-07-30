@@ -1295,7 +1295,7 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     // Hot-failover status snapshot (I15 fix)
     let hot_failover_profile = {
         let guard = crate::intelligence::hot_failover::HOT_FAILOVER_INSTANCE
-            .lock()
+            .read()
             .unwrap_or_else(|e| e.into_inner());
         let metrics = guard.metrics();
         json!({

@@ -472,10 +472,11 @@ mod tests {
             ]
         });
         let tool_results: Vec<Value> = vec![];
-        let orchestration = crate::acp::helpers::vote_orchestration::derive_response_orchestration(
-            &plan,
-            &tool_results,
-        );
+        let orchestration =
+            crate::acp::helpers::orchestration_alignment::derive_orchestration_node_decisions(
+                &plan,
+                &tool_results,
+            );
         assert!(
             orchestration.get("nodes").is_some(),
             "orchestration must have 'nodes'"

@@ -98,12 +98,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_set_full_auto_plugin_does_not_panic() {
+    #[tokio::test]
+    async fn test_set_full_auto_plugin_does_not_panic() {
         let config = BrainLoopConfig::default();
-        let _brain = BrainLoop::new(config);
+        let brain = BrainLoop::new(config);
         // Just verify the method can be called without panicking.
-        // Full flow tests require a fully-initialized FullAutoFlow.
-        assert!(true, "set_full_auto_plugin should not panic");
+        // Full flow tests require a fully-initialized FullAutoFlow with
+        // tool registry, so we only verify the async setter accepts the call.
+        let steps = brain.plan_with_full_auto("greet user").await;
+        assert!(
+            steps.is_empty(),
+            "Without plugin, plan_with_full_auto should return empty"
+        );
     }
 }

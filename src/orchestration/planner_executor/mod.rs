@@ -6,48 +6,14 @@
 //!
 //! This enables independent evolution of planning strategies and
 //! execution policies.
+//!
+//! Note: The `ExecutionPlan` and `PlanStep` types are canonical and used
+//! by `brain_loop::plan_construction::Planner`.  The `Executor` has been
+//! fully replaced by `brain_loop::BrainLoop`.
 
-use std::collections::{HashMap, HashSet};
-
-use crate::agent::{AgentRegistry, AgentTaskEnvelope, AgentTaskResult};
-use crate::i18n::runtime::tf;
-use std::sync::Arc;
-
-use crate::orchestration::mode::{ModeKind, ModeRuntime};
-use futures_util::future::join_all;
+use crate::orchestration::brain_loop::plan_construction::DagMetrics;
+use crate::orchestration::mode::ModeKind;
 use serde::{Deserialize, Serialize};
-use tokio_util::sync::CancellationToken;
-
-pub mod execution;
-
-#[deprecated(
-    since = "1.5.0",
-    note = "use crate::orchestration::brain_loop::BrainLoop instead"
-)]
-#[allow(deprecated)]
-pub use execution::Executor;
-
-// ---------------------------------------------------------------------------
-// Deprecated re-exports — moved to brain_loop::plan_construction
-// ---------------------------------------------------------------------------
-
-#[deprecated(
-    since = "1.5.0",
-    note = "use crate::orchestration::brain_loop::plan_construction::Planner instead"
-)]
-pub use crate::orchestration::brain_loop::plan_construction::Planner;
-
-#[deprecated(
-    since = "1.5.0",
-    note = "use crate::orchestration::brain_loop::plan_construction::TaskComplexity instead"
-)]
-pub use crate::orchestration::brain_loop::plan_construction::TaskComplexity;
-
-#[deprecated(
-    since = "1.5.0",
-    note = "use crate::orchestration::brain_loop::plan_construction::DagMetrics instead"
-)]
-pub use crate::orchestration::brain_loop::plan_construction::DagMetrics;
 
 /// A single step in an execution plan
 ///
@@ -84,8 +50,10 @@ pub struct PlannerExecutorConfig;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::orchestration::brain_loop::plan_construction::PlanningContext;
+    use crate::agent::AgentTaskEnvelope;
+    use crate::orchestration::brain_loop::plan_construction::{
+        Planner, PlanningContext, TaskComplexity,
+    };
 
     fn make_task() -> AgentTaskEnvelope {
         AgentTaskEnvelope {
@@ -300,108 +268,5 @@ mod tests {
         assert!(plan.steps[0].depends_on.is_empty());
         // review-1 depends on exec-1
         assert_eq!(plan.steps[1].depends_on, vec!["exec-1"]);
-    }
-
-    #[tokio::test]
-    #[allow(deprecated)]
-    async fn test_parallel_groups_execute_concurrently() {
-        // Create a plan with a parallel group to verify concurrent execution.
-        // We use a ManualClock runtime that records execution order to prove concurrency.
-        use crate::orchestration::mode::ModeKind;
-
-        let plan = ExecutionPlan {
-            plan_id: "parallel-test".to_string(),
-            steps: vec![
-                PlanStep {
-                    step_id: "plan-1".to_string(),
-                    description: "Analyze".to_string(),
-                    mode: ModeKind::FullAuto,
-                    agent: None,
-                    depends_on: vec![],
-                    timeout_seconds: 60,
-                },
-                PlanStep {
-                    step_id: "sub-1".to_string(),
-                    description: "Subtask A".to_string(),
-                    mode: ModeKind::FullAuto,
-                    agent: None,
-                    depends_on: vec!["plan-1".to_string()],
-                    timeout_seconds: 60,
-                },
-                PlanStep {
-                    step_id: "sub-2".to_string(),
-                    description: "Subtask B".to_string(),
-                    mode: ModeKind::FullAuto,
-                    agent: None,
-                    depends_on: vec!["plan-1".to_string()],
-                    timeout_seconds: 60,
-                },
-                PlanStep {
-                    step_id: "review-1".to_string(),
-                    description: "Review".to_string(),
-                    mode: ModeKind::SafeGuard,
-                    agent: None,
-                    depends_on: vec!["sub-1".to_string(), "sub-2".to_string()],
-                    timeout_seconds: 60,
-                },
-            ],
-            parallel_groups: vec![vec!["sub-1".to_string(), "sub-2".to_string()]],
-            dag_metrics: None,
-        };
-
-        let registry = AgentRegistry::default();
-        let results = Executor::execute(&plan, &registry, &[]).await;
-
-        // Without runtimes, all steps fail — but we verify the parallel group
-        // was dispatched (both sub-1 and sub-2 should have results).
-        assert_eq!(results.len(), 4, "All 4 steps should produce results");
-
-        // The order in results follows plan.steps declaration order.
-        // plan-1: no runtime
-        assert!(results[0].1.is_err());
-        // If plan-1 fails, sub-1 and sub-2 should be cancelled (upstream failure)
-        // Check that both parallel steps are handled (either success or cancellation)
-        let sub_results: Vec<_> = results
-            .iter()
-            .filter(|(id, _)| id.starts_with("sub-"))
-            .collect();
-        assert_eq!(
-            sub_results.len(),
-            2,
-            "Both parallel subtasks must have results"
-        );
-    }
-
-    #[tokio::test]
-    #[allow(deprecated)]
-    async fn test_execute_returns_results_for_all_steps() {
-        let task = make_task();
-        let plan = Planner::plan(&task).await;
-        let registry = AgentRegistry::default();
-        let results = Executor::execute(&plan, &registry, &[]).await;
-        // With no runtimes:
-        // plan-1 (no deps) -> "no runtime found"
-        // exec-1 (depends on plan-1, which failed) -> "cancelled due to upstream failure"
-        // review-1 (depends on exec-1, which was cancelled) -> "cancelled due to upstream failure"
-        assert_eq!(results.len(), 3);
-        assert!(results[0].1.is_err());
-        assert!(results[1].1.is_err());
-        assert!(results[2].1.is_err());
-    }
-
-    #[tokio::test]
-    #[allow(deprecated)]
-    async fn test_execute_with_missing_dependency() {
-        // Create a plan where exec-1 depends on plan-1, but plan-1 will fail
-        // because there's no runtime. The dependency should still be tracked.
-        let task = make_task();
-        let plan = Planner::plan(&task).await;
-        let registry = AgentRegistry::default();
-        let results = Executor::execute(&plan, &registry, &[]).await;
-        // First step (plan-1) fails with "no runtime found"
-        assert!(results[0].1.is_err());
-        // Second step (exec-1) depends on plan-1 which failed
-        // -> short-circuit: "cancelled due to upstream failure"
-        assert!(results[1].1.is_err());
     }
 }

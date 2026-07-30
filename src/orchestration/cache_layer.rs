@@ -22,7 +22,11 @@
 //! [`register_cache`] / [`get_aggregate_cache_stats`] helper functions let
 //! caches participate without creating their own collector.
 
-#![allow(dead_code)]
+// CacheLayer trait + CacheMetricsCollector are used through dynamic dispatch
+// by FastPathCache (full_auto) and ShardedGovernanceCache. register_cache()
+// is called from production (FullAutoFlow::new).
+// Only convenience helpers + collector methods are currently test-only.
+#![cfg_attr(not(test), allow(dead_code))]
 
 use std::sync::Mutex;
 use std::sync::OnceLock;

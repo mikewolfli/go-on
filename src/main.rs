@@ -69,7 +69,6 @@ pub use crate::observability::telemetry_enhanced;
 pub use crate::optimization::failure_prevention;
 
 pub use crate::orchestration::flow;
-pub use crate::orchestration::flow_with_models;
 pub use crate::orchestration::mode;
 pub use crate::orchestration::orchestrator;
 pub use crate::orchestration::roles;

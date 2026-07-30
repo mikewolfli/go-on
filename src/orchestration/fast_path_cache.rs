@@ -5,6 +5,7 @@
 //! across `FullAutoFlow` invocations.
 
 use std::collections::HashMap;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -13,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::orchestration::cache_layer::{CacheLayer, CacheStats};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+
 use tracing::debug;
 
 use crate::orchestration::full_auto::TaskIntent;
@@ -210,33 +211,36 @@ impl FastPathCache {
     /// Compute a stable u64 hash from normalized task text.
     ///
     /// The input is lowercased, non-alphanumeric/non-whitespace characters
-    /// are stripped, then SHA-256 is applied.  Only the first 8 bytes are
-    /// used for the key.  Uses streaming to avoid an intermediate String
-    /// allocation.
+    /// are stripped, then std SipHash (Rust default) is applied for fast
+    /// non-cryptographic hashing.  Uses streaming to avoid an intermediate
+    /// String allocation.
     fn fingerprint(text: &str) -> u64 {
-        let mut hasher = Sha256::new();
+        // Use std's default SipHasher (~2-3 GB/s) instead of SHA-256 (~300 MB/s)
+        // since this is a cache key, not a security boundary.
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         // Feed filtered, lowercased bytes directly into the hasher — avoids
         // the intermediate `normalized: String` allocation.
         for byte in text
             .bytes()
             .filter(|b| b.is_ascii_alphanumeric() || b.is_ascii_whitespace())
         {
-            hasher.update([byte.to_ascii_lowercase()]);
+            hasher.write_u8(byte.to_ascii_lowercase());
         }
-        let result = hasher.finalize();
-        u64::from_be_bytes(result[..8].try_into().expect("sha256 output >= 8 bytes"))
+        hasher.finish()
     }
 
     /// Compute a hash from a slice of strings (e.g. prerequisites).
     /// Uses streaming to avoid an intermediate String allocation.
     fn fingerprint_slice(items: &[String]) -> u64 {
-        let mut hasher = Sha256::new();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         for item in items {
-            hasher.update(item.to_lowercase().as_bytes());
-            hasher.update([0x00]);
+            // Hash each character in lowercase form to avoid allocation
+            for b in item.bytes() {
+                hasher.write_u8(b.to_ascii_lowercase());
+            }
+            hasher.write_u8(0x00);
         }
-        let result = hasher.finalize();
-        u64::from_be_bytes(result[..8].try_into().expect("sha256 output >= 8 bytes"))
+        hasher.finish()
     }
 
     // -----------------------------------------------------------------------
@@ -576,7 +580,6 @@ impl Default for FastPathCache {
 /// with [`CacheMetricsCollector`] without cloning or re-architecting ownership.
 ///
 /// Registration happens in `FullAutoFlow::new()` via `register_cache()`.
-#[allow(dead_code)]
 pub struct FastPathCacheMetrics(pub Arc<FastPathCache>);
 
 impl CacheLayer for FastPathCacheMetrics {

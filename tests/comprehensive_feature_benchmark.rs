@@ -13,10 +13,10 @@ use std::collections::BTreeMap;
 // ── Imports for real measurements ─────────────────────────────────────────
 
 use go_on::agent::AgentTaskEnvelope;
+use go_on::orchestration::brain_loop::plan_construction::Planner;
 use go_on::orchestration::brain_loop::plan_construction::PlanningContext;
 use go_on::orchestration::fast_path_cache::FastPathCache;
 use go_on::orchestration::full_auto::FullAutoFlow;
-use go_on::orchestration::planner_executor::Planner;
 use go_on::orchestration::recovery::RecoveryOrchestrator;
 use go_on::orchestration::skill::SkillRegistry;
 use go_on::orchestration::tool::ToolRegistry;

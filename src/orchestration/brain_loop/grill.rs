@@ -8,20 +8,15 @@ use crate::orchestration::brain_loop::BrainLoopReflection;
 use serde::{Deserialize, Serialize};
 
 /// GRILL interrogation mode for the reflection phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GrillMode {
     /// No GRILL interrogation (standard reflection only).
+    #[default]
     Disabled,
     /// Lightweight: add probing follow-up questions to reflections.
     Light,
     /// Full: add root-cause diagnosis, counterfactuals, and improvement suggestions.
     Full,
-}
-
-impl Default for GrillMode {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 /// Enhance a `BrainLoopReflection` with GRILL-style probing questions.

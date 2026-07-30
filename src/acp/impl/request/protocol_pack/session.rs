@@ -54,7 +54,7 @@ pub async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Va
 
     let config_options_init = HashMap::new();
     {
-        let mut state = super::acp_session_state().lock().await;
+        let mut state = super::acp_session_state().write().await;
         state.insert(
             session_id.clone(),
             super::AcpSessionState {
@@ -106,7 +106,7 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
     #[cfg(feature = "backend-sqlite")]
     if !session_id.is_empty() {
         if let Some(ref store) = server.session_store {
-            let mut state = super::acp_session_state().lock().await;
+            let mut state = super::acp_session_state().write().await;
             if !state.contains_key(session_id) {
                 if let Ok(Some(persisted)) = store.load(session_id).await {
                     state.insert(
@@ -126,7 +126,7 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
 
     // Build response
     let stored = {
-        let state = super::acp_session_state().lock().await;
+        let state = super::acp_session_state().read().await;
         state.get(session_id).cloned().unwrap_or_default()
     };
     let current_mode = super::normalize_acp_mode(Some(stored.mode.as_str()));
@@ -481,10 +481,10 @@ async fn register_pending_permission_request(
     risk_score: f64,
 ) {
     {
-        let mut decisions = super::acp_permission_state().lock().await;
+        let mut decisions = super::acp_permission_state().write().await;
         decisions.remove(session_id);
     }
-    let mut pending = super::acp_pending_permission_requests().lock().await;
+    let mut pending = super::acp_pending_permission_requests().write().await;
     pending.insert(
         session_id.to_string(),
         super::PendingPermissionRequest {
@@ -517,7 +517,7 @@ pub async fn session_list_payload(_server: &AcpServer, _params: Value) -> Result
     let mut sessions = vec![];
 
     {
-        let state = super::acp_session_state().lock().await;
+        let state = super::acp_session_state().read().await;
         for sid in state.keys() {
             sessions.push(serde_json::json!({
                 "id": sid,
@@ -563,7 +563,7 @@ pub async fn session_set_mode_payload(server: &AcpServer, params: Value) -> Resu
     let mode_id = super::normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
     if !session_id.is_empty() {
         let _snapshot = {
-            let mut state = super::acp_session_state().lock().await;
+            let mut state = super::acp_session_state().write().await;
             let entry = state.entry(session_id.to_string()).or_default();
             entry.mode = mode_id.clone();
             #[cfg(feature = "backend-sqlite")]
@@ -630,7 +630,7 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
     #[cfg(feature = "backend-sqlite")]
     if !session_id.is_empty() {
         if let Some(ref store) = server.session_store {
-            let mut state = super::acp_session_state().lock().await;
+            let mut state = super::acp_session_state().write().await;
             if !state.contains_key(session_id) {
                 if let Ok(Some(persisted)) = store.load(session_id).await {
                     state.insert(
@@ -649,7 +649,7 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
     }
 
     let (current_mode, _additional_dirs) = if !session_id.is_empty() {
-        let mut state = super::acp_session_state().lock().await;
+        let mut state = super::acp_session_state().write().await;
         let entry = state.entry(session_id.to_string()).or_default();
         if let Some(ref new_cwd) = cwd {
             entry.cwd = Some(new_cwd.clone());
@@ -662,7 +662,7 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
     let mut modes = super::build_default_modes();
     modes.current_mode_id = SessionModeId::new(current_mode);
     let current_model = {
-        let state = super::acp_session_state().lock().await;
+        let state = super::acp_session_state().read().await;
         state
             .get(session_id)
             .and_then(|entry| entry.config_options.get("model"))
@@ -687,17 +687,17 @@ pub async fn session_close_payload(server: &AcpServer, params: Value) -> Result<
     if !session_id.is_empty() {
         // 1. Remove the session from the in-memory map
         {
-            let mut state = super::acp_session_state().lock().await;
+            let mut state = super::acp_session_state().write().await;
             state.remove(session_id);
         }
 
         // 2. Clean up any permission state associated with this session
         {
-            let mut permissions = super::acp_permission_state().lock().await;
+            let mut permissions = super::acp_permission_state().write().await;
             permissions.remove(session_id);
         }
         {
-            let mut pending = super::acp_pending_permission_requests().lock().await;
+            let mut pending = super::acp_pending_permission_requests().write().await;
             pending.remove(session_id);
         }
 
@@ -733,14 +733,14 @@ pub async fn session_request_permission_payload(
         .unwrap_or_default();
 
     if !session_id.is_empty() && !option_id.is_empty() {
-        let mut permissions = super::acp_permission_state().lock().await;
+        let mut permissions = super::acp_permission_state().write().await;
         permissions.insert(
             session_id.to_string(),
             PermissionOptionId::new(option_id.to_string()),
         );
 
         let pending_request = {
-            let mut pending = super::acp_pending_permission_requests().lock().await;
+            let mut pending = super::acp_pending_permission_requests().write().await;
             pending.remove(session_id)
         };
 
@@ -792,7 +792,7 @@ pub async fn session_set_config_option_payload(server: &AcpServer, params: Value
 
     if !session_id.is_empty() && !config_id.is_empty() {
         let _snapshot = {
-            let mut state = super::acp_session_state().lock().await;
+            let mut state = super::acp_session_state().write().await;
             let session = state.entry(session_id.to_string()).or_default();
             session
                 .config_options
@@ -873,7 +873,7 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
 
     if !session_id.is_empty() {
         let removed = {
-            let mut state = super::acp_session_state().lock().await;
+            let mut state = super::acp_session_state().write().await;
             state.remove(session_id)
         };
         if removed.is_some() {
@@ -886,11 +886,11 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
 
             // Clean up permission state associated with this session
             {
-                let mut permissions = super::acp_permission_state().lock().await;
+                let mut permissions = super::acp_permission_state().write().await;
                 permissions.remove(session_id);
             }
             {
-                let mut pending = super::acp_pending_permission_requests().lock().await;
+                let mut pending = super::acp_pending_permission_requests().write().await;
                 pending.remove(session_id);
             }
 
@@ -931,7 +931,7 @@ pub async fn session_config_get_payload(_server: &AcpServer, params: Value) -> R
         .unwrap_or_default();
 
     let config_options = if !session_id.is_empty() {
-        let state = super::acp_session_state().lock().await;
+        let state = super::acp_session_state().read().await;
         state
             .get(session_id)
             .map(|s| s.config_options.clone())
@@ -941,7 +941,7 @@ pub async fn session_config_get_payload(_server: &AcpServer, params: Value) -> R
     };
 
     let mode = if !session_id.is_empty() {
-        let state = super::acp_session_state().lock().await;
+        let state = super::acp_session_state().read().await;
         state
             .get(session_id)
             .map(|s| s.mode.clone())
@@ -995,7 +995,7 @@ pub async fn session_config_favorite_toggle_payload(
     }
 
     let favorited = {
-        let mut state = super::acp_session_state().lock().await;
+        let mut state = super::acp_session_state().write().await;
         let session = state.entry(session_id.to_string()).or_default();
         let favorites = session
             .favorite_config_values
@@ -1022,7 +1022,7 @@ pub async fn session_config_favorite_toggle_payload(
 
     // Build updated config options with favorite state
     let current_model = {
-        let state = super::acp_session_state().lock().await;
+        let state = super::acp_session_state().read().await;
         state.get(session_id).and_then(|s| {
             s.config_options
                 .get("model")
@@ -1059,7 +1059,7 @@ async fn apply_favorites_to_select(
     config_id: &str,
 ) {
     let favorites = {
-        let state = super::acp_session_state().lock().await;
+        let state = super::acp_session_state().read().await;
         state
             .get(session_id)
             .and_then(|s| s.favorite_config_values.get(config_id))

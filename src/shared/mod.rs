@@ -11,3 +11,4 @@ pub mod secret_override;
 pub mod timestamps;
 pub mod token_bucket;
 pub mod tool_descriptors;
+pub mod vec_utils;

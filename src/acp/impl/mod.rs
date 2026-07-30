@@ -13,8 +13,6 @@ pub mod chat;
 pub mod agent;
 // I/O implementation functions
 pub mod io;
-// Storage implementation functions
-pub mod storage;
 // CORS support for ACP HTTP server
 pub mod cors;
 // User session management

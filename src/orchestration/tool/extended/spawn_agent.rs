@@ -161,21 +161,19 @@ impl Tool for SpawnAgentTool {
         let token_budget = input.payload["token_budget"].as_u64();
 
         // Prefer Handle::try_current() to detect if we are already running
-        // inside a tokio runtime. If so, use block_in_place + handle.block_on
-        // to avoid violating principle #24 (Handle::current().block_on()).
+        // inside a tokio runtime. If so, use handle.block_on directly
+        // (principle #23: no block_in_place needed for block_on).
         // If no runtime is active, fall back to the dedicated blocking runtime.
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| {
-                handle.block_on(execute_spawn(
-                    registry,
-                    task,
-                    agent_name,
-                    model_override,
-                    timeout_secs,
-                    role,
-                    token_budget,
-                ))
-            }),
+            Ok(handle) => handle.block_on(execute_spawn(
+                registry,
+                task,
+                agent_name,
+                model_override,
+                timeout_secs,
+                role,
+                token_budget,
+            )),
             Err(_) => spawn_agent_runtime().block_on(execute_spawn(
                 registry,
                 task,

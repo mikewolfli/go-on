@@ -25,11 +25,11 @@ pub fn request_timeout(options: Option<&PhaseOptions>) -> Option<Duration> {
 }
 
 /// Get review timeout from phase options, falling back to request timeout.
+///
+/// Delegates to the canonical implementation in `governance/review_controls`
+/// to eliminate duplication.
 pub fn review_timeout(options: Option<&PhaseOptions>) -> Option<Duration> {
-    options
-        .and_then(|opts| opts.review_timeout_seconds)
-        .or_else(|| options.and_then(|opts| opts.request_timeout_seconds))
-        .map(Duration::from_secs)
+    crate::governance::review_controls::review_timeout(options, None)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -14,6 +14,7 @@ use tokio::task::spawn_blocking;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use indexmap::IndexSet;
 #[cfg(feature = "backend-postgres")]
 use postgres::{Client as PgClient, NoTls as PgNoTls};
 use serde::{Deserialize, Serialize};
@@ -165,7 +166,7 @@ struct HotEntry {
 #[derive(Debug)]
 struct HotCache {
     entries: HashMap<String, HotEntry>,
-    lru_order: Vec<String>,
+    lru_order: IndexSet<String>,
     max_entries: usize,
     ttl: Duration,
 }
@@ -174,7 +175,7 @@ impl HotCache {
     fn new(max_entries: usize, ttl_secs: i64) -> Self {
         Self {
             entries: HashMap::with_capacity(max_entries),
-            lru_order: Vec::with_capacity(max_entries),
+            lru_order: IndexSet::with_capacity(max_entries),
             max_entries,
             ttl: Duration::from_secs(ttl_secs.max(0) as u64),
         }
@@ -182,9 +183,8 @@ impl HotCache {
 
     fn get(&mut self, id: &str) -> Option<&mut MemoryEntry> {
         // Promote to MRU position
-        if let Some(pos) = self.lru_order.iter().position(|x| x == id) {
-            self.lru_order.remove(pos);
-            self.lru_order.push(id.to_string());
+        if self.lru_order.shift_remove(id) {
+            self.lru_order.insert(id.to_string());
         }
         self.entries.get_mut(id).map(|he| {
             he.inserted_at = Instant::now();
@@ -200,10 +200,8 @@ impl HotCache {
             existing.entry = entry;
             existing.inserted_at = Instant::now();
             // Move to MRU
-            if let Some(pos) = self.lru_order.iter().position(|x| x == &existing.entry.id) {
-                self.lru_order.remove(pos);
-            }
-            self.lru_order.push(existing.entry.id.clone());
+            self.lru_order.shift_remove(&existing.entry.id);
+            self.lru_order.insert(existing.entry.id.clone());
             return;
         }
 
@@ -213,7 +211,7 @@ impl HotCache {
         }
 
         let id = entry.id.clone();
-        self.lru_order.push(id.clone());
+        self.lru_order.insert(id.clone());
         self.entries.insert(
             id,
             HotEntry {
@@ -224,9 +222,7 @@ impl HotCache {
     }
 
     fn remove(&mut self, id: &str) -> Option<MemoryEntry> {
-        if let Some(pos) = self.lru_order.iter().position(|x| x == id) {
-            self.lru_order.remove(pos);
-        }
+        self.lru_order.shift_remove(id);
         self.entries.remove(id).map(|he| he.entry)
     }
 

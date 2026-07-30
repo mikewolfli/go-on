@@ -1,16 +1,14 @@
-//! F-GAP-02: Reputation Store
+//! F-GAP-02: Reputation scoring
 //!
-//! Maintains an EMA-based reliability score per agent/node.  Scores feed the
-//! router's ranking to downweight consistently failing agents.
-//!
-//! NOTE: Production routing uses UnifiedKnowledgeBus for reputation scores.
-//! ReputationStore is retained for API compatibility (agent_selector.rs type
-//! signature) and is populated only in tests.
+//! Production routing uses UnifiedKnowledgeBus for reputation scores.
+//! This module provides only the minimal API compatibility layer:
+//! a simple `reputation_score()` function that always returns 1.0.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-/// Reputation record for a single agent/node
+/// Reputation record for a single agent/node.
+///
+/// Retained for API compatibility with `SensingOutput` snapshots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReputationRecord {
     pub agent: String,
@@ -23,18 +21,7 @@ pub struct ReputationRecord {
     pub last_updated_ms: u64,
 }
 
-/// Central reputation store — kept minimal for API compatibility.
-///
-/// Only `score()` is used in production (via `agent_selector.rs`).
-/// All mutation/persistence features are test-only.
-#[derive(Debug)]
-pub struct ReputationStore {
-    records: HashMap<String, ReputationRecord>,
-}
-
-impl ReputationStore {
-    /// Current score for agent (1.0 for unknown agents)
-    pub fn score(&self, agent: &str) -> f64 {
-        self.records.get(agent).map(|r| r.score).unwrap_or(1.0)
-    }
+/// Default reputation score for any agent (1.0 = fully trusted).
+pub fn reputation_score(_agent: &str) -> f64 {
+    1.0
 }

@@ -729,9 +729,9 @@ async fn process_user_message_and_run_agent(
                 warn!(
                     target: "cli_injection",
                     category = ?v.category,
-                    severity = ?v.severity,
+                    severity = ?v.base.severity,
                     pattern_id = ?v.pattern_id,
-                    description = %v.description,
+                    description = %v.base.description,
                     "prompt injection detected in user input"
                 );
             }
@@ -740,8 +740,8 @@ async fn process_user_message_and_run_agent(
                 let critical: Vec<String> = result
                     .violations
                     .iter()
-                    .filter(|v| v.severity >= InjectionSeverity::High)
-                    .map(|v| format!("{:?}: {}", v.category, v.description))
+                    .filter(|v| v.base.severity >= InjectionSeverity::High)
+                    .map(|v| format!("{:?}: {}", v.category, v.base.description))
                     .collect();
                 eprintln!(
                     "{}{}{}",

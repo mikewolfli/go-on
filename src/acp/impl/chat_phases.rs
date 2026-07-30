@@ -258,8 +258,8 @@ pub(crate) async fn observe_phase(
             if has_high_or_critical {
                 let critical: Vec<String> = all_violations
                     .iter()
-                    .filter(|v| v.severity >= InjectionSeverity::High)
-                    .map(|v| format!("{:?}: {}", v.category, v.description))
+                    .filter(|v| v.base.severity >= InjectionSeverity::High)
+                    .map(|v| format!("{:?}: {}", v.category, v.base.description))
                     .collect();
                 anyhow::bail!(
                     "Request blocked: prompt injection detected. Violations: {}",
@@ -835,81 +835,141 @@ pub(crate) async fn act_phase(
     // Scheduler
     observe_submit_to_scheduler(server, &resolve_out.resolved, &sched_task_id).await;
 
-    // Token cache
+    // Token & semantic caches (run concurrently for lower latency)
     let input_text = messages_to_text(&routing_out.agent_messages);
     let estimated_tokens = estimate_messages_token_count(&routing_out.agent_messages);
     let context_class = ContextLengthClass::from_token_count(estimated_tokens);
 
-    if let Some((level, entry)) = server
-        .cache_deps
-        .cache
-        .token_cache
-        .lookup(&input_text, context_class)
-        .await
-    {
-        let decision = CacheStrategy::decide_from_entry(
-            &format!("{level}"),
-            &entry,
-            &input_text,
-            cache_bypassed_for_execution,
-        );
-        match decision {
-            CacheDecision::Hit { response } => {
-                cache_hit = true;
-                selected_agent = resolve_out
-                    .resolved
-                    .agents
-                    .first()
-                    .map(|(n, _)| n.clone())
-                    .unwrap_or_else(|| "cached".to_string());
-                response_text = response.clone();
-                stream_cache_response(
-                    server,
-                    stream_observer.as_ref(),
-                    &selected_agent,
-                    &resolve_out.phase_name,
-                    &trace.trace_id,
-                    &response_text,
-                    &None,
-                )
-                .await?;
-                agent_attempts
-                    .push(json!({"agent": "cache", "ok": true, "level": format!("{level}")}));
-            }
-            CacheDecision::Refused { level, reason } => {
-                record_cache_shortcircuit_refused(&reason);
-                record_cache_bypass_for_execution();
-                agent_attempts.push(json!({"agent": "cache", "ok": false, "refused": true, "level": format!("{level}")}));
-            }
-            CacheDecision::Miss => {}
-        }
-    } else if cache_bypassed_for_execution {
-        record_cache_bypass_for_execution();
-        agent_attempts.push(json!({"agent": "cache", "ok": false}));
+    #[derive(Default)]
+    struct TokenOutcome {
+        response_text: String,
+        selected_agent: String,
+        agent_entry: Option<Value>,
     }
 
-    // Semantic cache
-    if !cache_hit && response_text.is_empty() && !cache_bypassed_for_execution {
-        if let Some(text) = try_semantic_cache(server, &input_text) {
-            cache_hit = true;
-            selected_agent = resolve_out
-                .resolved
-                .agents
-                .first()
-                .map(|(n, _)| n.clone())
-                .unwrap_or_else(|| "cached".to_string());
-            response_text = text;
-            stream_cache_response(
-                server,
-                stream_observer.as_ref(),
-                &selected_agent,
-                &resolve_out.phase_name,
-                &trace.trace_id,
-                &response_text,
-                &None,
-            )
-            .await?;
+    #[derive(Default)]
+    struct SemanticOutcome {
+        response_text: String,
+        selected_agent: String,
+    }
+
+    let (token_outcome, semantic_outcome) = tokio::join!(
+        // ── Token cache lookup ────────────────────────────────────────
+        async {
+            if let Some((level, entry)) = server
+                .cache_deps
+                .cache
+                .token_cache
+                .lookup(&input_text, context_class)
+                .await
+            {
+                let decision = CacheStrategy::decide_from_entry(
+                    &format!("{level}"),
+                    &entry,
+                    &input_text,
+                    cache_bypassed_for_execution,
+                );
+                match decision {
+                    CacheDecision::Hit { response } => {
+                        let agent = resolve_out
+                            .resolved
+                            .agents
+                            .first()
+                            .map(|(n, _)| n.clone())
+                            .unwrap_or_else(|| "cached".to_string());
+                        TokenOutcome {
+                            response_text: response.clone(),
+                            selected_agent: agent,
+                            agent_entry: Some(
+                                json!({"agent": "cache", "ok": true, "level": format!("{level}")}),
+                            ),
+                        }
+                    }
+                    CacheDecision::Refused { level, reason } => {
+                        record_cache_shortcircuit_refused(&reason);
+                        record_cache_bypass_for_execution();
+                        TokenOutcome {
+                            agent_entry: Some(
+                                json!({"agent": "cache", "ok": false, "refused": true, "level": format!("{level}")}),
+                            ),
+                            ..Default::default()
+                        }
+                    }
+                    CacheDecision::Miss => TokenOutcome::default(),
+                }
+            } else if cache_bypassed_for_execution {
+                record_cache_bypass_for_execution();
+                TokenOutcome {
+                    agent_entry: Some(json!({"agent": "cache", "ok": false})),
+                    ..Default::default()
+                }
+            } else {
+                TokenOutcome::default()
+            }
+        },
+        // ── Semantic cache lookup ─────────────────────────────────────
+        async {
+            if !cache_bypassed_for_execution {
+                if let Some(text) = try_semantic_cache(server, &input_text) {
+                    let agent = resolve_out
+                        .resolved
+                        .agents
+                        .first()
+                        .map(|(n, _)| n.clone())
+                        .unwrap_or_else(|| "cached".to_string());
+                    return SemanticOutcome {
+                        response_text: text,
+                        selected_agent: agent,
+                    };
+                }
+            }
+            SemanticOutcome::default()
+        },
+    );
+
+    // Merge: token cache has priority
+    let token_hit = !token_outcome.response_text.is_empty();
+    let semantic_hit = !semantic_outcome.response_text.is_empty();
+
+    // Apply non-hit agent-entries immediately (Refused / bypass -- no streaming needed)
+    if !token_hit {
+        if let Some(ref entry) = token_outcome.agent_entry {
+            agent_attempts.push(entry.clone());
         }
+    }
+
+    if token_hit {
+        cache_hit = true;
+        response_text.clone_from(&token_outcome.response_text);
+        selected_agent.clone_from(&token_outcome.selected_agent);
+        stream_cache_response(
+            server,
+            stream_observer.as_ref(),
+            &selected_agent,
+            &resolve_out.phase_name,
+            &trace.trace_id,
+            &response_text,
+            &None,
+        )
+        .await?;
+        // Push hit entry only after successful stream (preserves original ordering)
+        if let Some(entry) = token_outcome.agent_entry {
+            agent_attempts.push(entry);
+        }
+    } else if semantic_hit {
+        cache_hit = true;
+        response_text.clone_from(&semantic_outcome.response_text);
+        selected_agent.clone_from(&semantic_outcome.selected_agent);
+        stream_cache_response(
+            server,
+            stream_observer.as_ref(),
+            &selected_agent,
+            &resolve_out.phase_name,
+            &trace.trace_id,
+            &response_text,
+            &None,
+        )
+        .await?;
     }
 
     // ── Pre-execution review gate (SafeGuard mode) ────────────────────
@@ -1144,22 +1204,13 @@ pub(crate) async fn act_phase(
                 duration_ms: started.elapsed().as_millis() as u64,
             });
 
-        // Persistence
-        persist_vector_memory(
-            server,
-            &resolve_out.phase_name,
-            resolve_out.phase.options.as_ref(),
-            params,
-            &response_text,
-            &selected_agent,
-        )
-        .await;
+        // Persistence (BLUE69: all 4 ops run concurrently via tokio::join!)
         let mut msgs = params.messages.clone();
         msgs.push(Message {
             role: "assistant".to_string(),
             content: response_text.clone(),
         });
-        let (kn, (new_checkpoint_from_join, ml), dst) = tokio::join!(
+        let (kn, (new_checkpoint_from_join, ml), dst, _vec) = tokio::join!(
             persist_chat_knowledge(
                 server,
                 &routing_out.conversation_id,
@@ -1202,6 +1253,14 @@ pub(crate) async fn act_phase(
                 &routing_out.candidate_agents,
                 &agent_attempts,
                 &response_text
+            ),
+            persist_vector_memory(
+                server,
+                &resolve_out.phase_name,
+                resolve_out.phase.options.as_ref(),
+                params,
+                &response_text,
+                &selected_agent,
             ),
         );
         checkpoint = crate::acp::ConversationCheckpoint {

@@ -123,29 +123,30 @@ pub(super) struct TerminalProcess {
 
 // ── Static state ─────────────────────────────────────────────────────────
 
-static ACP_SESSION_STATE: OnceLock<tokio::sync::Mutex<HashMap<String, AcpSessionState>>> =
+static ACP_SESSION_STATE: OnceLock<tokio::sync::RwLock<HashMap<String, AcpSessionState>>> =
     OnceLock::new();
 
-pub(super) fn acp_session_state() -> &'static tokio::sync::Mutex<HashMap<String, AcpSessionState>> {
-    ACP_SESSION_STATE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+pub(super) fn acp_session_state() -> &'static tokio::sync::RwLock<HashMap<String, AcpSessionState>>
+{
+    ACP_SESSION_STATE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
 static ACP_PERMISSION_STATE: OnceLock<
-    tokio::sync::Mutex<HashMap<String, crate::schema::PermissionOptionId>>,
+    tokio::sync::RwLock<HashMap<String, crate::schema::PermissionOptionId>>,
 > = OnceLock::new();
 
 pub(crate) fn acp_permission_state(
-) -> &'static tokio::sync::Mutex<HashMap<String, crate::schema::PermissionOptionId>> {
-    ACP_PERMISSION_STATE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+) -> &'static tokio::sync::RwLock<HashMap<String, crate::schema::PermissionOptionId>> {
+    ACP_PERMISSION_STATE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
 static ACP_PENDING_PERMISSION_REQUESTS: OnceLock<
-    tokio::sync::Mutex<HashMap<String, PendingPermissionRequest>>,
+    tokio::sync::RwLock<HashMap<String, PendingPermissionRequest>>,
 > = OnceLock::new();
 
 pub(crate) fn acp_pending_permission_requests(
-) -> &'static tokio::sync::Mutex<HashMap<String, PendingPermissionRequest>> {
-    ACP_PENDING_PERMISSION_REQUESTS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+) -> &'static tokio::sync::RwLock<HashMap<String, PendingPermissionRequest>> {
+    ACP_PENDING_PERMISSION_REQUESTS.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
 static ACP_TERMINAL_STATE: OnceLock<StdMutex<HashMap<String, TerminalProcess>>> = OnceLock::new();
@@ -220,7 +221,7 @@ pub(super) fn extract_additional_directories(params: &Value) -> Vec<String> {
 pub(super) async fn session_state_for_prompt(params: &Value) -> AcpSessionState {
     let session_id = params.get("sessionId").and_then(Value::as_str);
     let stored = if let Some(session_id) = session_id {
-        let state = acp_session_state().lock().await;
+        let state = acp_session_state().read().await;
         state.get(session_id).cloned()
     } else {
         None
@@ -576,7 +577,7 @@ mod tests {
         let session_id = new_result["sessionId"].as_str().unwrap().to_string();
 
         {
-            let state = acp_session_state().lock().await;
+            let state = acp_session_state().read().await;
             assert!(state.contains_key(&session_id));
         }
 
@@ -587,7 +588,7 @@ mod tests {
         assert_eq!(delete_result["deleted"], true);
 
         {
-            let state = acp_session_state().lock().await;
+            let state = acp_session_state().read().await;
             assert!(!state.contains_key(&session_id));
         }
     }
@@ -688,7 +689,7 @@ mod tests {
         let session_id = new_result["sessionId"].as_str().unwrap().to_string();
 
         {
-            let mut pending = acp_pending_permission_requests().lock().await;
+            let mut pending = acp_pending_permission_requests().write().await;
             pending.insert(
                 session_id.clone(),
                 PendingPermissionRequest {
@@ -711,7 +712,7 @@ mod tests {
         .unwrap();
 
         assert!(result.is_object());
-        let pending = acp_pending_permission_requests().lock().await;
+        let pending = acp_pending_permission_requests().read().await;
         assert!(!pending.contains_key(new_result["sessionId"].as_str().unwrap()));
     }
 

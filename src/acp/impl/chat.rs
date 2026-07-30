@@ -141,7 +141,7 @@ pub(crate) async fn run_high_risk_vote_attempt(
     trace_id: &str,
     agent_name: String,
     agent: Arc<dyn crate::agent::Agent>,
-    agent_messages: Vec<Message>,
+    agent_messages: &[Message],
     principles: Option<Vec<String>>,
     options: HashMap<String, Value>,
     timeout: Option<Duration>,

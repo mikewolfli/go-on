@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::sync::Mutex;
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
@@ -253,8 +253,16 @@ impl HotFailover {
 /// Use this when you need a single failover tracker per process without
 /// explicitly plumbing a `&HotFailover` reference through your call chain.
 /// Wired into governance status profile for observability.
-pub static HOT_FAILOVER_INSTANCE: LazyLock<Mutex<HotFailover>> =
-    LazyLock::new(|| Mutex::new(HotFailover::new(HotFailoverConfig::default())));
+///
+/// # Locking notes
+///
+/// Uses `RwLock` instead of `Mutex` because the access pattern is
+/// read-dominated: governance status handlers call `metrics()` (read-only)
+/// frequently, while `record_failure()` writes are infrequent (only on
+/// model errors / timeouts). Multiple concurrent readers do not block
+/// each other.
+pub static HOT_FAILOVER_INSTANCE: LazyLock<RwLock<HotFailover>> =
+    LazyLock::new(|| RwLock::new(HotFailover::new(HotFailoverConfig::default())));
 
 // ---------------------------------------------------------------------------
 // Tests

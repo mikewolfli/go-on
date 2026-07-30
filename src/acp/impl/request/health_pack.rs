@@ -216,7 +216,7 @@ pub(super) async fn cache_clear_payload(server: &AcpServer) -> Result<Value> {
         .unwrap_or_else(|e| e.into_inner())
         .clear_all();
     let persistent_removed = if let Some(cache) = server.cache_deps.cache.response_cache.clone() {
-        crate::acp::r#impl::storage::cache_clear(cache).await?
+        cache.clear_all().await?
     } else {
         0
     };

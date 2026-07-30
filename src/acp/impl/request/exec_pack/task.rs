@@ -808,7 +808,7 @@ async fn execute_single_subtask(
         .candidates
         .iter()
         .map(|(agent_name, agent)| {
-            let selection = FlowModelSelector::select_model_for_agent(
+            let selection = crate::flow::FlowManager::select_model_for_agent(
                 context.orchestration_ctx.as_ref(),
                 agent.as_ref(),
                 context.app_config.as_ref(),

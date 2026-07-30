@@ -14,3 +14,18 @@ pub enum DetectionSeverity {
     High,
     Critical,
 }
+
+/// Shared base for [`SafetyViolation`](crate::security::content_safety::SafetyViolation)
+/// in [`content_safety`](crate::security::content_safety) and
+/// [`prompt_injection`](crate::security::prompt_injection).
+///
+/// The type-specific fields (e.g. `category`, `suggested_action`, `pattern_id`)
+/// are defined in each module's own `SafetyViolation` wrapper.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SafetyViolationBase {
+    pub severity: DetectionSeverity,
+    pub match_text: String,
+    pub start_pos: usize,
+    pub end_pos: usize,
+    pub description: String,
+}

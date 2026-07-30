@@ -10,11 +10,12 @@ The loader reads optional files relative to the config directory:
 2. `RULES/global.md`
 3. `RULES/common.md`
 4. `RULES/pua.md` ⭐ (NEW: PUA enforcement rules for agent proxy)
-5. `RULES/local.md`
-6. `<phase>.rules.md` (for example `coding.rules.md`)
-7. `RULES/<phase>.md`
-8. `RULES/<phase>.rules.md`
-9. `RULES/<phase>.local.md`
+5. `<phase>.rules.md` (for example `coding.rules.md`)
+6. `RULES/<phase>.md`
+7. `RULES/<phase>.rules.md`
+8. `RULES/<phase>.local.md`
+
+> Note: `RULES/local.md` does not exist yet — create it when local overrides are needed.
 
 ## Merge Behavior
 
@@ -53,7 +54,7 @@ Authoritative source model:
 
 1. Keep stable, cross-project constraints in `RULES/global.md`.
 2. Keep team conventions in `RULES/common.md`.
-3. Keep machine-local or developer-local overrides in `RULES/local.md`.
+3. Keep machine-local or developer-local overrides in `RULES/local.md` (create it when needed).
 4. Keep phase-specific rules in `RULES/coding.md`, `RULES/review.md`, etc.
 5. Keep project-local phase overrides in `RULES/<phase>.local.md` or `<phase>.rules.md` sidecar files when needed.
 

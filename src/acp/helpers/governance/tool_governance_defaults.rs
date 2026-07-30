@@ -9,19 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::tool_governance::record_tool_policy_denied;
-
-/// Risk classification for a tool
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub enum ToolRiskClass {
-    /// Read-only operations (files, search, git diff)
-    ReadOnly,
-    /// Low-risk write operations (file write, patch apply)
-    LowRiskWrite,
-    /// High-risk execution operations (shell, test run)
-    HighRiskExecute,
-    /// Administrative operations (skill management, workflow control)
-    Admin,
-}
+pub use crate::governance::tool_capability::ToolRiskClass;
 
 /// Deployment profile used by default governance when RBAC is unavailable.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -138,91 +126,7 @@ pub struct ToolClassification {
 
 /// Classify a tool by name into a risk class.
 pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
-    match tool_name {
-        // Read-only tools
-        "search_files"
-        | "read_file"
-        | "inspect_git_diff"
-        | "skill-finder"
-        | "prompts_list"
-        | "prompts_get"
-        | "acp_trace_get"
-        | "acp_debug_panel_get"
-        | "goon_workflow_run_list"
-        | "goon_workflow_run_get"
-        | "goon_metrics_window_query"
-        | "goon_metrics_errors_summary"
-        | "goon_provider_capabilities" => ToolRiskClass::ReadOnly,
-
-        // Low-risk write tools
-        "write_file" | "apply_patch" => ToolRiskClass::LowRiskWrite,
-
-        // High-risk execution tools
-        "run_tests"
-        | "bash"
-        | "execute_command"
-        | "shell_exec"
-        | "goon_provider_test_connection"
-        | "goon_provider_test_completion" => ToolRiskClass::HighRiskExecute,
-
-        // Admin tools (goon_skill_* prefix catches all skill admin tools)
-        name if name.starts_with("goon_skill_") => ToolRiskClass::Admin,
-
-        // Workflow admin tools (exact match for known workflow control tools)
-        "goon_workflow_run_cancel" | "goon_workflow_run_pause" | "goon_workflow_run_resume" => {
-            ToolRiskClass::Admin
-        }
-
-        // Keyword-based fallback: match tool names by substring against risk keyword lists.
-        // This ensures consistency with the frontend ModePolicy compute_risk_score classification
-        // and catches tools whose names follow standard naming conventions.
-        _ => {
-            let lower = tool_name.to_lowercase();
-
-            // High-risk keywords (destructive / execution operations)
-            let high_risk_keywords = [
-                "delete",
-                "remove",
-                "drop",
-                "rm",
-                "shutdown",
-                "rollback",
-                "revert",
-                "reset",
-                "force",
-                "truncate",
-                "uninstall",
-            ];
-            for kw in &high_risk_keywords {
-                if lower.contains(kw) {
-                    return ToolRiskClass::HighRiskExecute;
-                }
-            }
-
-            // Medium-risk keywords (write / edit / update operations)
-            let medium_risk_keywords = [
-                "write", "edit", "modify", "update", "create", "patch", "rename", "move", "copy",
-            ];
-            for kw in &medium_risk_keywords {
-                if lower.contains(kw) {
-                    return ToolRiskClass::LowRiskWrite;
-                }
-            }
-
-            // Low-risk keywords (read / search / query operations)
-            let low_risk_keywords = [
-                "read", "list", "search", "grep", "find", "view", "show", "get", "check", "test",
-            ];
-            for kw in &low_risk_keywords {
-                if lower.contains(kw) {
-                    return ToolRiskClass::ReadOnly;
-                }
-            }
-
-            // Unknown tools default to LowRiskWrite (conservative, requires policy)
-            ToolRiskClass::LowRiskWrite
-        }
-    }
+    crate::governance::tool_capability::ToolCapabilityRegistry::risk_class(tool_name)
 }
 
 /// Evaluate a tool call against the default governance policy.

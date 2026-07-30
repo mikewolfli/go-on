@@ -88,7 +88,6 @@ pub(crate) async fn execute_high_risk_vote(
         let vote_results = join_all(high_risk_vote_jobs.into_iter().map(
             |(agent_name, agent, vote_options, strong_model)| {
                 let server_ref = server;
-                let agent_messages = agent_messages.to_vec();
                 let phase_principles = phase_principles.clone();
                 async move {
                     run_high_risk_vote_attempt(
@@ -256,7 +255,6 @@ pub(crate) async fn execute_high_risk_vote(
             let escalation_results = join_all(escalation_jobs.into_iter().map(
                 |(agent_name, agent, model_options, model_id)| {
                     let server_ref = server;
-                    let agent_messages = agent_messages.to_vec();
                     let phase_principles = phase_principles.clone();
                     async move {
                         run_high_risk_vote_attempt(

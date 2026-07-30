@@ -26,7 +26,6 @@ use crate::acp::r#impl::request::prompts_pack::PromptManager;
 use crate::acp::r#impl::session::SessionManager;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
-use crate::flow_with_models::FlowModelSelector;
 use crate::governance::audit::ThreadSafeAuditLog;
 use crate::governance::harness_bus::HarnessBus;
 use crate::intelligence::capability_bus::core::CapabilityBus;
@@ -252,8 +251,6 @@ pub struct ModelServerDeps {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     /// Adaptive model selector
     pub adaptive_model_selector: Arc<StdMutex<AdaptiveModelSelector>>,
-    /// Flow model selector
-    pub flow_model_selector: Arc<StdMutex<FlowModelSelector>>,
 }
 
 /// Governance subsystems grouped together (harness + capability + audit + pua + rbac)
@@ -308,15 +305,12 @@ pub struct GovernanceServerDeps {
         Option<Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>>,
 }
 
-/// Orchestration subsystems grouped together (scheduler + planner + executor + skill)
-#[allow(deprecated)]
+/// Orchestration subsystems grouped together (scheduler + planner + skill)
 pub struct OrchestrationServerDeps {
     /// Dual-level task scheduler for priority queue and worker pool
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
     /// Planner — task decomposition engine (F-GAP-05)
-    pub planner: crate::orchestration::planner_executor::Planner,
-    /// Executor — plan execution engine (F-GAP-05)
-    pub executor: crate::orchestration::planner_executor::Executor,
+    pub planner: crate::orchestration::brain_loop::plan_construction::Planner,
     /// Planner-Executor configuration (BLUE47 Step 7)
     pub planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
     /// Registry for MCP skills
@@ -1283,7 +1277,6 @@ impl ServerBuilder {
             }
         }
         let failure_prevention = Arc::new(StdMutex::new(failure_prevention_state));
-        let flow_model_selector = Arc::new(StdMutex::new(FlowModelSelector {}));
         let memory_response_cache = Arc::new(StdMutex::new(
             self.memory_response_cache.unwrap_or_default(),
         ));
@@ -1465,7 +1458,6 @@ impl ServerBuilder {
                 flow_manager: self.flow_manager,
                 agent_registry: self.agent_registry,
                 adaptive_model_selector,
-                flow_model_selector,
             },
             governance_deps: GovernanceServerDeps {
                 harness_bus: if governance_enabled {
@@ -1551,16 +1543,11 @@ impl ServerBuilder {
                     None
                 },
             },
-            orchestration_deps: {
-                #[allow(deprecated)]
-                let deps = OrchestrationServerDeps {
-                    scheduler: self.scheduler,
-                    planner: crate::orchestration::planner_executor::Planner,
-                    executor: crate::orchestration::planner_executor::Executor,
-                    planner_executor_config: self.planner_executor_config,
-                    skill_registry,
-                };
-                deps
+            orchestration_deps: OrchestrationServerDeps {
+                scheduler: self.scheduler,
+                planner: crate::orchestration::brain_loop::plan_construction::Planner,
+                planner_executor_config: self.planner_executor_config,
+                skill_registry,
             },
             runtime_config,
             config_path: self.config_path,

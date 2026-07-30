@@ -69,14 +69,14 @@ pub enum SafetyAction {
 // SafetyViolation
 // ---------------------------------------------------------------------------
 
+/// Content safety violation.
+///
+/// Shared fields (`severity`, `match_text`, `start_pos`, `end_pos`, `description`)
+/// are stored in the [`SafetyViolationBase`] embed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyViolation {
     pub category: SafetyCategory,
-    pub severity: SafetySeverity,
-    pub match_text: String,
-    pub start_pos: usize,
-    pub end_pos: usize,
-    pub description: String,
+    pub base: crate::security::severity::SafetyViolationBase,
     pub suggested_action: SafetyAction,
 }
 
@@ -196,11 +196,13 @@ impl SafetyChecker {
             for mat in rule.regex.find_iter(&normalized) {
                 violations.push(SafetyViolation {
                     category: rule.category.clone(),
-                    severity: rule.severity.clone(),
-                    match_text: mat.as_str().to_string(),
-                    start_pos: mat.start(),
-                    end_pos: mat.end(),
-                    description: rule.description.clone(),
+                    base: crate::security::severity::SafetyViolationBase {
+                        severity: rule.severity.clone(),
+                        match_text: mat.as_str().to_string(),
+                        start_pos: mat.start(),
+                        end_pos: mat.end(),
+                        description: rule.description.clone(),
+                    },
                     suggested_action: rule.action.clone(),
                 });
             }
@@ -226,8 +228,8 @@ impl SafetyChecker {
 
         for v in &violations {
             *by_category.entry(v.category.clone()).or_insert(0) += 1;
-            if v.severity > max_severity {
-                max_severity = v.severity.clone();
+            if v.base.severity > max_severity {
+                max_severity = v.base.severity.clone();
             }
         }
 

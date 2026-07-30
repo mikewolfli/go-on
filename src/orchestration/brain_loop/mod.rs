@@ -6,6 +6,24 @@
 //! the remaining work.  The loop continues until the plan completes, fails,
 //! is cancelled, or reaches the configured maximum number of iterations.
 //!
+//! ## Relationship to AutonomyLoop
+//!
+//! BrainLoop is the **orchestration layer** of go-on's unified execution loop.
+//! Its companion is `AutonomyLoop` (`acp/helpers/autonomy/autonomy_loop.rs`),
+//! which is the **execution layer** (agent → tools → loop).
+//!
+//! | | AutonomyLoop | BrainLoop (this module) |
+//! |--|-------------|------------------------|
+//! | Role | Tool execution engine | Plan orchestration framework |
+//! | Does | Call LLM → parse tool calls → run tools | Manage plan state machine |
+//! | Has | persistent_loop, agent_reroute, governance_gate | DeepReasoningEngine, World Model, GRILL, DAG |
+//! | Entry | `run_acp_autonomy_loop()` via adapter | `brain_loop.run_async()` |
+//!
+//! The two are packaged together via `autonomy_loop_adapter.rs`
+//! (`acp/helpers/autonomy/autonomy_loop_adapter.rs`), which provides
+//! `run_acp_autonomy_loop()` — the single unified entry point.  The
+//! `use_brain_loop` config flag selects which engine drives execution.
+//!
 //! ## Status
 //!
 //! This module is **actively wired** in production:
@@ -150,7 +168,7 @@ pub struct BrainLoopPlan {
     /// Parallel groups for concurrent step execution (group name → step IDs).
     pub parallel_groups: Vec<Vec<String>>,
     /// DAG governance metrics from the planner-executor pipeline.
-    pub dag_metrics: Option<crate::orchestration::planner_executor::DagMetrics>,
+    pub dag_metrics: Option<crate::orchestration::brain_loop::plan_construction::DagMetrics>,
 }
 
 impl BrainLoopPlan {

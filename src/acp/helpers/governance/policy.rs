@@ -5,38 +5,11 @@
 
 use serde::Serialize;
 
+use crate::acp::helpers::misc::{extra_string, extra_string_list, extra_u64};
 use crate::config::PhaseOptions;
 use crate::orchestration::roles::role_registry_keywords_for;
 use crate::orchestration::task_router::TaskCharacteristics;
 use crate::reinforcement::ExecutionDecisionCandidate;
-
-// Helper functions from original acp/helpers module
-// These are defined in acp/helpers/misc.rs via include! macro
-// For now, we'll copy their implementations
-fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
-    options
-        .and_then(|opts| opts.extra.get(key))
-        .and_then(|v| v.as_u64())
-}
-
-fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
-    options
-        .and_then(|opts| opts.extra.get(key))
-        .and_then(|v| v.as_str())
-        .map(|v| v.to_string())
-}
-
-fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Vec<String>> {
-    options
-        .and_then(|opts| opts.extra.get(key))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.as_str())
-                .map(|item| item.to_string())
-                .collect::<Vec<_>>()
-        })
-}
 
 /// Review policy configuration
 #[derive(Debug, Clone, Serialize)]

@@ -1,9 +1,32 @@
-//! ACP-aware autonomy loop adapter (AUTON-01).
+//! # Unified Execution Loop — AutonomyLoop + BrainLoop
 //!
-//! Bridges the shared `run_autonomy_loop` into the ACP chat context with
-//! streaming output support, so the ACP entrypoint can run multi-round
-//! think → act → observe → replan → finalize cycles without bloating
-//! the large chat.rs handler.
+//! This module is the **single entry point** for all tool-execution loops
+//! in go-on.  It packages two complementary engines into one cohesive API:
+//!
+//! | Layer | Module | Role |
+//! |-------|--------|------|
+//! | **Execution** | `acp/helpers/autonomy/autonomy_loop.rs` | Thin agent-driven tool executor: call LLM → parse tool tokens → run tools → loop |
+//! | **Orchestration** | `orchestration/brain_loop/` | Plan state machine: Plan → Execute → Reflect → Replan, with DAG, deep reasoning, world model |
+//!
+//! ## Architecture
+//!
+//! ```text
+//! chat.rs / chat_phases.rs
+//!         │
+//!         ▼
+//!   run_acp_autonomy_loop()    ← YOU ARE HERE — the unified entry point
+//!         │
+//!         ├─ use_brain_loop=false ──► run_autonomy_loop()    [Execution layer]
+//!         │                                  (agent → tools → loop)
+//!         └─ use_brain_loop=true  ──► BrainLoop.run_async()  [Orchestration layer]
+//!                                            (plan → execute → reflect → replan)
+//! ```
+//!
+//! The two engines are **not** duplicates — they operate at different
+//! abstraction levels.  AutonomyLoop handles the raw agent/tool cycle;
+//! BrainLoop adds structured plan management on top.  The `use_brain_loop`
+//! flag selects which engine drives execution; both return the same
+//! [`AutonomyLoopResult`] format so callers are insulated from the choice.
 
 use std::sync::Arc;
 

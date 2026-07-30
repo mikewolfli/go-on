@@ -2,49 +2,36 @@
 //!
 //! # Status
 //! Complete implementation ready for CapabilityBus integration (ARCH-13).
+//!
+//! The canonical verdict type is [`crate::intelligence::quality_models::QualityVerdict`].
+//! This module re-exports it and provides governance-specific helpers.
 
 use std::time::Duration;
 
-use serde::Serialize;
-
 use crate::config::PhaseOptions;
 use crate::i18n::t;
+use crate::intelligence::quality_models::QualityVerdict;
 
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct ReviewDecision {
-    pub(crate) reviewer: String,
-    pub(crate) verdict: String,
-    pub(crate) response: String,
-}
+/// Governance-internal verdict, unified with [`QualityVerdict`].
+///
+/// Only a subset of [`QualityVerdict`] variants are used in the review-verdict
+/// parsing path: `Approve`, `Reject`, and `Invalid`. The type alias is used
+/// for semantic clarity within the governance module.
+pub(crate) type ReviewVerdict = QualityVerdict;
 
-/// Governance-internal review verdict.
-/// This enum uses `Approve`/`Reject` semantics (distinct from
-/// the public `acp::prelude::ReviewVerdict` which uses `Pass`/`Fail`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReviewVerdict {
-    Approve,
-    Reject,
-    Invalid,
-}
-
-impl ReviewVerdict {
-    pub(crate) fn as_str(self) -> String {
-        match self {
-            Self::Approve => t("status.review_controls.approve"),
-            Self::Reject => t("status.review_controls.reject"),
-            Self::Invalid => t("status.review_controls.invalid"),
-        }
-    }
-
-    pub(crate) fn is_approved(self) -> bool {
-        matches!(self, Self::Approve)
+/// Convert a [`ReviewVerdict`] (i.e. [`QualityVerdict`]) to a translated string.
+pub(crate) fn verdict_as_str(verdict: ReviewVerdict) -> String {
+    match verdict {
+        QualityVerdict::Approve => t("status.review_controls.approve"),
+        QualityVerdict::Reject => t("status.review_controls.reject"),
+        QualityVerdict::Invalid => t("status.review_controls.invalid"),
+        _ => t("status.review_controls.invalid"),
     }
 }
 
-pub(crate) enum ReviewGateOutcome {
-    Approved(Vec<ReviewDecision>),
-    Rejected(Vec<ReviewDecision>),
-    Degraded(Vec<ReviewDecision>),
+/// Returns `true` for approve-level verdicts.
+pub(crate) fn verdict_is_approved(verdict: ReviewVerdict) -> bool {
+    matches!(verdict, QualityVerdict::Approve)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,33 +71,33 @@ pub(crate) fn review_timeout(
         .map(Duration::from_secs)
 }
 
-pub(crate) fn review_verdict(response: &str, min_response_chars: usize) -> ReviewVerdict {
+pub(crate) fn review_verdict(response: &str, min_response_chars: usize) -> QualityVerdict {
     if response.trim().chars().count() < min_response_chars {
-        return ReviewVerdict::Invalid;
+        return QualityVerdict::Invalid;
     }
 
     let first_line = response.lines().find(|line| !line.trim().is_empty());
     match first_line.map(|line| line.trim().to_ascii_uppercase()) {
-        Some(value) if value == "APPROVE" => ReviewVerdict::Approve,
-        Some(value) if value == "REJECT" => ReviewVerdict::Reject,
+        Some(value) if value == "APPROVE" => QualityVerdict::Approve,
+        Some(value) if value == "REJECT" => QualityVerdict::Reject,
         // Allow optional colon separator: "APPROVE:" or "REJECT:"
         Some(value) if value.starts_with("APPROVE:") => {
             // Require at least one valid reason character after the colon
             let rest = &value["APPROVE:".len()..];
             if !rest.trim().is_empty() {
-                ReviewVerdict::Approve
+                QualityVerdict::Approve
             } else {
-                ReviewVerdict::Invalid
+                QualityVerdict::Invalid
             }
         }
         Some(value) if value.starts_with("REJECT:") => {
             let rest = &value["REJECT:".len()..];
             if !rest.trim().is_empty() {
-                ReviewVerdict::Reject
+                QualityVerdict::Reject
             } else {
-                ReviewVerdict::Invalid
+                QualityVerdict::Invalid
             }
         }
-        _ => ReviewVerdict::Invalid,
+        _ => QualityVerdict::Invalid,
     }
 }

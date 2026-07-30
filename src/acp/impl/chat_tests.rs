@@ -19,7 +19,17 @@
 //! To run these tests with any profile, build with `--no-default-features` or explicitly
 //! enable the SQLite backend.
 
+// ── Guardian: if building with backend-postgres, emit a clear compile-time
+// message instead of silently skipping 15+ tests.
+#[cfg(all(test, feature = "backend-postgres"))]
+compile_error!(
+    "chat_tests.rs: 15+ unit tests are disabled under backend-postgres. \
+     Run `cargo test --no-default-features --features backend-sqlite` \
+     to execute them."
+);
+
 #[cfg(test)]
+#[cfg(not(feature = "backend-postgres"))]
 mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     use std::collections::HashMap;

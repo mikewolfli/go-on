@@ -18,11 +18,10 @@ use crate::acp::helpers::agent_router::record_task_agent_outcome;
 use crate::acp::helpers::autonomy_metrics::{
     record_orchestration_alignment, record_orchestration_node_mapping,
 };
+use crate::acp::helpers::orchestration_alignment::derive_orchestration_node_decisions;
 use crate::acp::helpers::orchestration_alignment::derive_plan_trace_alignment;
-use crate::acp::helpers::vote_orchestration::derive_response_orchestration;
 use crate::acp::server::AcpServer;
-#[allow(deprecated)]
-use crate::orchestration::planner_executor::Planner;
+use crate::orchestration::brain_loop::plan_construction::Planner;
 use crate::orchestration::workflow_optimizer::OptimizationContext;
 use crate::rpc_protocol::RequestTraceContext;
 
@@ -381,7 +380,7 @@ async fn build_response_metadata(
     record_orchestration_alignment(alignment_coverage);
 
     let orchestration_node_decisions =
-        derive_response_orchestration(&execution_plan, tool_execution_results);
+        derive_orchestration_node_decisions(&execution_plan, tool_execution_results);
     let mapped_nodes = orchestration_node_decisions
         .get("mapped_nodes")
         .and_then(Value::as_u64)

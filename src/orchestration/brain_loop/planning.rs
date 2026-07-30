@@ -738,6 +738,23 @@ impl BrainLoop {
     /// through pending steps — executing, reflecting, and optionally
     /// replanning — until the plan reaches a terminal phase.
     /// Returns a [`BrainLoopProfile`] snapshot at the end.
+    ///
+    /// # Serial step execution
+    ///
+    /// Steps in the `pending` list are executed **sequentially** in a
+    /// `for` loop (line ~832).  Although `BrainLoopPlan.parallel_groups`
+    /// exists (populated from `ExecutionPlan` for complex tasks), this
+    /// method does **not** use it for concurrent fan-out.  The
+    /// `parallel_groups` are currently consumed downstream by
+    /// `ToolPipeline` (see [`tool::pipeline::ToolPipeline`]).
+    ///
+    /// Adding cross-group parallelism here would require:
+    /// 1. Dependency graph analysis to ensure groups are independent.
+    /// 2. Coordinated error handling across concurrent step failures.
+    /// 3. Ordered reflection when some steps complete before others.
+    ///
+    /// This is a future enhancement opportunity — the data (step IDs
+    /// partitioned by group) is already available on the plan.
     pub async fn run_async(
         &self,
         task: &str,

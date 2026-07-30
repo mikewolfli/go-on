@@ -1,8 +1,13 @@
 //! # Unified autonomy loop: plan → act → observe → replan
 //!
-//! This module provides the orchestration loop for autonomous agent execution,
-//! managing sequential attempts with fallback and configurable timeout.
-//! Planning and tool-loop concerns are handled by parent modules.
+//! This module provides the **execution layer** of go-on's unified execution
+//! loop: call the LLM → parse tool call tokens → run tools concurrently →
+//! collect results → loop.  It is a self-contained agent-driven tool executor.
+//!
+//! For structured plan management (DAG, deep reasoning, reflection, replanning),
+//! see [`BrainLoop`](crate::orchestration::brain_loop::BrainLoop).  The two
+//! are packaged together via `autonomy_loop_adapter::run_acp_autonomy_loop()`
+//! which provides a single entry point with `use_brain_loop` config selection.
 //!
 //! ## Key types
 //! - [`AutonomyLoopConfig`] — loop configuration

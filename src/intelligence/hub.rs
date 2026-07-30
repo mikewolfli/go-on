@@ -22,7 +22,7 @@ use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::voter_impls::{
-    CapabilityBusVoter, DeepSeekVoter, LocalAgentVoter, LocalVoter, RationalizationGuardVoter,
+    CapabilityBusVoter, DeepSeekVoter, LocalVoter, RationalizationGuardVoter,
 };
 use crate::intelligence::weighted_vote::{
     self, delphi_debate, AgentVoter, DelphiConfig, WeightedVoteConfig,
@@ -44,6 +44,18 @@ static USE_DELPHI_DEBATE: AtomicBool = AtomicBool::new(true);
 
 // ── Global instances ──────────────────────────────────────────────────────
 
+/// Global singleton self-rationalization guard.
+///
+/// Contention is expected to be negligible because:
+/// - It is accessed only from `rationalize_decision()`, once per decision.
+/// - The critical section is a single `guard.evaluate()` call that completes
+///   in microseconds.
+/// - There is no hot-loop or high-frequency polling path through this guard.
+///
+/// A `std::sync::Mutex` is the correct primitive here: the critical section
+/// is synchronous and brief.  `tokio::sync::Mutex` would add unnecessary
+/// overhead, and `RwLock` would not improve throughput since there is only
+/// one caller and no read-vs-write contention to exploit.
 static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
     LazyLock::new(|| Mutex::new(SelfRationalizationGuard::new(0.3)));
 
@@ -121,13 +133,13 @@ pub fn init_intel_hub_with_addrs(
     tracing::info!("intel_hub: initialized rationalization, audit");
 }
 
-/// Initialise the 3 internal voters (CapabilityBusVoter, LocalAgentVoter,
+/// Initialise the 3 internal voters (CapabilityBusVoter, LocalVoter,
 /// RationalizationGuardVoter) and store them so that
 /// [`consensus_vote_with_reputation`] can delegate to their async
 /// `AgentVoter::vote()` implementations.
 ///
 /// Call this once during server startup, *after* `init_intel_hub()`.
-/// When `capability_bus` is `None`, only the `LocalAgentVoter` and
+/// When `capability_bus` is `None`, only the `LocalVoter` and
 /// `RationalizationGuardVoter` are stored.
 pub fn init_intel_voters(capability_bus: Option<Arc<CapabilityBus>>) {
     let mut voters: Vec<Box<dyn AgentVoter + Send + Sync>> = Vec::new();
@@ -137,8 +149,11 @@ pub fn init_intel_voters(capability_bus: Option<Arc<CapabilityBus>>) {
         voters.push(Box::new(CapabilityBusVoter::new("capability-bus", bus)));
     }
 
-    // LocalAgentVoter — keyword-heuristic voter.
-    voters.push(Box::new(LocalAgentVoter::new("local-agent")));
+    // LocalVoter — keyword-heuristic voter with default config.
+    voters.push(Box::new(LocalVoter::new(
+        "local-agent",
+        AgentConfig::default(),
+    )));
 
     // RationalizationGuardVoter — safety-guard voter.
     voters.push(Box::new(RationalizationGuardVoter::new(

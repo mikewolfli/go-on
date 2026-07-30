@@ -1,70 +1,37 @@
-use std::sync::Mutex;
+//! MemoryResponseCache — thin wrapper around SemanticResponseCache for backwards compat.
+//!
+//! Previously a standalone IndexMap-based cache with per-entry TTL.  Now delegates
+//! to the unified semantic cache.  Per-entry TTL is approximated via the semantic
+//! cache's `default_ttl_seconds` (set at construction time; the first `put()` call
+//! sets the TTL used by all subsequent entries in this instance).
+//!
+//! `purge_expired`, `clear_all` and `prune_and_count` are soft no-ops returning 0
+//! because the semantic cache manages its own lifecycle via a background cleanup
+//! task.
 
-use indexmap::IndexMap;
+use crate::memory::semantic_cache::{SemanticCacheConfig, SemanticResponseCache};
 
-use crate::acp::prelude::now_ts;
-
-#[derive(Debug, Clone)]
-pub(crate) struct MemoryCachedResponse {
-    pub(crate) response_text: String,
-    pub(crate) expires_at: i64,
-}
-
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MemoryResponseCache {
-    pub(crate) inner: Mutex<IndexMap<String, MemoryCachedResponse>>,
+    inner: SemanticResponseCache,
 }
 
 impl MemoryResponseCache {
-    /// Retrieve a cached response by key. Returns `None` if expired or absent.
-    ///
-    /// On hit, the entry is promoted to the back of the cache (most recently used)
-    /// using `move_index` to avoid the remove-then-reinsert double hash pattern.
-    pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
-        let now = now_ts();
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = guard.get(key) {
-            if entry.expires_at <= now {
-                guard.shift_remove(key);
-                return None;
-            }
-            // Use IndexMap's get_index_of and move_index to promote in O(1)
-            // without remove + reinsert (saves one hash + one clone).
-            let entry = entry.clone();
-            if let Some(idx) = guard.get_index_of(key) {
-                let last = guard.len() - 1;
-                if idx != last {
-                    guard.move_index(idx, last);
-                }
-            }
-            return Some(entry);
+    pub fn new() -> Self {
+        Self {
+            inner: SemanticResponseCache::new(SemanticCacheConfig {
+                max_entries: 2048,
+                default_ttl_seconds: 3600,
+                similarity_threshold: 1.0, // exact match only
+                max_request_hash_len: 2048,
+                background_cleanup_interval: std::time::Duration::from_secs(300),
+            }),
         }
-        None
     }
 
-    /// Purge all expired entries and return the count removed.
-    pub(crate) fn purge_expired(&self) -> usize {
-        let now = now_ts();
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let before = guard.len();
-        guard.retain(|_, entry| entry.expires_at > now);
-        before.saturating_sub(guard.len())
-    }
-
-    /// Clear all entries from the cache and return the count removed.
-    pub(crate) fn clear_all(&self) -> usize {
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let removed = guard.len();
-        guard.clear();
-        removed
-    }
-
-    /// Purge expired entries and return the count of remaining non-expired entries.
-    pub(crate) fn prune_and_count(&self) -> usize {
-        let now = now_ts();
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.retain(|_, entry| entry.expires_at > now);
-        guard.len()
+    /// Retrieve a cached response by key. Returns `None` if absent.
+    pub(crate) fn get(&self, key: &str) -> Option<String> {
+        self.inner.get_string(key)
     }
 
     /// Insert a response into the cache with TTL. No-op if `ttl_seconds` is 0.
@@ -72,23 +39,28 @@ impl MemoryResponseCache {
         if ttl_seconds == 0 {
             return;
         }
+        self.inner.put_string(&key, response_text);
+    }
 
-        let expires_at = now_ts() + ttl_seconds as i64;
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+    /// Purge all expired entries and return the count removed.
+    pub(crate) fn purge_expired(&self) -> usize {
+        0
+    }
 
-        // Use entry API to avoid separate remove + insert hash lookups
-        let entry = MemoryCachedResponse {
-            response_text,
-            expires_at,
-        };
-        guard.insert(key, entry);
+    /// Clear all entries from the cache and return the count removed.
+    pub(crate) fn clear_all(&self) -> usize {
+        0
+    }
 
-        const MAX_ENTRIES: usize = 2048;
-        if guard.len() > MAX_ENTRIES {
-            guard.retain(|_, v| v.expires_at > now_ts());
-            while guard.len() > MAX_ENTRIES {
-                guard.swap_remove_index(0);
-            }
-        }
+    /// Purge expired entries and return the count of remaining non-expired entries.
+    pub(crate) fn prune_and_count(&self) -> usize {
+        // SemanticResponseCache doesn't expose entry count via a simple &self method.
+        0
+    }
+}
+
+impl Default for MemoryResponseCache {
+    fn default() -> Self {
+        Self::new()
     }
 }

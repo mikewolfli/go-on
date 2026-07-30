@@ -100,20 +100,21 @@ pub(crate) async fn run_agent_collecting(
     server: &AcpServer,
     stream_ctx: StreamNotificationContext<'_>,
     agent: Arc<dyn crate::agent::Agent>,
-    messages: Vec<Message>,
+    messages: &[Message],
     principles: Option<Vec<String>>,
     options: Option<HashMap<String, Value>>,
     timeout_duration: Option<Duration>,
 ) -> Result<(String, String, Option<String>)> {
     // tool execution delegated to execute_tools_concurrent
-    let base_messages = messages.clone();
+    let chat_messages = messages.to_vec();
     let followup_agent = Arc::clone(&agent);
     let followup_principles = principles.clone();
     let followup_options = options.clone();
 
     let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
     let sender = crate::agent::StreamingSender::from(sender);
-    let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
+    let task =
+        tokio::spawn(async move { agent.chat(chat_messages, principles, options, sender).await });
 
     let collect = async move {
         let stream_started = Instant::now();
@@ -334,7 +335,7 @@ pub(crate) async fn run_agent_collecting(
                 }
                 if !tool_results.is_empty() {
                     let combined = tool_results.join("\n");
-                    let mut followup_messages = base_messages.clone();
+                    let mut followup_messages = messages.to_vec();
                     if !response.trim().is_empty() {
                         followup_messages.push(Message {
                             role: "assistant".to_string(),

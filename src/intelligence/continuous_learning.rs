@@ -499,49 +499,10 @@ impl ContinuousLearningCenter {
         Ok(id)
     }
 
-    /// Consolidate a new experience AND run LLM distillation on the result.
-    /// Shared background runtime for async operations called from sync contexts.
-    /// Created once and reused, avoiding the overhead of creating a new
-    /// `Runtime` + OS thread on every invocation.
-    fn shared_background_runtime() -> &'static tokio::runtime::Runtime {
-        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-        RT.get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .expect("failed to create continuous_learning background runtime")
-        })
-    }
-
-    /// This replaces simple JSON string rotation with semantic summarisation.
-    pub fn consolidate_experience_with_distill(
-        &self,
-        pattern_key: &str,
-        data: &str,
-        importance: f64,
-    ) -> Result<String> {
-        let id = self.consolidate_experience(pattern_key, data, importance)?;
-        // Non-blocking: kicks off LLM distillation in the background using
-        // the shared runtime.  This avoids creating a new OS thread + Runtime
-        // on every invocation and prevents fire-and-forget panic swallowing.
-        if self
-            .agent
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some()
-        {
-            let center = self.clone();
-            let rt = Self::shared_background_runtime();
-            rt.spawn(async move {
-                let count = center.llm_distill().await;
-                if count > 0 {
-                    tracing::debug!("continuous_learning: llm_distill extracted {count} patterns");
-                }
-            });
-        }
-        Ok(id)
-    }
+    // consolidate_experience_with_distill was removed — it had zero production
+    // callers and created a LazyLock<Runtime> + block_on anti-pattern violating
+    // principles #23 and #24.  Callers that need async distillation should await
+    // llm_distill() directly in their async context.
 
     // ── LLM Distillation ───────────────────────────────────────────────────
 

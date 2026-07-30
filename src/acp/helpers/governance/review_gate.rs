@@ -5,21 +5,15 @@
 
 use serde_json::{json, Value};
 
+use crate::acp::r#impl::agent::ReviewGateOutcome;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
+use crate::intelligence::quality_models::QualityVerdict;
 use crate::intelligence::verification::{
     DeterministicVerifier, StructuredReview, VerificationVerdict,
 };
 use crate::rpc_protocol::RequestTraceContext;
-
-/// Outcome of a review gate execution
-#[derive(Debug, Clone)]
-pub struct ReviewGateOutcome {
-    pub passed: bool,
-    /// Review comments / reasons provided by the reviewer(s)
-    pub comments: Vec<String>,
-}
 
 /// Run the dual review gate for full_auto mode.
 ///
@@ -42,14 +36,16 @@ pub async fn run_review_gate(
     )
     .await;
 
-    let (passed, comments) = match review_outcome {
-        Ok(o) => (o.passed, o.comments),
-        Err(_) => (
-            false,
-            vec!["review gate error: unable to complete review".to_string()],
-        ),
-    };
-    ReviewGateOutcome { passed, comments }
+    match review_outcome {
+        Ok(o) => o,
+        Err(_) => ReviewGateOutcome {
+            passed: false,
+            comments: vec!["review gate error: unable to complete review".to_string()],
+            reviewer: "review_gate".to_string(),
+            duration_ms: 0,
+            verdict: QualityVerdict::Invalid,
+        },
+    }
 }
 
 /// Run enhanced verification (syntax, test, lint, adversarial checks) on response text.

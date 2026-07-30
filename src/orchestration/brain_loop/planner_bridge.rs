@@ -4,8 +4,9 @@
 //! of explicit steps, the bridge uses the `Planner` to auto-generate a DAG of
 //! steps via embedding-based classification and keyword heuristics.
 
+use crate::orchestration::brain_loop::plan_construction::Planner;
 use crate::orchestration::brain_loop::{BrainLoopPhase, BrainLoopStep, StepStatus};
-use crate::orchestration::planner_executor::{ExecutionPlan, Planner};
+use crate::orchestration::planner_executor::ExecutionPlan;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentTaskEnvelope;
@@ -14,18 +15,13 @@ use crate::agent::AgentTaskEnvelope;
 ///
 /// - `ExplicitSteps`: caller provides steps directly (existing behavior)
 /// - `AutoDecompose`: `planner_executor::Planner` decomposes the task into a DAG
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlanningStrategy {
     /// Use caller-provided steps (default, backward-compatible).
+    #[default]
     ExplicitSteps,
     /// Use `planner_executor::Planner` to auto-decompose the task.
     AutoDecompose,
-}
-
-impl Default for PlanningStrategy {
-    fn default() -> Self {
-        Self::ExplicitSteps
-    }
 }
 
 /// Convert a planner_executor `ExecutionPlan` into a `Vec<BrainLoopStep>`.

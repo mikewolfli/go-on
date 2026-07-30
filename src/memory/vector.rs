@@ -625,11 +625,16 @@ impl VectorStore {
                 params![memory_key, phase, query, response, json_value, blob_value, now,],
             )?;
 
+            // BLUE69: Combined eviction — single DELETE ... RETURNING avoids
+            // separate SELECT + DELETE round-trips.
             const SENTINEL_LIMIT: i64 = i64::MAX;
-
             let evicted_keys: Vec<String> = {
                 let mut stmt = conn.prepare(
-                    "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT ?2 OFFSET ?1",
+                    "DELETE FROM vector_memory WHERE memory_key IN (
+                        SELECT memory_key FROM vector_memory
+                        ORDER BY updated_at DESC
+                        LIMIT ?2 OFFSET ?1
+                    ) RETURNING memory_key",
                 )?;
                 let rows = stmt
                     .query_map(params![self.max_entries as i64, SENTINEL_LIMIT], |row| {
@@ -637,19 +642,6 @@ impl VectorStore {
                     })?;
                 rows.filter_map(|r| r.ok()).collect()
             };
-
-            conn.execute(
-                "
-            DELETE FROM vector_memory
-            WHERE memory_key IN (
-                SELECT memory_key
-                FROM vector_memory
-                ORDER BY updated_at DESC
-                LIMIT ?2 OFFSET ?1
-            )
-                ",
-                params![self.max_entries as i64, SENTINEL_LIMIT],
-            )?;
 
             // Update HNSW index if it exists
             if let Ok(mut hnsw_guard) = self.hnsw.lock() {
@@ -815,18 +807,23 @@ impl VectorStore {
                 };
 
                 // Update hit counts while still holding the lock
+                // BLUE69: Batch all hit count updates into a single SQL statement
+                // to avoid N individual UPDATE round-trips per search result.
                 if !scored.is_empty() {
+                    let placeholders: Vec<String> =
+                        (0..scored.len()).map(|i| format!("?{}", i + 1)).collect();
+                    let sql = format!(
+                        "UPDATE vector_memory SET hit_count = hit_count + 1, last_hit_at = ?{n_plus_1} WHERE memory_key IN ({})",
+                        placeholders.join(", "),
+                        n_plus_1 = scored.len() + 1
+                    );
+                    let mut params: Vec<&dyn rusqlite::types::ToSql> =
+                        Vec::with_capacity(scored.len() + 1);
                     for (memory_key, _, _) in &scored {
-                        conn.execute(
-                            "
-                        UPDATE vector_memory
-                        SET hit_count = hit_count + 1,
-                            last_hit_at = ?2
-                        WHERE memory_key = ?1
-                        ",
-                            params![memory_key, now],
-                        )?;
+                        params.push(memory_key);
                     }
+                    params.push(&now);
+                    conn.execute(&sql, params.as_slice())?;
                 }
 
                 scored
@@ -1094,18 +1091,25 @@ impl VectorStore {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
 
-        // Update hit counts in SQLite
+        // Update hit counts in SQLite (batched: single IN-clause query)
         let conn = self.conn.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("vector mutex poisoned in 'hnsw_search::hit_count', recovering");
             poisoned.into_inner()
         });
         if !scored.is_empty() {
+            let placeholders: Vec<String> =
+                (0..scored.len()).map(|i| format!("?{}", i + 1)).collect();
+            let sql = format!(
+                "UPDATE vector_memory SET hit_count = hit_count + 1, last_hit_at = ?{n_plus_1} WHERE memory_key IN ({})",
+                placeholders.join(", "),
+                n_plus_1 = scored.len() + 1
+            );
+            let mut params: Vec<&dyn rusqlite::types::ToSql> = Vec::with_capacity(scored.len() + 1);
             for (memory_key, _, _) in &scored {
-                let _ = conn.execute(
-                    "UPDATE vector_memory SET hit_count = hit_count + 1, last_hit_at = ?2 WHERE memory_key = ?1",
-                    params![memory_key, now],
-                );
+                params.push(memory_key);
             }
+            params.push(&now);
+            let _ = conn.execute(&sql, params.as_slice());
         }
         drop(conn);
 
@@ -1931,17 +1935,17 @@ impl VectorStore {
             }
 
             if !scored.is_empty() {
-                for (key, _, _) in &scored {
-                    let _ = client.execute(
-                        &format!(
-                            "UPDATE vector_memory
-                             SET hit_count = hit_count + 1, last_hit_at = {p}2
-                             WHERE memory_key = {p}1",
-                            p = PARAM_PREFIX,
-                        ),
-                        &[key, &now],
-                    );
-                }
+                // Batched: single UPDATE with IN clause using PostgreSQL array
+                let keys: Vec<String> = scored.iter().map(|(k, _, _)| k.clone()).collect();
+                let _ = client.execute(
+                    &format!(
+                        "UPDATE vector_memory
+                         SET hit_count = hit_count + 1, last_hit_at = {p}2
+                         WHERE memory_key = ANY({p}1::text[])",
+                        p = PARAM_PREFIX,
+                    ),
+                    &[&keys, &now],
+                );
             }
 
             let (hits, feedback) = scored_to_hits(scored, top_k, max_snippet_chars);
