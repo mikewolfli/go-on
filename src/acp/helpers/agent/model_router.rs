@@ -62,12 +62,21 @@ fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize) -> 
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Whether a model option should pin routing to a matching agent.
+///
+/// Returns `false` for empty / `"auto"` (default routing) and for the
+/// server's own advertised model `"go-on"` (which means "use default
+/// phase routing" on the OpenAI-compatible endpoints).
+pub(crate) fn model_option_is_specific(model: Option<&str>) -> bool {
+    model.is_some_and(|m| !m.is_empty() && m != "auto" && m != "go-on")
+}
+
 /// Filter agents by model option.
 ///
 /// When the user picks a specific model (e.g. `"deepseek-v4-flash"`), this
 /// function replaces `agents` with only the matching agent(s) so unrelated
-/// providers are skipped.  When the model is `"auto"` or empty the phase
-/// agent list is kept intact.
+/// providers are skipped.  When the model is `"auto"`, empty, or the
+/// server-default `"go-on"` the phase agent list is kept intact.
 ///
 /// Special cases:
 /// * `"copilot"`, `"copilot/auto"`, `"copilot-auto"` — retain only the copilot agent.
@@ -80,10 +89,7 @@ pub(crate) fn filter_agents_by_model(
     agents: &mut Vec<(String, Arc<dyn Agent>)>,
     options: &HashMap<String, Value>,
 ) -> FilterResult {
-    let model_is_specific = options
-        .get("model")
-        .and_then(|v| v.as_str())
-        .is_some_and(|m| !m.is_empty() && m != "auto");
+    let model_is_specific = model_option_is_specific(options.get("model").and_then(|v| v.as_str()));
 
     let model_str = options
         .get("model")
@@ -111,16 +117,21 @@ pub(crate) fn filter_agents_by_model(
             before
                 .iter()
                 .filter(|(name, _)| {
-                    let name_lower = name.to_ascii_lowercase();
+                    // Model IDs conventionally use hyphens (e.g. "local-echo")
+                    // while config agent names use underscores (e.g. "local_echo").
+                    // Normalize both to underscores before comparing so that
+                    // model→agent routing works across both conventions.
+                    let name_lower = name.to_ascii_lowercase().replace('-', "_");
+                    let model_norm = model_lower.replace('-', "_");
 
-                    if model_lower.starts_with(&name_lower) && model_lower.contains('/') {
+                    if model_norm.starts_with(&name_lower) && model_norm.contains('/') {
                         // Qualified model ID like "siliconflow/deepseek-..." —
                         // only match if the agent name also appears after '/',
                         // or the agent name IS the full model string.
-                        name_lower.starts_with(&model_lower)
-                            || model_lower.ends_with(&format!("/{}", name_lower))
+                        name_lower.starts_with(&model_norm)
+                            || model_norm.ends_with(&format!("/{}", name_lower))
                     } else {
-                        model_lower.starts_with(&name_lower) || name_lower.starts_with(&model_lower)
+                        model_norm.starts_with(&name_lower) || name_lower.starts_with(&model_norm)
                     }
                 })
                 .cloned(),

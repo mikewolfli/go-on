@@ -89,7 +89,6 @@ use crate::orchestration::council::{CouncilConfig, OrchestrationCouncil};
 use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::orchestration::workflow_registry::WorkflowRegistry;
-use crate::protocol::transport::MultiChannelTransport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -393,9 +392,6 @@ pub struct CapabilityBus {
     /// Continuous learning center — lifelong learning (F-GAP-24)
     pub continuous_learning: Arc<Mutex<ContinuousLearningCenter>>,
 
-    /// Multi-channel message transport — protocol layer (F-GAP-29)
-    pub transport: Arc<Mutex<MultiChannelTransport>>,
-
     /// Token multi-level cache for LLM response caching (P2-1)
     pub token_cache: Option<Arc<TokenMultiLevelCache>>,
 
@@ -532,7 +528,6 @@ impl CapabilityBus {
             continuous_learning: Arc::new(Mutex::new(ContinuousLearningCenter::new(
                 Default::default(),
             ))),
-            transport: Arc::new(Mutex::new(MultiChannelTransport::new(Default::default()))),
             token_cache: None,
             model_selector: None,
             federated_learning: None,
@@ -1010,7 +1005,7 @@ impl CapabilityBus {
     ///     consciousness, world_model, consensus
     ///
     ///   Level 3 (outermost – acquire last, release first):
-    ///     evolution_graph, transport, learning_bus, reputation,
+    ///     evolution_graph, learning_bus, reputation,
     ///     capability_graph, profile
     ///
     ///   Single-lock (no ordering conflicts):
@@ -1301,15 +1296,14 @@ impl CapabilityBus {
             (0.0, 0.0)
         });
 
-        if timeout(timeout_dur, async {
-            self.evolve_send_transport_event(q_value, exploration_rate)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: transport.send_event timed out — skipping");
+        // Log evolution metrics — previously sent via MultiChannelTransport
+        // which was removed as dead code (~740 lines, only 1 usage).
+        if q_value > 0.0 || exploration_rate > 0.0 {
+            tracing::info!(
+                q_value = %format!("{:.4}", q_value),
+                exploration_rate = %format!("{:.4}", exploration_rate),
+                "evolve: metrics snapshot"
+            );
         }
 
         if timeout(timeout_dur, async {

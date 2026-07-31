@@ -85,7 +85,6 @@ use std::time::Instant;
 /// PolicyEvaluator as its primary interface.
 pub struct HarnessBus {
     pub evaluator: Arc<PolicyEvaluator>,
-    pub audit_trail: Arc<Mutex<HarnessAuditTrail>>,
     pub feedback_collector: Option<PuaFeedbackCollector>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
     pub drift_engine: Arc<DriftProtectionEngine>,
@@ -98,9 +97,7 @@ pub struct HarnessBus {
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
     pub fault_tolerance: Arc<FaultToleranceEngine>,
-    /// Structured audit trail for replay and evidence export (dual system integration).
-    pub structured_audit_trail: Arc<Mutex<crate::orchestration::audit::AuditTrail>>,
-    /// Canonical thread-safe audit log with NDJSON persistence (canonical sink).
+    /// Canonical thread-safe audit log with NDJSON persistence (single sink).
     pub audit_log: Arc<ThreadSafeAuditLog>,
     /// Consecutive allow-count for PUA de-escalation.
     consecutive_allows: AtomicU32,
@@ -132,7 +129,6 @@ impl HarnessBus {
                 guard,
                 policy_reloader,
             )),
-            audit_trail: Arc::new(Mutex::new(HarnessAuditTrail::default())),
             feedback_collector,
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
             drift_engine: Arc::new(DriftProtectionEngine::new(DriftProtectionConfig::default())),
@@ -146,9 +142,6 @@ impl HarnessBus {
                 Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
             }),
             fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
-            structured_audit_trail: Arc::new(Mutex::new(
-                crate::orchestration::audit::AuditTrail::new("harness-bus", 1000),
-            )),
             audit_log,
             consecutive_allows: AtomicU32::new(0),
         };
@@ -281,9 +274,6 @@ impl HarnessBus {
                 | PolicyVerdict::AllowWithConstraints(_)
                 | PolicyVerdict::Review(_)
         );
-        self.resilience_engine
-            .record_execution("harness-main", success)
-            .await;
 
         // PUA de-escalation: after 3 consecutive clean evaluations, de-escalate.
         // Uses compare_exchange for atomic reset to prevent double-de-escalation
@@ -327,7 +317,7 @@ impl HarnessBus {
             }
         }
 
-        // B51-32: Record evaluation outcome to the canonical ThreadSafeAuditLog.
+        // Parallelize resilience recording and audit logging (they are independent).
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -352,7 +342,13 @@ impl HarnessBus {
             retention_policy: None,
             correlation_id: None,
         };
-        self.audit_log.record(audit_entry);
+        let resilience = self
+            .resilience_engine
+            .record_execution("harness-main", success);
+        let audit = async {
+            self.audit_log.record(audit_entry);
+        };
+        tokio::join!(resilience, audit);
 
         verdict
     }
@@ -412,6 +408,11 @@ impl HarnessBus {
     }
 
     /// Record an audit entry.
+    ///
+    /// Consolidated: writes to the canonical `ThreadSafeAuditLog` only.
+    /// The duplicate writes to `audit_trail` and `structured_audit_trail`
+    /// were removed — they recorded the same data in different formats.
+    /// The profile counter is still updated for metrics reporting.
     pub fn audit(&self, entry: AuditEntry) {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -439,41 +440,6 @@ impl HarnessBus {
             retention_policy: None,
             correlation_id: None,
         });
-
-        self.audit_trail
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .entries
-            .push(entry.clone());
-
-        let mut structured = self
-            .structured_audit_trail
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-        {
-            use crate::orchestration::audit::AuditEntry as OrchestrationAuditEntry;
-            structured.append_entry(OrchestrationAuditEntry::new(
-                "harness_audit",
-                &entry.request_id,
-                &entry.stage,
-                serde_json::json!({
-                    "verdict": &entry.verdict,
-                    "dispatch_policy": &entry.dispatch_policy,
-                    "execution_policy": &entry.execution_policy,
-                    "governance_policy": &entry.governance_policy,
-                    "violations": &entry.violations,
-                }),
-                serde_json::json!({
-                    "context_snapshot": &entry.context_snapshot,
-                }),
-            ));
-        }
 
         let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");

@@ -40,6 +40,23 @@ impl Tool for SlowTool {
     }
 }
 
+/// MCP requires two-phase initialization: the server rejects tools/list,
+/// tools/call, and resources/read with SERVER_NOT_INITIALIZED until the
+/// client has sent `initialize`.
+async fn initialize(server: &McpServer) {
+    let request = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        method: "initialize".to_string(),
+        params: Some(json!({"protocolVersion": "2024-11-05"})),
+        id: Some(json!(0)),
+    };
+    let response = server
+        .handle_request(request)
+        .await
+        .expect("initialize should return a response");
+    assert!(response.result.is_some(), "initialize must succeed");
+}
+
 fn build_server_with_tool<T: Tool + 'static>(tool: T) -> McpServer {
     let agent_registry = Arc::new(AgentRegistry::new());
     let mut tool_registry = ToolRegistry::new_empty();
@@ -73,6 +90,7 @@ async fn test_mcp_initialize() {
 #[tokio::test]
 async fn test_mcp_list_tools() {
     let server = build_server();
+    initialize(&server).await;
 
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -114,6 +132,7 @@ async fn test_mcp_error_handling() {
 #[tokio::test]
 async fn test_mcp_tool_call_rejects_missing_required_arguments() {
     let server = build_server();
+    initialize(&server).await;
 
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -140,6 +159,7 @@ async fn test_mcp_tool_call_rejects_missing_required_arguments() {
 #[tokio::test]
 async fn test_mcp_resource_reads_return_registry_contents() {
     let server = build_server();
+    initialize(&server).await;
 
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -165,6 +185,7 @@ async fn test_mcp_tool_call_executes_registered_tool() {
     let file_path = temp.path().join("sample.txt");
     std::fs::write(&file_path, "hello from mcp").expect("test file should be written");
     let server = build_server();
+    initialize(&server).await;
 
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -228,6 +249,7 @@ async fn test_mcp_cancelled_request_returns_cancel_error() {
 #[tokio::test]
 async fn test_mcp_tool_call_timeout_returns_timeout_error() {
     let server = build_server_with_tool(SlowTool);
+    initialize(&server).await;
 
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),

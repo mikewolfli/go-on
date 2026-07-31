@@ -238,20 +238,105 @@ impl ToolCapabilityRegistry {
     // governance_action_for_tool().
 
     /// Return the governance action for a tool name.
+    ///
+    /// This is the canonical tool→action mapping, consolidating what was
+    /// previously duplicated in `pipeline_tool_to_action`. All sandbox
+    /// governance paths should use this single source of truth.
     pub fn action(tool: &str) -> GovernanceAction {
         match tool {
-            // Explicit write tools (from check_permission)
-            "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path"
-            | "copy_path" | "file_move" | "file_delete" => GovernanceAction::Write,
+            // ── Read operations (read-only file/content access) ──
+            "read_file" | "inspect_git_diff" | "list_directory" | "date_time"
+            | "skill_list" | "archive_inspect" | "jsonl_read" | "diagnostics" | "environment_info"
+            | "echo_skill" | "builtin.echo" | "goon_skill_version_list"
+            | "skill-finder" | "chat.execute"
+            | "acp_trace_get" | "acp_debug_panel_get"
+            | "goon_workflow_run_list" | "goon_workflow_run_get"
+            | "goon_metrics_window_query" | "goon_metrics_errors_summary"
+            | "goon_provider_capabilities" | "prompts_list" | "prompts_get"
+            | "workflow_execute" | "workflow_ask" | "workflow_generate"
+            | "import_skill" | "skill_reload"
+            // ── CAD read tools (read-only 3d/2d format parsing) ──
+            | "dxf_read" | "stl_read" | "obj_read" | "step_read" | "ply_read" | "iges_read"
+            | "gltf_read" | "svg_read" | "obj_model_read" | "gcode_read" | "gpx_read" | "geo_util"
+            // ── Image read/analyze tools ──
+            | "image_analyze"
+            // ── Document read tools ──
+            | "read_docx" | "read_excel" | "read_pdf" | "read_ppt"
+            | "email_parse" | "csv_read" | "csv_analyze" | "toml_read" | "yaml_read"
+            | "web_scrape" | "invoice_parse" | "rss_read" | "sqlite_query" => GovernanceAction::Read,
 
-            // Explicit shell tools (from check_permission)
-            "run_tests" | "execute_command" | "terminal" | "bash" | "shell_exec" | "cargo_test" => {
-                GovernanceAction::Shell
-            }
+            // ── Search operations ──
+            "grep" | "search_files" | "find_path" | "find_files" | "code_index_search" | "semantic_search"
+            | "search" | "find" => GovernanceAction::Search,
 
-            // Explicit search tools (from check_permission)
-            "search" | "find" | "grep" | "semantic_search" | "code_index_search" | "find_path"
-            | "find_files" => GovernanceAction::Search,
+            // ── Write operations (file creation/modification) ──
+            "write_file"
+            | "apply_patch"
+            | "create_directory"
+            | "delete_path"
+            | "move_path"
+            | "copy_path"
+            | "file_move"
+            | "file_delete"
+            | "compress"
+            | "decompress"
+            | "archive_extract"
+            | "jsonl_write"
+            | "csv_write"
+            | "csv_transform"
+            | "toml_write"
+            | "yaml_write"
+            | "game_mod_install"
+            | "game_replay_recorder"
+            | "game_save_manager"
+            | "game_screen_capture"
+            | "goon_skill_update"
+            | "goon_skill_version_rollback"
+            | "goon_workflow_run_cancel"
+            | "goon_workflow_run_pause"
+            | "goon_workflow_run_resume"
+            | "image_generate"
+            | "image_resize"
+            | "image_convert"
+            | "skill-creator" | "skill_create"
+            | "stl_generate"
+            | "svg_export"
+            | "svg_generate"
+            | "qrcode_generate"
+            | "write_docx"
+            | "write_excel"
+            | "write_ppt"
+            | "pdf_merge" | "pdf_split"
+            | "cad_convert"
+            | "game_auto_grind"
+            | "game_keyboard_input"
+            | "game_mouse_input"
+            | "game_state_modify"
+            | "spawn_agent" => GovernanceAction::Write,
+
+            // ── Shell operations (command/code execution) ──
+            "run_tests"
+            | "execute_command"
+            | "terminal"
+            | "bash"
+            | "cargo_test"
+            | "shell_exec"
+            | "cargo_check"
+            | "game_launch"
+            | "skill_execute" => GovernanceAction::Shell,
+
+            // ── Network operations (outbound) ──
+            "http_request"
+            | "web_search"
+            | "dns_lookup"
+            | "ping"
+            | "port_scan"
+            | "git"
+            | "github_search_skills"
+            | "game_monitor"
+            | "game_online_status"
+            | "goon_provider_test_completion"
+            | "goon_provider_test_connection" => GovernanceAction::Network,
 
             // ── Keyword-based fallback ─────────────────────────
             _ => classify_action_by_keyword(tool),

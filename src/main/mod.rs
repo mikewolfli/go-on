@@ -329,6 +329,7 @@ async fn run() -> Result<()> {
         }
     }
 
+    eprintln!("DEBUG-EXIT: run() returning");
     Ok(())
 }
 

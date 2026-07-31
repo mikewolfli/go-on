@@ -843,6 +843,19 @@ pub enum GovernanceAction {
     Network,
 }
 
+impl GovernanceAction {
+    /// Return the action as a static string for sandbox policy checks.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GovernanceAction::Read => "read",
+            GovernanceAction::Search => "search",
+            GovernanceAction::Write => "write",
+            GovernanceAction::Shell => "shell",
+            GovernanceAction::Network => "network",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardeningDecision {
     pub allowed: bool,

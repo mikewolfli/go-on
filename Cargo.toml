@@ -364,14 +364,19 @@ strip = "symbols"
 opt-level = 3
 
 [profile.dev]
-opt-level = 0
+# opt-level 2: dev binary (also spawned by integration tests) starts and
+# responds several times faster than opt-level 0, which was the dominant
+# cause of slow integration-test runs and slow dev server startup.
+opt-level = 2
 debug = true
 
 [profile.test]
-# Fast compilation — no LTO, opt-level=0 for minimum compile time.
-# Tests are relatively short-lived so optimization overhead doesn't pay off.
-opt-level = 0
+# opt-level 2: unit/integration tests execute real work (crypto, SQLite,
+# HTTP, JSON-RPC). At opt-level 0 they ran 3-10x slower. Incremental
+# compilation keeps iteration fast despite the higher opt level.
+opt-level = 2
 lto = "off"
+incremental = true
 
 [profile.bench]
 # Benchmarks benefit from full optimization for accurate measurements.

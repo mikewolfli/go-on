@@ -121,14 +121,12 @@ impl CapabilityBus {
             );
         }
 
-        // Send a heartbeat through the transport layer, including task risk score
-        // so the transport is always informed of the current task context.
-        let transport = crate::lock_or_recover!(&self.transport, "intelligence");
-        let heartbeat = format!(
-            "{{\"status\":\"alive\",\"risk_score\":{}}}",
-            task.risk_score
+        // Log sense heartbeat — previously sent via MultiChannelTransport
+        // which was removed as dead code (~740 lines, only 1 usage).
+        tracing::debug!(
+            risk_score = task.risk_score,
+            "sense: heartbeat (MultiChannelTransport removed)"
         );
-        let _ = transport.send_heartbeat("capability-bus", "harness-bus", &heartbeat);
 
         SensingOutput {
             capability_agent_count: cap_agents,

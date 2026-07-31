@@ -916,6 +916,21 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
             });
             obj.insert("platform_metadata".to_string(), platform_md);
         }
+        // Also inject the universal platform_context so every response exposes
+        // a uniform `platform_context.schema_version` regardless of transport
+        // (stdio vs HTTP) — verified by transport_parity integration tests.
+        if !obj.contains_key("platform_context") {
+            obj.insert(
+                "platform_context".to_string(),
+                json!({
+                    "schema_version": "blue24-platform-universal-v1",
+                    "platform": "go-on",
+                    "ai_profiles_active": true,
+                    "method": method,
+                    "profile_class": "platform-metadata",
+                }),
+            );
+        }
         // Also inject standard profiles for these endpoints
         let empty_params = json!({});
         if !obj.contains_key("learning_profile") {

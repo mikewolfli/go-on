@@ -141,6 +141,33 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
     }
 }
 
+/// Record a structured trace event via the trace sink.
+///
+/// Public wrapper over `trace_pack::record_trace_event` so sibling modules
+/// (e.g. the chat session handler) can emit lifecycle trace events.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_trace_event(
+    server: &AcpServer,
+    trace: &RequestTraceContext,
+    event_type: &str,
+    status: &str,
+    stage: &str,
+    inputs: Value,
+    outputs: Option<Value>,
+    duration_ms: u64,
+) {
+    self::trace_pack::record_trace_event(
+        server,
+        trace,
+        event_type,
+        status,
+        stage,
+        inputs,
+        outputs,
+        duration_ms,
+    );
+}
+
 // GAP-B50-36: Authenticate a JSON-RPC request before dispatch.
 /// Extract authentication token from request params or HTTP headers and validate it.
 /// Returns None if auth is disabled (local profile backward compat) or the session.
@@ -226,10 +253,12 @@ pub async fn handle_request(
             .and_then(|p| p.get("tenant_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("default");
-        if !server
+        // Rate limiting is optional: when no middleware is configured, allow.
+        if server
             .rate_limiting
-            .global_rate_limiter
-            .try_consume_tenant(tenant, 1.0)
+            .rate_limit_middleware
+            .as_ref()
+            .is_some_and(|r| !r.try_consume_tenant(tenant, 1.0))
         {
             return send_error(
                 server,
@@ -394,10 +423,12 @@ pub async fn handle_request(
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
-        if !server
+        // Rate limiting is optional: when no middleware is configured, allow.
+        if server
             .rate_limiting
-            .global_rate_limiter
-            .try_consume_tenant(tenant_id, 1.0)
+            .rate_limit_middleware
+            .as_ref()
+            .is_some_and(|r| !r.try_consume_tenant(tenant_id, 1.0))
         {
             anyhow::bail!("rate limit exceeded for tenant: {}", tenant_id);
         }
@@ -1210,9 +1241,10 @@ pub async fn handle_request(
                 "chat" => {
                     dispatch_to_client(
                         server,
-                        request_id,
+                        request_id.clone(),
                         protocol_pack::handle_chat(
                             server,
+                            request_id,
                             request.params.unwrap_or_default(),
                             &trace,
                         )
@@ -1967,7 +1999,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        runtime_pack::provider_test_connection_payload(server, &params),
+                        runtime_pack::provider_test_connection_payload(server, &params).await,
                     )
                     .await
                 }

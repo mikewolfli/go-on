@@ -104,6 +104,7 @@ pub async fn mcp_initialize_payload(_server: &AcpServer) -> Result<Value> {
 /// Handle `chat` — ACP chat endpoint with SSE streaming.
 pub async fn handle_chat(
     server: &AcpServer,
+    request_id: Option<Value>,
     params: Value,
     trace: &RequestTraceContext,
 ) -> Result<DispatchOutput> {
@@ -116,7 +117,7 @@ pub async fn handle_chat(
 
     match chat_handler(
         server,
-        None,
+        request_id,
         Some(params),
         None,
         Some(trace.clone()),

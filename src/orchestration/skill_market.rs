@@ -484,13 +484,17 @@ impl SkillMarketRegistry {
 
     /// Uninstall a skill.
     pub async fn uninstall_skill(&self, name: &str) -> Result<()> {
-        let mut installations = self.installations.write().await;
-        let pos = installations
-            .iter()
-            .position(|i| i.name == name)
-            .ok_or_else(|| anyhow::anyhow!("Skill '{}' is not installed", name))?;
-
-        let installation = installations.remove(pos);
+        let installation = {
+            let mut installations = self.installations.write().await;
+            let pos = installations
+                .iter()
+                .position(|i| i.name == name)
+                .ok_or_else(|| anyhow::anyhow!("Skill '{}' is not installed", name))?;
+            let installation = installations.remove(pos);
+            // Guard dropped here before the await below: save_installations()
+            // re-acquires the read lock, and tokio RwLock is not reentrant.
+            installation
+        };
         // Remove files (keep for potential reinstall)
         if installation.installed_path.exists() {
             tokio::fs::remove_dir_all(&installation.installed_path)
@@ -520,12 +524,17 @@ impl SkillMarketRegistry {
 
     /// Enable or disable an installed skill.
     pub async fn set_enabled(&self, name: &str, enabled: bool) -> Result<()> {
-        let mut installations = self.installations.write().await;
-        let installation = installations
-            .iter_mut()
-            .find(|i| i.name == name)
-            .ok_or_else(|| anyhow::anyhow!("Skill '{}' is not installed", name))?;
-        installation.enabled = enabled;
+        {
+            let mut installations = self.installations.write().await;
+            let installation = installations
+                .iter_mut()
+                .find(|i| i.name == name)
+                .ok_or_else(|| anyhow::anyhow!("Skill '{}' is not installed", name))?;
+            installation.enabled = enabled;
+            // Guard dropped here before persisting: tokio::sync::RwLock is not
+            // reentrant, and save_installations() acquires the read lock on the
+            // same store — holding the write lock across the await deadlocked.
+        }
 
         // Persist the enabled/disabled state so it survives restarts.
         if let Err(e) = self.save_installations().await {
@@ -1308,7 +1317,11 @@ mod tests {
             .path()
             .to_path_buf();
         let skill_registry = Arc::new(StdRwLock::new(SkillRegistry::default()));
-        SkillMarketRegistry::new("https://skills.go-on.dev", cache_dir, skill_registry)
+        // Use a non-routable local URL so the remote fetch fails fast
+        // (connection refused) instead of depending on external network
+        // availability — keeps the suite deterministic and fast. The
+        // tests exercise the fallback-to-builtin path.
+        SkillMarketRegistry::new("http://127.0.0.1:1", cache_dir, skill_registry)
             .expect("test registry creation should succeed")
     }
 

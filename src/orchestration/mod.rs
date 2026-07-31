@@ -17,7 +17,6 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG
 ))]
 pub mod council; // F-GAP-15
 pub mod diagnostic_feedback;
-pub mod evolution_bridge;
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod fork_registry;

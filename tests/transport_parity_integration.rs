@@ -136,6 +136,66 @@ async fn wait_healthy(client: &reqwest::Client, base_url: &str, timeout: Duratio
     panic!("server at {base_url} did not become healthy within {timeout:?}");
 }
 
+/// MCP HTTP requires two-phase initialization: send `initialize` first,
+/// otherwise the server rejects later requests with SERVER_NOT_INITIALIZED (-32002).
+async fn mcp_http_initialize(client: &reqwest::Client, base_url: &str) {
+    let resp: Value = post_mcp_json_with_retry(
+        client,
+        &format!("{base_url}/"),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": { "name": "go-on-parity-test" }
+            }
+        }),
+        3,
+    )
+    .await;
+    assert!(
+        resp.get("result").is_some(),
+        "mcp http initialize must succeed; got: {resp}"
+    );
+}
+
+/// POST JSON to an MCP HTTP endpoint, retrying on transport-level errors.
+///
+/// Integration test binaries run in parallel and `find_free_port()` has a
+/// small TOCTOU window, so a fresh connection can occasionally hit a
+/// half-closed/stale port. Retrying the connection (not the HTTP status)
+/// removes that flake.
+async fn post_mcp_json_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    payload: &Value,
+    attempts: usize,
+) -> Value {
+    let total = attempts.max(1);
+    let mut last_err: Option<reqwest::Error> = None;
+    for i in 0..total {
+        match client.post(url).json(payload).send().await {
+            Ok(resp) => {
+                return resp
+                    .json()
+                    .await
+                    .unwrap_or_else(|e| panic!("invalid json from {url}: {e}"));
+            }
+            Err(err) => {
+                last_err = Some(err);
+                if i + 1 < total {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+            }
+        }
+    }
+    panic!(
+        "request to {url} failed after {total} attempts: {:?}",
+        last_err
+    );
+}
+
 async fn post_json_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -616,21 +676,20 @@ async fn mcp_http_error_data_keeps_platform_context() {
         .build()
         .expect("build client");
     wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
+    mcp_http_initialize(&client, &harness.base_url).await;
 
-    let unknown: Value = client
-        .post(format!("{}/", harness.base_url))
-        .json(&json!({
+    let unknown: Value = post_mcp_json_with_retry(
+        &client,
+        &format!("{}/", harness.base_url),
+        &json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": 2,
             "method": "blue25.unknown.method",
             "params": {}
-        }))
-        .send()
-        .await
-        .expect("mcp unknown method request failed")
-        .json()
-        .await
-        .expect("invalid mcp unknown-method json");
+        }),
+        3,
+    )
+    .await;
 
     assert!(
         unknown["error"]["data"].get("platform_context").is_some(),
@@ -713,9 +772,10 @@ async fn mcp_http_initialize_list_and_call_succeeds() {
         .expect("build client");
     wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
 
-    let init: Value = client
-        .post(format!("{}/", harness.base_url))
-        .json(&json!({
+    let init: Value = post_mcp_json_with_retry(
+        &client,
+        &format!("{}/", harness.base_url),
+        &json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
@@ -723,30 +783,25 @@ async fn mcp_http_initialize_list_and_call_succeeds() {
                 "protocolVersion": "2024-11-05",
                 "clientInfo": { "name": "test" }
             }
-        }))
-        .send()
-        .await
-        .expect("mcp initialize request failed")
-        .json()
-        .await
-        .expect("invalid mcp initialize json");
+        }),
+        3,
+    )
+    .await;
     assert_eq!(init["result"]["protocolVersion"], "2024-11-05");
     assert_eq!(init["result"]["serverInfo"]["name"], "go-on");
 
-    let tools: Value = client
-        .post(format!("{}/", harness.base_url))
-        .json(&json!({
+    let tools: Value = post_mcp_json_with_retry(
+        &client,
+        &format!("{}/", harness.base_url),
+        &json!({
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/list",
             "params": {}
-        }))
-        .send()
-        .await
-        .expect("mcp tools/list request failed")
-        .json()
-        .await
-        .expect("invalid mcp tools/list json");
+        }),
+        3,
+    )
+    .await;
     let tools_arr = tools["result"]["tools"]
         .as_array()
         .expect("mcp tools/list should return tools array");
@@ -755,9 +810,10 @@ async fn mcp_http_initialize_list_and_call_succeeds() {
         "mcp_http tools/list should expose read_file; got: {tools}"
     );
 
-    let called: Value = client
-        .post(format!("{}/", harness.base_url))
-        .json(&json!({
+    let called: Value = post_mcp_json_with_retry(
+        &client,
+        &format!("{}/", harness.base_url),
+        &json!({
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
@@ -765,13 +821,10 @@ async fn mcp_http_initialize_list_and_call_succeeds() {
                 "name": "read_file",
                 "arguments": { "path": sample.to_string_lossy().to_string() }
             }
-        }))
-        .send()
-        .await
-        .expect("mcp tools/call request failed")
-        .json()
-        .await
-        .expect("invalid mcp tools/call json");
+        }),
+        3,
+    )
+    .await;
     assert_eq!(called["result"]["structuredContent"]["success"], true);
     assert_eq!(
         called["result"]["structuredContent"]["result"]["content"],
@@ -1086,20 +1139,19 @@ async fn mcp_stdio_and_http_tool_call_shapes_match() {
         .build()
         .expect("build client");
     wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
+    mcp_http_initialize(&client, &harness.base_url).await;
 
-    let http_resp: Value = client
-        .post(format!("{}/", harness.base_url))
-        .json(&json!({
+    let http_resp: Value = post_mcp_json_with_retry(
+        &client,
+        &format!("{}/", harness.base_url),
+        &json!({
             "jsonrpc": "2.0",
             "method": "tools/list",
-            "id": 1
-        }))
-        .send()
-        .await
-        .expect("mcp http tools/list request")
-        .json()
-        .await
-        .expect("mcp http tools/list json");
+            "id": 2
+        }),
+        3,
+    )
+    .await;
 
     // Both responses must be success shapes with identical key structure
     assert!(
@@ -1243,10 +1295,12 @@ async fn mcp_stdio_and_http_timeout_codes_match() {
         .build()
         .expect("build client");
     wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
+    mcp_http_initialize(&client, &harness.base_url).await;
 
-    let http_resp: Value = client
-        .post(format!("{}/", harness.base_url))
-        .json(&json!({
+    let http_resp: Value = post_mcp_json_with_retry(
+        &client,
+        &format!("{}/", harness.base_url),
+        &json!({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {
@@ -1255,13 +1309,10 @@ async fn mcp_stdio_and_http_timeout_codes_match() {
                 "timeoutMs": 1
             },
             "id": 99
-        }))
-        .send()
-        .await
-        .expect("mcp http timeout request")
-        .json()
-        .await
-        .expect("mcp http timeout json");
+        }),
+        3,
+    )
+    .await;
 
     let http_code = http_resp["error"]["code"].as_i64().unwrap_or(0);
 

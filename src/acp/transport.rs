@@ -164,8 +164,11 @@ pub(crate) fn set_current_transport(transport: Arc<dyn Transport>) {
     }
 }
 
-/// Clear the global transport (used in tests).
-#[cfg(test)]
+/// Clear the global transport.
+///
+/// Must be called after per-request HTTP/SSE handling completes: the
+/// `SseTransport` holds an `Arc` to the request's socket, so keeping it in
+/// the global would pin the TCP connection open indefinitely.
 pub(crate) fn clear_current_transport() {
     if let Ok(mut guard) = CURRENT_TRANSPORT.write() {
         *guard = None;

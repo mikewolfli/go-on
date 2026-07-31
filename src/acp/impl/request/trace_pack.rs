@@ -193,7 +193,7 @@ pub(super) fn new_request_trace(
 
 /// Record trace event
 #[allow(clippy::too_many_arguments)]
-pub(super) fn record_trace_event(
+pub(crate) fn record_trace_event(
     _server: &AcpServer,
     trace: &RequestTraceContext,
     event_type: &str,

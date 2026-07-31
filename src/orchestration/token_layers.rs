@@ -405,34 +405,59 @@ impl TokenLayerChain {
     /// Returns the first non-`Route` verdict.  `Allow` short-circuits and is
     /// returned immediately.  `Reject` and `RequireApproval` also stop the
     /// chain.  If every layer `Route`s, the last verdict is returned.
+    ///
+    /// # Performance
+    /// The per-layer verdict counters are locked once after the chain completes
+    /// (rather than acquiring + releasing the mutex inside the hot loop) to
+    /// minimise contention on the profile mutex.
     pub fn evaluate(&self, ctx: &GateContext) -> TokenGateVerdict {
         let mut last_verdict = TokenGateVerdict::Route("no layers evaluated".into());
+        let mut per_layer_verdicts: Vec<(String, TokenGateVerdict)> =
+            Vec::with_capacity(self.gates.len());
 
         for gate in &self.gates {
             let verdict = gate.evaluate(ctx);
-
-            // Record the verdict in the counters.
-            let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            let counters = profile
-                .layers
-                .entry(gate.layer.label().to_string())
-                .or_default();
-            counters.record(&verdict);
+            per_layer_verdicts.push((gate.layer.label().to_string(), verdict.clone()));
 
             last_verdict = verdict.clone();
 
             match &verdict {
                 // Allow — request satisfied at this layer.
-                TokenGateVerdict::Allow => return verdict,
+                TokenGateVerdict::Allow => {
+                    // Batch-record all verdicts under a single lock acquisition.
+                    let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    for (label, v) in &per_layer_verdicts {
+                        let counters = profile.layers.entry(label.clone()).or_default();
+                        counters.record(v);
+                    }
+                    return verdict;
+                }
                 // Route — continue to the next layer.
                 TokenGateVerdict::Route(_) => continue,
                 // Reject or RequireApproval — stop the chain.
                 TokenGateVerdict::Reject(_) | TokenGateVerdict::RequireApproval(_) => {
+                    // Batch-record all verdicts under a single lock acquisition.
+                    let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    for (label, v) in &per_layer_verdicts {
+                        let counters = profile.layers.entry(label.clone()).or_default();
+                        counters.record(v);
+                    }
                     return verdict;
                 }
+            }
+        }
+
+        // All layers routed: batch-record once.
+        if let Ok(mut profile) = self.profile.lock() {
+            for (label, v) in &per_layer_verdicts {
+                let counters = profile.layers.entry(label.clone()).or_default();
+                counters.record(v);
             }
         }
 

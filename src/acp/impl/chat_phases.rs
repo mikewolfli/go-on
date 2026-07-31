@@ -24,10 +24,10 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::Result;
+use futures_util::future::join_all;
 use opentelemetry::Context as OtelContext;
 use serde_json::{json, Value};
 use tracing::{debug, info};
-use futures_util::future::join_all;
 
 use crate::acp::helpers::autonomy_metrics::{
     record_cache_bypass_for_execution, record_cache_shortcircuit_refused,
@@ -316,49 +316,59 @@ pub(crate) async fn observe_phase(
         }
 
         // Phase 1: Fetch all URLs in parallel
-        let fetch_futures: Vec<_> = url_entries.iter().filter_map(|(msg_idx, url)| {
-            let url_lower = url.to_lowercase();
-            if url_lower.starts_with("http://localhost")
-                || url_lower.starts_with("http://127.0.0.1")
-                || url_lower.starts_with("https://localhost")
-                || url_lower.starts_with("https://127.0.0.1")
-                || url_lower.starts_with("http://10.")
-                || url_lower.starts_with("http://192.168.")
-                || url_lower.starts_with("https://10.")
-                || url_lower.starts_with("https://192.168.")
-            {
-                tracing::info!(
-                    "observe_phase: skipping pre-fetch for local/private URL: {}",
-                    url
-                );
-                return None;
-            }
-
-            let fetch_url = url.split('#').next().unwrap_or(url).to_string();
-            let url_owned = url.clone();
-            let msg_idx = *msg_idx;
-            Some(async move {
-                tracing::info!("observe_phase: auto-detected URL, pre-fetching: {}", url_owned);
-
-                let result = match tokio::time::timeout(
-                    std::time::Duration::from_secs(3),
-                    reqwest::get(&fetch_url),
-                )
-                .await
+        let fetch_futures: Vec<_> = url_entries
+            .iter()
+            .filter_map(|(msg_idx, url)| {
+                let url_lower = url.to_lowercase();
+                if url_lower.starts_with("http://localhost")
+                    || url_lower.starts_with("http://127.0.0.1")
+                    || url_lower.starts_with("https://localhost")
+                    || url_lower.starts_with("https://127.0.0.1")
+                    || url_lower.starts_with("http://10.")
+                    || url_lower.starts_with("http://192.168.")
+                    || url_lower.starts_with("https://10.")
+                    || url_lower.starts_with("https://192.168.")
                 {
-                    Ok(Ok(resp)) => {
-                        let status = resp.status().to_string();
-                        match tokio::time::timeout(std::time::Duration::from_secs(2), resp.text()).await
-                        {
-                            Ok(Ok(body)) => Some((status, body)),
-                            _ => None,
+                    tracing::info!(
+                        "observe_phase: skipping pre-fetch for local/private URL: {}",
+                        url
+                    );
+                    return None;
+                }
+
+                let fetch_url = url.split('#').next().unwrap_or(url).to_string();
+                let url_owned = url.clone();
+                let msg_idx = *msg_idx;
+                Some(async move {
+                    tracing::info!(
+                        "observe_phase: auto-detected URL, pre-fetching: {}",
+                        url_owned
+                    );
+
+                    let result = match tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        reqwest::get(&fetch_url),
+                    )
+                    .await
+                    {
+                        Ok(Ok(resp)) => {
+                            let status = resp.status().to_string();
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(2),
+                                resp.text(),
+                            )
+                            .await
+                            {
+                                Ok(Ok(body)) => Some((status, body)),
+                                _ => None,
+                            }
                         }
-                    }
-                    _ => None,
-                };
-                (msg_idx, url_owned, fetch_url, result)
+                        _ => None,
+                    };
+                    (msg_idx, url_owned, fetch_url, result)
+                })
             })
-        }).collect();
+            .collect();
 
         let fetch_results = join_all(fetch_futures).await;
 
@@ -1084,8 +1094,11 @@ pub(crate) async fn act_phase(
     let mut knowledge = Value::Null;
     let mut metacognitive_loop = Value::Null;
     let mut distillation = Value::Null;
+    // Hoisted out of the fallback block so the post-block stream completion
+    // logic can tell whether the high-risk vote path already emitted done.
+    let mut emit_final_vote = false;
     if !(cache_hit || autonomy_loop_executed && !response_text.trim().is_empty()) {
-        let (fallback_result, vote_result, emit_final_vote) = execute_fallback_with_vote(
+        let (fallback_result, vote_result, vote_flag) = execute_fallback_with_vote(
             server,
             params,
             resolve_out,
@@ -1095,6 +1108,7 @@ pub(crate) async fn act_phase(
             agent_attempts,
         )
         .await?;
+        emit_final_vote = vote_flag;
 
         selected_agent = fallback_result.selected_agent;
         response_text = fallback_result.response_text;
@@ -1214,8 +1228,13 @@ pub(crate) async fn act_phase(
                 success: true,
                 duration_ms: started.elapsed().as_millis() as u64,
             });
+    }
 
-        // Persistence (BLUE69: all 4 ops run concurrently via tokio::join!)
+    // Persistence + post-execute verification — run for ALL successful execution
+    // paths (autonomy loop, fallback, or cache hit). Previously this was only
+    // reachable via the fallback branch, so autonomy-loop chats never persisted
+    // knowledge / checkpoints / distillation / vector memory.
+    if !selected_agent.is_empty() && !response_text.is_empty() && last_err.is_none() {
         let mut msgs = params.messages.clone();
         msgs.push(Message {
             role: "assistant".to_string(),
@@ -1249,7 +1268,7 @@ pub(crate) async fn act_phase(
                     json!({
                         "active": true, "schema_version": "blue25-metacognitive-loop-v1", "cycle_count": 1,
                         "checkpoint_id": cp.checkpoint_id, "last_reflection": format!("{}:{}", resolve_out.phase_name, selected_agent),
-                        "reflection_trigger": "response_completed", "last_selected_agent": selected_agent, "response_chars": response_text.chars().count(),
+                        "trigger": "response_completed", "last_selected_agent": selected_agent, "response_chars": response_text.chars().count(),
                     })
                 ).await;
                 (cp, ml)
@@ -1282,24 +1301,57 @@ pub(crate) async fn act_phase(
         metacognitive_loop = ml;
         distillation = dst;
 
-        if stream_observer.is_some() {
+        // HarnessBus post-execute
+        if let Some(ref harness) = server.governance_deps.harness_bus {
+            let output_v = harness.verify_output(&json!({"agent": &selected_agent, "response": &response_text, "reasoning": &reasoning_text, "phase": &resolve_out.phase_name}));
+            if !output_v.quality {
+                tracing::warn!(target: "harness_bus", risk_score = output_v.risk_score, "post-execute: verification flagged quality issue");
+            }
+        }
+    }
+
+    // Stream completion events (telemetry + done) — emitted for ALL successful
+    // execution paths (autonomy loop, fallback, or cache hit). Previously these
+    // only fired inside the fallback branch, so autonomy-loop chats never sent
+    // telemetry/done. The high-risk vote path already emits chunk+done in-block.
+    if !selected_agent.is_empty() && !response_text.is_empty() && last_err.is_none() {
+        if let Some(ref observer) = stream_observer {
+            let meta = StreamEventMeta {
+                agent_name: &selected_agent,
+                phase_name: &resolve_out.phase_name,
+                trace_id: &trace.trace_id,
+                mode: Some(&params.mode),
+                risk_score: None,
+                degrade_policy: None,
+            };
             emit_stream_token_economy(
                 server,
-                stream_observer.as_ref(),
-                StreamEventMeta {
-                    agent_name: &selected_agent,
-                    phase_name: &resolve_out.phase_name,
-                    trace_id: &trace.trace_id,
-                    mode: Some(&params.mode),
-                    risk_score: None,
-                    degrade_policy: None,
-                },
+                Some(observer),
+                meta,
                 &estimate_token_economy(&params.messages, &response_text),
             )
             .await?;
+            if !emit_final_vote {
+                let total_chars = response_text.chars().count();
+                emit_stream_done(
+                    server,
+                    Some(observer),
+                    meta,
+                    1,
+                    total_chars,
+                    started.elapsed().as_millis() as u64,
+                    selected_model_name.clone(),
+                    Some(&response_text),
+                )
+                .await?;
+            }
         }
+    }
 
-        // Trace event
+    // Trace event — recorded for ALL successful execution paths (autonomy loop,
+    // fallback, or cache hit). Previously this only fired inside the fallback
+    // branch, so autonomy-loop chats had no phase.agent telemetry.
+    if !selected_agent.is_empty() && !response_text.is_empty() && last_err.is_none() {
         request::append_trace_event(TraceEvent {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1318,14 +1370,6 @@ pub(crate) async fn act_phase(
             error: None,
             pua_stage: None,
         });
-
-        // HarnessBus post-execute
-        if let Some(ref harness) = server.governance_deps.harness_bus {
-            let output_v = harness.verify_output(&json!({"agent": &selected_agent, "response": &response_text, "reasoning": &reasoning_text, "phase": &resolve_out.phase_name}));
-            if !output_v.quality {
-                tracing::warn!(target: "harness_bus", risk_score = output_v.risk_score, "post-execute: verification flagged quality issue");
-            }
-        }
     }
 
     // O-FIX4: Record global performance metric (cache-hit or fallback-early path)

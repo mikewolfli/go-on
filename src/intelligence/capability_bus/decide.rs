@@ -768,11 +768,13 @@ impl CapabilityBus {
             p.last_route_duration_ms = start.elapsed().as_millis() as u64;
         }
 
-        // Send a control message through the transport layer if an agent was selected
+        // Log agent selection — previously sent via MultiChannelTransport
+        // which was removed as dead code (~740 lines, only 1 usage).
         if let Some(agent) = &selected_agent {
-            let transport = crate::lock_or_recover!(&self.transport, "intelligence");
-            let msg = serde_json::json!({ "selected_tool": agent, "agent": agent });
-            let _ = transport.send_control("capability-bus", "tool-bus", &msg.to_string());
+            tracing::debug!(
+                agent = %agent,
+                "decide: agent selected (MultiChannelTransport removed)"
+            );
         }
 
         DecisionOutput {

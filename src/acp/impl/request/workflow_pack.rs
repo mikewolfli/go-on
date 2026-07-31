@@ -518,6 +518,11 @@ pub(super) async fn workflow_research_payload(server: &AcpServer, params: Value)
             "plan": plan_artifact_path.display().to_string(),
         },
         "change_bundle": change_bundle,
+        "trace_ref": build_trace_ref(
+            "workflow.research",
+            None,
+            Some(&plan_artifact_path.display().to_string()),
+        ),
     }))
 }
 
@@ -655,6 +660,11 @@ pub(super) async fn workflow_consult_payload(server: &AcpServer, params: Value) 
             "consultation": artifact_path.display().to_string(),
         },
         "change_bundle": change_bundle,
+        "trace_ref": build_trace_ref(
+            "workflow.consult",
+            None,
+            Some(&artifact_path.display().to_string()),
+        ),
     }))
 }
 

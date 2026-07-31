@@ -41,13 +41,6 @@ pub struct ExecutionPlan {
     pub dag_metrics: Option<DagMetrics>,
 }
 
-/// Configuration for the Planner-Executor pipeline.
-///
-/// Carried in OrchestrationServerDeps for future wiring of
-/// task execution timeouts.
-#[derive(Debug, Clone, Default)]
-pub struct PlannerExecutorConfig;
-
 #[cfg(test)]
 mod tests {
     use crate::agent::AgentTaskEnvelope;

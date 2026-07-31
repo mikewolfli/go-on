@@ -128,7 +128,7 @@ pub(crate) async fn handle_http_connection(
         return Ok(());
     }
 
-    let _path_label = route_http_post(
+    let post_result = route_http_post(
         socket,
         server,
         parsed.path,
@@ -137,8 +137,15 @@ pub(crate) async fn handle_http_connection(
         user_session,
         &cors_headers,
     )
-    .await?;
+    .await;
 
+    // Clear the global transport on every path: SseTransport holds an Arc to
+    // this request's socket (and RpcBufferTransport holds the response buffer),
+    // so leaving it in the global would pin the TCP connection open indefinitely
+    // (observed as a hanging /chat/stream response).
+    crate::acp::transport::clear_current_transport();
+
+    post_result?;
     Ok(())
 }
 
@@ -610,6 +617,7 @@ async fn route_http_post(
                         let _ = write_sse_event(socket, "error", &payload).await;
                         let _ = flush_sse(socket).await;
                     }
+
                 }
                 "/chat/completions" | "/v1/chat/completions" | "/chat/chat/completions" => {
                     handle_openai_chat_completions(

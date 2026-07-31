@@ -572,7 +572,7 @@ pub(crate) async fn execute_mcp_tool_call(
         "goon_workflow_run_cancel" => workflow_run_transition_payload(arguments, "cancelled"),
         "goon_workflow_run_pause" => workflow_run_transition_payload(arguments, "paused"),
         "goon_workflow_run_resume" => workflow_run_transition_payload(arguments, "running"),
-        "goon_provider_test_connection" => provider_test_connection_payload(server, arguments),
+        "goon_provider_test_connection" => provider_test_connection_payload(server, arguments).await,
         "goon_provider_test_completion" => provider_test_completion_payload(server, arguments),
         "goon_provider_capabilities" => provider_capabilities_payload(server, arguments),
         "goon_metrics_window_query" => Ok(metrics_window_query_payload(server, arguments)),

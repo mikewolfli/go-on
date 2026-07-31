@@ -5,7 +5,6 @@
 //! `record_trace_event`).  Extracted from the parent `chat.rs` to reduce
 //! the monolithic file size.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -715,28 +714,28 @@ async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Re
 
 /// Record a trace event with metrics counter.
 ///
-/// `_server`, `_trace`, `_inputs`, `_outputs`, `_duration_ms` are kept
-/// unused with `_` prefixes to maintain signature consistency with the
-/// sibling `record_trace_event` in `trace_pack.rs`.
+/// Delegates to the real trace sink in `trace_pack.rs` so chat lifecycle
+/// events (e.g. `chat.complete`) appear in `trace.get` alongside the events
+/// recorded by other request handlers.
 #[allow(clippy::too_many_arguments)]
 fn record_trace_event(
-    _server: &AcpServer,
-    _trace: &RequestTraceContext,
+    server: &AcpServer,
+    trace: &RequestTraceContext,
     event_type: &str,
     status: &str,
     stage: &str,
-    _inputs: Value,
-    _outputs: Option<Value>,
-    _duration_ms: u64,
+    inputs: Value,
+    outputs: Option<Value>,
+    duration_ms: u64,
 ) {
-    static EVENTS_RECEIVED: AtomicU64 = AtomicU64::new(0);
-    let count = EVENTS_RECEIVED.fetch_add(1, Ordering::Relaxed);
-
-    debug!(
-        event_type = %event_type,
-        status = %status,
-        stage = %stage,
-        events_received = count,
-        "record_trace_event"
+    crate::acp::r#impl::request::record_trace_event(
+        server,
+        trace,
+        event_type,
+        status,
+        stage,
+        inputs,
+        outputs,
+        duration_ms,
     );
 }

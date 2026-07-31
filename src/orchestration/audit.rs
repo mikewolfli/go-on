@@ -117,6 +117,7 @@ pub struct AuditTrail {
     pub started_at: String,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl AuditTrail {
     /// Create a new audit trail with the given identifier.
     pub fn new(trail_id: impl Into<String>, max_entries: usize) -> Self {

@@ -52,7 +52,6 @@ use crate::schema::{
     PermissionOption, PermissionOptionId, PermissionOptionKind, PermissionRequest,
     SessionNotification, SessionUpdate,
 };
-use crate::security::rate_limiter::GlobalRateLimiter;
 use crate::vector::VectorStore;
 
 type PendingClientRpcResult = std::result::Result<Value, JsonRpcError>;
@@ -312,8 +311,12 @@ pub struct OrchestrationServerDeps {
     pub scheduler: Option<Arc<AgentWorkerScheduler>>,
     /// Planner — task decomposition engine (F-GAP-05)
     pub planner: crate::orchestration::brain_loop::plan_construction::Planner,
-    /// Planner-Executor configuration (BLUE47 Step 7)
-    pub planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
+    /// Reserved for future planner-executor configuration.
+    /// Replaced `PlannerExecutorConfig` (which was an empty struct) after
+    /// planner-executor unification (the executor role was already subsumed
+    /// by BrainLoop). Kept as `()` to avoid churning call sites; may be
+    /// removed once the field is no longer referenced externally.
+    pub planner_executor_config: (),
     /// Registry for MCP skills
     pub skill_registry: Arc<std::sync::RwLock<SkillRegistry>>,
 }
@@ -427,8 +430,6 @@ pub struct RateLimitContext {
     // SAFETY: StdMutex is never held across `.await` — `check_can_start()` and `start_task()`
     // are synchronous token-budget operations that complete and drop the guard before any `.await`.
     pub tenant_budget: Arc<StdMutex<crate::governance::hardening::TenantBudgetEnforcer>>,
-    /// Global per-tenant token-bucket rate limiter (migrated from OnceLock static).
-    pub global_rate_limiter: GlobalRateLimiter,
 }
 
 /// Registries for reusable system components
@@ -995,7 +996,8 @@ pub struct ServerBuilder {
     task_graph_store: Option<Arc<TaskGraphStore>>,
     scheduler: Option<Arc<AgentWorkerScheduler>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
-    planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
+    /// Planner-executor configuration (reserved for future use, currently unit).
+    planner_executor_config: (),
     approval_engine:
         Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
@@ -1054,7 +1056,7 @@ impl ServerBuilder {
             task_graph_store: None,
             scheduler: None,
             provenance_ledger: None,
-            planner_executor_config: Default::default(),
+            planner_executor_config: (),
             approval_engine: None,
             injection_detector: None,
             safety_checker: None,
@@ -1593,9 +1595,6 @@ impl ServerBuilder {
                 tenant_budget: Arc::new(StdMutex::new(
                     crate::governance::hardening::TenantBudgetEnforcer::new(),
                 )),
-                global_rate_limiter: GlobalRateLimiter::new(
-                    crate::security::rate_limiter::RateLimitConfig::default(),
-                ),
             },
             registries: RegistryContext {
                 schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),

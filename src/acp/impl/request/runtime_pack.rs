@@ -143,13 +143,16 @@ async fn store_copilot_models_cache(models: Vec<String>) {
     *guard = Some((now, models));
 }
 
-fn resolve_copilot_github_token() -> Option<String> {
+async fn resolve_copilot_github_token() -> Option<String> {
     // Only check keyring, not environment variables.
     // The copilot.rs agent handles env vars via resolve_secret() with full secret
     // pooling and rotation. This function is for the ACP provider.list_models path
     // where we want consistent behavior: all API keys come from the system keyring.
+    // Keyring I/O blocks on a D-Bus pipe — must run on the blocking pool.
     for account in ["github_copilot_token", "copilot_api_key"] {
-        if let Some(value) = crate::shared::secret_override::get_keyring_cached("go-on", account) {
+        if let Some(value) =
+            crate::shared::secret_override::get_keyring_cached_async("go-on", account).await
+        {
             return Some(value);
         }
     }
@@ -166,7 +169,7 @@ async fn resolve_copilot_models_dynamic() -> Vec<String> {
         .map(|model| (*model).to_string())
         .collect::<Vec<_>>();
 
-    let Some(github_token) = resolve_copilot_github_token() else {
+    let Some(github_token) = resolve_copilot_github_token().await else {
         return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     };
 
@@ -966,7 +969,7 @@ fn provider_models_for(server: &AcpServer, provider: &str) -> Vec<crate::agent::
         .unwrap_or_default()
 }
 
-pub(super) fn provider_test_connection_payload(
+pub(super) async fn provider_test_connection_payload(
     server: &AcpServer,
     params: &Value,
 ) -> Result<Value> {
@@ -983,9 +986,12 @@ pub(super) fn provider_test_connection_payload(
 
     let models = provider_models_for(server, provider);
     let account = format!("{}_api_key", provider);
-    let keyring_has_key = crate::shared::secret_override::get_keyring_cached("go-on", &account)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
+    // Keyring I/O blocks on a D-Bus pipe — must run on the blocking pool.
+    let keyring_has_key =
+        crate::shared::secret_override::get_keyring_cached_async("go-on", &account)
+            .await
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
 
     let mut api_ref_has_key = false;
     let mut secret_ref_has_key = false;

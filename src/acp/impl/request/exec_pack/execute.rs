@@ -535,7 +535,7 @@ pub(crate) async fn handle_workflow_execute(
             decision_confidence: 0.75,
             handoff_primary_agent: "local_echo".to_string(),
         };
-        let _consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
+        let consultation_artifact_path = persist_consultation_artifact(&ledger, &artifact)?;
         let blocked_reason = crate::i18n::runtime::t("error.consultation_blocked");
         super::workflow::complete_workflow_run(
             &run_id,
@@ -543,7 +543,16 @@ pub(crate) async fn handle_workflow_execute(
             Some(blocked_reason.clone()),
             Vec::new(),
         );
-        anyhow::bail!(blocked_reason);
+        // Structured error so clients can distinguish a consultation block from
+        // generic dispatch errors (dispatch maps plain Err to -32602).
+        return Ok(DispatchOutput::Error {
+            code: -32007,
+            message: blocked_reason,
+            data: Some(serde_json::json!({
+                "kind": "consultation_blocked",
+                "consultation_artifact_path": consultation_artifact_path.display().to_string(),
+            })),
+        });
     }
 
     let mut plan = build_task_plan(&task_text);

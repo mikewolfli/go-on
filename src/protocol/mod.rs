@@ -8,7 +8,6 @@ pub mod state_sync;
 pub mod rpc_protocol;
 
 pub mod rate_limit;
-pub mod transport;
 pub mod websocket;
 
 // Re-exports — public API surface; #[allow(unused_imports)] is necessary for

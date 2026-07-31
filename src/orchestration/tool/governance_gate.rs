@@ -252,118 +252,64 @@ pub fn low_risk_audit_log(tool_name: &str, operation_mode: &str) {
 // ---------------------------------------------------------------------------
 
 /// Map a tool name to a governance action for pipeline sandbox checks.
-/// This mirrors the evaluator's tool-to-action mapping in a simplified form.
 ///
-/// # Security audit
-/// All tools registered in `ToolRegistry::new()` must be mapped here.
-/// Unknown tools default to "read" (lowest risk) but log a warning.
-fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
-    match tool_name {
-        // ── Read operations (read-only file/content access) ──
-        "read_file" | "search_files" | "inspect_git_diff" | "list_directory" | "date_time"
-        | "skill_list" | "archive_inspect" | "jsonl_read" | "diagnostics" | "environment_info"
-        | "echo_skill" | "builtin.echo" | "goon_skill_version_list"
-        | "skill-finder" | "chat.execute"
-        | "acp_trace_get" | "acp_debug_panel_get"
-        | "goon_workflow_run_list" | "goon_workflow_run_get"
-        | "goon_metrics_window_query" | "goon_metrics_errors_summary"
-        | "goon_provider_capabilities" | "prompts_list" | "prompts_get"
-        | "workflow_execute" | "workflow_ask" | "workflow_generate"
-        | "import_skill" | "skill_reload"
-        | "semantic_search"
-        // ── CAD read tools (read-only 3d/2d format parsing) ──
-        | "dxf_read" | "stl_read" | "obj_read" | "step_read" | "ply_read" | "iges_read"
-        | "gltf_read" | "svg_read" | "obj_model_read" | "gcode_read" | "gpx_read" | "geo_util"
-        // ── Image read/analyze tools ──
-        | "image_analyze"
-        // ── Document read tools ──
-        | "read_docx" | "read_excel" | "read_pdf" | "read_ppt"
-        | "email_parse" | "csv_read" | "csv_analyze" | "toml_read" | "yaml_read"
-        | "web_scrape" | "invoice_parse" | "rss_read" | "sqlite_query" => "read",
-
-        // ── Search operations ──
-        "grep" | "find_path" | "find_files" | "code_index_search" => "search",
-
-        // ── Write operations (file creation/modification) ──
-        "write_file"
-        | "apply_patch"
-        | "create_directory"
-        | "delete_path"
-        | "move_path"
-        | "copy_path"
-        | "file_move"
-        | "file_delete"
-        | "compress"
-        | "decompress"
-        | "archive_extract"
-        | "jsonl_write"
-        | "csv_write"
-        | "csv_transform"
-        | "toml_write"
-        | "yaml_write"
-        | "game_mod_install"
-        | "game_replay_recorder"
-        | "game_save_manager"
-        | "game_screen_capture"
-        | "goon_skill_update"
-        | "goon_skill_version_rollback"
-        | "goon_workflow_run_cancel"
-        | "goon_workflow_run_pause"
-        | "goon_workflow_run_resume"
-        | "image_generate"
-        | "image_resize"
-        | "image_convert"
-        | "skill-creator" | "skill_create"
-        | "stl_generate"
-        | "svg_export"
-        | "svg_generate"
-        | "qrcode_generate"
-        | "write_docx"
-        | "write_excel"
-        | "write_ppt"
-        | "pdf_merge" | "pdf_split"
-        | "cad_convert"
-        | "game_auto_grind"
-        | "game_keyboard_input"
-        | "game_mouse_input"
-        | "game_state_modify"
-        | "spawn_agent" => "write",
-
-        // ── Shell operations (command/code execution) ──
-        "run_tests"
-        | "execute_command"
-        | "terminal"
-        | "bash"
-        | "cargo_test"
-        | "shell_exec"
-        | "cargo_check"
-        | "game_launch"
-        | "skill_execute" => "shell",
-
-        // ── Network operations (outbound) ──
-        "http_request"
-        | "web_search"
-        | "dns_lookup"
-        | "ping"
-        | "port_scan"
-        | "git"
-        | "github_search_skills"
-        | "game_monitor"
-        | "game_online_status"
-        | "goon_provider_test_completion"
-        | "goon_provider_test_connection" => "network",
-
-        // Unknown — default to read (lowest risk), log warning for security audit
-        _ => {
-            tracing::warn!(
-                target: "tool_pipeline",
-                tool = %tool_name,
-                "pipeline_tool_to_action: unknown tool '{}', defaulting to 'read' action — audit needed",
-                tool_name,
-            );
-            "read"
-        }
+/// Delegates to the canonical [`ToolCapabilityRegistry::action()`] to eliminate
+/// the previously duplicated tool-name-to-action mapping. Unknown tools are
+/// logged and default to "read" (lowest risk).
+pub fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
+    let action = crate::governance::tool_capability::ToolCapabilityRegistry::action(tool_name);
+    let label = action.as_str();
+    // Log a warning for tools that fall through to keyword matching,
+    // indicating they should be added to the explicit registry.
+    if matches!(tool_name, _ if ![
+        "read_file","inspect_git_diff","list_directory","date_time",
+        "skill_list","archive_inspect","jsonl_read","diagnostics","environment_info",
+        "echo_skill","builtin.echo","goon_skill_version_list",
+        "skill-finder","chat.execute",
+        "acp_trace_get","acp_debug_panel_get",
+        "goon_workflow_run_list","goon_workflow_run_get",
+        "goon_metrics_window_query","goon_metrics_errors_summary",
+        "goon_provider_capabilities","prompts_list","prompts_get",
+        "workflow_execute","workflow_ask","workflow_generate",
+        "import_skill","skill_reload",
+        "dxf_read","stl_read","obj_read","step_read","ply_read","iges_read",
+        "gltf_read","svg_read","obj_model_read","gcode_read","gpx_read","geo_util",
+        "image_analyze",
+        "read_docx","read_excel","read_pdf","read_ppt",
+        "email_parse","csv_read","csv_analyze","toml_read","yaml_read",
+        "web_scrape","invoice_parse","rss_read","sqlite_query",
+        "grep","search_files","find_path","find_files","code_index_search","semantic_search",
+        "write_file","apply_patch","create_directory","delete_path","move_path","copy_path",
+        "file_move","file_delete",
+        "compress","decompress","archive_extract",
+        "jsonl_write","csv_write","csv_transform","toml_write","yaml_write",
+        "game_mod_install","game_replay_recorder","game_save_manager","game_screen_capture",
+        "goon_skill_update","goon_skill_version_rollback",
+        "goon_workflow_run_cancel","goon_workflow_run_pause","goon_workflow_run_resume",
+        "image_generate","image_resize","image_convert",
+        "skill-creator","skill_create",
+        "stl_generate","svg_export","svg_generate","qrcode_generate",
+        "write_docx","write_excel","write_ppt",
+        "pdf_merge","pdf_split",
+        "cad_convert",
+        "game_auto_grind","game_keyboard_input","game_mouse_input","game_state_modify",
+        "spawn_agent",
+        "run_tests","execute_command","terminal","bash","cargo_test","shell_exec",
+        "cargo_check","game_launch","skill_execute",
+        "http_request","web_search","dns_lookup","ping","port_scan","git",
+        "github_search_skills","game_monitor","game_online_status",
+        "goon_provider_test_completion","goon_provider_test_connection"
+    ].contains(&tool_name))
+    {
+        tracing::warn!(
+            target: "tool_pipeline",
+            tool = %tool_name,
+            action = %label,
+            "pipeline_tool_to_action: tool '{}' not in explicit registry (matched by keyword), defaulting to '{}'",
+            tool_name, label,
+        );
     }
+    label
 }
 
 /// Check if a tool is allowed at the given sandbox level.

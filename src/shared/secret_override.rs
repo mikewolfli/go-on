@@ -110,6 +110,21 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
     value
 }
 
+/// Fetch a secret from the system keyring from an async context.
+///
+/// The keyring backend (e.g. secret-service over D-Bus) performs blocking
+/// pipe/socket I/O. Calling it directly on a tokio worker starves the runtime
+/// and, worse, prevents clean process shutdown (the runtime drop waits for the
+/// blocked worker forever). Use this wrapper instead of the sync function
+/// whenever the caller is async.
+pub async fn get_keyring_cached_async(service: &str, account: &str) -> Option<String> {
+    let service = service.to_string();
+    let account = account.to_string();
+    tokio::task::spawn_blocking(move || get_keyring_cached(&service, &account))
+        .await
+        .unwrap_or(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

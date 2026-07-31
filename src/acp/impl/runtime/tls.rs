@@ -77,6 +77,7 @@ async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serd
         crate::acp::transport::RpcBufferTransport::new(buf_clone),
     ));
     let result = handle_request(server, request, None).await;
+    crate::acp::transport::clear_current_transport();
 
     match result {
         Ok(()) => {

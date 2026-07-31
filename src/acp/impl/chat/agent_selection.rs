@@ -115,13 +115,13 @@ pub(crate) async fn select_and_score_agents(
     // to match the correct agent. This applies to GUI chat, Zed agent_servers,
     // and VS Code addon alike — only when BOTH agent and model are "auto"
     // does the capability bus scoring take effect.
-    let user_model_specific = params
-        .options
-        .as_ref()
-        .and_then(|opts| opts.extra.get("model"))
-        .and_then(|v| v.as_str())
-        .map(|m| !m.is_empty() && m != "auto")
-        .unwrap_or(false);
+    let user_model_specific = model_router::model_option_is_specific(
+        params
+            .options
+            .as_ref()
+            .and_then(|opts| opts.extra.get("model"))
+            .and_then(|v| v.as_str()),
+    );
 
     // ── CapabilityBus agent selection ──────────────────────────────────
     // SKIP when a specific model was chosen by the user.

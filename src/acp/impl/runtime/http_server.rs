@@ -241,6 +241,15 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                 info!("Received SIGTERM, initiating graceful shutdown...");
                 break;
             }
+            // Poll the shutdown flag so a shutdown requested by a handler task is
+            // honored even when the Notify notification was missed (notify_waiters
+            // does not store a permit for future waiters).
+            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+                if server.shutdown_requested() {
+                    break;
+                }
+                continue;
+            }
             incoming = listener.accept() => {
                 // Check if draining before accepting new connections
                 if server.drain_guard.is_draining() {

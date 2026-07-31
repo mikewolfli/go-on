@@ -1452,18 +1452,15 @@ mod tests {
     }
 
     /// E2E: Node fault → recovery plan → execute → complete → reintegrate
-    /// with transport-level notification via MultiChannelTransport.
+    /// (MultiChannelTransport notification removed — transport eliminated as dead code)
     #[tokio::test]
     async fn test_e2e_fault_recovery_with_transport() {
-        use crate::protocol::transport::{MultiChannelTransport, TransportConfig};
-
         let ft_config = FaultToleranceConfig {
             heartbeat_timeout_ms: 60_000,
             max_missed_beats: 5,
             recovery_check_interval_ms: 1000,
         };
         let ft = FaultToleranceEngine::new(ft_config);
-        let transport = MultiChannelTransport::new(TransportConfig::default());
 
         // Register 10 nodes
         for i in 0..10 {
@@ -1499,13 +1496,6 @@ mod tests {
         ft.reintegrate_node(crashed)
             .await
             .expect("reintegrate node-5 after transport recovery");
-
-        // Send recovery notification via transport
-        let _ = transport.send_event(
-            "coordinator",
-            "logger",
-            &format!("node {} recovered", crashed),
-        );
 
         assert_eq!(ft.profile().await.online_nodes, 10);
         assert_eq!(ft.profile().await.active_faults, 0);

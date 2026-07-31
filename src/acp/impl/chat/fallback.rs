@@ -96,10 +96,9 @@ pub(crate) async fn execute_fallback_agents(
     // Only the matching agent(s) are in agent_list after filter_agents_by_model;
     // if the first agent fails, report the error directly instead of trying
     // other agents (which would be the wrong provider for the selected model).
-    let model_is_specific = base_agent_options
-        .get("model")
-        .and_then(|v| v.as_str())
-        .is_some_and(|m| !m.is_empty() && m != "auto");
+    let model_is_specific = crate::acp::helpers::model_router::model_option_is_specific(
+        base_agent_options.get("model").and_then(|v| v.as_str()),
+    );
 
     use futures_util::future::join_all;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(5));

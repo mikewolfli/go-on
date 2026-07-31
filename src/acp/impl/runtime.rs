@@ -163,8 +163,13 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
             break;
         }
 
+        eprintln!(
+            "DEBUG-EXIT: loop iteration, shutdown_requested={}",
+            server.shutdown_requested()
+        );
         let next_line = tokio::select! {
             _ = shutdown_notify.notified() => {
+                eprintln!("DEBUG-EXIT: notified branch");
                 break;
             }
             _ = signal::ctrl_c() => {
@@ -174,6 +179,17 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
             _ = sigterm.as_mut() => {
                 info!("Received SIGTERM, initiating graceful shutdown...");
                 break;
+            }
+            // Shutdown can be requested from a spawned handler task (e.g. the
+            // "shutdown" RPC). tokio::sync::Notify::notify_waiters() does NOT
+            // store a notification for a future waiter, so the loop can miss it
+            // and stay blocked on next_line() forever. Poll the flag on a short
+            // timeout so a shutdown is honored within 200ms in every interleaving.
+            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+                if server.shutdown_requested() {
+                    break;
+                }
+                continue;
             }
             line = lines.next_line() => line?,
         };
@@ -258,6 +274,7 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     server.begin_shutdown();
     shutdown_notify.notify_waiters();
     info!("ACP server shutting down");
+    eprintln!("DEBUG-EXIT: run_acp_server returning");
     Ok(())
 }
 

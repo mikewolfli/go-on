@@ -645,7 +645,11 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     #[serial]
-    async fn process_chat_request_specific_model_without_match_keeps_phase_agents() {
+    async fn process_chat_request_specific_model_without_match_reports_error() {
+        // BLUE (strict routing): when the user explicitly requests a specific
+        // model that no configured agent matches, the request fails with
+        // error.chat.model_no_matching_agent instead of silently falling back
+        // to phase agents (which would use the wrong provider/model).
         reset_global_state().await;
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
@@ -697,25 +701,22 @@ mod unit_tests {
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.model_filter_fallback");
-        let result = process_chat_request(&server, &mut params, None, &trace, None, None)
-            .await
-            .expect("chat request should succeed by falling back to phase agents");
+        let result = process_chat_request(&server, &mut params, None, &trace, None, None).await;
 
-        // With persistent_loop enabled, the autonomy loop runs 2 rounds
-        // when no tools are invoked. RecordingAgent returns the same output
-        // each round, so the response is the concatenation of both rounds.
-        let resp = result["response"].as_str().unwrap_or("");
+        let err =
+            result.expect_err("unmapped specific model must fail with model_no_matching_agent");
         assert!(
-            resp.starts_with("model fallback answer"),
-            "response should start with the model fallback output, got: {}",
-            resp
+            err.to_string().contains("model_no_matching_agent"),
+            "error should mention model_no_matching_agent, got: {err}"
         );
-        let attempts = result["agent_attempts"]
-            .as_array()
-            .expect("agent attempts should be an array");
-        assert!(attempts
-            .iter()
-            .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true));
+        // No agent should have been invoked.
+        assert!(
+            seen_messages
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty(),
+            "no agent should run when the requested model matches no configured agent"
+        );
     }
 
     #[cfg(not(feature = "backend-postgres"))]

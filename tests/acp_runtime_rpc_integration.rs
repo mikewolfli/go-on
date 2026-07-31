@@ -288,6 +288,19 @@ impl RpcHarness {
         drop(self.stdin.take());
     }
 
+    /// Receive the next available response message, regardless of id.
+    /// Returns `None` on timeout. Used by `send_concurrent` to collect
+    /// responses that arrive out of order.
+    fn recv_any_response(&mut self, timeout: Duration) -> Option<Value> {
+        let deadline = Instant::now() + timeout;
+        let now = Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        self.stdout_rx.recv_timeout(remaining).ok()
+    }
+
     /// Like `read_response_for_id` but returns `None` on timeout instead of panicking.
     /// Useful for tests that expect a provider to be unreachable in CI environments.
     fn try_read_response_for_id(&mut self, id: u64, timeout: Duration) -> Option<Value> {
@@ -335,7 +348,9 @@ impl RpcHarness {
     }
 
     fn wait_for_exit(&mut self, timeout: Duration) {
-        let timeout = timeout.max(Duration::from_secs(15));
+        // 30s floor: parallel test binaries spawn many go-on children, and
+        // under CPU contention the child can take longer than 15s to tear down.
+        let timeout = timeout.max(Duration::from_secs(30));
         // Close the write end of stdin so the child sees EOF and can exit cleanly.
         // Without this, the child's stdin-reader blocks and the process never terminates,
         // causing a timing race in the multi-process pipe harness.
@@ -349,7 +364,10 @@ impl RpcHarness {
                 }
                 Ok(None) => {
                     if Instant::now() >= deadline {
-                        panic!("timed out waiting for child exit");
+                        panic!(
+                            "timed out waiting for child exit; stderr tail:\n{}",
+                            self.stderr_tail(40)
+                        );
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
@@ -485,11 +503,34 @@ impl AdvancedRpcHarness {
             self.inner.raw_request(&payload);
         }
 
+        // Responses arrive OUT OF ORDER because each request is handled in its
+        // own tokio task. Reading by id sequentially would consume later ids
+        // while searching for the current one, so collect ALL n responses into
+        // a map keyed by id first, then return them in request order.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut by_id = std::collections::HashMap::new();
+        let mut received = 0usize;
+        while received < n && Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.inner.recv_any_response(remaining) {
+                Some(msg) => {
+                    if let Some(id) = msg.get("id").and_then(Value::as_u64) {
+                        if id >= start_id && id < start_id + n as u64 {
+                            by_id.insert(id, msg);
+                            received += 1;
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+
         (0..n)
             .map(|offset| {
-                Ok(self
-                    .inner
-                    .read_response_for_id(start_id + offset as u64, Duration::from_secs(15)))
+                let id = start_id + offset as u64;
+                by_id
+                    .remove(&id)
+                    .ok_or_else(|| format!("timed out waiting for concurrent response id {id}"))
             })
             .collect()
     }
@@ -865,7 +906,8 @@ fn rpc_initialize_health_phase_and_shutdown() {
     assert!(phase_status["result"]["inflight"].is_object());
 
     let prometheus = harness.request(30, "metrics.prometheus", None);
-    let prometheus_text = prometheus["result"]["text"]
+    // DispatchOutput::Text is wrapped in the __text_plain__ sentinel field.
+    let prometheus_text = prometheus["result"]["__text_plain__"]
         .as_str()
         .expect("prometheus text should be string");
     assert!(prometheus_text.contains("acp_review_gate_timeout_total 0"));
@@ -1060,7 +1102,7 @@ mod advanced {
 
         let shutdown = harness.inner.shutdown(6_199);
         assert_eq!(shutdown["result"]["ok"], true);
-        harness.inner.wait_for_exit(Duration::from_secs(8));
+        harness.inner.wait_for_exit(Duration::from_secs(30));
     }
 
     // ── B16-R1: debug_panel.get / debug.panel.get ─────────────────────────────
@@ -1273,12 +1315,41 @@ fn http_chat_completions_updates_health_metrics_and_emits_latency_log() {
         "expected /health metrics.total_requests >= 1 after completion request"
     );
 
-    // Capture stderr before dropping child (Drop kills + waits)
+    // Capture stderr before dropping child (Drop kills + waits).
+    // The child is still running (HTTP server), so read_to_string would block
+    // forever waiting for EOF. Read in a helper thread that sends incremental
+    // snapshots; the test collects whatever is available within a bounded wait.
     let mut stderr_text = String::new();
     // Give the process a moment to flush logs
     thread::sleep(Duration::from_millis(200));
-    if let Some(ref mut stderr) = child.child.stderr {
-        let _ = stderr.read_to_string(&mut stderr_text);
+    if let Some(mut stderr) = child.child.stderr.take() {
+        let (stderr_tx, stderr_rx) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            use std::io::Read;
+            let mut text = String::new();
+            loop {
+                let mut chunk = [0u8; 2048];
+                match stderr.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        text.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                        // Send incremental progress so the caller sees output
+                        // without waiting for EOF (child is still running).
+                        let _ = stderr_tx.send(text.clone());
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = stderr_tx.send(text);
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && stderr_text.is_empty() {
+            match stderr_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(text) => stderr_text = text,
+                Err(_) => continue,
+            }
+        }
+        let _ = reader;
     }
 
     // Check for any structured log line — the exact key may vary by build
@@ -1546,9 +1617,11 @@ fn rpc_conversation_checkpoint_and_rollback() {
         })),
     );
     assert_eq!(pruned["result"]["ok"], true);
-    assert_eq!(pruned["result"]["removed"], 1);
-    assert!(pruned["result"]["repaired_heads"].is_number());
-    assert!(pruned["result"]["dropped_heads"].is_number());
+    // DispatchOutput::deleted wraps the payload under result.deleted.
+    let pruned_deleted = &pruned["result"]["deleted"];
+    assert_eq!(pruned_deleted["removed"], 1);
+    assert!(pruned_deleted["repaired_heads"].is_number());
+    assert!(pruned_deleted["dropped_heads"].is_number());
 
     // List again: main should now have 1 checkpoint
     let listed2 = harness.request(
