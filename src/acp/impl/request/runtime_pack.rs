@@ -996,11 +996,14 @@ pub(super) async fn provider_test_connection_payload(
     let mut api_ref_has_key = false;
     let mut secret_ref_has_key = false;
     let mut secret_ref_required = false;
+    // Use the already-loaded AppConfig held by the FlowManager instead of
+    // re-loading + re-parsing the config file from disk on every request
+    // (synchronous file I/O on the async worker).
     if let Some(cfg) = server
-        .config_path
-        .as_deref()
-        .map(std::path::Path::new)
-        .and_then(|path| AppConfig::load(path).ok())
+        .model_deps
+        .flow_manager
+        .as_ref()
+        .map(|fm| fm.config())
     {
         for agent in cfg.agents().values() {
             if agent.agent_type.eq_ignore_ascii_case(provider) {

@@ -103,22 +103,6 @@ pub(crate) async fn evaluate_pre_route_policies(
         }
     }
 
-    // ── RateLimitMiddleware tenant-level rate limit (F-GAP-49) ───────-
-    // Check per-tenant token bucket rate limits alongside phase-level rate
-    // limiting (PhaseRateLimiter). Returns 429 with retry-after when exceeded.
-    #[cfg(feature = "multi-users-server")]
-    {
-        if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
-            if let Err(retry_after) = limiter.check(_tenant_id) {
-                anyhow::bail!(
-                    "rate limited for tenant '{}': retry after {}s",
-                    _tenant_id,
-                    retry_after,
-                );
-            }
-        }
-    }
-
     // ── TenantBudgetEnforcer pre-route check (activated) ───────────────
     // Check per-tenant resource quotas before allocating compute.
     // Uses the _tenant_id resolved from the ChatRequestContext (which comes

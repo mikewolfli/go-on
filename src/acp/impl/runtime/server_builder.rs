@@ -172,7 +172,6 @@ pub async fn new_acp_server(
     .with_capability_graph(registry.get_capability_graph())
     .with_provenance_ledger(Arc::clone(&provenance_ledger))
     .with_live_performance(Arc::clone(&perf_feed));
-    let cb_builder = cb_builder.with_live_performance(Arc::clone(&perf_feed));
     let cb_builder = if let Some(agent) = first_agent {
         cb_builder.with_metacognitive_llm(agent)
     } else {
@@ -814,27 +813,12 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // BLUE48 Step 19: Initialize intelligence hub at startup so consensus
     // voting, rationalization, and audit are wired into the request path.
     // Single call replaces old init_intel_hub() + init_intel_voters() pattern.
+    // enable_delphi_debate is honored from the runtime config so the
+    // previously dead config field is now wired.
     crate::intelligence::hub::init_intelligence_hub(
-        false,
+        server.runtime_config.enable_delphi_debate,
         server.governance_deps.capability_bus.clone(),
     );
-
-    // BLUE51 Step 1: Wire WebSocket hub to SessionRegistry for real-time sync
-    let session_registry = Arc::new(crate::protocol::session_sync::SessionRegistry::new());
-    let ws_hub = Arc::new(crate::protocol::websocket::WebSocketHub::new(
-        crate::protocol::websocket::WebSocketConfig::default(),
-    ));
-
-    // Start WebSocket heartbeat and wire broadcast fn.
-    //
-    // BLUE67-R9: wire_server() is now async, so we can directly .await
-    // the WebSocket heartbeat setup instead of using block_in_place + block_on.
-    ws_hub.start_heartbeat().await;
-    let broadcast_fn = ws_hub.create_broadcast_fn();
-    session_registry.set_broadcast_fn(broadcast_fn).await;
-
-    server.session.session_registry = Some(session_registry);
-    server.websocket_hub = Some(ws_hub);
 
     // ── Memory health monitor (F-GAP-49 activation) ───────────────
     // Start background memory pressure monitoring. Periodically queries

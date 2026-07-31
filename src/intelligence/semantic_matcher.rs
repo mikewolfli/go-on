@@ -25,25 +25,6 @@ pub struct ScoredModel {
     pub match_reasons: Vec<String>,
 }
 
-/// A skill capability declaration used for matching.
-#[derive(Debug, Clone)]
-pub struct SkillCapability {
-    /// Unique skill ID.
-    pub skill_id: String,
-    /// Human-readable skill description.
-    pub description: String,
-    /// Tags associated with this skill.
-    pub tags: Vec<String>,
-}
-
-/// A skill scored by the matcher.
-#[derive(Debug, Clone)]
-pub struct ScoredSkill {
-    pub skill_id: String,
-    pub score: f64,
-    pub match_reasons: Vec<String>,
-}
-
 // ---------------------------------------------------------------------------
 // Capability-aware boosting weights
 // ---------------------------------------------------------------------------
@@ -166,41 +147,6 @@ impl SemanticCapabilityMatcher {
 
                 ScoredModel {
                     model_id: m.model_id.clone(),
-                    score: final_score,
-                    match_reasons: reasons,
-                }
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.score.total_cmp(&a.score));
-        scored
-    }
-
-    /// Match a task description to skills using keyword + semantic similarity.
-    ///
-    /// Returns skills sorted by descending score.
-    pub fn match_task_to_skills(task: &str, skills: &[SkillCapability]) -> Vec<ScoredSkill> {
-        let task_tokens = Self::tokenize(task);
-        let task_lower = task.to_lowercase();
-
-        let mut scored: Vec<ScoredSkill> = skills
-            .iter()
-            .map(|s| {
-                let cap_tokens = Self::tokenize(&s.description);
-                let base_score = Self::score_match(&task_tokens, &cap_tokens, &s.tags);
-                let boost = Self::capability_boost(&task_lower, &s.tags);
-                let final_score = (base_score * boost).min(1.0);
-
-                let mut reasons = Vec::new();
-                if boost > 1.0 {
-                    reasons.push(format!("capability_boost={:.2}", boost));
-                }
-                if base_score > 0.3 {
-                    reasons.push("token_overlap".to_string());
-                }
-
-                ScoredSkill {
-                    skill_id: s.skill_id.clone(),
                     score: final_score,
                     match_reasons: reasons,
                 }
@@ -365,21 +311,6 @@ mod tests {
         ]
     }
 
-    fn sample_skills() -> Vec<SkillCapability> {
-        vec![
-            SkillCapability {
-                skill_id: "code_refactor".to_string(),
-                description: "Refactor code for improved readability and performance".to_string(),
-                tags: vec!["code".to_string(), "refactor".to_string()],
-            },
-            SkillCapability {
-                skill_id: "image_analysis".to_string(),
-                description: "Analyze images and screenshots for content".to_string(),
-                tags: vec!["vision".to_string(), "image".to_string()],
-            },
-        ]
-    }
-
     #[test]
     fn code_task_boosts_code_models() {
         let task = "implement a function to sort an array";
@@ -406,16 +337,6 @@ mod tests {
 
         assert!(!results.is_empty());
         assert_eq!(results[0].model_id, "claude-sonnet");
-    }
-
-    #[test]
-    fn skill_matching_prefers_relevant_skills() {
-        let task = "refactor the codebase to improve performance";
-        let results = SemanticCapabilityMatcher::match_task_to_skills(task, &sample_skills());
-
-        assert!(!results.is_empty());
-        assert_eq!(results[0].skill_id, "code_refactor");
-        assert!(results[0].score > results[1].score);
     }
 
     #[test]

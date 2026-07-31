@@ -377,9 +377,19 @@ pub(crate) async fn filter_runtime_ready_agents(
     let mut unavailable = Vec::new();
     let mut retained = Vec::with_capacity(agents.len());
 
-    for (name, agent) in std::mem::take(agents) {
-        let readiness =
-            probe_agent_runtime_readiness(config, &name, Duration::from_millis(250)).await;
+    // Probes are independent (config/env reads + local TCP connect), so run
+    // them concurrently. Serial probing cost up to N×250ms on the observe→think
+    // hot path; parallel probing bounds it at a single 250ms timeout.
+    let taken = std::mem::take(agents);
+    let probes: Vec<(String, Arc<dyn crate::agent::Agent>, AgentRuntimeReadiness)> =
+        futures_util::future::join_all(taken.into_iter().map(|(name, agent)| async move {
+            let readiness =
+                probe_agent_runtime_readiness(config, &name, Duration::from_millis(250)).await;
+            (name, agent, readiness)
+        }))
+        .await;
+
+    for (name, agent, readiness) in probes {
         match readiness {
             AgentRuntimeReadiness::Ready => retained.push((name, agent)),
             AgentRuntimeReadiness::EndpointTimedOut => {

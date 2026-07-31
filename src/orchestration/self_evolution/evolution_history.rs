@@ -544,33 +544,10 @@ impl EvolutionHistory {
 
 impl Drop for EvolutionHistory {
     fn drop(&mut self) {
-        // Best-effort flush of history to disk using a background thread.
-        // We avoid tokio::runtime::Handle::block_on here because it can panic
-        // when called from a non-async context or cause deadlocks.
-        // Must write in NDJSON format (one JSON entry per line) to match
-        // load_from_disk which expects NDJSON, not a single JSON object.
-        let path = self.history_path.clone();
-        // Best-effort flush using try_lock — tokio::sync::Mutex::lock()
-        // returns a Future which cannot be awaited in Drop.
-        if let Ok(entries) = self.entries.try_lock() {
-            let data: Vec<EvolutionEntry> = entries.values().cloned().collect();
-            drop(entries);
-            std::thread::spawn(move || {
-                let mut out = String::new();
-                for entry in &data {
-                    if let Ok(json) = serde_json::to_string(entry) {
-                        out.push_str(&json);
-                        out.push('\n');
-                    }
-                }
-                if !out.is_empty() {
-                    let _ = std::fs::write(&path, out.as_bytes());
-                }
-            });
-        }
-
-        // Best-effort: try_lock won't block. If we can't acquire the lock
-        // (e.g. another task holds it), skip the debug log — this is non-critical.
+        // No flush needed: `record_entry` persists every entry synchronously via
+        // `append_to_disk`, so the on-disk history always matches the in-memory
+        // map. A background snapshot rewrite in Drop would race with concurrent
+        // readers (truncate-then-write) and was the source of a flaky test.
         if let Ok(ids) = self.ordered_ids.try_lock() {
             let count = ids.len();
             debug!(total_entries = count, "evolution history dropped");

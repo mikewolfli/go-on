@@ -245,37 +245,12 @@ pub async fn handle_request(
         }
     }
 
-    // GAP-B52: Rate limiting — check tenant rate before dispatch
-    if server.runtime_config.entry_auth_enabled || server.runtime_config.governance_enabled {
-        let tenant = request
-            .params
-            .as_ref()
-            .and_then(|p| p.get("tenant_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("default");
-        // Rate limiting is optional: when no middleware is configured, allow.
-        if server
-            .rate_limiting
-            .rate_limit_middleware
-            .as_ref()
-            .is_some_and(|r| !r.try_consume_tenant(tenant, 1.0))
-        {
-            return send_error(
-                server,
-                request.id,
-                -32029, // JSON-RPC rate limited
-                format!("Rate limit exceeded for tenant '{}'", tenant),
-                Some(serde_json::json!({
-                    "code": "RATE_LIMITED",
-                    "tenant": tenant,
-                    "retry_after_ms": 1000,
-                })),
-            )
-            .await;
-        }
-        // Global concurrency limiting via semaphore was removed (F-GAP-49).
-        // The per-tenant rate limiter above provides sufficient throttling.
-    }
+    // GAP-B52: Rate limiting is enforced once, unconditionally, below (S-FIX1).
+    // A previous conditional gate here consumed a second token from the same
+    // tenant bucket whenever entry-auth or governance was enabled, silently
+    // halving the effective RPM. The single gate below keeps the same
+    // per-tenant throttling for every request and returns a structured
+    // JSON-RPC error (-32029) when the limit is exceeded.
 
     // GAP-B52-23: Request signature verification
     if server.runtime_config.request_signing_enabled {
@@ -410,11 +385,12 @@ pub async fn handle_request(
     }
 
     // ── Rate limiting (S-FIX1) ───────────────────────────────────────────
-    // Apply global and per-tenant rate limits before dispatching the request.
+    // Apply per-tenant rate limits once, before dispatching the request.
+    // This is the single rate-limit gate: the previous conditional gate
+    // (GAP-B52) was removed because it charged the same tenant bucket twice
+    // per request and used an unstructured bail that produced no JSON-RPC
+    // error for the client.
     {
-        // Global concurrency semaphore was removed (F-GAP-49).
-        // Per-tenant throttling is retained below.
-
         // Extract tenant_id from request params for per-tenant throttling.
         let tenant_id = request
             .params
@@ -430,7 +406,18 @@ pub async fn handle_request(
             .as_ref()
             .is_some_and(|r| !r.try_consume_tenant(tenant_id, 1.0))
         {
-            anyhow::bail!("rate limit exceeded for tenant: {}", tenant_id);
+            return send_error(
+                server,
+                request.id,
+                -32029, // JSON-RPC rate limited
+                format!("Rate limit exceeded for tenant '{}'", tenant_id),
+                Some(serde_json::json!({
+                    "code": "RATE_LIMITED",
+                    "tenant": tenant_id,
+                    "retry_after_ms": 1000,
+                })),
+            )
+            .await;
         }
     }
 

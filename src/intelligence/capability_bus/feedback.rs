@@ -121,29 +121,15 @@ impl CapabilityBus {
                 .record_protocol_latency(&active_transport, duration_ms);
         }
 
-        // 4c. Persist execution summary to MemoryBus L1/L2.
-        #[cfg(any(feature = "sub-bus-memory", feature = "sub-bus-distributed-memory"))]
+        // 4c. Persist execution summary to DistributedMemoryBus and share.
+        // Note: the MemoryBus L1/L2 write path was removed — `store` was
+        // called with a unique `task_type::task_id` key that no read path
+        // ever matches (MemoryBus::lookup has no production caller), so every
+        // request appended an unreachable entry to the L1 memory cache and the
+        // L2 SQLite cache. DistributedMemoryBus below is the active
+        // cross-node persistence channel.
+        #[cfg(feature = "sub-bus-distributed-memory")]
         let memory_key = format!("{}::{}", task_type, task_id);
-        #[cfg(feature = "sub-bus-memory")]
-        let memory_value = serde_json::json!({
-            "agent": agent,
-            "success": success,
-            "duration_ms": duration_ms,
-            "token_cost": token_cost,
-            "quality_score": quality_score,
-        })
-        .to_string()
-        .into_bytes();
-        #[cfg(feature = "sub-bus-memory")]
-        self.memory_bus
-            .store(
-                &memory_key,
-                memory_value,
-                &crate::intelligence::capability_bus::memory_bus::CacheStrategy::default(),
-            )
-            .await;
-
-        // 4d. Persist execution summary to DistributedMemoryBus and share.
         #[cfg(feature = "sub-bus-distributed-memory")]
         {
             let dist_id = self.distributed_memory_bus.store_local(

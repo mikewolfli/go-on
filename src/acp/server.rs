@@ -408,8 +408,6 @@ pub struct SessionContext {
     pub conversation_state: Arc<Mutex<ConversationState>>,
     /// User session manager for authentication and session lifecycle
     pub session_manager: Option<Arc<SessionManager>>,
-    /// Session registry for cross-client state synchronization
-    pub session_registry: Option<Arc<crate::protocol::session_sync::SessionRegistry>>,
     /// Thread-safe audit log with NDJSON persistence at ~/.goon/audit.ndjson
     pub audit_log: ThreadSafeAuditLog,
     /// In-memory registry for Responses API objects
@@ -531,8 +529,6 @@ pub struct AcpServer {
     pub drain_guard: DrainGuard,
     /// Tool registry for built-in tool execution
     pub tool_registry: Arc<ToolRegistry>,
-    /// WebSocket hub for real-time push to connected clients
-    pub websocket_hub: Option<Arc<crate::protocol::websocket::WebSocketHub>>,
     /// Optional multimodal processor for document, audio, video, and repo analysis.
     /// When `None`, the chat pipeline falls back to text-only processing.
     pub multimodal_processor: Option<crate::multimodal::MultimodalProcessor>,
@@ -929,16 +925,6 @@ impl AcpServer {
     /// Get the session manager handle
     pub fn session_manager(&self) -> Option<Arc<crate::acp::r#impl::session::SessionManager>> {
         self.session.session_manager.clone()
-    }
-
-    /// Get the session registry handle
-    pub fn session_registry(&self) -> Option<Arc<crate::protocol::session_sync::SessionRegistry>> {
-        self.session.session_registry.clone()
-    }
-
-    /// Get the WebSocket hub handle
-    pub fn websocket_hub(&self) -> Option<Arc<crate::protocol::websocket::WebSocketHub>> {
-        self.websocket_hub.clone()
     }
 
     /// Get the tool registry reference
@@ -1586,7 +1572,6 @@ impl ServerBuilder {
             session: SessionContext {
                 conversation_state,
                 session_manager: None,
-                session_registry: None,
                 audit_log: ThreadSafeAuditLog::new_with_default_path(10_000),
                 responses_api_store,
             },
@@ -1618,7 +1603,6 @@ impl ServerBuilder {
             skill_market_registry: None,
             drain_guard: DrainGuard::default(),
             tool_registry: Arc::new(ToolRegistry::new()),
-            websocket_hub: None,
             multimodal_processor: self.multimodal_processor,
             lazy_memory_persistence: OnceLock::new(),
             lazy_memory_retrieval_engine: OnceLock::new(),

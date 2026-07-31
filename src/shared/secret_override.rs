@@ -81,11 +81,15 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
     let key = (service.to_string(), account.to_string());
     let now = Instant::now();
 
-    // Check cache first.
-    let cache = lock_or_recover!(KEYRING_CACHE);
-    if let Some(entry) = cache.get(&key) {
-        if now.duration_since(entry.fetched_at) < KEYRING_CACHE_TTL {
-            return Some(entry.value.clone());
+    // Check cache first. The guard is scoped to this block so it is dropped
+    // before the keyring lookup below — `std::sync::Mutex` is not reentrant
+    // and re-locking it on the miss path deadlocks the calling thread forever.
+    {
+        let cache = lock_or_recover!(KEYRING_CACHE);
+        if let Some(entry) = cache.get(&key) {
+            if now.duration_since(entry.fetched_at) < KEYRING_CACHE_TTL {
+                return Some(entry.value.clone());
+            }
         }
     }
 

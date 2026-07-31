@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::signal;
 use tracing::{error, info};
 
@@ -137,8 +137,25 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
 
     info!("ACP server running");
 
-    let stdin = tokio::io::stdin();
-    let mut lines = BufReader::new(stdin).lines();
+    // stdin is read on a dedicated plain OS thread feeding an unbounded channel
+    // instead of tokio::io::stdin(). Tokio's stdio is implemented as a blocking
+    // read on the blocking-pool thread that CANNOT be cancelled; at runtime drop
+    // the pool waits for it forever unless stdin reaches EOF, which hangs
+    // shutdown whenever the client keeps the pipe open. A plain thread is not
+    // tracked by the blocking pool, so runtime teardown never waits on it (the
+    // thread exits on EOF and is killed with the process otherwise).
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            if stdin_tx.send(line).is_err() {
+                // Receiver dropped (server exiting) — stop reading.
+                break;
+            }
+        }
+    });
 
     // Set up signal watchers for graceful shutdown
     let mut sigterm = std::pin::pin!(async {
@@ -163,13 +180,8 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
             break;
         }
 
-        eprintln!(
-            "DEBUG-EXIT: loop iteration, shutdown_requested={}",
-            server.shutdown_requested()
-        );
-        let next_line = tokio::select! {
+        let line = tokio::select! {
             _ = shutdown_notify.notified() => {
-                eprintln!("DEBUG-EXIT: notified branch");
                 break;
             }
             _ = signal::ctrl_c() => {
@@ -191,11 +203,11 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
                 }
                 continue;
             }
-            line = lines.next_line() => line?,
-        };
-
-        let Some(line) = next_line else {
-            break;
+            line = stdin_rx.recv() => match line {
+                Some(line) => line,
+                // stdin EOF — the client closed the pipe, so shut down.
+                None => break,
+            },
         };
 
         if server.shutdown_requested() {
@@ -274,7 +286,6 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     server.begin_shutdown();
     shutdown_notify.notify_waiters();
     info!("ACP server shutting down");
-    eprintln!("DEBUG-EXIT: run_acp_server returning");
     Ok(())
 }
 

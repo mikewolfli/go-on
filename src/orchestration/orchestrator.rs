@@ -7,70 +7,16 @@
 //! Phase 10+: Model selection integration for automatic model discovery and selection.
 //! BLUE44: HotFailover + LivePerformanceFeed + SemanticCapabilityMatcher integration.
 
-use crate::agent::{AgentRegistry, AgentTaskEnvelope, AgentTaskResult, ModelInfo};
+use crate::agent::ModelInfo;
 use crate::intelligence::semantic_matcher::{
-    ModelCapability as SemanticModelCapability, ScoredSkill, SemanticCapabilityMatcher,
-    SkillCapability as SemanticSkillCapability,
+    ModelCapability as SemanticModelCapability, SemanticCapabilityMatcher,
 };
 
-use crate::mode::{GenericModeRuntime, ModeKind, ModeRuntime};
 use crate::model_selector::{
     ModelCharacteristics, ModelSelectionStrategy, ModelSelector, SelectionCriteria,
 };
-use crate::orchestration::tool::ToolRegistry;
-use crate::orchestration::tool_pipeline::{PipelineResult, PipelineStep, ToolPipeline};
-use anyhow::Result;
-use serde_json::Value;
-use std::sync::Arc;
 
 pub use crate::orchestration::context::OrchestrationContext;
-
-/// Record a model execution outcome.
-///
-/// Call after each model request completes to keep dynamic estimates fresh.
-pub fn record_model_execution(
-    ctx: &mut OrchestrationContext,
-    model_id: &str,
-    success: bool,
-    latency_ms: u64,
-) {
-    ctx.record_model_execution(model_id, success, latency_ms);
-}
-
-// ---------------------------------------------------------------------------
-// Mode selection
-// ---------------------------------------------------------------------------
-
-/// Select mode runtime based on mode string.
-///
-/// Creates runtimes with the provided agent registry so they can actually
-/// execute tasks instead of falling through to the no-agent fallback.
-///
-/// Mode string is resolved via `ModeKind::from(&str)`, which performs
-/// case-insensitive structured dispatch — see `ModeKind` for supported
-/// variants (ask, edit, agent, full_auto, safeguard). Unrecognized
-/// strings fall back to `ModeKind::Ask`.
-pub fn select_mode_runtime_with_registry(
-    mode: &str,
-    registry: Arc<AgentRegistry>,
-) -> Box<dyn ModeRuntime> {
-    let kind = ModeKind::from(mode);
-    Box::new(GenericModeRuntime::new(kind, registry, None))
-}
-
-/// Execute task using the selected mode, providing the runtime with a
-/// full agent registry so it has access to real agents.
-///
-/// Uses `select_mode_runtime_with_registry` so the runtime has access to
-/// real agents.
-pub async fn execute_with_mode(
-    mode: &str,
-    registry: Arc<AgentRegistry>,
-    task: AgentTaskEnvelope,
-) -> Result<AgentTaskResult> {
-    let runtime = select_mode_runtime_with_registry(mode, registry);
-    runtime.run(task).await
-}
 
 // ---------------------------------------------------------------------------
 // Model selection
@@ -123,7 +69,7 @@ pub fn select_model_for_task(
         .cloned()
 }
 
-/// Select best model using semantic capability matching.
+/// Select the best model using semantic capability matching.
 ///
 /// Converts `ModelInfo` entries into `SemanticModelCapability` structs and
 /// delegates to `SemanticCapabilityMatcher::match_task_to_models`.
@@ -171,80 +117,6 @@ pub fn select_model_semantic(
     // Fallback: use traditional criteria-based selection
     let criteria = SelectionCriteria::minimal();
     select_model_for_task(ctx, available_models, &criteria, fallback_strategy)
-}
-
-/// Select the best-matching skill using semantic capability matching.
-///
-/// Converts skill metadata into `SemanticSkillCapability` structs and
-/// delegates to `SemanticCapabilityMatcher::match_task_to_skills`.
-pub fn select_skill_semantic(
-    task_description: &str,
-    skills: &[(String, String, Vec<String>)], // (id, description, tags)
-) -> Vec<ScoredSkill> {
-    let capabilities: Vec<SemanticSkillCapability> = skills
-        .iter()
-        .map(|(id, desc, tags)| SemanticSkillCapability {
-            skill_id: id.clone(),
-            description: desc.clone(),
-            tags: tags.clone(),
-        })
-        .collect();
-
-    SemanticCapabilityMatcher::match_task_to_skills(task_description, &capabilities)
-}
-
-// ---------------------------------------------------------------------------
-// ToolPipeline integration (GAP-46-12)
-// ---------------------------------------------------------------------------
-
-/// Execute a chain of tools using the ToolPipeline engine.
-///
-/// Each step in the pipeline represents a tool call with its input payload.
-/// The pipeline executes tools sequentially, collecting results and handling
-/// errors according to the configured error strategy.
-///
-/// Returns `PipelineResult` with per-step outcomes and aggregate success flag.
-pub async fn execute_tool_pipeline(
-    registry: &ToolRegistry,
-    tool_steps: Vec<(String, Value)>,
-) -> PipelineResult {
-    // Build sequential steps, then chunk them into parallel groups.
-    // Each group runs concurrently via `tokio::join!`; groups themselves
-    // run sequentially.  Consecutive tools are always independent because
-    // outputs go to the LLM, not to other tools, so a simple batch split
-    // is safe.
-    let steps: Vec<PipelineStep> = tool_steps
-        .into_iter()
-        .map(|(tool_name, input)| PipelineStep { tool_name, input })
-        .collect();
-
-    const MAX_PARALLEL: usize = 5;
-    let parallel_groups: Vec<Vec<PipelineStep>> =
-        steps.chunks(MAX_PARALLEL).map(|c| c.to_vec()).collect();
-
-    let pipeline = ToolPipeline {
-        name: "orchestrator-pipeline".to_string(),
-        steps,
-        parallel_groups,
-        on_error: crate::orchestration::tool_pipeline::PipelineErrorStrategy::Continue,
-        sandbox_level: Some(crate::governance::hardening::SandboxLevel::Basic),
-    };
-
-    tracing::info!(
-        "ToolPipeline: executing {} steps via orchestrator",
-        pipeline.steps.len()
-    );
-
-    let result = pipeline.execute(registry, &Value::Null).await;
-
-    tracing::info!(
-        "ToolPipeline completed: {} steps, success={}, duration_ms={}",
-        result.step_results.len(),
-        result.success,
-        result.total_duration_ms
-    );
-
-    result
 }
 
 // ---------------------------------------------------------------------------
@@ -353,16 +225,23 @@ pub fn estimate_context_window(caps: &[String]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::ApprovalPosture;
+    use crate::agent::AgentRegistry;
+    use crate::mode::{ApprovalPosture, ModeKind};
+    use crate::orchestration::mode::resolve_mode_runtime;
+    use std::sync::Arc;
+
+    fn runtime_for(mode: &str, registry: Arc<AgentRegistry>) -> Box<dyn crate::mode::ModeRuntime> {
+        resolve_mode_runtime(mode, Some(registry), None).expect("mode runtime should resolve")
+    }
 
     #[test]
     fn test_select_mode_runtime_with_registry() {
         let registry = Arc::new(AgentRegistry::new());
-        let ask = select_mode_runtime_with_registry("ask", Arc::clone(&registry));
-        let edit = select_mode_runtime_with_registry("edit", Arc::clone(&registry));
-        let agent = select_mode_runtime_with_registry("agent", Arc::clone(&registry));
-        let full_auto = select_mode_runtime_with_registry("full_auto", Arc::clone(&registry));
-        let unknown = select_mode_runtime_with_registry("unknown", registry);
+        let ask = runtime_for("ask", Arc::clone(&registry));
+        let edit = runtime_for("edit", Arc::clone(&registry));
+        let agent = runtime_for("agent", Arc::clone(&registry));
+        let full_auto = runtime_for("full_auto", Arc::clone(&registry));
+        let unknown = runtime_for("unknown", registry);
 
         // Verify all modes return valid runtimes with correct kinds
         assert_eq!(ask.kind(), ModeKind::Ask);
@@ -439,7 +318,7 @@ mod tests {
     #[test]
     fn test_safeguard_mode_selection() {
         let registry = Arc::new(AgentRegistry::new());
-        let safeguard = select_mode_runtime_with_registry("safeguard", registry);
+        let safeguard = runtime_for("safeguard", registry);
         assert_eq!(safeguard.kind(), ModeKind::SafeGuard);
         // SafeGuard mode defaults to Suggest posture (requires approval
         // at high-risk nodes) per mode.rs default_posture_for().
@@ -449,7 +328,7 @@ mod tests {
     #[test]
     fn test_safeguard_mode_detects_high_risk_operations() {
         let registry = Arc::new(AgentRegistry::new());
-        let safeguard = select_mode_runtime_with_registry("safeguard", registry);
+        let safeguard = runtime_for("safeguard", registry);
 
         // Should detect delete operations
         assert!(safeguard.is_high_risk_operation("delete user data"));
@@ -472,10 +351,10 @@ mod tests {
     #[test]
     fn test_other_modes_dont_flag_high_risk() {
         let base = Arc::new(AgentRegistry::new());
-        let ask = select_mode_runtime_with_registry("ask", Arc::clone(&base));
-        let edit = select_mode_runtime_with_registry("edit", Arc::clone(&base));
-        let _agent = select_mode_runtime_with_registry("agent", Arc::clone(&base));
-        let full_auto = select_mode_runtime_with_registry("full_auto", base);
+        let ask = runtime_for("ask", Arc::clone(&base));
+        let edit = runtime_for("edit", Arc::clone(&base));
+        let _agent = runtime_for("agent", Arc::clone(&base));
+        let full_auto = runtime_for("full_auto", base);
 
         // After AUTONOMY + TAO merge, Agent mode was merged into Edit.
         // Edit inherits Agent's risk detection for operations like delete.

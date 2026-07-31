@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Notify;
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
 use crate::intelligence::fusion_evolution_bridge::init_fusion_evolution_bridge;
@@ -32,48 +32,27 @@ pub struct MaintenanceCycleResult {
 
 /// Shared context for background maintenance operations.
 ///
-/// Groups all shared state handles needed by the background maintenance loop
+/// Groups all shared state handles needed by the on-demand maintenance cycle
 /// into a single struct, eliminating the previous 12-parameter function signature.
 #[derive(Debug)]
 pub struct BackgroundContext {
     pub memory_cache: Arc<MemoryResponseCache>,
     pub memory_store: Arc<tokio::sync::Mutex<MemoryStore>>,
     pub maintenance: Arc<tokio::sync::Mutex<MaintenanceTracker>>,
-    pub shutdown_notify: Arc<Notify>,
 }
 
 /// Shared BackgroundContext populated once by `start_background_tasks`.
-/// Used by one-shot `run_maintenance_cycle` and `run_health_check` to avoid
-/// creating duplicate lock and state instances for each call.
+/// Used by one-shot `run_maintenance_cycle` to avoid creating duplicate lock
+/// and state instances for each call.
 static SHARED_BG_CTX: OnceLock<BackgroundContext> = OnceLock::new();
 
-/// Run background maintenance loop
-///
-/// This function runs periodic memory maintenance tasks.
-pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
-    // Run maintenance every 60 seconds to purge expired cache entries
-    let mut maintenance_interval = interval(Duration::from_secs(60));
-
-    maintenance_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! {
-            _ = ctx.shutdown_notify.notified() => break,
-            _ = maintenance_interval.tick() => {
-                if let Err(err) = perform_maintenance_cycle(
-                    ctx.memory_cache.clone(),
-                    ctx.memory_store.clone(),
-                    ctx.maintenance.clone(),
-                    "background",
-                ).await {
-                    warn!("background maintenance cycle failed: {}", err);
-                }
-            }
-        }
-    }
-
-    info!("background maintenance loop stopped");
-}
+// NOTE: The 60-second background maintenance loop was removed.
+// `MemoryResponseCache::purge_expired()` is a hardcoded no-op returning 0
+// (the underlying SemanticResponseCache manages its own lifecycle via
+// `start_background_cleanup`, started in wire_server), and the loop GC'd a
+// freshly-created empty MemoryStore that no request path writes to — the loop
+// ran forever doing nothing but taking locks. The on-demand
+// `run_maintenance_cycle()` below remains for the health/lifecycle APIs.
 
 /// Perform maintenance cycle
 pub async fn perform_maintenance_cycle(
@@ -147,29 +126,13 @@ pub async fn start_background_tasks(
     ));
 
     let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
-    let shutdown_notify_clone = shutdown_notify.clone();
-
     // Store shared context for reuse by one-shot maintenance/health-check calls.
     let ctx = BackgroundContext {
-        memory_cache: memory_cache.clone(),
-        memory_store: memory_store.clone(),
-        maintenance: maintenance.clone(),
-        shutdown_notify: shutdown_notify.clone(),
+        memory_cache,
+        memory_store,
+        maintenance,
     };
     let _ = SHARED_BG_CTX.set(ctx);
-
-    spawn_background_task(
-        async move {
-            let bg_ctx = BackgroundContext {
-                memory_cache,
-                memory_store,
-                maintenance,
-                shutdown_notify: shutdown_notify_clone,
-            };
-            run_background_maintenance_loop(bg_ctx).await;
-        },
-        "maintenance_loop",
-    );
 
     // ── Metacognitive persistence (GAP-B53-56) ──────────────────────────
     // Save metacognitive state to disk every 60 seconds.

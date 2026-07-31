@@ -35,7 +35,15 @@ mod main_module;
 // Shared re-exports — single source of truth at src/_reexports.rs.
 include!("_reexports.rs");
 
-#[tokio::main]
-async fn main() {
-    main_module::main().await;
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    runtime.block_on(main_module::main());
+    // Runtime::drop waits forever for blocking-pool threads when a
+    // spawn_blocking task is stuck in uncancellable I/O (e.g. keyring D-Bus or
+    // a peer that never closes a pipe). Bound the teardown so process exit can
+    // never hang; graceful shutdown already happened in the server code.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(5));
 }

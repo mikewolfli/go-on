@@ -412,10 +412,6 @@ pub struct CapabilityBus {
 
     /// Cumulative count of evolve() subsystem timeouts (non-zero indicates silent degradation)
     pub evolve_timeout_count: std::sync::atomic::AtomicU64,
-
-    /// Multi-model voter — cross-validates high-risk decisions via agent consensus
-    #[cfg(feature = "sub-bus-voter-future")]
-    pub multi_voter: crate::intelligence::multi_model_voter::MultiModelVoter,
 }
 
 impl CapabilityBus {
@@ -535,9 +531,6 @@ impl CapabilityBus {
             hot_failover: None,
             config: CapabilityBusConfig::default(),
             evolve_timeout_count: std::sync::atomic::AtomicU64::new(0),
-            #[cfg(feature = "sub-bus-voter-future")]
-            multi_voter:
-                crate::intelligence::multi_model_voter::MultiModelVoter::new(),
         }
     }
 
@@ -1382,21 +1375,6 @@ impl CapabilityBus {
             "success",
             serde_json::json!({"reward": reward, "state": state, "action": action}),
         );
-    }
-
-    // ------------------------------------------------------------------
-    // Multi-model voter (sub-bus-voter-future)
-    // ------------------------------------------------------------------
-
-    /// Run multi-model voting on a high-stakes decision.
-    /// Spawns concurrent agent evaluations and aggregates via configured strategy.
-    #[cfg(feature = "sub-bus-voter-future")]
-    pub async fn vote_on_decision(
-        &self,
-        prompt: &str,
-        agents: &[std::sync::Arc<dyn crate::agents::agent::Agent>],
-    ) -> anyhow::Result<crate::intelligence::multi_model_voter::VotingOutcome> {
-        self.multi_voter.vote(prompt, agents).await
     }
 }
 

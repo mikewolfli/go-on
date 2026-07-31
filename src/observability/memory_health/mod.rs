@@ -407,6 +407,10 @@ static RUNTIME_MEMORY_FREE_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_MEMORY_TOTAL_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
 /// Get the last known free memory in MB (from the runtime monitor).
+#[allow(
+    dead_code,
+    reason = "Reserved for memory-pressure-aware callers / alert rules — returns last-known free RAM from the background monitor"
+)]
 pub fn runtime_free_mb() -> u64 {
     RUNTIME_MEMORY_FREE_MB.load(Ordering::Relaxed)
 }

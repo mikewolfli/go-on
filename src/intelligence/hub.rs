@@ -85,8 +85,8 @@ pub fn hub_metrics() -> serde_json::Value {
 
 /// Initialize intelligence hub at server startup — single entry point.
 ///
-/// Registers local nodes in the consensus engine and initialises the 5
-/// AgentVoter impls (CapabilityBusVoter, LocalVoter x2,
+/// Registers local nodes in the consensus engine and initialises the 4
+/// AgentVoter impls (CapabilityBusVoter, LocalVoter,
 /// RationalizationGuardVoter, DeepSeekVoter) for the Delphi debate /
 /// weighted-vote system.
 ///
@@ -134,8 +134,6 @@ pub fn init_intelligence_hub(
         "deepseek-v4-flash",
         deepseek_api_key,
     )));
-
-    voters.push(Box::new(LocalVoter::new("local", AgentConfig::default())));
 
     let _ = GLOBAL_VOTERS.set(voters).map_err(|_| {
         tracing::warn!("intel_hub: GLOBAL_VOTERS already initialised");

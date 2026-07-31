@@ -1,6 +1,18 @@
 //! Tool pipeline for composing and executing sequential tool workflows.
 //!
 //! Builds on the tool registry to execute steps sequentially.
+//!
+//! # Design-保留 (design-retained)
+//! This engine is complete and fully tested but currently has no production
+//! caller: its previous consumer `orchestrator::execute_tool_pipeline` was
+//! removed as dead code, and `BrainLoopPlan.parallel_groups` (which the DAG
+//! planner emits for this engine) are not yet fanned out by `BrainLoop`.
+//! It is retained for the planned planner-executor unification; the active
+//! multi-agent execution path is `multi_agent_pipeline::MultiAgentPipeline`.
+#![allow(
+    dead_code,
+    reason = "design-retained tool pipeline engine (see module docs)"
+)]
 
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;

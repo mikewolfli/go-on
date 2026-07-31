@@ -183,7 +183,11 @@ impl RateLimitMiddleware {
     /// Looks up or creates a token bucket and attempts to consume tokens.
     pub fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
         let burst = self.default_limit.burst as f64;
-        let refill_rate = self.default_limit.rpm as f64;
+        // TokenBucket::new expects tokens per SECOND (see shared::token_bucket).
+        // Passing rpm directly made the refill 60x faster than configured,
+        // silently disabling tenant rate limits. `/60.0` matches the rate
+        // used by `check()` so both entry points enforce the same RPM.
+        let refill_rate = self.default_limit.rpm as f64 / 60.0;
         // For multi-token consumption we bypass the single-token try_consume
         // and operate directly on the bucket.
         self.buckets.with_lock(|buckets| {
