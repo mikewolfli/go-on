@@ -21,7 +21,7 @@ use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceC
 
 use super::params::ChatParams;
 use super::streaming::StreamObserver;
-use super::{process_chat_request, should_escalate_approval_strategy};
+use super::{check_server_shutdown, evaluate_pre_chat_gates, process_chat_request};
 
 // ---------------------------------------------------------------------------
 // handle_chat
@@ -65,23 +65,9 @@ pub(crate) async fn handle_chat(
     });
 
     let result = async {
-        let lifecycle_snapshot = {
-            let lifecycle_guard =
-                server
-                    .resilience
-                    .lifecycle_state
-                    .read()
-                    .unwrap_or_else(|poisoned| {
-                        warn!("handle_chat: lifecycle_state poisoned, recovering");
-                        poisoned.into_inner()
-                    });
-            if lifecycle_guard.shutdown_requested() {
-                Some(serde_json::to_value(lifecycle_guard.snapshot())?)
-            } else {
-                None
-            }
-        };
-        if let Some(snapshot) = lifecycle_snapshot {
+        // Shared lifecycle gate — reject requests while the server is
+        // shutting down (same gate is applied by the session/prompt entry).
+        if let Some(snapshot) = check_server_shutdown(server).await? {
             send_error(
                 server,
                 id,
@@ -124,20 +110,29 @@ pub(crate) async fn handle_chat(
         }
 
         // Validate the resolved mode is a recognized value before dispatching.
-        let mode_lower = chat_params.mode.trim().to_ascii_lowercase();
-        match mode_lower.as_str() {
-            "ask" | "plan" | "edit" | "agent" | "full_auto" | "safeguard" | "safe_guard"
-            | "fullauto" => {
-                info!("chat mode validated: '{}'", chat_params.mode);
-            }
-            other => {
-                warn!(
-                    "unrecognized mode '{}' from client, defaulting to 'ask'",
-                    other
-                );
-                chat_params.mode = "edit".to_string();
-            }
+        // (Shared with the session/prompt entry via evaluate_pre_chat_gates.)
+        if let crate::acp::r#impl::chat::PreChatGate::EscalationRequired { mode } =
+            evaluate_pre_chat_gates(server, &mut chat_params).await?
+        {
+            info!(
+                trace_id = %pipeline_trace.trace_id,
+                "approval strategy escalated due to policy — rejecting request"
+            );
+            send_error(
+                server,
+                id,
+                -32040,
+                t("error.chat.escalation_required"),
+                Some(serde_json::json!({
+                    "reason": "Request requires human approval per governance policy",
+                    "mode": mode,
+                })),
+            )
+            .await?;
+            return Ok(());
         }
+
+        // Determine which observer to use — external (SSE) or internal (JSON-RPC).
 
         // GAP-46-12: Track session context across requests.
         // Use SessionContextManager to extract key concepts from the conversation
@@ -285,36 +280,9 @@ pub(crate) async fn handle_chat(
             }
         }
 
-        // Check if should escalate approval strategy
-        let should_escalate = should_escalate_approval_strategy(
-            server,
-            &chat_params.mode,
-            &chat_params.messages,
-            chat_params.conversation_id.as_deref(),
-            chat_params.phase.as_deref(),
-            chat_params.options.as_ref(),
-        )
-        .await?;
-
-        if should_escalate {
-            info!(
-                trace_id = %pipeline_trace.trace_id,
-                "approval strategy escalated due to policy — rejecting request"
-            );
-            send_error(
-                server,
-                id,
-                -32040,
-                t("error.chat.escalation_required"),
-                Some(serde_json::json!({
-                    "reason": "Request requires human approval per governance policy",
-                    "mode": chat_params.mode,
-                })),
-            )
-            .await?;
-            return Ok(());
-        }
-
+        // Check if should escalate approval strategy — shared gate with the
+        // session/prompt entry (evaluate_pre_chat_gates above).
+        //
         // Determine which observer to use — external (SSE) or internal (JSON-RPC).
         let observer = stream_observer.unwrap_or_else(|| StreamObserver::jsonrpc(id.clone()));
 

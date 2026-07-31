@@ -270,13 +270,9 @@ pub struct GovernanceServerDeps {
         Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     /// Prompt injection detector (GAP-B52-25)
     pub injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
-    /// Content safety checker (GAP-B52-28)
-    pub safety_checker: Option<Arc<crate::security::content_safety::SafetyChecker>>,
     /// Hash chain audit integrity protector (GAP-B52-27)
     pub hash_chain_auditor:
         Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
-    /// Secret manager with auto-rotation (GAP-B52-26)
-    pub secret_manager: Option<Arc<crate::security::secret_rotation::SecretManager>>,
     /// Memory persistence manager (GAP-B52-11)
     pub memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
     /// Memory retrieval engine with link graph and semantic search (GAP-B52-13)
@@ -295,9 +291,6 @@ pub struct GovernanceServerDeps {
     /// Secret exposure detector (GAP-B52-24)
     pub secret_exposure_detector:
         Option<Arc<crate::security::vulnerability_scan::SecretExposureDetector>>,
-    /// Permit/mode exposure analyzer (GAP-B52-24)
-    pub permit_exposure_analyzer:
-        Option<Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>>,
     /// Security advisor agent (GAP-B52-30)
     pub security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
     /// Policy reloader for hot-reloading governance policies (GAP-B58-D04)
@@ -987,10 +980,8 @@ pub struct ServerBuilder {
     approval_engine:
         Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
-    safety_checker: Option<Arc<crate::security::content_safety::SafetyChecker>>,
     hash_chain_auditor:
         Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
-    secret_manager: Option<Arc<crate::security::secret_rotation::SecretManager>>,
     memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
     memory_retrieval_engine: Option<Arc<MemoryRetrievalEngine>>,
     evolution_loop: Option<
@@ -1003,8 +994,6 @@ pub struct ServerBuilder {
         Option<Arc<crate::security::vulnerability_scan::DependencyVulnerabilityScanner>>,
     secret_exposure_detector:
         Option<Arc<crate::security::vulnerability_scan::SecretExposureDetector>>,
-    permit_exposure_analyzer:
-        Option<Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>>,
     security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
     /// Policy reloader for hot-reloading governance policies (GAP-B58-D04)
     policy_reloader:
@@ -1045,15 +1034,12 @@ impl ServerBuilder {
             planner_executor_config: (),
             approval_engine: None,
             injection_detector: None,
-            safety_checker: None,
             hash_chain_auditor: None,
-            secret_manager: None,
             memory_persistence: None,
             memory_retrieval_engine: None,
             evolution_loop: None,
             dependency_vulnerability_scanner: None,
             secret_exposure_detector: None,
-            permit_exposure_analyzer: None,
             security_advisor: None,
             policy_reloader: None,
             pre_loaded_skill_registry: None,
@@ -1131,30 +1117,12 @@ impl ServerBuilder {
         self
     }
 
-    /// Set the safety checker
-    pub fn with_safety_checker(
-        mut self,
-        checker: Arc<crate::security::content_safety::SafetyChecker>,
-    ) -> Self {
-        self.safety_checker = Some(checker);
-        self
-    }
-
     /// Set the hash chain auditor
     pub fn with_hash_chain_auditor(
         mut self,
         auditor: Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>,
     ) -> Self {
         self.hash_chain_auditor = Some(auditor);
-        self
-    }
-
-    /// Set the secret manager
-    pub fn with_secret_manager(
-        mut self,
-        manager: Arc<crate::security::secret_rotation::SecretManager>,
-    ) -> Self {
-        self.secret_manager = Some(manager);
         self
     }
 
@@ -1184,15 +1152,6 @@ impl ServerBuilder {
         detector: Arc<crate::security::vulnerability_scan::SecretExposureDetector>,
     ) -> Self {
         self.secret_exposure_detector = Some(detector);
-        self
-    }
-
-    /// Set the permit exposure analyzer
-    pub fn with_permit_exposure_analyzer(
-        mut self,
-        analyzer: Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>,
-    ) -> Self {
-        self.permit_exposure_analyzer = Some(analyzer);
         self
     }
 
@@ -1474,18 +1433,8 @@ impl ServerBuilder {
                 } else {
                     None
                 },
-                safety_checker: if governance_enabled {
-                    self.safety_checker
-                } else {
-                    None
-                },
                 hash_chain_auditor: if governance_enabled {
                     self.hash_chain_auditor
-                } else {
-                    None
-                },
-                secret_manager: if governance_enabled {
-                    self.secret_manager
                 } else {
                     None
                 },
@@ -1511,11 +1460,6 @@ impl ServerBuilder {
                 },
                 secret_exposure_detector: if governance_enabled {
                     self.secret_exposure_detector
-                } else {
-                    None
-                },
-                permit_exposure_analyzer: if governance_enabled {
-                    self.permit_exposure_analyzer
                 } else {
                     None
                 },

@@ -369,6 +369,84 @@ pub async fn should_escalate_approval_strategy(
         || phase_requires_escalation)
 }
 
+/// Result of the shared pre-chat gate evaluation.
+///
+/// Both the `chat` and `session/prompt` entries must pass these gates before
+/// a pipeline is executed. Previously only the `chat` entry enforced them,
+/// letting `session/prompt` bypass the lifecycle, mode-validation, and
+/// approval-escalation (injection / sensitive-content) checks entirely.
+/// (The lifecycle shutdown check is applied separately via
+/// [`check_server_shutdown`], which both entries call before this gate.)
+#[derive(Debug)]
+pub(crate) enum PreChatGate {
+    /// All gates passed — proceed.
+    Pass,
+    /// Approval strategy must be escalated — reject the request.
+    EscalationRequired { mode: String },
+}
+
+/// Check whether the server is in shutdown state.
+///
+/// Returns `Ok(Some(snapshot))` when shutdown has been requested.
+pub(crate) async fn check_server_shutdown(server: &AcpServer) -> Result<Option<serde_json::Value>> {
+    let lifecycle_snapshot = {
+        let lifecycle_guard = server
+            .resilience
+            .lifecycle_state
+            .read()
+            .unwrap_or_else(|poisoned| {
+                warn!("check_server_shutdown: lifecycle_state poisoned, recovering");
+                poisoned.into_inner()
+            });
+        if lifecycle_guard.shutdown_requested() {
+            Some(serde_json::to_value(lifecycle_guard.snapshot())?)
+        } else {
+            None
+        }
+    };
+    Ok(lifecycle_snapshot)
+}
+
+/// Evaluate the shared pre-chat security gates: mode normalization and
+/// approval-strategy escalation (mode rules + prompt injection +
+/// sensitive-content + conversation-history + phase rules).
+pub(crate) async fn evaluate_pre_chat_gates(
+    server: &AcpServer,
+    chat_params: &mut ChatParams,
+) -> Result<PreChatGate> {
+    // ── Mode normalization: reject/coerce unrecognized modes ───────────
+    let mode_lower = chat_params.mode.trim().to_ascii_lowercase();
+    match mode_lower.as_str() {
+        "ask" | "plan" | "edit" | "agent" | "full_auto" | "safeguard" | "safe_guard"
+        | "fullauto" => {}
+        other => {
+            warn!(
+                "unrecognized mode '{}' from client, defaulting to 'edit'",
+                other
+            );
+            chat_params.mode = "edit".to_string();
+        }
+    }
+
+    // ── Approval-strategy escalation ───────────────────────────────────
+    let should_escalate = should_escalate_approval_strategy(
+        server,
+        &chat_params.mode,
+        &chat_params.messages,
+        chat_params.conversation_id.as_deref(),
+        chat_params.phase.as_deref(),
+        chat_params.options.as_ref(),
+    )
+    .await?;
+    if should_escalate {
+        return Ok(PreChatGate::EscalationRequired {
+            mode: chat_params.mode.clone(),
+        });
+    }
+
+    Ok(PreChatGate::Pass)
+}
+
 pub(crate) async fn filter_runtime_ready_agents(
     server: &AcpServer,
     config: &crate::config::AppConfig,

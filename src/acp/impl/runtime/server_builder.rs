@@ -240,14 +240,13 @@ pub async fn new_acp_server(
         builder = builder.with_injection_detector(detector);
     }
 
-    // Wire safety checker
-    {
-        use crate::security::content_safety::{ContentSafetyConfig, SafetyChecker};
-        // SafetyChecker::new is now infallible — regex compilation errors are
-        // logged and result in an empty ruleset rather than a hard failure.
-        let checker = Arc::new(SafetyChecker::new(ContentSafetyConfig::default()));
-        builder = builder.with_safety_checker(checker);
-    }
+    // Wire safety checker — REMOVED: the injected GovernanceServerDeps
+    // SafetyChecker was never read by any code path. PolicyEvaluator exposes
+    // `pub safety_checker: Option<SafetyChecker>` as a designed extension
+    // point (check_tool_call / verify_output branches), but wiring the
+    // default config (threshold=Low, PII scanning on) would block legitimate
+    // tool calls on low-severity matches (e.g. an email address in args),
+    // so the wiring is intentionally left to an explicit conservative config.
 
     // Wire hash chain auditor (requires config path)
     if let Some(ref path) = config_path {
@@ -268,13 +267,11 @@ pub async fn new_acp_server(
         }
     }
 
-    // Wire secret manager
-    {
-        use crate::security::secret_rotation::{MemoryRotator, RotationPolicy, SecretManager};
-        let rotator = Arc::new(MemoryRotator::new());
-        let manager = Arc::new(SecretManager::new(RotationPolicy::default(), rotator));
-        builder = builder.with_secret_manager(manager);
-    }
+    // Wire secret manager — REMOVED: the injected SecretManager (backed by a
+    // MemoryRotator) was never read by any code path (register_key/get_key/
+    // rotate_key have no production callers), making it dead weight. The
+    // active rotation path is start_secret_rotation_if_configured() in
+    // src/security/mod.rs (VaultRotator, gated on VAULT_ADDR).
 
     // Wire memory persistence and memory retrieval engine (GAP-B58-D03) — LAZY INIT
     //
@@ -348,12 +345,10 @@ pub async fn new_acp_server(
         builder = builder.with_secret_exposure_detector(Arc::new(detector));
     }
 
-    // Wire permit exposure analyzer
-    {
-        use crate::security::vulnerability_scan::PermitExposureAnalyzer;
-        let analyzer = PermitExposureAnalyzer::default();
-        builder = builder.with_permit_exposure_analyzer(Arc::new(analyzer));
-    }
+    // Wire permit exposure analyzer — REMOVED: PermitExposureAnalyzer was
+    // injected into GovernanceServerDeps but scan_directory() has no
+    // production caller (the security advisor's periodic scans cover
+    // dependency + secret exposure; permit scanning was never activated).
 
     // Wire security advisor agent
     let _security_advisor = {

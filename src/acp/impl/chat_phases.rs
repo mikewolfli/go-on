@@ -2125,9 +2125,16 @@ async fn run_mode_runtime_and_multi_agent(
         }
     }
 
+    // ── Multi-agent pipeline (Edit + multiple agents) ──────────────────
+    // Runs only as a safety net when the act-phase autonomy loop produced no
+    // output — the same guard applied to the mode runtime above. Without it,
+    // every Edit-mode request with >1 agents triggered a second full agentic
+    // execution (LLM decomposition + per-subtask LLM calls) whose result
+    // silently OVERWROTE the act-phase response.
     if matches!(mode_runtime.kind(), ModeKind::Edit)
         && resolved.agents.len() > 1
         && !exec_out.cache_hit
+        && !act_phase_produced_output
     {
         run_multi_agent_pipeline(server, params, resolved, exec_out, phase_name).await;
     }

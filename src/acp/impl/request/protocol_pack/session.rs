@@ -146,7 +146,9 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
 /// Handle `session/prompt` — processes a user prompt within a session.
 pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result<Value> {
     use crate::acp::r#impl::chat::streaming::StreamObserver;
-    use crate::acp::r#impl::chat::{process_chat_request, ChatParams};
+    use crate::acp::r#impl::chat::{
+        check_server_shutdown, evaluate_pre_chat_gates, process_chat_request, ChatParams,
+    };
     use crate::rpc_protocol::chat_trace_context;
 
     let session_state = super::session_state_for_prompt(&params).await;
@@ -163,6 +165,28 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
             return Err(anyhow::anyhow!("invalid chat params: {}", e));
         }
     };
+
+    // ── Shared pre-chat gates (same as the `chat` entry) ──────────────
+    // Previously this entry bypassed the lifecycle / mode-validation /
+    // approval-escalation (injection + sensitive content) checks that the
+    // `chat` entry applies. Enforce them here so both entries are uniform.
+    if let Some(snapshot) = check_server_shutdown(server).await? {
+        tracing::warn!("ACP session/prompt: rejected — server shutting down");
+        return Err(anyhow::anyhow!("server is shutting down: {:?}", snapshot));
+    }
+    match evaluate_pre_chat_gates(server, &mut chat_params).await? {
+        crate::acp::r#impl::chat::PreChatGate::Pass => {}
+        crate::acp::r#impl::chat::PreChatGate::EscalationRequired { mode } => {
+            tracing::warn!(
+                "ACP session/prompt: rejected — approval escalation required (mode={})",
+                mode
+            );
+            return Err(anyhow::anyhow!(
+                "request requires human approval per governance policy (mode={})",
+                mode
+            ));
+        }
+    }
 
     let pipeline_trace = chat_trace_context(&None, "session.prompt");
 

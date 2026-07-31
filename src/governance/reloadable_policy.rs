@@ -43,6 +43,15 @@ pub trait ReloadablePolicy: Send + Sync {
 
 // ─── PolicyReloader ────────────────────────────────────────────────────────
 
+/// Minimum interval between reload cycles.
+///
+/// `PolicyEvaluator::evaluate()` invokes `reload_all()` on every request (hot
+/// path), and each reload cycle performs 3 synchronous file reads + sha256
+/// digests even when the files are unchanged. The background 60s task keeps
+/// policies fresh; this bound turns per-request reloads into cheap timestamp
+/// checks after the first request in each window.
+const RELOAD_MIN_INTERVAL_MS: u64 = 2000;
+
 /// Runtime policy registry that watches for file changes and triggers reloads.
 ///
 /// Manages a collection of [`ReloadablePolicy`] instances and optionally
@@ -60,6 +69,8 @@ pub struct PolicyReloader {
     notify_tx: Option<std::sync::mpsc::Sender<()>>,
     /// Optional audit log for recording reload events.
     audit_log: Option<ThreadSafeAuditLog>,
+    /// Timestamp (ms) of the last completed reload cycle.
+    last_reload_cycle_ms: u64,
 }
 
 impl Default for PolicyReloader {
@@ -78,6 +89,7 @@ impl PolicyReloader {
             on_reload: None,
             notify_tx: None,
             audit_log: None,
+            last_reload_cycle_ms: 0,
         }
     }
 
@@ -91,7 +103,17 @@ impl PolicyReloader {
     /// do not prevent other policies from reloading.
     ///
     /// If an audit log is configured, a reload event is recorded.
+    ///
+    /// Hot-path callers (every `PolicyEvaluator::evaluate()`) invoke this on
+    /// every request; the `RELOAD_MIN_INTERVAL_MS` guard skips the actual
+    /// disk reads when a cycle completed within the window.
     pub fn reload_all(&mut self) {
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
+        if now.saturating_sub(self.last_reload_cycle_ms) < RELOAD_MIN_INTERVAL_MS {
+            return;
+        }
+        self.last_reload_cycle_ms = now;
+
         let policy_count = self.policies.len();
         let mut errors: Vec<String> = Vec::new();
 
