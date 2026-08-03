@@ -1,4 +1,4 @@
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use tracing::Instrument;
 
 use super::config_handlers::build_trace_payload;
@@ -25,11 +25,15 @@ pub(crate) static SHARED_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(
 /// Global `SkillDiscovery` engine, lazily initialized on first `skill-finder` call.
 static SKILL_DISCOVERY: OnceLock<Mutex<SkillDiscovery>> = OnceLock::new();
 
-static GLOBAL_TOOL_REGISTRY: OnceLock<ToolRegistry> = OnceLock::new();
+static GLOBAL_TOOL_REGISTRY: OnceLock<Arc<ToolRegistry>> = OnceLock::new();
 
 /// Get or create the global `ToolRegistry` instance (lazily initialized once).
-pub(crate) fn global_tool_registry() -> &'static ToolRegistry {
-    GLOBAL_TOOL_REGISTRY.get_or_init(ToolRegistry::new)
+///
+/// Returns `&'static Arc` so callers can cheaply `Arc::clone` the shared
+/// registry (e.g. for the per-server field) instead of building a second
+/// full registration of every built-in tool.
+pub(crate) fn global_tool_registry() -> &'static Arc<ToolRegistry> {
+    GLOBAL_TOOL_REGISTRY.get_or_init(|| Arc::new(ToolRegistry::new()))
 }
 
 /// Get or create the global `SkillDiscovery` instance.

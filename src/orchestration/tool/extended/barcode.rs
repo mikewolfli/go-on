@@ -94,7 +94,7 @@ fn code128b_modules(data: &str) -> Vec<u8> {
     // Encode data bytes using ASCII subset (0x20-0x5F)
     let mut checksum: u32 = 104; // start code value
     for (i, &byte) in data.as_bytes().iter().enumerate() {
-        let value = if byte >= b' ' && byte <= b'_' {
+        let value = if (b' '..=b'_').contains(&byte) {
             (byte - b' ') as u32
         } else {
             0 // space for unsupported characters
@@ -106,7 +106,7 @@ fn code128b_modules(data: &str) -> Vec<u8> {
 
     // Checksum digit
     let check_digit = (checksum % 103) as usize;
-    let idx = (check_digit % 32) as usize;
+    let idx = check_digit % 32;
     modules.extend_from_slice(&TABLE[idx]);
 
     // Stop character (Code 128 stop pattern)

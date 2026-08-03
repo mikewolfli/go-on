@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -131,7 +132,6 @@ pub fn weighted_vote(
     reputations: &HashMap<String, f64>,
     threshold: f64,
     default_weight: f64,
-    _context: &str,
 ) -> VoteResult {
     let mut weighted_yes = 0.0_f64;
     let mut total_weight = 0.0_f64;
@@ -222,21 +222,47 @@ pub fn format_debate_history(round_votes: &HashMap<String, Vote>) -> String {
 /// * `question` – The proposal or question being voted on.
 /// * `reputations` – Map from agent name to reputation score.
 /// * `config` – [`DelphiConfig`] controlling rounds, threshold, etc.
+/// * `initial_votes` – Round-0 votes already collected by the caller. When
+///   provided, the voters are not invoked again for round 0 — this avoids
+///   paying a full extra voter round (including remote LLM voters) when the
+///   caller has already gathered the first-round votes.
 pub async fn delphi_debate(
     agents: &[&dyn AgentVoter],
     question: &str,
     reputations: &HashMap<String, f64>,
     config: &DelphiConfig,
+    initial_votes: Option<HashMap<String, Vote>>,
 ) -> DelphiResult {
     let mut history: Vec<DelphiRound> = Vec::new();
     let mut current_votes: HashMap<String, Vote> = HashMap::new();
     let mut previous_votes: HashMap<String, Vote> = HashMap::new();
 
-    for round in 0..config.max_rounds {
+    // Round 0 may already have been cast by the caller; seed the debate with
+    // it so convergence is checked from round 1 onward without re-invoking
+    // the voters (which would duplicate remote LLM calls).
+    let mut first_round = 0usize;
+    if let Some(initial) = initial_votes {
+        if !initial.is_empty() {
+            let round_result = weighted_vote(
+                &initial,
+                reputations,
+                config.threshold,
+                config.default_weight,
+            );
+            history.push(DelphiRound {
+                round: 0,
+                votes: initial.clone(),
+                approval_ratio: round_result.approval_ratio,
+            });
+            previous_votes = initial.clone();
+            current_votes = initial;
+            first_round = 1;
+        }
+    }
+
+    for round in first_round..config.max_rounds {
         // Build context for this round
-        let context = if round == 0 {
-            format!("Question: {question}")
-        } else {
+        let context = {
             let debate_history = history
                 .last()
                 .map(|r| format_debate_history(&r.votes))
@@ -247,11 +273,16 @@ pub async fn delphi_debate(
             )
         };
 
-        // Collect votes from all agents
+        // Collect votes from all agents — voters are independent, so run them
+        // concurrently (a slow remote voter no longer serializes local voters).
         let mut round_votes: HashMap<String, Vote> = HashMap::new();
-        for agent in agents {
+        let votes: Vec<(String, Vote)> = join_all(agents.iter().map(|agent| async {
             let vote = agent.vote(&context).await;
-            round_votes.insert(agent.name().to_string(), vote);
+            (agent.name().to_string(), vote)
+        }))
+        .await;
+        for (name, vote) in votes {
+            round_votes.insert(name, vote);
         }
 
         // Compute weighted approval ratio for this round
@@ -260,7 +291,6 @@ pub async fn delphi_debate(
             reputations,
             config.threshold,
             config.default_weight,
-            &context,
         );
 
         let round_record = DelphiRound {
@@ -286,7 +316,6 @@ pub async fn delphi_debate(
         reputations,
         config.threshold,
         config.default_weight,
-        "",
     );
 
     let rounds_elapsed = history.len();
@@ -350,7 +379,7 @@ mod tests {
         reps.insert("alice".to_string(), 0.9);
         reps.insert("bob".to_string(), 0.7);
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
         assert!(result.approved);
         assert!((result.approval_ratio - 1.0).abs() < f64::EPSILON);
         assert!(result.weighted);
@@ -380,7 +409,7 @@ mod tests {
         reps.insert("alice".to_string(), 0.9);
         reps.insert("bob".to_string(), 0.9);
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
         // alice has 0.9 weight, bob has 0.9, so 0.9 / 1.8 = 0.5 < 0.6
         assert!(!result.approved);
         assert!((result.approval_ratio - 0.5).abs() < f64::EPSILON);
@@ -411,7 +440,7 @@ mod tests {
         reps.insert("alice".to_string(), 0.95); // high reputation
         reps.insert("bob".to_string(), 0.15); // low reputation (excluded range)
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
         // Alice has 0.95 weight, Bob has 0.15 weight
         // weighted_yes = 0.95, total_weight = 1.10
         // approval_ratio = 0.95 / 1.10 ≈ 0.864 >= 0.6 → approved
@@ -433,7 +462,7 @@ mod tests {
         );
         // No reputation entry for "unknown" → uses default_weight = 0.5
         let reps = HashMap::new();
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
         assert!(result.approved);
         assert!((result.weighted_yes - 0.5).abs() < f64::EPSILON);
         assert_eq!(result.participant_count, 1);
@@ -463,12 +492,12 @@ mod tests {
         reps.insert("bob".to_string(), 0.2);
 
         // With threshold 0.5, alice's 0.8 / 1.0 = 0.8 >= 0.5 → approved
-        let result = weighted_vote(&votes, &reps, 0.5, 0.5, "");
+        let result = weighted_vote(&votes, &reps, 0.5, 0.5);
         assert!(result.approved);
         assert!((result.approval_ratio - 0.8).abs() < f64::EPSILON);
 
         // With threshold 0.9, 0.8 < 0.9 → not approved
-        let result = weighted_vote(&votes, &reps, 0.9, 0.5, "");
+        let result = weighted_vote(&votes, &reps, 0.9, 0.5);
         assert!(!result.approved);
     }
 
@@ -643,7 +672,7 @@ mod tests {
         let mut reps = HashMap::new();
         reps.insert("a".to_string(), 1.0);
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
         assert!(result.weighted);
         assert_eq!(result.participant_count, 1);
     }

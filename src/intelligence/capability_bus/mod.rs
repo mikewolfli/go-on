@@ -29,7 +29,6 @@
 //! 5. **Evolution** — update Q-table, decay exploration rate
 
 pub mod act;
-pub mod consensus;
 pub mod core;
 pub mod decide;
 pub mod discovery;

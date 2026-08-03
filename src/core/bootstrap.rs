@@ -72,12 +72,9 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
         "OrchestrationProvider trait available"
     );
 
-    // 4. Initialize intermediate file directory for agent task intermediate files
-    if let Some(project_root) = config.config_path.parent() {
-        if let Err(e) = crate::orchestration::intermediate::init_intermediate_base(project_root) {
-            tracing::warn!(target: "go_on::core::bootstrap", "intermediate dir init: {e}");
-        }
-    }
+    // 4. (removed) intermediate-file dir init — the `.goon/intermediates/`
+    //    feature was dormant: create_task_intermediate_dir ran per request but
+    //    nothing consumed or cleaned the directories (log-20260730-18).
 
     // 5. Initialize agent skills system — discover local SKILL.md files
     //    and set up the default prompt skill agent.

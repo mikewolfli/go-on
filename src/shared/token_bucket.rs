@@ -65,16 +65,15 @@ impl TokenBucket {
     pub fn is_idle(&self, idle_timeout: Duration) -> bool {
         self.last_access.elapsed() >= idle_timeout
     }
+}
 
-    /// Return the wait time in milliseconds until a single token is available.
-    pub fn wait_time_ms(&self) -> u64 {
-        if self.tokens >= 1.0 {
-            return 0;
-        }
-        let deficit = 1.0 - self.tokens;
-        let secs = (deficit / self.refill_rate).ceil();
-        (secs * 1000.0) as u64
-    }
+/// Convert a requests-per-minute limit to a tokens-per-second refill rate.
+///
+/// Single conversion point for all rate limiter entry points so the rpm→
+/// per-second conversion is never duplicated (previously hand-written in
+/// `RateLimitMiddleware` and `PhaseRateLimiter`).
+pub fn rpm_to_refill_per_second(rpm: u64) -> f64 {
+    rpm as f64 / 60.0
 }
 
 /// A thread-safe map of named token buckets.
@@ -119,6 +118,28 @@ impl BucketMap {
         bucket.try_consume(1.0)
     }
 
+    /// Try to consume `tokens` (possibly > 1) from the named bucket.
+    ///
+    /// Creates the bucket with the given `burst` capacity and `refill_rate`
+    /// (tokens/sec) if it does not already exist, and re-creates it when the
+    /// parameters change. Returns `true` if the tokens were available and
+    /// consumed, `false` if rate-limited.
+    pub fn try_consume_n(&self, key: &str, tokens: f64, burst: f64, refill_rate: f64) -> bool {
+        let mut map = crate::lock_or_recover!(self.inner);
+        let bucket = map
+            .entry(key.to_string())
+            .or_insert_with(|| TokenBucket::new(burst, refill_rate));
+
+        // Re-create if params changed
+        if (bucket.capacity - burst).abs() > f64::EPSILON
+            || (bucket.refill_rate - refill_rate).abs() > f64::EPSILON
+        {
+            *bucket = TokenBucket::new(burst, refill_rate);
+        }
+
+        bucket.try_consume(tokens)
+    }
+
     /// Number of tracked buckets.
     pub fn len(&self) -> usize {
         self.inner.lock().map(|g| g.len()).unwrap_or(0)
@@ -135,15 +156,6 @@ impl BucketMap {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    /// Retain only buckets for which the predicate returns `true`.
-    pub fn retain<F>(&self, mut f: F)
-    where
-        F: FnMut(&str, &mut TokenBucket) -> bool,
-    {
-        let mut map = crate::lock_or_recover!(self.inner);
-        map.retain(|k, v| f(k.as_str(), v));
     }
 
     /// Provide temporary access to the locked inner map.

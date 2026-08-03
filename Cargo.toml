@@ -74,7 +74,6 @@ sub-bus-protocol = []
 sub-bus-orchestration = []
 sub-bus-distributed-memory = []
 # Note: sub-bus-tool-future was removed because no code ever used it.
-sub-bus-voter-future = []
 
 # Multimodal document-parsing backends (optional, feature-gated)
 document-pdf = ["dep:lopdf"]
@@ -156,7 +155,6 @@ simple-server = [
 multi-users-server = [
     "backend-postgres",
     "sub-bus-tool",
-    "sub-bus-voter-future",
     "sub-bus-observability",
     "sub-bus-optimization",
     "sub-bus-memory",
@@ -177,7 +175,6 @@ template-engine = ["dep:minijinja"]
 full = [
     "backend-sqlite",
     "sub-bus-tool",
-    "sub-bus-voter-future",
     "sub-bus-memory",
     "sub-bus-observability",
     "sub-bus-optimization",

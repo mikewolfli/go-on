@@ -17,15 +17,13 @@ use super::bulkhead::Bulkhead;
 // ── Submodules ──────────────────────────────────────────────────────────────
 
 mod concurrency;
-mod persistence;
 mod priority;
 mod queue;
 
 // ── Re-exports ──────────────────────────────────────────────────────────────
 
 pub use concurrency::TaskPermitGuard;
-pub use persistence::create_in_memory_scheduler;
-pub use priority::{Priority, ScheduledTask};
+pub use priority::ScheduledTask;
 
 // ──────────────────────────────────────────────
 // Types
@@ -49,8 +47,6 @@ pub struct SchedulerConfig {
     /// Queue depth at which backpressure is triggered (rejects with 429).
     /// When the pending queue exceeds this, new submissions are rejected.
     pub backpressure_queue_depth: usize,
-    /// Enable automatic fault tolerance recovery cycle (runs every 30s).
-    pub fault_tolerance_enabled: bool,
 }
 
 /// Default queue depth for backpressure: 500 pending tasks.
@@ -66,7 +62,6 @@ impl Default for SchedulerConfig {
             default_max_retries: 3,
             aging_interval_secs: 5,
             backpressure_queue_depth: DEFAULT_BACKPRESSURE_QUEUE_DEPTH,
-            fault_tolerance_enabled: false,
         }
     }
 }
@@ -125,8 +120,6 @@ pub struct TaskScheduler {
 
     /// Bulkhead instance for per-provider concurrency isolation.
     bulkhead: Bulkhead,
-    /// Cancellation token for the fault tolerance background task.
-    ft_cancel: Mutex<Option<CancellationToken>>,
 }
 
 impl TaskScheduler {
@@ -153,7 +146,6 @@ impl TaskScheduler {
             role_limiters: Mutex::new(HashMap::new()),
             aging_cancel: Mutex::new(None),
             bulkhead: Bulkhead::new(config.max_workers_per_role * 3),
-            ft_cancel: Mutex::new(None),
             config,
         }
     }
@@ -542,8 +534,6 @@ impl TaskScheduler {
             *stored = Some(cancel);
         }
         let sched = self.clone();
-        // Also start the fault tolerance background timer if enabled.
-        let _ft_handle = self.start_fault_tolerance_timer();
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(interval);
             loop {
@@ -558,62 +548,6 @@ impl TaskScheduler {
                 }
             }
         })
-    }
-
-    /// Start a background timer for the fault tolerance recovery cycle.
-    ///
-    /// Spawns a periodic task that runs every 30 seconds.  On each tick,
-    /// it calls [`FaultToleranceEngine::run_recovery_cycle`] to detect faults,
-    /// create recovery plans, and execute pending plans.
-    ///
-    /// Returns `None` when `fault_tolerance_enabled` is `false`.
-    /// The task is cancelled when [`shutdown`](Self::shutdown) is called.
-    ///
-    /// Note: This method is called from `start_aging_timer()` which also
-    /// starts the fault tolerance loop.  The `pub` visibility is reserved
-    /// for external callers who want independent lifecycle control.
-    #[allow(
-        dead_code,
-        reason = "Public API surface — reserved for external callers who want independent lifecycle control"
-    )]
-    pub fn start_fault_tolerance_timer(self: &Arc<Self>) -> Option<JoinHandle<()>> {
-        if !self.config.fault_tolerance_enabled {
-            return None;
-        }
-
-        let cancel = CancellationToken::new();
-        let cancel_clone = cancel.clone();
-        if let Ok(mut stored) = self.ft_cancel.lock() {
-            *stored = Some(cancel);
-        }
-
-        let engine = crate::fault_tolerance::FaultToleranceEngine::new(
-            crate::fault_tolerance::FaultToleranceConfig::default(),
-        );
-
-        Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            // Skip the first immediate tick so the loop waits 30s before
-            // the first recovery cycle.
-            interval.tick().await;
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let summary = engine.run_recovery_cycle().await;
-                        info!(
-                            "FaultTolerance: recovery cycle — {} offenders, {} plans created, {:?}",
-                            summary.offenders.len(),
-                            summary.plans_created,
-                            summary.cluster_health,
-                        );
-                    }
-                    _ = cancel_clone.cancelled() => {
-                        info!("Fault tolerance timer cancelled");
-                        break;
-                    }
-                }
-            }
-        }))
     }
 
     /// Apply aging bonus to all pending (non-active) tasks.
@@ -1034,6 +968,7 @@ fn chrono_now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use super::priority::Priority;
     use super::*;
     use std::time::Duration;
 
@@ -1506,19 +1441,5 @@ mod tests {
         scheduler.submit(make_task("t3", "w", 3, 30.0)).unwrap();
         let (task3, _g3) = scheduler.dequeue("w").unwrap();
         assert_eq!(task3.task_id, "t3");
-    }
-
-    // ── persistent scheduler smoke test ────────────────────────────────
-    // Persistence layer was removed; factory delegates to in-memory scheduler.
-
-    #[test]
-    #[cfg(feature = "backend-sqlite")]
-    fn create_in_memory_scheduler_works() {
-        let scheduler = create_in_memory_scheduler();
-        let _profile = scheduler.profile();
-        // Smoke: submit a task to ensure the scheduler is alive.
-        scheduler
-            .submit(make_task("p-task", "worker", 3, 20.0))
-            .unwrap();
     }
 }

@@ -104,11 +104,6 @@ impl BrainLoop {
             plan.phase = BrainLoopPhase::Executing;
         }
 
-        // Emit phase hint for streaming consumers.
-        if let Some(ref mut reporter) = inner.progress_reporter {
-            reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_EXECUTING);
-        }
-
         Ok(())
     }
 }

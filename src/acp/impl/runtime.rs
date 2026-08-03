@@ -114,24 +114,14 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     info!("ACP server running");
 
     // stdin is read on a dedicated plain OS thread feeding an unbounded channel
-    // instead of tokio::io::stdin(). Tokio's stdio is implemented as a blocking
-    // read on the blocking-pool thread that CANNOT be cancelled; at runtime drop
-    // the pool waits for it forever unless stdin reaches EOF, which hangs
-    // shutdown whenever the client keeps the pipe open. A plain thread is not
-    // tracked by the blocking pool, so runtime teardown never waits on it (the
-    // thread exits on EOF and is killed with the process otherwise).
-    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    std::thread::spawn(move || {
-        use std::io::BufRead;
-        let stdin = std::io::stdin();
-        for line in stdin.lock().lines() {
-            let Ok(line) = line else { break };
-            if stdin_tx.send(line).is_err() {
-                // Receiver dropped (server exiting) — stop reading.
-                break;
-            }
-        }
-    });
+    // (shared implementation, see `shared::stdio::spawn_stdin_lines`). Tokio's
+    // stdio is implemented as a blocking read on the blocking-pool thread that
+    // CANNOT be cancelled; at runtime drop the pool waits for it forever unless
+    // stdin reaches EOF, which hangs shutdown whenever the client keeps the
+    // pipe open. A plain thread is not tracked by the blocking pool, so runtime
+    // teardown never waits on it (the thread exits on EOF and is killed with
+    // the process otherwise).
+    let mut stdin_rx = crate::shared::stdio::spawn_stdin_lines();
 
     // Set up signal watchers for graceful shutdown
     let mut sigterm = std::pin::pin!(async {

@@ -201,27 +201,11 @@ pub(crate) struct HighRiskVoteAttemptResult {
 }
 
 /// Select the strongest model from an agent's available models.
+///
+/// Equivalent to `select_top_models(agent, 1).first()` — delegates to the
+/// shared ranking implementation (single sort, no duplicated logic).
 pub(crate) fn select_strong_model_id(agent: &dyn crate::agent::Agent) -> Option<String> {
-    let mut models = agent
-        .available_models()
-        .into_iter()
-        .filter(|model| !model.id.trim().is_empty())
-        .collect::<Vec<_>>();
-
-    if models.is_empty() {
-        return agent.default_model().map(|model| model.id);
-    }
-
-    models.sort_by(|left, right| {
-        right
-            .context_window
-            .unwrap_or(0)
-            .cmp(&left.context_window.unwrap_or(0))
-            .then_with(|| right.capabilities.len().cmp(&left.capabilities.len()))
-            .then_with(|| right.is_default.cmp(&left.is_default))
-    });
-
-    models.first().map(|model| model.id.clone())
+    select_top_models(agent, 1).into_iter().next()
 }
 
 /// Select the top N models from an agent by capability ranking.

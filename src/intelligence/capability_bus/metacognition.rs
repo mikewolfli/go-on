@@ -33,14 +33,14 @@ impl CapabilityBus {
         // ── Generate metacognitive feedback and feed into Q-learning (F-GAP-51) ──
         let feedback = self.metacognitive.generate_evolve_feedback();
         let _reward_multiplier = feedback["reward_multiplier"].as_f64().unwrap_or(1.0);
-        let _suggested_exploration_rate = feedback["suggested_exploration_rate"]
+        let suggested_exploration_rate = feedback["suggested_exploration_rate"]
             .as_f64()
             .unwrap_or(0.1);
 
-        // Apply suggested exploration rate to ReinforcementBus for future decisions.
+        // Apply the suggested exploration rate to the ReinforcementBus.
         {
             let mut rb = crate::write_or_recover!(&self.reinforcement_bus, "intelligence");
-            rb.decay_exploration(1.0); // Reset: apply the rate via decay
+            rb.set_exploration_rate(suggested_exploration_rate);
         }
         // Note: Q-value scaling is handled internally by ReinforcementBus.record_reward().
     }

@@ -18,9 +18,6 @@ pub const DEFAULT_TOKEN_WINDOW: usize = 128_000;
 /// Default max messages before compression is triggered.
 pub const DEFAULT_MAX_MESSAGES: usize = 1000;
 
-/// Token estimation ratio: approximate tokens per character.
-const TOKENS_PER_CHAR: f64 = 0.25;
-
 // ===========================================================================
 // Core types
 // ===========================================================================
@@ -44,9 +41,9 @@ impl Message {
         }
     }
 
-    /// Estimate the number of tokens in this message.
+    /// Estimate the number of tokens in this message (canonical estimator).
     pub fn estimate_tokens(&self) -> usize {
-        (self.content.len() as f64 * TOKENS_PER_CHAR).ceil() as usize
+        crate::shared::token_estimator::estimate_tokens(&self.content)
     }
 }
 
@@ -246,7 +243,7 @@ impl SessionCompressor {
 
         let compressed_count = kept.len() + 1; // +1 for the summary message itself
         let total_tokens: usize = kept.iter().map(|m| m.estimate_tokens()).sum();
-        let summary_tokens = (merged_summary.len() as f64 * TOKENS_PER_CHAR).ceil() as usize;
+        let summary_tokens = crate::shared::token_estimator::estimate_tokens(&merged_summary);
         let estimated_tokens = total_tokens + summary_tokens;
 
         let compression_ratio = if original_count == 0 {
@@ -585,8 +582,8 @@ mod tests {
     #[test]
     fn test_message_token_estimate() {
         let msg = Message::new("user", "hello world");
-        // "hello world" is 11 chars * 0.25 = 2.75 → ceil = 3
-        assert_eq!(msg.estimate_tokens(), 3);
+        // Canonical CJK/ASCII estimator: 11 ASCII chars / 4 = 2 tokens
+        assert_eq!(msg.estimate_tokens(), 2);
     }
 
     #[test]

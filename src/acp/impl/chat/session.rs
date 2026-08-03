@@ -135,32 +135,34 @@ pub(crate) async fn handle_chat(
         // Determine which observer to use — external (SSE) or internal (JSON-RPC).
 
         // GAP-46-12: Track session context across requests.
-        // Use SessionContextManager to extract key concepts from the conversation
-        // and maintain continuity markers for long-running sessions.
-        let mut session_mgr = SessionContextManager::default();
+        // Concept extraction only benefits long conversations — for ordinary
+        // conversations (<50 messages) the extracted data was discarded after
+        // a debug log. The manager is therefore built lazily inside the trim
+        // branch below.
         let conversation_id = chat_params
             .conversation_id
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let msg_count = chat_params.messages.len();
-        debug!(
-            "SessionContextManager: tracking conversation '{}' with {} messages",
-            conversation_id, msg_count
-        );
-        // Record each message for context extraction.
-        for msg in &chat_params.messages {
-            session_mgr.record_message(&msg.content);
-        }
-        let concept_count = session_mgr.concept_count();
-        let decision_count = session_mgr.decision_count();
-        if concept_count > 0 || decision_count > 0 {
-            debug!(
-                "SessionContextManager: {} concepts, {} decisions extracted",
-                concept_count, decision_count
-            );
-        }
-        // If the conversation is long, compute trim budget and apply it.
+        // If the conversation is long, extract key concepts and apply trim budget.
         if msg_count > 50 {
+            let mut session_mgr = SessionContextManager::default();
+            debug!(
+                "SessionContextManager: tracking conversation '{}' with {} messages",
+                conversation_id, msg_count
+            );
+            // Record each message for context extraction.
+            for msg in &chat_params.messages {
+                session_mgr.record_message(&msg.content);
+            }
+            let concept_count = session_mgr.concept_count();
+            let decision_count = session_mgr.decision_count();
+            if concept_count > 0 || decision_count > 0 {
+                debug!(
+                    "SessionContextManager: {} concepts, {} decisions extracted",
+                    concept_count, decision_count
+                );
+            }
             let effective = session_mgr.budget.effective_retain();
             debug!(
                 "SessionContextManager: effective retain budget for {} messages = {}",
@@ -297,16 +299,13 @@ pub(crate) async fn handle_chat(
         )
         .await?;
 
-        // If using an external SSE observer, send the final result as a stream frame
-        // so dispatch_to_client can forward it. Otherwise send as a JSON-RPC result.
-        if let Some(sender) = observer.sse_sender() {
-            use crate::acp::r#impl::chat::streaming::StreamFrame;
-            let _ = sender.send(StreamFrame {
-                event: "result",
-                payload: json!(result),
-                status: None,
-            });
-        } else {
+        // `process_chat_request` already emits the final "result" stream frame
+        // through the SSE observer channel (payload: {response, agent, done}),
+        // which `dispatch_to_client` forwards as the JSON-RPC response. Sending
+        // a second "result" frame here produced a duplicate JSON-RPC response
+        // with the same id. Only the non-SSE (jsonrpc-observer) case needs an
+        // explicit result here.
+        if observer.sse_sender().is_none() {
             send_result(server, id, json!(result)).await?;
         }
 

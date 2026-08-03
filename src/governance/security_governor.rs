@@ -367,6 +367,33 @@ impl AuditEntry {
     }
 }
 
+impl From<AuditEntry> for crate::governance::audit::AuditLogEntry {
+    fn from(e: AuditEntry) -> Self {
+        crate::governance::audit::AuditLogEntry {
+            timestamp: format!("{}", e.timestamp),
+            task_id: e.policy_id.clone(),
+            phase: "security_governor".to_string(),
+            agent: Some(e.actor),
+            tool: None,
+            decision: format!(
+                "allowed={} escalation={}",
+                e.verdict.allowed, e.verdict.escalation_level
+            ),
+            inputs: serde_json::json!({
+                "resource": e.resource,
+                "detail": e.detail,
+            }),
+            outputs: None,
+            error: None,
+            confidence: None,
+            data_classification: None,
+            compliance_tags: Vec::new(),
+            retention_policy: None,
+            correlation_id: None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SecurityGovernorConfig
 // ---------------------------------------------------------------------------
@@ -776,8 +803,9 @@ impl SecurityGovernor {
         })
     }
 
-    /// Record an audit log entry: appends to the internal audit log and
-    /// updates governance metric counters (evaluations, denials, reviews).
+    /// Record an audit log entry: appends to the internal audit log, mirrors
+    /// the entry into the canonical global audit sink, and updates governance
+    /// metric counters (evaluations, denials, reviews).
     pub fn record_audit(&self, entry: AuditEntry) {
         let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("SecurityGovernor lock poisoned in record_audit, recovering");
@@ -793,6 +821,8 @@ impl SecurityGovernor {
         if !entry.verdict.escalation_level.is_empty() {
             inner.active_escalations += 1;
         }
+        // Mirror into the single process-wide audit sink (From conversion).
+        crate::governance::audit::global_audit_log().record(entry.clone().into());
         inner.audit_log.push(entry);
         if inner.audit_log.len() > MAX_AUDIT_ENTRIES {
             inner.audit_log.remove(0);

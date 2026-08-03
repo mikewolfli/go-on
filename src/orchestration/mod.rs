@@ -1,5 +1,4 @@
 pub mod artifact;
-pub mod audit;
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
 pub mod bulkhead;
@@ -7,7 +6,6 @@ pub mod cache_layer; // BLUE65: Unified CacheLayer trait and global metrics coll
 
 pub mod plan_output; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
 
-pub mod complexity_estimator;
 pub mod context;
 pub mod core_dag; // DAG-UNIFY: Unified generic DAG
 #[cfg(any(
@@ -17,11 +15,7 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG
 ))]
 pub mod council; // F-GAP-15
 pub mod diagnostic_feedback;
-pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
-pub mod fork_registry;
-pub mod full_auto;
-pub mod intermediate; // BLUE43 Step 10: Full-auto flow orchestrator
 
 pub mod mode;
 pub mod multi_agent_pipeline;
@@ -30,9 +24,7 @@ pub mod orchestrator;
 pub mod planner_embedding; // BLUE47 Step 7: Embedding-based task classification
 pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG
 pub mod planner_executor;
-pub mod promotion_plugin;
 pub mod prompt_layers;
-pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
 pub mod roles;
 pub mod scheduler;
 pub mod self_evolution; // GAP-B52: Self-evolution infrastructure
@@ -47,11 +39,8 @@ pub mod task_decomposer;
 pub mod task_graph_store;
 pub mod task_router;
 pub mod task_schema;
-pub mod threshold_learner; // BLUE44: Dynamic threshold learning for skill matching
-pub mod token_layers;
 pub mod tool;
 pub use tool::extended as tool_extended;
-pub use tool::recommender as tool_recommender;
 
 pub mod workflow_optimizer;
 pub mod workflow_registry;

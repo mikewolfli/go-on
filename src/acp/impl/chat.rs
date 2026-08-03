@@ -952,7 +952,12 @@ pub(crate) async fn execute_autonomy_round(
             agent_opts.remove("tool_choice");
         }
         let agent_opts = Some(agent_opts);
-        let autonomy_tool_registry = None;
+        // Reuse the process-wide singleton registry — constructing a fresh
+        // ToolRegistry per attempt re-registers every built-in tool (~20+)
+        // and creates a separate tool population that diverges from the one
+        // used by the rest of the request path.
+        let autonomy_tool_registry =
+            Some(crate::acp::r#impl::request::tools_pack::global_tool_registry().clone());
 
         let effective_mode = if _params.mode.is_empty() {
             "edit"
@@ -1065,7 +1070,6 @@ pub(crate) async fn apply_review_gate_assemble(
     schema_error: Option<String>,
     layered_prompt_segments: usize,
     tool_execution_results: &[Value],
-    sched_task_id: &str,
     candidate_agents: &[String],
     routing_provenance: &[String],
     reputation_scores: &HashMap<String, f64>,
@@ -1116,11 +1120,11 @@ pub(crate) async fn apply_review_gate_assemble(
 
     // Cache task description once for all full_auto sub-steps
     let task_description = extract_task_description(&params.messages);
+    // Evaluate once — used by all full_auto sub-steps below.
+    let is_full_auto = ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto;
 
     // Memory policy execution integration
-    // F-GAP-64: Use structured ModeKind::FullAuto check instead of raw string comparison.
-    // Same pattern repeated at L~2260, L~2277, L~2284.
-    let memory_promotion_result = if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
+    let memory_promotion_result = if is_full_auto {
         let memory_entry = MemoryEntry {
             id: format!("task-{}-{}", conversation_id, started.elapsed().as_millis()),
             class: MemoryClass::Observation,
@@ -1156,33 +1160,32 @@ pub(crate) async fn apply_review_gate_assemble(
     };
 
     // Task graph execution engine integration
-    let (task_graph_result, _saved_graph_id, _saved_checkpoint_id) =
-        if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
-            build_task_graph_checkpoint(
-                server,
-                conversation_id,
-                &task_description,
-                &params.mode,
-                phase_name,
-                response_text,
-                tool_execution_results,
-                memory_promotion_result.as_ref(),
-                started.elapsed().as_millis() as u64,
-            )
-            .await
-        } else {
-            (None, None, None)
-        };
+    let (task_graph_result, _saved_graph_id, _saved_checkpoint_id) = if is_full_auto {
+        build_task_graph_checkpoint(
+            server,
+            conversation_id,
+            &task_description,
+            &params.mode,
+            phase_name,
+            response_text,
+            tool_execution_results,
+            memory_promotion_result.as_ref(),
+            started.elapsed().as_millis() as u64,
+        )
+        .await
+    } else {
+        (None, None, None)
+    };
 
     // Role-based agent routing integration
-    let role_routing_result = if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
+    let role_routing_result = if is_full_auto {
         Some(build_role_routing(&task_description))
     } else {
         None
     };
 
     // Enhanced verification system integration
-    let verification_result = if ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto {
+    let verification_result = if is_full_auto {
         Some(run_enhanced_verification(response_text))
     } else {
         None
@@ -1242,16 +1245,7 @@ pub(crate) async fn apply_review_gate_assemble(
         schema_error,
         layered_prompt_segments,
         tool_execution_results,
-        sched_task_id,
         candidate_agents,
-        routing_provenance,
-        reputation_scores,
-        selected_agent_reputation,
-        council_decision,
-        vote_winner,
-        fallback_reason,
-        cache_hit,
-        cache_bypassed_for_execution,
         params
             .messages
             .first()

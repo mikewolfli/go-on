@@ -188,7 +188,11 @@ async fn write_entry_rejection(
 }
 
 /// Extract the entry authentication token from request headers.
-fn extract_entry_token(headers: &str) -> Option<String> {
+///
+/// Checks `Authorization: Bearer <token>` first, then falls back to
+/// `X-Api-Key` and `X-Go-On-Key` headers. Shared by the ACP and MCP HTTP
+/// servers (the MCP server's duplicate copy was removed).
+pub(crate) fn extract_entry_token(headers: &str) -> Option<String> {
     if let Some(auth) = extract_header_value(headers, "authorization") {
         let lower = auth.to_ascii_lowercase();
         if lower.starts_with("bearer ") {

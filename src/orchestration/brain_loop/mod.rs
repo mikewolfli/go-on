@@ -53,7 +53,6 @@
 // ---------------------------------------------------------------------------
 
 pub mod execution;
-pub mod full_auto_plugin;
 pub mod grill;
 pub mod plan_construction;
 pub mod planner_bridge;
@@ -74,7 +73,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::agent::AgentRegistry;
-use crate::agents::progress_reporter::ProgressReporter;
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::orchestration::core_dag::TaskContext;
 
@@ -351,8 +349,6 @@ pub(crate) struct BrainLoopInner {
     pub(crate) completed_plans_total: u64,
     pub(crate) failed_plans_total: u64,
     pub(crate) cancelled_plans_total: u64,
-    /// Optional progress reporter for streaming status hints.
-    pub(crate) progress_reporter: Option<ProgressReporter>,
     /// Optional metacognitive controller for self-correction feedback.
     pub(crate) metacognitive: Option<MetacognitiveController>,
     /// Planner hints accumulated during loop execution.
@@ -362,9 +358,6 @@ pub(crate) struct BrainLoopInner {
     pub(crate) error_counts: HashMap<String, u32>,
     /// B51-08: Optional agent registry for LLM-backed deep reasoning.
     pub(crate) agent_registry: Option<Arc<AgentRegistry>>,
-    /// Optional FullAutoFlow plugin for intent-aware planning.
-    pub(crate) full_auto_plugin:
-        Option<Arc<std::sync::Mutex<crate::orchestration::full_auto::FullAutoFlow>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -395,12 +388,10 @@ impl BrainLoop {
                 completed_plans_total: 0,
                 failed_plans_total: 0,
                 cancelled_plans_total: 0,
-                progress_reporter: None,
                 metacognitive: None,
                 planner_hints: Vec::new(),
                 error_counts: HashMap::new(),
                 agent_registry: None,
-                full_auto_plugin: None,
             })),
             next_plan_id: Arc::new(AtomicU64::new(1)),
         }

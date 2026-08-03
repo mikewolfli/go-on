@@ -1,8 +1,8 @@
 //! Agent implementations
 //!
 //! This module provides implementations for various AI agents, including Anthropic, Cohere,
-//! Copilot, DeepSeek, Gemini (Google), OpenAI, OpenAI-compatible, Qianfan (Baidu),
-//! and Wenxin (Baidu).
+//! Copilot, DeepSeek, Gemini (Google), OpenAI, OpenAI-compatible, and Baidu ERNIE
+//! (Wenxin + Qianfan unified).
 
 pub mod agent;
 pub mod anthropic;
@@ -11,6 +11,7 @@ pub mod cohere;
 pub mod communication;
 pub mod copilot;
 pub mod deepseek;
+pub mod ernie;
 #[cfg(any(
     feature = "sub-bus-tool",
     feature = "simple-server",
@@ -20,13 +21,10 @@ pub mod factory;
 pub mod gemini;
 // OpenAI agent removed — fully superseded by `OpenAiCompatibleAgent`. File deleted.
 pub mod openai_compatible;
-pub mod progress_reporter;
-pub mod qianfan;
 pub mod self_evolution_agent; // GAP-B52-03: Self-Evolution Agent
 
 pub mod sse_compressor;
 pub mod sse_optimizer;
-pub mod wenxin;
 
 use std::collections::HashMap;
 
@@ -90,10 +88,9 @@ pub use anthropic::AnthropicAgent;
 pub use cohere::CohereAgent;
 pub use copilot::CopilotAgent;
 pub use deepseek::DeepSeekAgent;
+pub use ernie::{BaiduErnieAgent, ErnieApi};
 pub use gemini::GeminiAgent;
 pub use openai_compatible::OpenAiCompatibleAgent;
-pub use qianfan::QianfanAgent;
-pub use wenxin::WenxinAgent;
 
 pub use sse_compressor::{SseDecompressor, StreamingConfig};
 

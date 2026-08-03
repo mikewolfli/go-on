@@ -571,9 +571,7 @@ pub async fn new_acp_server(
                 Some(server.cache_deps.cache.response_cache.clone()),
                 Some(server.cache_deps.cache.vector_store.clone()),
                 None,
-                Some(Some(Arc::clone(
-                    &server.cache_deps.cache.memory_response_cache,
-                ))),
+                Some(Some(Arc::clone(&server.cache_deps.cache.semantic_cache))),
             );
             tracing::info!("capability_bus: memory bus backends injected");
         } else {
@@ -581,22 +579,9 @@ pub async fn new_acp_server(
         }
     }
 
-    // GAP-B55-042: Start approval engine timeout processing background task
-    if let Some(ref approval_engine) = server.governance_deps.approval_engine {
-        let engine = Arc::clone(approval_engine);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                // tokio::sync::RwLock does not use lock poisoning.
-                let mut guard = engine.write().await;
-                let changed = guard.process_timeouts().await;
-                if !changed.is_empty() {
-                    tracing::info!("approval engine timed out {} request(s)", changed.len());
-                }
-            }
-        });
-    }
+    // GAP-B55-042: approval-engine timeout processing is handled by
+    // spawn_timeout_loop (5s cycle, shutdown-aware) in background.rs — the
+    // duplicate 30s loop here was removed (same process_timeouts() call).
 
     server
 }
@@ -618,7 +603,6 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // targets.  The scheduler tracks queue depth and active-worker counts that
     // are surfaced in governance.status.
     {
-        crate::orchestration::scheduler::create_in_memory_scheduler();
         let config = crate::orchestration::scheduler::SchedulerConfig::default();
         let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
             config,

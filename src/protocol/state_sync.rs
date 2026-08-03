@@ -23,6 +23,10 @@ const BROADCAST_CAPACITY: usize = 256;
 ///
 /// Each variant carries a human-readable description for display in client UIs
 /// and enough structured data for the client to react intelligently.
+///
+/// **Single source of truth**: `contracts/state-sync-events.json`. The VSCode
+/// TypeScript union is generated from it (`python3 scripts/gen-state-sync-types.py`),
+/// which also verifies this enum stays in sync.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StateSyncEvent {

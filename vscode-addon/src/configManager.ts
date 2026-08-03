@@ -267,6 +267,9 @@ class ConfigManager {
 
   /**
    * Create default configuration
+   *
+   * Defaults mirror the single backend config `config/config.toml`
+   * (source of truth). Keep field values in sync when it changes.
    */
   private createDefaultConfig(): void {
     this.config = {
@@ -292,7 +295,8 @@ class ConfigManager {
         summary_max_chars: 1200,
       },
       autotune: {
-        enabled: true,
+        // Matches backend default (core/config/autotune.rs default_autotune_config).
+        enabled: false,
         evaluate_interval: 20,
         min_query_chars_step: 20,
         min_query_chars_min: 40,

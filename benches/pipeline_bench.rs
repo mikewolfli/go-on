@@ -4,7 +4,6 @@
 //! - ToolRegistry lookup + governance check (every tool execution)
 //! - CacheLayer stats aggregation (governance/metrics endpoint)
 //! - Skill registry lookup + discovery (skills/list + skills/find)
-//! - FastPathCache hit/miss (full-auto flow cache)
 //!
 //! Run with: cargo bench --bench pipeline_bench
 
@@ -12,9 +11,38 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use go_on::orchestration::cache_layer::CacheMetricsCollector;
-use go_on::orchestration::fast_path_cache::FastPathCache;
+use go_on::orchestration::cache_layer::{CacheLayer, CacheMetricsCollector, CacheStats};
 use go_on::orchestration::skill::SkillRegistry;
+
+/// Minimal `CacheLayer` stand-in used to measure the collector's aggregation
+/// and serialization cost independently of any concrete cache backend.
+struct StatsOnlyCache {
+    hits: u64,
+    misses: u64,
+    entries: usize,
+}
+
+impl CacheLayer for StatsOnlyCache {
+    fn name(&self) -> &str {
+        "stats_only"
+    }
+
+    fn stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            entries: self.entries,
+            max_entries: 128,
+            estimated_size_bytes: self.entries.saturating_mul(48),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.hits = 0;
+        self.misses = 0;
+        self.entries = 0;
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. CacheLayer stats aggregation (for governance/metrics endpoint)
@@ -24,8 +52,11 @@ fn bench_cache_layer_aggregate_stats(c: &mut Criterion) {
     let mut collector = CacheMetricsCollector::with_capacity(8);
     // Simulate registering several caches.
     for _ in 0..4 {
-        let cache = FastPathCache::new();
-        collector.register(Box::new(cache));
+        collector.register(Box::new(StatsOnlyCache {
+            hits: 10_000,
+            misses: 500,
+            entries: 1024,
+        }));
     }
 
     c.bench_function("cache_layer/aggregate_stats", |b| {
@@ -36,44 +67,7 @@ fn bench_cache_layer_aggregate_stats(c: &mut Criterion) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 2. FastPathCache hit & miss (full-auto flow)
-// ═══════════════════════════════════════════════════════════════════════════
-
-fn bench_fast_path_cache_get_intent(c: &mut Criterion) {
-    let cache = FastPathCache::new();
-    // Populate with N entries
-    for i in 0..100 {
-        cache.set_intent(
-            &format!(
-                "task number {} with some padding text to make it realistic",
-                i
-            ),
-            go_on::orchestration::fast_path_cache::IntentCacheValue {
-                goals: vec![format!("goal {}", i)],
-                constraints: vec![],
-                prerequisites: vec![],
-                deliverables: vec![],
-            },
-        );
-    }
-
-    let hit_key = "task number 42 with some padding text to make it realistic";
-
-    c.bench_function("fast_path_cache/get_intent_hit", |b| {
-        b.iter(|| {
-            let _ = black_box(cache.get_intent(hit_key));
-        });
-    });
-
-    c.bench_function("fast_path_cache/get_intent_miss", |b| {
-        b.iter(|| {
-            let _ = black_box(cache.get_intent("completely unknown task description"));
-        });
-    });
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 3. Skill registry lookup
+// 2. Skill registry lookup
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn bench_skill_registry_discover(c: &mut Criterion) {
@@ -115,13 +109,17 @@ fn bench_skill_registry_discover(c: &mut Criterion) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. CacheMetricsCollector with multiple caches (governance endpoint)
+// 3. CacheMetricsCollector with multiple caches (governance endpoint)
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn bench_cache_metrics_serialize(c: &mut Criterion) {
     let mut collector = CacheMetricsCollector::with_capacity(8);
     for _ in 0..6 {
-        collector.register(Box::new(FastPathCache::new()));
+        collector.register(Box::new(StatsOnlyCache {
+            hits: 5_000,
+            misses: 250,
+            entries: 512,
+        }));
     }
 
     c.bench_function("cache_metrics/serialize_json", |b| {
@@ -139,7 +137,6 @@ criterion_group! {
         .sample_size(50);
     targets =
         bench_cache_layer_aggregate_stats,
-        bench_fast_path_cache_get_intent,
         bench_skill_registry_discover,
         bench_cache_metrics_serialize,
 }

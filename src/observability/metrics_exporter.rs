@@ -12,21 +12,13 @@
 //! - **`metrics_exporter`** (this file) — reads `AcpServer::RuntimeMetrics` and
 //!   renders a Prometheus `/metrics` endpoint. This is the **primary** path for
 //!   Prometheus scraping.
-//! - **`telemetry_enhanced::MetricsRecorder`** — a standalone `AppMetrics` collector
-//!   used by the structured-logging / OTLP path. It tracks request counts, cache
-//!   operations, memory usage, etc.
-//!
-//! The two are **independent** but complementary:
-//! - `MetricsRecorder` feeds into structured event streams (e.g. OTLP traces, JSON logs)
-//!   but is **not** exported via `/metrics`.
-//! - `RuntimeMetrics` (consumed here) is the canonical source for the Prometheus
-//!   endpoint. The bridge function [`bridge_metrics_recorder`] pulls
-//!   `MetricsRecorder` values into `RuntimeMetrics` for unified Prometheus
-//!   exposure.
+//! - **`telemetry_enhanced::MetricsRecorder`** — a legacy standalone `AppMetrics`
+//!   collector with **zero production writers**; kept only for backward
+//!   compatibility. The old `bridge_metrics_recorder` sync (which merged its
+//!   all-zero values into `RuntimeMetrics` on every scrape / background tick)
+//!   was removed.
 
-use crate::acp::prelude::RuntimeMetrics;
 use crate::acp::server::AcpServer;
-use crate::observability::telemetry_enhanced::{global_metrics_recorder, MetricsRecorder};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
@@ -186,10 +178,10 @@ fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
 /// (the canonical resilience authority) rather than the legacy
 /// `CircuitBreakerRegistry` on `AcpServer`.
 pub async fn build_prometheus_metrics(server: &AcpServer) -> String {
-    // Bridge OTLP MetricsRecorder values into the Prometheus RuntimeMetrics
-    // on every scrape, so that manual metric recordings are visible via /metrics.
-    bridge_metrics_recorder(&server.observability.metrics, global_metrics_recorder());
-
+    // NOTE: the `bridge_metrics_recorder` sync (OTLP MetricsRecorder →
+    // RuntimeMetrics) was removed — MetricsRecorder has zero production
+    // writers, so every bridge call merged all-zero values (dead work on
+    // every /metrics scrape and a 15s background loop).
     let status = server.get_status();
     let m = &status.metrics;
     let lifecycle = &status.lifecycle;
@@ -335,45 +327,4 @@ pub async fn build_prometheus_metrics(server: &AcpServer) -> String {
     ));
 
     lines.join("\n") + "\n"
-}
-
-/// Bridge the legacy `MetricsRecorder` values into the primary `RuntimeMetrics` path.
-///
-/// Call this periodically (e.g. every metrics scrape) to synchronize the
-/// two metric systems. Only writes fields that the legacy `MetricsRecorder` tracks
-/// and `RuntimeMetrics` also exposes.
-///
-/// ## Bridge activation
-///
-/// This bridge is **always active** when both systems are initialized:
-/// - Called on every `/metrics` scrape in [`build_prometheus_metrics`]
-/// - Called periodically in the background task loop in
-///   `acp::background::start_background_tasks`
-pub fn bridge_metrics_recorder(runtime_metrics: &RuntimeMetrics, recorder: &MetricsRecorder) {
-    let app = recorder.get_metrics();
-
-    runtime_metrics.update_snapshot(|snap| {
-        // Merge cache hit rate using EMA-like blend
-        if app.cache_hits + app.cache_misses > 0 {
-            let recorder_rate = app.cache_hits as f64 / (app.cache_hits + app.cache_misses) as f64;
-            if snap.cache_hit_rate == 0.0 {
-                snap.cache_hit_rate = recorder_rate;
-            } else {
-                snap.cache_hit_rate = 0.3 * recorder_rate + 0.7 * snap.cache_hit_rate;
-            }
-        }
-
-        // Latency: prefer the more recent recorder value
-        if app.avg_latency_ms > 0.0 && snap.avg_request_duration_ms == 0.0 {
-            snap.avg_request_duration_ms = app.avg_latency_ms;
-        }
-
-        // Active connections / memory from recorder (use max to avoid losing data)
-        if app.active_connections > snap.active_requests as u64 {
-            snap.active_requests = app.active_connections as u32;
-        }
-        if app.memory_usage_bytes > snap.memory_usage_bytes {
-            snap.memory_usage_bytes = app.memory_usage_bytes;
-        }
-    });
 }

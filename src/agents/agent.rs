@@ -24,8 +24,8 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, warn};
 
 use crate::agents::{
-    AnthropicAgent, CohereAgent, CopilotAgent, DeepSeekAgent, GeminiAgent, OpenAiCompatibleAgent,
-    QianfanAgent, WenxinAgent,
+    AnthropicAgent, BaiduErnieAgent, CohereAgent, CopilotAgent, DeepSeekAgent, ErnieApi,
+    GeminiAgent, OpenAiCompatibleAgent,
 };
 use crate::core::error::Result as AppResult;
 
@@ -1002,7 +1002,9 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let api_key_env = required_field("wenxin", &config.api_key_env, "api_key_env")?;
             let secret_key_env =
                 required_field("wenxin", &config.secret_key_env, "secret_key_env")?;
-            Ok(Arc::new(WenxinAgent::new(
+            Ok(Arc::new(BaiduErnieAgent::new(
+                ErnieApi::Wenxin,
+                String::new(),
                 api_key_env,
                 secret_key_env,
                 client,
@@ -1131,10 +1133,11 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let secret_key_env =
                 required_field("qianfan", &config.secret_key_env, "secret_key_env")?;
             let model = required_field("qianfan", &config.model, "model")?;
-            Ok(Arc::new(QianfanAgent::new(
+            Ok(Arc::new(BaiduErnieAgent::new(
+                ErnieApi::Qianfan,
+                model,
                 api_key_env,
                 secret_key_env,
-                model,
                 client,
             )))
         }

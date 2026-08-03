@@ -494,20 +494,26 @@ pub async fn handle_request(
         .await;
     }
 
-    // BLUE56-D07: Hash chain audit integrity — append to hash chain
+    // BLUE56-D07: Hash chain audit integrity — append to hash chain.
+    // The disk append is offloaded to the blocking pool so the request hot
+    // path never blocks on synchronous file I/O; ordering within the chain is
+    // still guaranteed by the auditor's mutex.
     if let Some(ref hca) = server.governance_deps.hash_chain_auditor {
-        if let Ok(mut hca_guard) = hca.lock() {
-            let payload = serde_json::json!({
-                "id": request.id.as_ref().map(|v| format!("{:?}", v)).unwrap_or_default(),
-                "method": method.as_ref(),
-                "params": request.params,
-                "timestamp_ms": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis(),
-            });
-            let _ = hca_guard.append(payload);
-        }
+        let hca = hca.clone();
+        let payload = serde_json::json!({
+            "id": request.id.as_ref().map(|v| format!("{:?}", v)).unwrap_or_default(),
+            "method": method.as_ref(),
+            "params": request.params.clone(),
+            "timestamp_ms": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        });
+        tokio::task::spawn_blocking(move || {
+            if let Ok(mut hca_guard) = hca.lock() {
+                let _ = hca_guard.append(payload);
+            }
+        });
     }
 
     let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());

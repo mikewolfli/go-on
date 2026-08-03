@@ -13,10 +13,8 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
 
 use crate::intelligence::fusion_evolution_bridge::init_fusion_evolution_bridge;
+use crate::memory::semantic_cache::SemanticResponseCache;
 use crate::memory_module::MemoryStore;
-use crate::memory_response_cache::MemoryResponseCache;
-use crate::observability::metrics_exporter::bridge_metrics_recorder;
-use crate::observability::telemetry_enhanced::global_metrics_recorder;
 use crate::orchestration::self_evolution::evolution_loop::PubsubTriggerSource;
 
 use super::prelude::{with_acp_lock, with_acp_lock_async, MaintenanceTracker};
@@ -36,7 +34,9 @@ pub struct MaintenanceCycleResult {
 /// into a single struct, eliminating the previous 12-parameter function signature.
 #[derive(Debug)]
 pub struct BackgroundContext {
-    pub memory_cache: Arc<MemoryResponseCache>,
+    /// The server's live semantic cache — expired-entry purging runs against
+    /// the same cache instance serving live requests.
+    pub semantic_cache: Arc<std::sync::RwLock<SemanticResponseCache>>,
     /// The server's live memory store (GC must run on the store request paths
     /// actually write to, not on a fresh empty instance).
     pub memory_store: Arc<StdMutex<MemoryStore>>,
@@ -49,24 +49,27 @@ pub struct BackgroundContext {
 static SHARED_BG_CTX: OnceLock<BackgroundContext> = OnceLock::new();
 
 // NOTE: The 60-second background maintenance loop was removed.
-// `MemoryResponseCache::purge_expired()` is a hardcoded no-op returning 0
-// (the underlying SemanticResponseCache manages its own lifecycle via
-// `start_background_cleanup`, started in wire_server), and the loop GC'd a
-// freshly-created empty MemoryStore that no request path writes to — the loop
-// ran forever doing nothing but taking locks. The on-demand
-// `run_maintenance_cycle()` below remains for the health/lifecycle APIs.
+// `MemoryResponseCache::purge_expired()` now delegates to the semantic cache
+// (real expired-entry removal), and the loop GC'd a freshly-created empty
+// MemoryStore that no request path writes to — the loop ran forever doing
+// nothing but taking locks. The on-demand `run_maintenance_cycle()` below
+// remains for the health/lifecycle APIs.
 
 /// Perform maintenance cycle
 pub async fn perform_maintenance_cycle(
-    memory_cache: Arc<MemoryResponseCache>,
+    semantic_cache: Arc<std::sync::RwLock<SemanticResponseCache>>,
     memory_store: Arc<StdMutex<MemoryStore>>,
     maintenance: Arc<TokioMutex<MaintenanceTracker>>,
     source: &str,
 ) -> Result<MaintenanceCycleResult> {
     let _ = with_acp_lock_async(maintenance.as_ref(), |guard| guard.note_started()).await;
 
+    let memory_expired_removed = semantic_cache
+        .write()
+        .map(|guard| guard.purge_expired())
+        .unwrap_or(0);
     let mut result = MaintenanceCycleResult {
-        memory_expired_removed: memory_cache.purge_expired(),
+        memory_expired_removed,
         ..MaintenanceCycleResult::default()
     };
 
@@ -117,9 +120,9 @@ pub async fn start_background_tasks(
     server: &super::server::AcpServer,
     shutdown_notify: Arc<Notify>,
 ) -> Result<()> {
-    // Share the live memory_response_cache so background GC actually
+    // Share the live semantic cache so background GC actually
     // purges expired entries from the cache serving live requests.
-    let memory_cache = server.cache_deps.cache.memory_response_cache.clone();
+    let semantic_cache = server.cache_deps.cache.semantic_cache.clone();
     // GC the server's live memory store (previously a fresh empty MemoryStore
     // was created here and GC'd — the health/lifecycle APIs reported "GC ran"
     // while doing nothing).
@@ -128,7 +131,7 @@ pub async fn start_background_tasks(
     let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
     // Store shared context for reuse by one-shot maintenance/health-check calls.
     let ctx = BackgroundContext {
-        memory_cache,
+        semantic_cache,
         memory_store,
         maintenance,
     };
@@ -296,59 +299,22 @@ pub async fn start_background_tasks(
         advisor.start_digest_schedule();
     }
 
-    // BLUE56-D01: Policy reloader — check for policy file changes every 60 seconds (GAP-B58-D04)
-    if let Some(ref reloader) = server.governance_deps.policy_reloader {
-        let reloader = Arc::clone(reloader);
-        let harness_bus = server.governance_deps.harness_bus.clone();
-        let shutdown = shutdown_notify.clone();
-        spawn_background_task(
-            async move {
-                let mut ticker = tokio::time::interval(Duration::from_secs(60));
-                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = shutdown.notified() => break,
-                        _ = ticker.tick() => {
-                            if let Ok(mut guard) = reloader.lock() {
-                                guard.reload_all();
-                            }
-                            // Merge reloaded TOML policies into the evaluator's
-                            // runtime policy map (no-op until an embedder wires
-                            // the reloader into harness_bus; keeps hot path RO).
-                            if let Some(ref hb) = harness_bus {
-                                hb.evaluator.merge_reloadable_policies();
-                            }
-                            debug!("Policy reloader: checked for policy updates");
-                        }
-                    }
-                }
-            },
-            "policy_reloader",
-        );
-    } else {
-        tracing::warn!("Policy reloader: no shared reloader available, skipping background task");
-    }
+    // BLUE56-D01: Policy reloader — REMOVED as a background task.
+    // The 60s loop read the RULES/*.toml files but nothing consumed the
+    // results (harness_bus wires policy_reloader=None), and auto-activating
+    // it is unsafe: the auto-created default RedLine policy is action=deny
+    // at risk_score>=0.5, which would hard-block task.execute (0.6),
+    // mcp.tools.call (0.7) and SecurityPatch (0.9) requests. The framework
+    // (PolicyReloader + reloadable_policy module) remains as designed
+    // API; wiring it to the evaluator is an explicit operator decision.
+    // See log-20260730-18 for the risk analysis.
 
-    // BLUE56-D02: Process timeouts — spawn the full timeout loop
-    // (which also runs timeout checks and processes approval engine timeouts)
+    // BLUE56-D02: Process timeouts — spawn the approval timeout loop
     {
         let approval_engine = server.governance_deps.approval_engine.clone();
-        // Pull timeout config from harness_bus evaluator if available
-        let (pending_count, timeout_secs) = server
-            .governance_deps
-            .harness_bus
-            .as_ref()
-            .map(|hb| {
-                let secs = hb.evaluator.dispatch.timeout_policy.max_timeout.as_secs();
-                (Some(1usize), Some(secs))
-            })
-            .unwrap_or_else(|| (Some(1usize), Some(300u64)));
-
         crate::governance::runtime_controls::spawn_timeout_loop(
             shutdown_notify.clone(),
             approval_engine,
-            pending_count,
-            timeout_secs,
         );
     }
 
@@ -544,30 +510,6 @@ pub async fn start_background_tasks(
         });
     }
 
-    // ── Metrics bridge (P5-6): periodically sync OTLP MetricsRecorder → RuntimeMetrics ──
-    {
-        let runtime_metrics = server.observability.metrics.clone();
-        let shutdown = shutdown_notify.clone();
-        spawn_background_task(
-            async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(15));
-                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = shutdown.notified() => break,
-                        _ = interval.tick() => {}
-                    }
-                    bridge_metrics_recorder(&runtime_metrics, global_metrics_recorder());
-                }
-            },
-            "metrics_bridge",
-        );
-        tracing::debug!(
-            target: "acp",
-            "metrics bridge background task started (interval=15s)"
-        );
-    }
-
     Ok(())
 }
 
@@ -581,7 +523,7 @@ pub async fn run_maintenance_cycle(
     // Use shared context if available, otherwise fall back to creating fresh state.
     if let Some(ctx) = SHARED_BG_CTX.get() {
         return perform_maintenance_cycle(
-            ctx.memory_cache.clone(),
+            ctx.semantic_cache.clone(),
             ctx.memory_store.clone(),
             ctx.maintenance.clone(),
             "manual",
@@ -590,11 +532,13 @@ pub async fn run_maintenance_cycle(
     }
 
     // Fallback: create fresh state (before start_background_tasks is called).
-    let memory_cache = Arc::new(MemoryResponseCache::default());
+    let semantic_cache = Arc::new(std::sync::RwLock::new(SemanticResponseCache::new(
+        Default::default(),
+    )));
     let memory_store = Arc::new(StdMutex::new(MemoryStore::new(Default::default())));
     let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
 
-    perform_maintenance_cycle(memory_cache, memory_store, maintenance, "manual").await
+    perform_maintenance_cycle(semantic_cache, memory_store, maintenance, "manual").await
 }
 
 /// Run a single health check on demand.

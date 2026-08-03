@@ -34,30 +34,6 @@ pub(crate) fn verdict_is_approved(verdict: ReviewVerdict) -> bool {
     matches!(verdict, QualityVerdict::Approve)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Governance-internal timeout policy kind.
-/// This is an enum (not a struct) used to express policy decisions
-/// during review-timeout evaluation in the governance layer.
-pub(crate) enum ReviewTimeoutPolicyKind {
-    Reject,
-    DegradeSingle,
-}
-
-impl ReviewTimeoutPolicyKind {
-    pub(crate) fn from_options(options: Option<&PhaseOptions>) -> Self {
-        let value = options
-            .and_then(|opts| opts.extra.get("review_timeout_policy"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("reject");
-
-        if value.eq_ignore_ascii_case("degrade_single") || value.eq_ignore_ascii_case("warn") {
-            Self::DegradeSingle
-        } else {
-            Self::Reject
-        }
-    }
-}
-
 pub(crate) fn review_timeout(
     review_options: Option<&PhaseOptions>,
     primary_phase_options: Option<&PhaseOptions>,

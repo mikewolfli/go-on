@@ -91,6 +91,18 @@ export class GoOnClient {
 
   // ── Low-level JSON-RPC ─────────────────────────────────────────────
 
+  /**
+   * Generic JSON-RPC call. Convenience escape hatch for methods that do not
+   * have a dedicated typed wrapper yet (used e.g. by the VSCode addon for
+   * ad-hoc methods such as `runtime.health` / `health.probes`).
+   */
+  async request<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<T> {
+    return this.jsonRpc<T>(method, params);
+  }
+
   private async jsonRpc<T>(
     method: string,
     params: Record<string, unknown>,

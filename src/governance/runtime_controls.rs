@@ -458,95 +458,23 @@ impl OnlineControllerState {
     }
 }
 
-/// Periodic timeout check called from background tasks (BLUE56-D02).
-/// Scans for operations that have exceeded their timeout budget and
-/// Tracks the earliest cycle at which pending operations were first observed.
-static TIMEOUT_START_CYCLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Tracks whether a timeout warning has already been emitted for the current
-/// pending batch (to avoid log spam every 5-second cycle).
-static TIMEOUT_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Check for timed-out operations and log/escalate if any have expired.
+/// Spawn a continuous background loop that periodically processes approval
+/// engine timeouts.
 ///
-/// When `pending_count` and `timeout_secs` are provided, tracks the duration
-/// that operations have been pending. If the deadline has passed (pending_count
-/// remains > 0 longer than `timeout_secs` at 5s/cycle), logs a warning and
-/// resets the tracking.
-pub fn run_timeout_check(cycle: u64, pending_count: Option<usize>, timeout_secs: Option<u64>) {
-    if let (Some(count), Some(timeout)) = (pending_count, timeout_secs) {
-        if count > 0 {
-            // First cycle with pending work — record start
-            TIMEOUT_START_CYCLE
-                .compare_exchange(
-                    0,
-                    cycle,
-                    std::sync::atomic::Ordering::Relaxed,
-                    std::sync::atomic::Ordering::Relaxed,
-                )
-                .ok();
-
-            let start = TIMEOUT_START_CYCLE.load(std::sync::atomic::Ordering::Relaxed);
-            let cycles_elapsed = cycle.wrapping_sub(start);
-            let elapsed_secs = cycles_elapsed * 5; // each cycle is 5 seconds
-
-            if elapsed_secs >= timeout && !TIMEOUT_WARNED.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                tracing::warn!(
-                    target: "runtime_controls",
-                    cycle,
-                    pending = count,
-                    timeout_secs = timeout,
-                    elapsed_secs = elapsed_secs,
-                    cycles_since_pending = cycles_elapsed,
-                    "TIMEOUT: {} pending operations exceeded {}s timeout (elapsed: {}s)",
-                    count, timeout, elapsed_secs
-                );
-                TIMEOUT_WARNED.store(true, std::sync::atomic::Ordering::Relaxed);
-            } else if elapsed_secs < timeout {
-                tracing::debug!(
-                    target: "runtime_controls",
-                    cycle,
-                    pending = count,
-                    timeout_secs = timeout,
-                    elapsed_secs = elapsed_secs,
-                    "timeout check: {} pending, {}s elapsed of {}s budget",
-                    count, elapsed_secs, timeout
-                );
-            }
-        } else {
-            // No pending work — reset tracking
-            TIMEOUT_START_CYCLE.store(0, std::sync::atomic::Ordering::Relaxed);
-            TIMEOUT_WARNED.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    if cycle > 0 && cycle.is_multiple_of(12) {
-        tracing::debug!(
-            target: "runtime_controls",
-            cycle,
-            "timeout check: periodic health tick"
-        );
-    }
-}
-
-/// Spawn a continuous background loop that periodically checks for runtime
-/// timeouts and processes approval engine timeouts.
-///
-/// Call this once during server startup to integrate timeout checking into
+/// Call this once during server startup to integrate timeout processing into
 /// the runtime control system.
 ///
 /// The loop runs every 5 seconds and exits when `shutdown_notify` is signalled.
+///
+/// Note: the generic `run_timeout_check` (hardcoded `pending_count = 1`) was
+/// removed — it emitted false timeout warnings on an empty engine.
 pub fn spawn_timeout_loop(
     shutdown_notify: std::sync::Arc<tokio::sync::Notify>,
     approval_engine: Option<
         std::sync::Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
     >,
-    pending_count: Option<usize>,
-    timeout_secs: Option<u64>,
 ) {
     tokio::spawn(async move {
-        let mut cycle: u64 = 0;
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -557,15 +485,7 @@ pub fn spawn_timeout_loop(
                     break;
                 }
                 _ = ticker.tick() => {
-                    cycle = cycle.wrapping_add(1);
-
-                    // 1. Run the runtime_controls timeout check
-                    //    Use provided values, or default to tracking 1 pending op with a 300s timeout
-                    let pc = pending_count.or(Some(1));
-                    let ts = timeout_secs.or(Some(300));
-                    run_timeout_check(cycle, pc, ts);
-
-                    // 2. Process approval engine timeouts if available
+                    // Process approval engine timeouts if available
                     if let Some(ref engine) = approval_engine {
                         // tokio::sync::RwLock does not use lock poisoning,
                         // so .write().await returns the guard directly.

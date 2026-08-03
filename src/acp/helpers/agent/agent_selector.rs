@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use crate::acp::server::AcpServer;
 use crate::agent::Agent;
-use crate::intelligence::reputation::reputation_score;
 use serde::{Deserialize, Serialize};
 
 /// Result of a single agent selection
@@ -97,7 +96,6 @@ impl AgentSelector {
         &self,
         agents: &[(String, Arc<dyn Agent>)],
         preferred_agent: Option<&str>,
-        _reputation: Option<()>,
         online_scores: &[(String, f64)],
         task_type: &str,
     ) -> Vec<ScoredAgent> {
@@ -124,7 +122,7 @@ impl AgentSelector {
                 } else {
                     0.5
                 };
-                let rep_score = reputation_score(name);
+                let rep_score = 0.5; // default reputation; overridden by real scores in reorder_agents_by_selection
                 let mut hist_score = online_scores
                     .iter()
                     .find(|(n, _)| n == name)
@@ -225,7 +223,7 @@ impl AgentSelector {
         task_type: &str,
     ) -> Option<AgentSelection> {
         let scored = self
-            .score_candidates(agents, preferred_agent, None, online_scores, task_type)
+            .score_candidates(agents, preferred_agent, online_scores, task_type)
             .into_iter()
             .map(|mut candidate| {
                 candidate.reputation_score = reputation_scores
@@ -337,7 +335,7 @@ mod tests {
             ("a".into(), Arc::new(MockAgent)),
             ("b".into(), Arc::new(MockAgent)),
         ];
-        let scores = selector.score_candidates(&agents, None, None, &[], "test");
+        let scores = selector.score_candidates(&agents, None, &[], "test");
         assert_eq!(scores.len(), 2);
     }
 
@@ -358,7 +356,6 @@ mod tests {
         let scored = selector.score_candidates(
             &agents,
             Some("preferred"),
-            None,
             &[("preferred".to_string(), 0.0), ("other".to_string(), 1.0)],
             "coding",
         );
@@ -373,7 +370,7 @@ mod tests {
             ("a".into(), Arc::new(MockAgent)),
             ("b".into(), Arc::new(MockAgent)),
         ];
-        let scores = selector.score_candidates(&agents, Some("a"), None, &[], "test");
+        let scores = selector.score_candidates(&agents, Some("a"), &[], "test");
         assert!(
             scores
                 .iter()
@@ -515,7 +512,7 @@ mod tests {
             ("copilot".into(), Arc::new(MockAgent)),
             ("generic-agent".into(), Arc::new(MockAgent)),
         ];
-        let scored = selector.score_candidates(&agents, None, None, &[], "implement a feature fix");
+        let scored = selector.score_candidates(&agents, None, &[], "implement a feature fix");
         let copilot_score = scored
             .iter()
             .find(|s| s.name == "copilot")
@@ -538,7 +535,7 @@ mod tests {
             ("gemini".into(), Arc::new(MockAgent)),
             ("deepseek".into(), Arc::new(MockAgent)),
         ];
-        let scored = selector.score_candidates(&agents, None, None, &[], "write a creative story");
+        let scored = selector.score_candidates(&agents, None, &[], "write a creative story");
         let gemini = scored
             .iter()
             .find(|s| s.name == "gemini")

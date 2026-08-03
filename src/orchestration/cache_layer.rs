@@ -12,10 +12,10 @@
 //!                    │  CacheMetricsCollector    │
 //!                    │  (holds Vec<Box<dyn CL>>) │
 //!                    └──────┬───────────────────┘
-//!            ┌──────────────┼──────────────┐
-//!            ▼              ▼              ▼
-//!     GovernanceCache  FastPathCache  SemanticCache …
-//!     (impl CacheLayer)(impl CacheLayer)(impl CacheLayer)
+//!            ┌──────────────┼──────────────────┐
+//!            ▼              ▼
+//!     GovernanceCache  SemanticCache …
+//!     (impl CacheLayer)(impl CacheLayer)
 //! ```
 //!
 //! A convenience [`GLOBAL_CACHE_METRICS`] singleton and
@@ -23,8 +23,9 @@
 //! caches participate without creating their own collector.
 
 // CacheLayer trait + CacheMetricsCollector are used through dynamic dispatch
-// by FastPathCache (full_auto) and ShardedGovernanceCache. register_cache()
-// is called from production (FullAutoFlow::new).
+// by ShardedGovernanceCache. register_cache() has no current production
+// callers (the former FullAutoFlow registration was removed); the collector
+// helpers remain as a pub observability extension point.
 // Only convenience helpers + collector methods are currently test-only.
 #![cfg_attr(not(test), allow(dead_code))]
 

@@ -21,9 +21,7 @@ use crate::governance::pua::{PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
 use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 use crate::governance::reloadable_policy::PolicyReloader;
-use crate::governance::review_controls::{
-    review_verdict, verdict_as_str, verdict_is_approved, ReviewTimeoutPolicyKind,
-};
+use crate::governance::review_controls::{review_verdict, verdict_as_str, verdict_is_approved};
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{
     AuditEntry as SgAuditEntry, ConditionOperator, PolicyAction, PolicyComposition,
@@ -374,8 +372,6 @@ impl PolicyEvaluator {
         if self.governance.quality_compass.enabled {
             tracing::debug!("review gate evaluating governance-driven review verdict");
         }
-        let timeout_policy = ReviewTimeoutPolicyKind::from_options(None);
-        let timeout_duration = crate::governance::review_controls::review_timeout(None, None);
         let requires_manual_review = ctx.risk_score >= 0.70
             || ctx.file_count >= 8
             || matches!(
@@ -408,8 +404,6 @@ impl PolicyEvaluator {
         tracing::debug!(
             reviewer = review_result,
             verdict = verdict_as_str(verdict),
-            timeout_policy = ?timeout_policy,
-            timeout_duration = ?timeout_duration,
             "review gate evaluated"
         );
         if !verdict_is_approved(verdict) {

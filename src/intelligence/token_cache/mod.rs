@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -107,10 +107,6 @@ impl CacheEntry {
 ///
 /// Routes lookup requests through L1 → L2 → L3, tracks hit rates per level,
 /// and reports savings statistics.
-///
-/// Supports optional per-request token budget enforcement: when a maximum budget
-/// is configured via [`set_token_budget`](Self::set_token_budget), any request
-/// whose token count exceeds the remaining budget is rejected.
 pub struct TokenMultiLevelCache {
     /// L1: Exact-match cache
     pub l1: RwLock<L1ExactCache>,
@@ -122,20 +118,12 @@ pub struct TokenMultiLevelCache {
     pub stats: RwLock<TokenCacheStats>,
     /// Whether the cache is enabled (lock-free atomic flag)
     pub enabled: AtomicBool,
-    /// Optional per-request token budget (0 = unlimited, lock-free atomic).
-    max_token_budget: AtomicUsize,
-    /// Remaining budget for the current period (lock-free atomic).
-    remaining_budget: AtomicUsize,
     /// TTL in milliseconds for cached entries (0 = no expiration, lock-free atomic).
     ttl_ms: AtomicU64,
 }
 
 impl TokenMultiLevelCache {
     /// Create a new multi-level cache with default capacities.
-    ///
-    /// The token budget is initialised to 0 (unlimited).  Call
-    /// [`set_token_budget`](Self::set_token_budget) after construction
-    /// to enable per-request enforcement.
     pub fn new(l1_capacity: usize, l2_capacity: usize, l3_store_path: &str) -> Self {
         Self {
             l1: RwLock::new(L1ExactCache::new(l1_capacity)),
@@ -143,75 +131,8 @@ impl TokenMultiLevelCache {
             l3: RwLock::new(L3TemplateCache::new(l3_store_path)),
             stats: RwLock::new(TokenCacheStats::default()),
             enabled: AtomicBool::new(true),
-            max_token_budget: AtomicUsize::new(0),
-            remaining_budget: AtomicUsize::new(0),
             ttl_ms: AtomicU64::new(0),
         }
-    }
-
-    /// Set the maximum token budget for a period.  Pass `0` to disable
-    /// budget enforcement (unlimited).
-    pub fn set_token_budget(&self, max: usize) {
-        self.max_token_budget.store(max, Ordering::Release);
-        self.remaining_budget.store(max, Ordering::Release);
-    }
-
-    /// Returns the remaining token budget.  `0` means either unlimited
-    /// (when `max_budget` is also 0) or exhausted.
-    pub fn remaining_budget(&self) -> usize {
-        self.remaining_budget.load(Ordering::Acquire)
-    }
-
-    /// Returns the configured maximum token budget (`0` = unlimited).
-    pub fn max_token_budget(&self) -> usize {
-        self.max_token_budget.load(Ordering::Acquire)
-    }
-
-    /// Check whether the requested token count fits within the remaining
-    /// budget.  Returns `Ok(())` if the budget is unlimited or sufficient,
-    /// or `Err(remaining)` if the request exceeds the available budget.
-    pub async fn check_budget(&self, requested: usize) -> Result<(), usize> {
-        let max = self.max_token_budget.load(Ordering::Acquire);
-        if max == 0 {
-            return Ok(()); // unlimited
-        }
-        let remaining = self.remaining_budget.load(Ordering::Acquire);
-        if requested <= remaining {
-            Ok(())
-        } else {
-            Err(remaining)
-        }
-    }
-
-    /// Deduct `consumed` tokens from the remaining budget (only when
-    /// a positive budget is configured).  If the budget would go below
-    /// zero, it is clamped to zero.
-    pub async fn deduct_budget(&self, consumed: usize) {
-        let max = self.max_token_budget.load(Ordering::Acquire);
-        if max == 0 {
-            return;
-        }
-        self.remaining_budget
-            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |r| {
-                Some(r.saturating_sub(consumed))
-            })
-            .ok();
-    }
-
-    /// Set the TTL for cached entries.  Pass `0` to disable expiration.
-    pub fn set_ttl_ms(&self, ttl: u64) {
-        self.ttl_ms.store(ttl, Ordering::Release);
-    }
-
-    /// Returns the configured TTL in milliseconds (`0` = no expiration).
-    pub fn ttl_ms(&self) -> u64 {
-        self.ttl_ms.load(Ordering::Acquire)
-    }
-
-    /// Reset the remaining budget to the configured maximum.
-    pub fn reset_budget(&self) {
-        let max = self.max_token_budget.load(Ordering::Acquire);
-        self.remaining_budget.store(max, Ordering::Release);
     }
 
     /// Look up a cache entry by input text.
@@ -338,96 +259,10 @@ impl TokenMultiLevelCache {
         self.stats.write().await.total_entries += 1;
     }
 
-    /// Warm up the cache from a list of recent chat records.
-    pub async fn warmup(&self, entries: Vec<CacheEntry>) {
-        for entry in entries {
-            if entry.hit_count > 2 {
-                self.l1.write().await.put(entry.key.clone(), entry.clone());
-            }
-            if entry.token_count > 500 {
-                let vec = simple_embedding(&entry.input);
-                self.l2.write().await.add(vec, entry);
-            }
-        }
-    }
-
     /// Generate a JSON report of cache performance.
     pub async fn report(&self) -> serde_json::Value {
         let stats = self.stats.read().await;
         stats.to_json()
-    }
-
-    /// Clear all cache levels.
-    pub async fn clear(&self) {
-        self.l1.write().await.clear();
-        self.l2.write().await.clear();
-        self.l3.write().await.clear();
-        self.stats.write().await.reset();
-    }
-
-    /// Start a periodic background cleanup task that removes expired entries.
-    ///
-    /// The task runs every `interval_ms` milliseconds and removes entries
-    /// whose `created_at * 1000 + ttl_ms < now_ms` from L1 (exact-match)
-    /// cache. L2 and L3 entries are cleaned lazily on lookup.
-    ///
-    /// Returns a [`tokio_util::sync::CancellationToken`] that can be used
-    /// to stop the task by calling `.cancel()`.
-    pub async fn start_background_cleanup(
-        self: Arc<Self>,
-        interval_ms: u64,
-    ) -> tokio_util::sync::CancellationToken {
-        let token = tokio_util::sync::CancellationToken::new();
-        let token_clone = token.clone();
-
-        tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_millis(interval_ms));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let ttl_ms = self.ttl_ms.load(Ordering::Acquire);
-                        if ttl_ms == 0 {
-                            continue;
-                        }
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-
-                        let expired_keys = {
-                            let l1 = self.l1.read().await;
-                            l1.entries()
-                                .iter()
-                                .filter(|entry| {
-                                    let created_ms = (entry.created_at as u64) * 1000;
-                                    now_ms > created_ms.saturating_add(ttl_ms)
-                                })
-                                .map(|entry| entry.key.clone())
-                                .collect::<Vec<String>>()
-                        };
-
-                        let expired_count = expired_keys.len();
-                        if expired_count > 0 {
-                            let mut l1 = self.l1.write().await;
-                            for key in &expired_keys {
-                                l1.remove(key);
-                            }
-                            tracing::debug!(
-                                target: "token_cache",
-                                expired_count,
-                                "background cleanup removed expired L1 entries"
-                            );
-                        }
-                    }
-                    _ = token_clone.cancelled() => {
-                        break;
-                    }
-                }
-            }
-        });
-
-        token
     }
 
     /// Synchronous snapshot of cache statistics.
@@ -460,16 +295,20 @@ impl std::fmt::Display for CacheLevel {
     }
 }
 
-/// Estimate token count from text (simple heuristic: chars / 4).
+/// Estimate token count from text using the canonical CJK/ASCII-weighted
+/// estimator (see [`crate::shared::token_estimator::estimate_tokens`]).
 pub fn estimate_token_count(text: &str) -> usize {
-    (text.len() / 4).max(1)
+    crate::shared::token_estimator::estimate_tokens(text)
 }
 
 /// Estimate token count from a list of messages.
 pub fn estimate_messages_token_count(messages: &[crate::agent::Message]) -> usize {
     messages
         .iter()
-        .map(|m| m.content.len() / 4 + m.role.len() / 4)
+        .map(|m| {
+            crate::shared::token_estimator::estimate_tokens(&m.content)
+                + crate::shared::token_estimator::estimate_tokens(&m.role)
+        })
         .sum::<usize>()
         .max(1)
 }
@@ -530,32 +369,6 @@ impl L1ExactCache {
         }
     }
 
-    /// Get an entry by key. Moves it to MRU position.
-    pub fn get(&mut self, key: &str) -> Option<CacheEntry> {
-        if let Some(entry) = self.map.get(key) {
-            let mut entry = entry.clone();
-            entry.hit_count += 1;
-            entry.last_access_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-
-            // Move to MRU (back of deque)
-            if let Some(pos) = self.order.iter().position(|k| k == key) {
-                let k = self
-                    .order
-                    .remove(pos)
-                    .expect("pos is valid because we just found it via position()");
-                self.order.push_back(k);
-            }
-
-            self.map.insert(key.to_string(), entry.clone());
-            Some(entry)
-        } else {
-            None
-        }
-    }
-
     /// Read-only peek — looks up an entry without updating hit count or LRU order.
     /// Use this for read-locked lookup paths to avoid unnecessary write contention.
     pub fn peek(&self, key: &str) -> Option<CacheEntry> {
@@ -609,11 +422,6 @@ impl L1ExactCache {
 
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
-    }
-
-    /// Iterate over all entries (for warmup serialization).
-    pub fn entries(&self) -> Vec<CacheEntry> {
-        self.map.values().cloned().collect()
     }
 }
 
@@ -698,18 +506,6 @@ pub fn simple_embedding(text: &str) -> Vec<f32> {
     vec
 }
 
-/// Cosine similarity between two vectors.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if norm_a > 0.0 && norm_b > 0.0 {
-        dot / (norm_a * norm_b)
-    } else {
-        0.0
-    }
-}
-
 /// L2 semantic-similarity cache.
 pub struct L2SemanticCache {
     entries: Vec<CacheEntry>,
@@ -736,7 +532,7 @@ impl L2SemanticCache {
         let mut best_entry = None;
 
         for (i, vec) in self.vectors.iter().enumerate() {
-            let score = cosine_similarity(query_vec, vec);
+            let score = crate::shared::math::cosine_similarity_f32(query_vec, vec);
             if score > best_score && score >= self.similarity_threshold {
                 best_score = score;
                 best_entry = Some(self.entries[i].clone());
@@ -744,30 +540,6 @@ impl L2SemanticCache {
         }
 
         best_entry
-    }
-
-    /// Find the most semantically similar entry above the threshold.
-    /// Updates hit count and is write-locked.
-    pub fn find_similar(&mut self, query_vec: &[f32]) -> Option<CacheEntry> {
-        let mut best_score = 0.0f32;
-        let mut best_idx = None;
-
-        for (i, vec) in self.vectors.iter().enumerate() {
-            let score = cosine_similarity(query_vec, vec);
-            if score > best_score && score >= self.similarity_threshold {
-                best_score = score;
-                best_idx = Some(i);
-            }
-        }
-
-        if let Some(idx) = best_idx {
-            let mut entry = self.entries[idx].clone();
-            entry.hit_count += 1;
-            self.entries[idx] = entry.clone();
-            Some(entry)
-        } else {
-            None
-        }
     }
 
     /// Add a new entry to the cache. Evicts oldest if at capacity.
@@ -1252,22 +1024,6 @@ impl Agent for CachedAgentWrapper {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // --- Budget enforcement ---
-        // Reject the request if it exceeds the remaining token budget.
-        if let Err(remaining) = self.cache.check_budget(estimated_tokens).await {
-            tracing::warn!(
-                target = "token_cache",
-                estimated_tokens,
-                remaining,
-                "CachedAgentWrapper: request exceeds remaining token budget"
-            );
-            return Err(crate::core::error::AppError::Proxy(
-                crate::core::error::ProxyError::Internal(format!(
-                    "Token budget exceeded: requested {estimated_tokens}, remaining {remaining}"
-                )),
-            ));
-        }
-
         // --- Cache lookup ---
         if let Some((level, entry)) = self.cache.lookup(&input_text, context_class).await {
             tracing::debug!(
@@ -1334,9 +1090,6 @@ impl Agent for CachedAgentWrapper {
         let output = collect_handle.await.unwrap_or_default();
 
         let token_count = estimate_token_count(&output);
-
-        // --- Deduct tokens from budget ---
-        self.cache.deduct_budget(token_count).await;
 
         // --- Store result in cache asynchronously ---
         let cache = self.cache.clone();

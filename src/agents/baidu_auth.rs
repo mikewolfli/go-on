@@ -1,11 +1,11 @@
 //! Shared Baidu OAuth 2.0 token authentication
 //!
-//! Both [`WenxinAgent`](super::wenxin::WenxinAgent) and
-//! [`QianfanAgent`](super::qianfan::QianfanAgent) use the same Baidu OAuth 2.0
-//! `client_credentials` flow: an `api_key` + `secret_key` are exchanged for a
-//! short-lived `access_token`. This module provides a single, reusable client
-//! that fetches and caches that token, and automatically refreshes it on
-//! expiry.
+//! Both the Wenxin and Qianfan variants of
+//! [`BaiduErnieAgent`](super::ernie::BaiduErnieAgent) use the same Baidu
+//! OAuth 2.0 `client_credentials` flow: an `api_key` + `secret_key` are
+//! exchanged for a short-lived `access_token`. This module provides a single,
+//! reusable client that fetches and caches that token, and automatically
+//! refreshes it on expiry.
 
 use std::time::{Duration, Instant};
 

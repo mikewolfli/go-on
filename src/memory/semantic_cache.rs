@@ -141,7 +141,6 @@ pub struct SemanticResponseCache {
     config: SemanticCacheConfig,
     total_hits: AtomicU64,
     total_misses: AtomicU64,
-    total_warmups: AtomicU64,
     expired_count: AtomicU64,
     cancellation_token: Option<CancellationToken>,
 }
@@ -153,7 +152,6 @@ impl SemanticResponseCache {
             config,
             total_hits: AtomicU64::new(0),
             total_misses: AtomicU64::new(0),
-            total_warmups: AtomicU64::new(0),
             expired_count: AtomicU64::new(0),
             cancellation_token: None,
         }
@@ -198,6 +196,21 @@ impl SemanticResponseCache {
 
     /// Cache a response
     pub fn put(&self, request: &str, response: Value) {
+        self.put_inner(request, response, self.config.default_ttl_seconds);
+    }
+
+    /// Store a string response (convenience wrapper for `put`).
+    pub fn put_string(&self, request: &str, response_text: String) {
+        self.put(request, Value::String(response_text));
+    }
+
+    /// Store a string response with an explicit per-entry TTL (seconds).
+    pub fn put_string_with_ttl(&self, request: &str, response_text: String, ttl_seconds: u64) {
+        self.put_inner(request, Value::String(response_text), ttl_seconds);
+    }
+
+    /// Shared insert path with an explicit per-entry TTL.
+    fn put_inner(&self, request: &str, response: Value, ttl_seconds: u64) {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
@@ -235,17 +248,12 @@ impl SemanticResponseCache {
             request_text: request.to_string(),
             request_hash: hash,
             created_at: now,
-            ttl: Duration::from_secs(self.config.default_ttl_seconds),
+            ttl: Duration::from_secs(ttl_seconds),
             last_accessed: now,
             bigram_set: Some(bigrams_set(request)),
         };
 
         guard.entry(hash).or_default().push(entry);
-    }
-
-    /// Store a string response (convenience wrapper for `put`).
-    pub fn put_string(&self, request: &str, response_text: String) {
-        self.put(request, Value::String(response_text));
     }
 
     /// Retrieve a string response (convenience wrapper for `get`).
@@ -256,16 +264,8 @@ impl SemanticResponseCache {
         })
     }
 
-    /// Warm up the cache with known entries
-    pub fn warmup(&self, requests: Vec<(String, Value)>) {
-        for (request, response) in requests {
-            self.put(&request, response);
-            self.total_warmups.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
     /// Clear all entries
-    pub fn clear(&mut self) {
+    pub fn clear(&self) {
         self.entries
             .write()
             .expect("SemanticCache entries poisoned")
@@ -274,11 +274,50 @@ impl SemanticResponseCache {
         self.total_misses.store(0, Ordering::Relaxed);
     }
 
+    /// Remove all expired entries and return the number removed.
+    pub fn purge_expired(&self) -> usize {
+        let now = Instant::now();
+        let mut guard = self
+            .entries
+            .write()
+            .expect("SemanticCache entries poisoned");
+        let mut removed = 0usize;
+        guard.retain(|_, bucket| {
+            let before = bucket.len();
+            bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
+            removed += before - bucket.len();
+            !bucket.is_empty()
+        });
+        self.expired_count
+            .fetch_add(removed as u64, Ordering::Relaxed);
+        removed
+    }
+
+    /// Total number of live (non-expired) entries.
+    pub fn len(&self) -> usize {
+        let now = Instant::now();
+        self.entries
+            .read()
+            .expect("SemanticCache entries poisoned")
+            .values()
+            .map(|bucket| {
+                bucket
+                    .iter()
+                    .filter(|e| now.duration_since(e.created_at) < e.ttl)
+                    .count()
+            })
+            .sum()
+    }
+
+    /// Return `true` if the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Get cache statistics
     pub fn stats(&self) -> SemanticCacheStats {
         let total_hits = self.total_hits.load(Ordering::Relaxed);
         let total_misses = self.total_misses.load(Ordering::Relaxed);
-        let total_warmups = self.total_warmups.load(Ordering::Relaxed);
         let expired_count = self.expired_count.load(Ordering::Relaxed);
         let total = total_hits + total_misses;
         let total_entries: u64 = self
@@ -297,7 +336,6 @@ impl SemanticResponseCache {
             } else {
                 total_hits as f64 / total as f64
             },
-            total_warmups,
             expired_count,
         }
     }
@@ -356,7 +394,6 @@ pub struct SemanticCacheStats {
     pub total_hits: u64,
     pub total_misses: u64,
     pub hit_ratio: f64,
-    pub total_warmups: u64,
     pub expired_count: u64,
 }
 
@@ -417,15 +454,6 @@ mod tests {
                 .len(),
             2
         );
-    }
-
-    #[test]
-    fn test_warmup() {
-        let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
-        cache.warmup(vec![("q1".into(), json!("a1")), ("q2".into(), json!("a2"))]);
-        assert_eq!(cache.total_warmups.load(Ordering::Relaxed), 2);
-        assert!(cache.get("q1").is_some());
-        assert!(cache.get("q2").is_some());
     }
 
     #[test]

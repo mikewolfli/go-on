@@ -15,12 +15,6 @@ use std::collections::BTreeMap;
 use go_on::agent::AgentTaskEnvelope;
 use go_on::orchestration::brain_loop::plan_construction::Planner;
 use go_on::orchestration::brain_loop::plan_construction::PlanningContext;
-use go_on::orchestration::fast_path_cache::FastPathCache;
-use go_on::orchestration::full_auto::FullAutoFlow;
-use go_on::orchestration::recovery::RecoveryOrchestrator;
-use go_on::orchestration::skill::SkillRegistry;
-use go_on::orchestration::tool::ToolRegistry;
-use std::sync::{Arc, RwLock};
 
 // ── Dimension metadata ──────────────────────────────────────────────────
 
@@ -44,17 +38,12 @@ enum Capability {
     PredictiveReroute,
     BusMultiFactor,
     RealisticE2EBenchmark,
-    FullAutoClosure,
-    FastPathCache,
-    IntentFastRouting,
-    EnvAutoBootstrap,
     SkillDiscoveryReuse,
     ToolTransactionIdempotency,
-    AutoRecovery,
     TenantIsolation,
     McpCancelTimeoutParity,
     ThreeEntryParity,
-    AuditReplay,
+}
 }
 
 impl Capability {
@@ -69,17 +58,11 @@ impl Capability {
             Capability::PredictiveReroute => "predictive_reroute",
             Capability::BusMultiFactor => "capability_bus_multi_factor",
             Capability::RealisticE2EBenchmark => "realistic_e2e_benchmark",
-            Capability::FullAutoClosure => "full_auto_closure",
-            Capability::FastPathCache => "fast_path_cache",
-            Capability::IntentFastRouting => "intent_fast_routing",
-            Capability::EnvAutoBootstrap => "env_auto_bootstrap",
             Capability::SkillDiscoveryReuse => "skill_discovery_reuse",
             Capability::ToolTransactionIdempotency => "tool_transaction_idempotency",
-            Capability::AutoRecovery => "auto_recovery",
             Capability::TenantIsolation => "tenant_isolation",
             Capability::McpCancelTimeoutParity => "mcp_cancel_timeout_parity",
             Capability::ThreeEntryParity => "three_entry_parity",
-            Capability::AuditReplay => "audit_replay",
         }
     }
 
@@ -90,19 +73,13 @@ impl Capability {
             Capability::ProfileMatrix3 => Measurability::Measured,
             Capability::PlannerDagReality => Measurability::Measured,
             Capability::ChatHotpathDecomposition => Measurability::Measured,
-            Capability::FastPathCache => Measurability::Measured,
-            Capability::AutoRecovery => Measurability::Measured,
-            Capability::FullAutoClosure => Measurability::Measured,
             Capability::ThreeEntryParity => Measurability::Measured,
             Capability::DagEvidenceFidelity => Measurability::Measured,
-            Capability::IntentFastRouting => Measurability::Measured,
-            Capability::AuditReplay => Measurability::Measured,
             // ── Qualitative only (needs live traffic / E2E) ────
             Capability::GovernanceP95Correctness => Measurability::Qualitative,
             Capability::PredictiveReroute => Measurability::Qualitative,
             Capability::BusMultiFactor => Measurability::Qualitative,
             Capability::RealisticE2EBenchmark => Measurability::Qualitative,
-            Capability::EnvAutoBootstrap => Measurability::Qualitative,
             Capability::SkillDiscoveryReuse => Measurability::Qualitative,
             Capability::ToolTransactionIdempotency => Measurability::Qualitative,
             Capability::TenantIsolation => Measurability::Qualitative,
@@ -121,17 +98,11 @@ impl Capability {
             Capability::PredictiveReroute => 1.0,
             Capability::BusMultiFactor => 1.0,
             Capability::RealisticE2EBenchmark => 1.0,
-            Capability::FullAutoClosure => 1.2,
-            Capability::FastPathCache => 1.0,
-            Capability::IntentFastRouting => 1.0,
-            Capability::EnvAutoBootstrap => 1.0,
             Capability::SkillDiscoveryReuse => 1.0,
             Capability::ToolTransactionIdempotency => 1.1,
-            Capability::AutoRecovery => 1.1,
             Capability::TenantIsolation => 1.1,
             Capability::McpCancelTimeoutParity => 1.1,
             Capability::ThreeEntryParity => 1.0,
-            Capability::AuditReplay => 1.0,
         }
     }
 
@@ -148,22 +119,16 @@ impl Capability {
             Capability::ProfileMatrix3 => 30.0,
             Capability::PlannerDagReality => 70.0,
             Capability::ChatHotpathDecomposition => 50.0,
-            Capability::FastPathCache => 80.0,
             Capability::DagEvidenceFidelity => 90.0,
             Capability::ProtocolMatrix5 => 90.0,
             Capability::ThreeEntryParity => 60.0,
-            Capability::EnvAutoBootstrap => 90.0,
             Capability::RealisticE2EBenchmark => 0.1,
-            Capability::AutoRecovery => 90.0,
             Capability::BusMultiFactor => 0.1,
             Capability::PredictiveReroute => 0.1,
             Capability::McpCancelTimeoutParity => 90.0,
-            Capability::IntentFastRouting => 90.0,
             Capability::TenantIsolation => 90.0,
             Capability::ToolTransactionIdempotency => 90.0,
-            Capability::FullAutoClosure => 90.0,
             Capability::SkillDiscoveryReuse => 90.0,
-            Capability::AuditReplay => 90.0,
             _ if self.measurability() == Measurability::Qualitative => 50.0,
             _ => 95.0,
         }
@@ -407,194 +372,6 @@ fn measure_chat_hotpath_decomposition() -> DimensionScore {
     }
 }
 
-/// Check that FastPathCache is constructable and all its methods are callable.
-fn measure_fast_path_cache() -> DimensionScore {
-    let cache = FastPathCache::new();
-
-    // Test get/set intent
-    let intent = go_on::orchestration::full_auto::TaskIntent {
-        goals: vec!["test".into()],
-        constraints: vec![],
-        prerequisites: vec![],
-        deliverables: vec![],
-    };
-    cache.set_intent("bench test task", intent.clone().into());
-    let intent_get = cache.get_intent("bench test task");
-    let intent_ok = intent_get.is_some();
-
-    // Test skills
-    let skill_val = go_on::orchestration::fast_path_cache::SkillCacheValue {
-        skill_names: vec!["test_skill".into()],
-        scores: vec![1.0],
-    };
-    cache.set_skills("bench test task", skill_val);
-    let skills_get = cache.get_skills("bench test task");
-    let skills_ok = skills_get.is_some();
-
-    // Test env
-    cache.set_env(
-        &[],
-        go_on::orchestration::fast_path_cache::EnvCacheValue {
-            dependencies_checked: true,
-            runtime_ready: true,
-        },
-    );
-    let env_get = cache.get_env(&[]);
-    let env_ok = env_get.is_some();
-
-    // Test routes
-    let route_match = cache.match_route("fix the bug");
-    let route_ok = route_match.is_some();
-
-    // Test metrics snapshot
-    let metrics = cache.cache_metrics_snapshot();
-    let metrics_ok = metrics.is_object();
-
-    let mut pass_count = 0u64;
-    let total = 6u64;
-    if intent_ok {
-        pass_count += 1;
-    }
-    if skills_ok {
-        pass_count += 1;
-    }
-    if env_ok {
-        pass_count += 1;
-    }
-    if route_ok {
-        pass_count += 1;
-    }
-    if metrics_ok {
-        pass_count += 1;
-    }
-    // Extra: verify that new_with_default_routes works
-    let _ = FastPathCache::with_default_routes();
-    pass_count += 1; // construction succeeded
-
-    let score = ratio_score(pass_count, total);
-    DimensionScore {
-        score,
-        evidence: "FastPathCache constructed; get/set intent, skills, env, route matching, metrics snapshot all functional",
-        measurability: Measurability::Measured,
-    }
-}
-
-/// Check that RecoveryOrchestrator exists and can attempt recovery.
-fn measure_auto_recovery() -> DimensionScore {
-    let mut orchestrator = RecoveryOrchestrator::new();
-
-    // Attempt recovery for a timeout failure
-    let action = tokio::runtime::Runtime::new()
-        .expect("create tokio runtime")
-        .block_on(orchestrator.attempt_recovery("timeout", serde_json::json!({})));
-    let has_action = action.is_ok();
-    let action_label_ok = !action.as_ref().map(|a| a.label()).unwrap_or("").is_empty();
-
-    // Record outcome
-    let attempt_id = orchestrator.last_attempt_id();
-    if let Some(ref id) = attempt_id {
-        orchestrator.record_outcome(id, true);
-    }
-    let outcome_recorded = orchestrator.last_attempt_id().is_some();
-
-    let mut pass_count = 0u64;
-    let total = 3u64;
-    if has_action {
-        pass_count += 1;
-    }
-    if action_label_ok {
-        pass_count += 1;
-    }
-    if outcome_recorded {
-        pass_count += 1;
-    }
-
-    let score = ratio_score(pass_count, total);
-    DimensionScore {
-        score,
-        evidence: "RecoveryOrchestrator constructed; attempt_recovery returns action; record_outcome succeeds; classify_failure works",
-        measurability: Measurability::Measured,
-    }
-}
-
-/// Check that FullAutoFlow is constructable and can parse tasks.
-fn measure_full_auto_closure() -> DimensionScore {
-    let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
-    let tool_registry = Arc::new(ToolRegistry::new_empty());
-    let flow = FullAutoFlow::new(skill_registry, tool_registry);
-
-    // Parse a task
-    let intent = flow.parse_task("Fix the login bug");
-    let has_goals = !intent.goals.is_empty();
-
-    // Effective min match score should return a reasonable value
-    let min_score = flow.effective_min_match_score();
-    let score_in_range = (0.0..=1.0).contains(&min_score);
-
-    // FastPathCache is wired (default routes)
-    let route_matched = flow.parse_task("implement a new feature");
-
-    let mut pass_count = 0u64;
-    let total = 3u64;
-    if has_goals {
-        pass_count += 1;
-    }
-    if score_in_range {
-        pass_count += 1;
-    }
-    if !route_matched.goals.is_empty() {
-        pass_count += 1;
-    }
-
-    let score = ratio_score(pass_count, total);
-    DimensionScore {
-        score,
-        evidence: "FullAutoFlow constructed; parse_task extracts goals; effective_min_match_score in range; routes wired",
-        measurability: Measurability::Measured,
-    }
-}
-
-/// Check that intent_fast_routing is accessible via FastPathCache route matching.
-fn measure_intent_fast_routing() -> DimensionScore {
-    let cache = FastPathCache::with_default_routes();
-
-    // Route matching for known task types
-    let bug_route = cache.match_route("fix the broken authentication");
-    let feature_route = cache.match_route("implement a new dashboard");
-
-    let bug_ok = bug_route.is_some();
-    let feature_ok = feature_route.is_some();
-
-    // Verify route templates have proper structure
-    let bug_has_goals = bug_route
-        .as_ref()
-        .is_some_and(|r| !r.default_goals.is_empty());
-    let feature_has_skills = feature_route
-        .as_ref()
-        .is_some_and(|r| !r.default_skills.is_empty());
-
-    let mut pass_count = 0u64;
-    if bug_ok {
-        pass_count += 1;
-    }
-    if feature_ok {
-        pass_count += 1;
-    }
-    if bug_has_goals {
-        pass_count += 1;
-    }
-    if feature_has_skills {
-        pass_count += 1;
-    }
-
-    let score = ratio_score(pass_count, 4);
-    DimensionScore {
-        score,
-        evidence: "FastPathCache with_default_routes matches bug_fix and feature_add routes with goals and skills",
-        measurability: Measurability::Measured,
-    }
-}
-
 /// Check that ACP/CLI/MCP entry points exist.
 fn measure_three_entry_parity() -> DimensionScore {
     // ACP: run_acp_server function path is accessible
@@ -645,61 +422,6 @@ fn measure_three_entry_parity() -> DimensionScore {
     }
 }
 
-/// Check AuditReplay exists (AuditTrail with append/len/public API).
-fn measure_audit_replay() -> DimensionScore {
-    let mut trail = go_on::orchestration::audit::AuditTrail::new("benchmark-test", 100);
-
-    // Verify empty trail
-    let was_empty = trail.is_empty();
-
-    // Append an entry
-    trail.append_entry(go_on::orchestration::audit::AuditEntry {
-        timestamp: "2025-01-01T00:00:00Z".to_string(),
-        event_type: "test".to_string(),
-        agent_id: "test-agent".to_string(),
-        task_id: "test-task".to_string(),
-        input_snapshot: serde_json::json!({}),
-        output_snapshot: serde_json::json!({}),
-        decision_path: vec![],
-    });
-
-    // Verify entry was added
-    let has_entry = trail.len() == 1;
-
-    let mut pass_count = 0u64;
-    let total = 3u64;
-    if was_empty {
-        pass_count += 1;
-    }
-    if has_entry {
-        pass_count += 1;
-    }
-    // Verify max_entries boundary by appending more (exceeds cap -> evicts oldest)
-    for i in 0..200 {
-        trail.append_entry(go_on::orchestration::audit::AuditEntry {
-            timestamp: format!("2025-01-01T00:00:00{:03}Z", i),
-            event_type: "bulk".to_string(),
-            agent_id: "test-agent".to_string(),
-            task_id: "test-task".to_string(),
-            input_snapshot: serde_json::json!({}),
-            output_snapshot: serde_json::json!({}),
-            decision_path: vec![],
-        });
-    }
-    // Trail should not exceed max_entries
-    let bounded = trail.len() <= 100;
-    if bounded {
-        pass_count += 1;
-    }
-
-    let score = ratio_score(pass_count, total);
-    DimensionScore {
-        score,
-        evidence: "AuditTrail new/append_entry/len/is_empty public API functional",
-        measurability: Measurability::Measured,
-    }
-}
-
 /// Build a qualitative score for dimensions that cannot be measured at test time.
 /// Qualitative dimensions receive score 0.0 and ARE still included in the
 /// weighted total denominator, which pulls the aggregate toward zero for
@@ -736,12 +458,7 @@ fn build_report() -> BenchmarkReport {
         Capability::ChatHotpathDecomposition,
         measure_chat_hotpath_decomposition(),
     );
-    dimensions.insert(Capability::FastPathCache, measure_fast_path_cache());
-    dimensions.insert(Capability::AutoRecovery, measure_auto_recovery());
-    dimensions.insert(Capability::FullAutoClosure, measure_full_auto_closure());
     dimensions.insert(Capability::ThreeEntryParity, measure_three_entry_parity());
-    dimensions.insert(Capability::IntentFastRouting, measure_intent_fast_routing());
-    dimensions.insert(Capability::AuditReplay, measure_audit_replay());
 
     // ── Qualitative dimensions ───────────────────────────────────────
 
@@ -760,10 +477,6 @@ fn build_report() -> BenchmarkReport {
     dimensions.insert(
         Capability::RealisticE2EBenchmark,
         qualitative_score("autonomy_benchmark.rs contains serial/fanout/recovery/regression-gate replay scenarios — requires real E2E runtime to measure"),
-    );
-    dimensions.insert(
-        Capability::EnvAutoBootstrap,
-        qualitative_score("environment detection with reusable readiness state, env_cache TTL — requires real environment to measure"),
     );
     dimensions.insert(
         Capability::SkillDiscoveryReuse,
@@ -826,7 +539,16 @@ fn build_report() -> BenchmarkReport {
 #[test]
 fn comprehensive_benchmark_contains_all_dimensions() {
     let report = build_report();
-    assert_eq!(report.dimensions.len(), 20, "must score all BLUE43 steps");
+    // 14 remaining dimensions: the four full-auto subsystem dimensions
+    // (FullAutoClosure/FastPathCache/IntentFastRouting/EnvAutoBootstrap)
+    // were removed together with the production-unreachable FullAutoFlow,
+    // and AutoRecovery was removed with the production-unreachable
+    // RecoveryOrchestrator.
+    assert_eq!(
+        report.dimensions.len(),
+        14,
+        "must score all remaining dimensions"
+    );
 }
 
 #[test]
@@ -853,11 +575,13 @@ fn comprehensive_benchmark_each_dimension_meets_gate() {
 #[test]
 fn comprehensive_benchmark_weighted_total_meets_gate() {
     let report = build_report();
-    // Gate set to 48.0 for the local profile. All dimensions (measured +
-    // qualitative) contribute to the denominator; qualitative dimensions
-    // score 0.0 and pull the average down. The previous 95.0 gate assumed
-    // a full-feature build with all dimensions measurable.
-    let total_gate = 48.0;
+    // The denominator includes qualitative dimensions (weight=16.0), which
+    // score 0.0, so the theoretical ceiling is (measured_weight / 16.0) =
+    // 7.6/16.0 = 47.5%. The gate is set below the current 38.61% baseline
+    // to catch measured-dimension regressions of ~7 points or more. The
+    // previous 95.0/48.0 gates assumed full-feature builds with the
+    // full-auto subsystem dimensions still present.
+    let total_gate = 36.0;
     let epsilon = 1e-9;
     assert!(
         report.weighted_total + epsilon >= total_gate,

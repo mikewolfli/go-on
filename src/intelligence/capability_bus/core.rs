@@ -55,7 +55,6 @@ use crate::intelligence::capability_bus::protocol_bus::ProtocolBus;
 use crate::intelligence::capability_bus::tool_bus::ToolBus;
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::intelligence::consciousness::ConsciousnessMetrics;
-use crate::intelligence::consensus::ConsensusEngine;
 use crate::intelligence::continuous_learning::ContinuousLearningCenter;
 use crate::intelligence::discovery::DiscoveryCenter;
 use crate::intelligence::evolution_graph::EvolutionGraph;
@@ -66,7 +65,6 @@ use crate::intelligence::capability_bus::reinforcement_bus::ReinforcementBus;
 use crate::intelligence::capability_bus::unified_knowledge_bus::UnifiedKnowledgeBus;
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
-use crate::intelligence::hot_failover::HotFailover;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
 
@@ -370,7 +368,6 @@ pub struct CapabilityBus {
     pub federated_rl: FederatedRL,
     pub matcher: ScenarioMatcher,
     pub discovery: DiscoveryCenter,
-    pub consensus: ConsensusEngine,
 
     /// Agent factory — dynamic sub-agent creation (F-GAP-13)
     #[cfg(any(
@@ -403,9 +400,6 @@ pub struct CapabilityBus {
 
     /// Live performance feed — EMA-smoothed model cost estimates (P2-6)
     pub live_performance: Option<Arc<LivePerformanceFeed>>,
-
-    /// Hot failover manager — transparent model failover with cooldown (P2-7)
-    pub hot_failover: Option<Arc<HotFailover>>,
 
     /// Configuration for capability bus lifecycle (GAP-B50-21)
     pub config: CapabilityBusConfig,
@@ -501,7 +495,6 @@ impl CapabilityBus {
             federated_rl: FederatedRL::new(Default::default()),
             matcher: ScenarioMatcher::default(),
             discovery: DiscoveryCenter::new(),
-            consensus: ConsensusEngine::new(Default::default()),
             #[cfg(any(
                 feature = "sub-bus-tool",
                 feature = "simple-server",
@@ -528,7 +521,6 @@ impl CapabilityBus {
             model_selector: None,
             federated_learning: None,
             live_performance: None,
-            hot_failover: None,
             config: CapabilityBusConfig::default(),
             evolve_timeout_count: std::sync::atomic::AtomicU64::new(0),
         }
@@ -565,10 +557,10 @@ impl CapabilityBus {
     // with_optimization_bus / with_memory_bus / with_protocol_bus /
     // with_orchestration_bus / with_distributed_memory_bus / with_config /
     // with_remote_skills / with_token_cache / with_model_selector /
-    // with_federated_learning / with_hot_failover) had zero callers and were
+    // with_federated_learning) had zero callers and were
     // removed. The buses are wired directly through their fields
     // (e.g. memory_bus.set_backends in server_builder) and the P2-* fields
-    // (token_cache/model_selector/federated_learning/hot_failover) remain
+    // (token_cache/model_selector/federated_learning) remain
     // designed extension points (always None unless set by an embedder).
 
     /// Inject an LLM agent into the MetacognitiveController (BLUE56-GAP-B02).
@@ -1203,56 +1195,6 @@ impl CapabilityBus {
                 exploration_rate = %format!("{:.4}", exploration_rate),
                 "evolve: metrics snapshot"
             );
-        }
-
-        if timeout(timeout_dur, async {
-            self.evolve_consensus(state, action, reward, q_value, success, now)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_consensus timed out — skipping");
-        }
-
-        // ── P2-4: Federated learning aggregation — merge client policies ──
-        if let Some(ref federated) = self.federated_learning {
-            if timeout(timeout_dur, async {
-                match federated.lock() {
-                    Ok(mut fl) => {
-                        // Only aggregate if enough clients have contributed
-                        if fl.pending_weights_count() >= fl.min_clients_required() {
-                            match fl.aggregate_round() {
-                                Ok(round) => {
-                                    tracing::info!(
-                                        "evolve: federated aggregation round {} completed with {} clients",
-                                        round.round_id,
-                                        round.clients_participated.len(),
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        "evolve: federated aggregation skipped: {}",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(poisoned) => {
-                        warn!("evolve: federated_learning lock poisoned");
-                        drop(poisoned.into_inner());
-                    }
-                }
-            })
-            .await
-            .is_err()
-            {
-                self.evolve_timeout_count
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                warn!("evolve: federated_learning timed out — skipping");
-            }
         }
 
         // ── P2-5: Metacognitive autoreflect ──────────────────────────────

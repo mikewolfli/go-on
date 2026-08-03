@@ -586,22 +586,7 @@ impl CapabilityBus {
             None => &candidate_agents,
         };
 
-        // ── P2-7: HotFailover — check if preferred agents are blacklisted ──
-        let effective_override =
-            q_learning_override
-                .or(scenario_preferred_agent)
-                .and_then(|agent| {
-                    if let Some(ref hf) = self.hot_failover {
-                        if hf.is_blacklisted(&agent) {
-                            tracing::warn!(
-                        "decide: preferred agent {} is blacklisted by hot_failover, falling back",
-                        agent
-                    );
-                            return None;
-                        }
-                    }
-                    Some(agent)
-                });
+        let effective_override = q_learning_override.or(scenario_preferred_agent);
 
         let (selected_agent, score_breakdown) = if let Some(ref preferred) = effective_override {
             let breakdown = vec![CandidateScoreBreakdown {

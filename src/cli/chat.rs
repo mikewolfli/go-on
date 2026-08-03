@@ -191,29 +191,10 @@ struct ChatSession {
     mode: String,
 }
 
-/// Estimate token count from text using a hybrid approach:
-/// - CJK characters (East Asian) count as ~1.5 tokens each
-/// - ASCII words count as ~1.3 tokens each
-/// - Numbers/symbols count as ~0.5 tokens each
-///
-/// This is significantly more accurate than the naive `chars/4` approach.
+/// Estimate token count from text using the canonical CJK/ASCII-weighted
+/// estimator (see [`crate::shared::token_estimator::estimate_tokens`]).
 pub fn estimate_tokens(text: &str) -> usize {
-    if text.is_empty() {
-        return 0;
-    }
-    let mut cjk_chars = 0usize;
-    let mut ascii_chars = 0usize;
-    for ch in text.chars() {
-        match ch {
-            '\u{4E00}'..='\u{9FFF}'
-            | '\u{3400}'..='\u{4DBF}'
-            | '\u{F900}'..='\u{FAFF}'
-            | '\u{2F800}'..='\u{2FA1F}' => cjk_chars += 1,
-            _ => ascii_chars += 1,
-        }
-    }
-    // CJK ~1.5 tokens/char, ASCII ~0.25 tokens/char (4 chars/token)
-    (cjk_chars.saturating_mul(15) / 10) + (ascii_chars / 4)
+    crate::shared::token_estimator::estimate_tokens(text)
 }
 
 /// Track cumulative token usage and cost across the session.

@@ -20,7 +20,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -180,11 +179,6 @@ pub(crate) struct ActOutput {
     /// True when tools were requested but ALL of them failed.
     pub all_tools_failed: bool,
 }
-
-// ── ThresholdLearner (INT-2) ──────────────────────────────────────────
-static CHAT_THRESHOLD_LEARNER: OnceLock<
-    StdMutex<crate::orchestration::threshold_learner::ThresholdLearner>,
-> = OnceLock::new();
 
 // ═════════════════════════════════════════════════════════════════════
 // Phase 1: Observe
@@ -857,13 +851,6 @@ pub(crate) async fn act_phase(
     let mut cache_hit = false;
     let cache_bypassed_for_execution =
         should_bypass_for_execution(&params.mode, &routing_out.agent_messages);
-    let sched_task_id = trace.request_id.clone();
-
-    // Create intermediate file directory for this task
-    let _ = crate::orchestration::intermediate::create_task_intermediate_dir(&trace.request_id);
-
-    // Scheduler
-    observe_submit_to_scheduler(server, &resolve_out.resolved, &sched_task_id).await;
 
     // Token & semantic caches (run concurrently for lower latency)
     let input_text = messages_to_text(&routing_out.agent_messages);
@@ -1425,46 +1412,6 @@ fn cognitive_empty_checkpoint() -> crate::acp::ConversationCheckpoint {
 
 // ── Execution internal helpers ──────────────────────────────────────────
 
-async fn observe_submit_to_scheduler(
-    server: &AcpServer,
-    resolved: &crate::orchestration::flow::ResolvedRouting,
-    sched_task_id: &str,
-) {
-    if let Some(ref sched) = server.orchestration_deps.scheduler {
-        let submitted_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        let role = resolved
-            .agents
-            .first()
-            .map(|(n, _)| n.clone())
-            .unwrap_or_else(|| "general".to_string());
-        let task = crate::orchestration::scheduler::ScheduledTask {
-            task_id: sched_task_id.to_string(),
-            role,
-            priority: crate::orchestration::scheduler::Priority(100),
-            base_score: 1.0,
-            urgency: 0.5,
-            cost_efficiency: 0.8,
-            deadline_pressure: 0.0,
-            aging_bonus: 0.0,
-            submitted_at,
-            retries: 0,
-            max_retries: 3,
-            provider: None,
-        };
-        if let Err(e) = sched.level1.submit(task) {
-            let s = format!("{}", e);
-            if s.contains("backpressure") {
-                tracing::warn!("scheduler backpressure: {}", s);
-            } else {
-                tracing::warn!("scheduler submit failed: {}", s);
-            }
-        }
-    }
-}
-
 fn try_semantic_cache(server: &AcpServer, cache_key: &str) -> Option<String> {
     server
         .cache_deps
@@ -1593,14 +1540,6 @@ async fn handle_execution_errors(
                         .map(|e| e == "empty_response")
                         .unwrap_or(false)
             });
-        #[cfg(feature = "multi-users-server")]
-        {
-            let _ = server
-                .rate_limiting
-                .tenant_budget
-                .lock()
-                .map(|mut b| b.record_usage(_tenant_id, 0, 0));
-        }
         if all_empty {
             return Ok(Some(json!({
                 "done": false, "mode": params.mode, "phase": phase_name, "phase_origin": phase_origin,
@@ -1636,14 +1575,6 @@ async fn handle_execution_errors(
                 duration_ms: started.elapsed().as_millis() as u64,
             });
         if all_quota {
-            #[cfg(feature = "multi-users-server")]
-            {
-                let _ = server
-                    .rate_limiting
-                    .tenant_budget
-                    .lock()
-                    .map(|mut b| b.record_usage(_tenant_id, 0, 0));
-            }
             return Ok(Some(json!({
                 "done": false, "mode": params.mode, "phase": phase_name, "phase_origin": phase_origin,
                 "requires_user_action": true, "action": "switch_agent",
@@ -1657,14 +1588,6 @@ async fn handle_execution_errors(
                 "hint": {"options_field": "options.extra.preferred_agent",
                     "example": {"preferred_agent": candidate_agents.first().cloned().unwrap_or_else(|| "primary".into())}},
             })));
-        }
-        #[cfg(feature = "multi-users-server")]
-        {
-            let _ = server
-                .rate_limiting
-                .tenant_budget
-                .lock()
-                .map(|mut b| b.record_usage(_tenant_id, 0, 0));
         }
     }
     Ok(None)
@@ -1689,16 +1612,9 @@ pub(crate) async fn reflect_phase(
     routing_out: &ThinkOutput,
     exec_out: &mut ActOutput,
 ) -> Result<serde_json::Value> {
-    let sched_task_id = trace.request_id.clone();
-
-    // Early return for cache-hit / no-execution-needed paths
-    if exec_out.cache_hit && !exec_out.response_text.is_empty() {
-        return Ok(json!({
-            "done": true, "mode": params.mode, "phase": resolve_out.phase_name,
-            "phase_origin": resolve_out.phase_origin, "cached": exec_out.cache_hit,
-            "agent": exec_out.selected_agent, "response": exec_out.response_text,
-        }));
-    }
+    // NOTE: the cache-hit early return is handled by `ChatPipeline::run`
+    // before this phase — the identical branch inside `reflect_phase` was
+    // unreachable (this function's only caller guards it).
 
     // ModeRuntime + MultiAgent — skip for ask mode since response is already handled
     let mode_kind = ModeKind::from(params.mode.as_str());
@@ -1747,116 +1663,170 @@ pub(crate) async fn reflect_phase(
         "vote_report": exec_out.vote_report,
     });
 
-    let result = apply_review_gate_assemble(
-        server,
-        params,
-        trace,
-        &resolve_out.phase_name,
-        &resolve_out.phase_origin,
-        &exec_out.selected_agent,
-        &exec_out.selected_model_name,
-        &exec_out.response_text,
-        &exec_out.reasoning_text,
-        &resolve_out.tenant_id,
-        started,
-        &routing_out.conversation_id,
-        &routing_out.branch_id,
-        resolve_out.schema_warnings.clone(),
-        resolve_out.schema_error.clone(),
-        routing_out.layered_prompt_segments,
-        &Vec::<Value>::new(),
-        &sched_task_id,
-        &routing_out.candidate_agents,
-        &resolve_out.routing_provenance,
-        &resolve_out.reputation_scores,
-        resolve_out
-            .reputation_scores
-            .get(&exec_out.selected_agent)
-            .copied(),
-        &routing_out.council_decision,
-        &exec_out.vote_winner,
-        &routing_out.fallback_reason,
-        exec_out.cache_hit,
-        exec_out.cache_bypassed_for_execution,
-        CapabilityRoutingInfo {
-            selected_agent: routing_out.capability_selected_agent.clone(),
-            recommended_mode: routing_out.capability_recommended_mode.clone(),
-            candidate_count: routing_out.capability_candidate_count,
-            decision_confidence: routing_out.capability_decision_confidence,
-            selection_reason: routing_out.capability_selection_reason.clone(),
-            optimization_hint: routing_out.capability_optimization_hint.clone(),
+    // Background skill/workflow generation runs concurrently with the
+    // review-gate assembly — both are independent side-effects on the same
+    // response text (the generators cap at one 2s timeout each).
+    let response_text_for_skills = exec_out.response_text.clone();
+    let empty_tool_results = Vec::<Value>::new();
+    let (assemble_result, ()) = tokio::join!(
+        apply_review_gate_assemble(
+            server,
+            params,
+            trace,
+            &resolve_out.phase_name,
+            &resolve_out.phase_origin,
+            &exec_out.selected_agent,
+            &exec_out.selected_model_name,
+            &exec_out.response_text,
+            &exec_out.reasoning_text,
+            &resolve_out.tenant_id,
+            started,
+            &routing_out.conversation_id,
+            &routing_out.branch_id,
+            resolve_out.schema_warnings.clone(),
+            resolve_out.schema_error.clone(),
+            routing_out.layered_prompt_segments,
+            &empty_tool_results,
+            &routing_out.candidate_agents,
+            &resolve_out.routing_provenance,
+            &resolve_out.reputation_scores,
+            resolve_out
+                .reputation_scores
+                .get(&exec_out.selected_agent)
+                .copied(),
+            &routing_out.council_decision,
+            &exec_out.vote_winner,
+            &routing_out.fallback_reason,
+            exec_out.cache_hit,
+            exec_out.cache_bypassed_for_execution,
+            CapabilityRoutingInfo {
+                selected_agent: routing_out.capability_selected_agent.clone(),
+                recommended_mode: routing_out.capability_recommended_mode.clone(),
+                candidate_count: routing_out.capability_candidate_count,
+                decision_confidence: routing_out.capability_decision_confidence,
+                selection_reason: routing_out.capability_selection_reason.clone(),
+                optimization_hint: routing_out.capability_optimization_hint.clone(),
+            },
+            Vec::new(),
+            std::mem::take(&mut exec_out.agent_attempts),
+            risk_decision,
+            exec_out.quota_failed_agents.clone(),
+            routing_out.vector_context.clone(),
+            std::mem::take(&mut exec_out.knowledge),
+            std::mem::take(&mut exec_out.distillation),
+            std::mem::take(&mut exec_out.checkpoint),
+            std::mem::take(&mut exec_out.metacognitive_loop),
+        ),
+        async {
+            // Codex-style: skip for simple chat — no meaningful patterns to extract.
+            if !is_simple_chat(params) {
+                let (skills_res, workflow_res) = tokio::join!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        auto_create_skills_from_conversation(
+                            server,
+                            params,
+                            &response_text_for_skills
+                        ),
+                    ),
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        auto_generate_workflow_from_conversation(
+                            server,
+                            params,
+                            &response_text_for_skills
+                        ),
+                    ),
+                );
+                let _ = (skills_res, workflow_res);
+            }
         },
-        Vec::new(),
-        std::mem::take(&mut exec_out.agent_attempts),
-        risk_decision,
-        exec_out.quota_failed_agents.clone(),
-        routing_out.vector_context.clone(),
-        std::mem::take(&mut exec_out.knowledge),
-        std::mem::take(&mut exec_out.distillation),
-        std::mem::take(&mut exec_out.checkpoint),
-        std::mem::take(&mut exec_out.metacognitive_loop),
-    )
-    .await?;
+    );
+    let result = assemble_result?;
 
-    // Background skill/workflow generation
-    // Codex-style: skip for simple chat — no meaningful patterns to extract.
-    // The two generators are independent; run them concurrently so the worst
-    // case is one 2s timeout instead of two serialized 2s timeouts.
-    if !is_simple_chat(params) {
-        let (skills_res, workflow_res) = tokio::join!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                auto_create_skills_from_conversation(server, params, &exec_out.response_text),
-            ),
-            tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                auto_generate_workflow_from_conversation(server, params, &exec_out.response_text),
-            ),
-        );
-        let _ = (skills_res, workflow_res);
-    }
-
-    // Rationalization
-    let (justified, reason) = crate::intelligence::hub::rationalize_decision(
-        &exec_out.selected_agent,
-        &extract_task_description(&params.messages),
-        if exec_out.response_text.is_empty() {
-            0.3
-        } else {
-            0.8
+    // ── Independent post-execution side-effects (run concurrently) ─────
+    // Rationalization, capability feedback, memory-bus completion, provenance
+    // recording, memory-bridge store, and retrieval indexing are mutually
+    // independent and hold only shared references — serializing them added
+    // their latencies to the response. Run them concurrently instead.
+    let task_desc = extract_task_description(&params.messages);
+    let confidence = if exec_out.response_text.is_empty() {
+        0.3
+    } else {
+        0.8
+    };
+    let ((justified, reason), _, _, _, _) = tokio::join!(
+        crate::intelligence::hub::rationalize_decision(
+            &exec_out.selected_agent,
+            &task_desc,
+            confidence,
+        ),
+        capability_bus_feedback(
+            server,
+            trace,
+            &resolve_out.phase_name,
+            &exec_out.selected_agent,
+            &exec_out.response_text,
+            &exec_out.last_err,
+            params,
+        ),
+        store_agent_memory_bus_completion(
+            &exec_out.selected_agent,
+            resolve_out.user_id.as_deref(),
+            &resolve_out.phase_name,
+            params,
+            &exec_out.response_text,
+            &exec_out.last_err,
+        ),
+        async {
+            if let Some(ref ledger) = server.governance_deps.provenance_ledger {
+                let _ = ledger
+                    .record_provenance(
+                        &trace.trace_id,
+                        &task_desc,
+                        &exec_out.selected_agent,
+                        exec_out.last_err.is_none(),
+                        started.elapsed().as_millis() as u64,
+                    )
+                    .await;
+            }
         },
-    )
-    .await;
+        async {
+            // Memory bridge: persist reflection outcome (GAP-B54-011)
+            if let Some(mp) = server.get_or_init_memory_persistence() {
+                use crate::memory::memory::{MemoryClass, MemoryEntry};
+                let entry = MemoryEntry {
+                    id: format!("reflect-{}", trace.request_id),
+                    class: MemoryClass::Episodic,
+                    content: if exec_out.response_text.is_empty() {
+                        "empty_response".to_string()
+                    } else {
+                        exec_out.response_text.clone()
+                    },
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                        .to_string(),
+                    usefulness: 0.5,
+                    staleness: 0,
+                    user_id: None,
+                };
+                let _ = crate::memory::memory_bridge::bridge_store(
+                    &server.persistence.memory_store,
+                    mp.as_ref(),
+                    entry,
+                )
+                .await;
+            }
+        },
+    );
     if !justified {
         debug!(
             "rationalize: blocked agent={} reason={}",
             exec_out.selected_agent, reason
         );
     }
-
-    // CapabilityBus feedback
-    capability_bus_feedback(
-        server,
-        trace,
-        &resolve_out.phase_name,
-        &exec_out.selected_agent,
-        &exec_out.response_text,
-        &exec_out.last_err,
-        params,
-        started,
-    )
-    .await;
-
-    // AgentMemoryBus completion
-    store_agent_memory_bus_completion(
-        &exec_out.selected_agent,
-        resolve_out.user_id.as_deref(),
-        &resolve_out.phase_name,
-        params,
-        &exec_out.response_text,
-        &exec_out.last_err,
-    )
-    .await;
 
     // BrainLoop post-execution reflection
     if let Some(ref harness) = server.governance_deps.harness_bus {
@@ -1922,35 +1892,6 @@ pub(crate) async fn reflect_phase(
         }
     }
 
-    // ThresholdLearner
-    {
-        let success = !exec_out.response_text.is_empty() && exec_out.last_err.is_none();
-        if let Ok(mut learner) = CHAT_THRESHOLD_LEARNER
-            .get_or_init(|| {
-                StdMutex::new(
-                    crate::orchestration::threshold_learner::ThresholdLearner::default_learner(),
-                )
-            })
-            .lock()
-        {
-            learner.record_trial("chat_execution", 0.5, success, !success, false);
-        }
-    }
-
-    // ── Provenance recording ────────────────────────────────────────
-    // Record a high-level provenance entry for this chat execution.
-    if let Some(ref ledger) = server.governance_deps.provenance_ledger {
-        let _ = ledger
-            .record_provenance(
-                &trace.trace_id,
-                &extract_task_description(&params.messages),
-                &exec_out.selected_agent,
-                exec_out.last_err.is_none(),
-                started.elapsed().as_millis() as u64,
-            )
-            .await;
-    }
-
     // ── Metacognitive persistence save (fire-and-forget) ──────────────────
     if let Some(ref cb) = server.governance_deps.capability_bus {
         let meta = cb.metacognitive.clone();
@@ -1972,41 +1913,6 @@ pub(crate) async fn reflect_phase(
             let triggers = fusion_bridge.lock().await.run_fusion_cycle(&meta, &cs);
             crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
         });
-    }
-
-    // ── Memory bridge: persist reflection outcome (GAP-B54-011) ────────
-    // Uses lazy initialization (S1 startup optimization).
-    if let Some(mp) = server.get_or_init_memory_persistence() {
-        use crate::memory::memory::{MemoryClass, MemoryEntry};
-        let entry = MemoryEntry {
-            id: format!("reflect-{}", trace.request_id),
-            class: MemoryClass::Episodic,
-            content: if exec_out.response_text.is_empty() {
-                "empty_response".to_string()
-            } else {
-                exec_out.response_text.clone()
-            },
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                .to_string(),
-            usefulness: 0.5,
-            staleness: 0,
-            user_id: None,
-        };
-        let _ = crate::memory::memory_bridge::bridge_store(
-            &server.persistence.memory_store,
-            mp.as_ref(),
-            entry,
-        )
-        .await;
-    }
-
-    // ── MemoryRetrievalEngine: index session memory (GAP-B52-13) ───────
-    // Uses lazy initialization (S1 startup optimization).
-    if let Some(engine) = server.get_or_init_memory_retrieval_engine() {
-        let _ = engine.index_session_memory(&routing_out.conversation_id, &trace.request_id);
     }
 
     // Include all_tools_failed flag when all tools failed
@@ -2082,7 +1988,6 @@ async fn run_mode_runtime_and_multi_agent(
     let act_phase_produced_output =
         !exec_out.response_text.trim().is_empty() || !exec_out.selected_agent.trim().is_empty();
     let should_run = !exec_out.cache_hit && !act_phase_produced_output;
-    let should_capture = !act_phase_produced_output;
 
     if should_run {
         let envelope = crate::agent::AgentTaskEnvelope {
@@ -2102,21 +2007,21 @@ async fn run_mode_runtime_and_multi_agent(
             input: json!({"response_text": exec_out.response_text, "reasoning_text": exec_out.reasoning_text}),
         };
         if let Ok(result) = mode_runtime.run(envelope).await {
-            if should_capture {
-                // Capture the mode runtime's output back into exec_out so the
-                // final "result" SSE event carries the actual response.
-                if let Some(ref output) = result.output {
-                    let answer = output.get("answer").and_then(|v| v.as_str());
-                    let agent_from_output = output.get("agent").and_then(|v| v.as_str());
-                    if let Some(text) = answer {
-                        if !text.trim().is_empty() {
-                            exec_out.response_text = text.to_string();
-                        }
+            // Capture the mode runtime's output back into exec_out so the
+            // final "result" SSE event carries the actual response.
+            // (should_run implies !act_phase_produced_output, so capture is
+            // unconditional here — the old `should_capture` flag was always true.)
+            if let Some(ref output) = result.output {
+                let answer = output.get("answer").and_then(|v| v.as_str());
+                let agent_from_output = output.get("agent").and_then(|v| v.as_str());
+                if let Some(text) = answer {
+                    if !text.trim().is_empty() {
+                        exec_out.response_text = text.to_string();
                     }
-                    if let Some(name) = agent_from_output {
-                        if !name.trim().is_empty() {
-                            exec_out.selected_agent = name.to_string();
-                        }
+                }
+                if let Some(name) = agent_from_output {
+                    if !name.trim().is_empty() {
+                        exec_out.selected_agent = name.to_string();
                     }
                 }
             }
@@ -2265,8 +2170,6 @@ async fn run_multi_agent_pipeline(
             pipeline_result.succeeded_count
         );
         exec_out.cache_hit = true;
-        #[cfg(feature = "sub-bus-voter-future")]
-        run_multi_model_voter(resolved, &extract_task_description(&params.messages)).await;
     }
 }
 
@@ -2279,23 +2182,16 @@ async fn capability_bus_feedback(
     response_text: &str,
     last_err: &Option<anyhow::Error>,
     params: &ChatParams,
-    started: Instant,
 ) {
     if let Some(ref cb) = server.governance_deps.capability_bus {
         let success = !response_text.is_empty() && last_err.is_none();
-        let duration_ms = started.elapsed().as_millis() as u64;
         let economy = estimate_token_economy(&params.messages, response_text);
         let token_cost_est = economy["total_tokens"].as_u64().unwrap_or(0);
-        cb.feedback(
-            selected_agent,
-            phase_name,
-            &trace.request_id,
-            success,
-            duration_ms,
-            token_cost_est,
-            if success { 0.8 } else { 0.2 },
-        )
-        .await;
+        // NOTE: the per-request cb.feedback call was removed — the single
+        // feedback point is finalize_chat_response (weight 1.0, stable
+        // conversation_id). This function now only drives the THROTTLED
+        // evolve() (every evolve_interval requests) so learning happens
+        // without a per-request full pipeline spawn.
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2342,22 +2238,5 @@ async fn store_agent_memory_bus_completion(
             user_id,
         )
         .await;
-    }
-}
-
-#[cfg(feature = "sub-bus-voter-future")]
-async fn run_multi_model_voter(
-    resolved: &crate::orchestration::flow::ResolvedRouting,
-    task_description: &str,
-) {
-    use crate::intelligence::multi_model_voter::MultiModelVoter;
-    let agents: Vec<Arc<dyn crate::agent::Agent>> =
-        resolved.agents.iter().map(|(_, a)| a.clone()).collect();
-    if agents.len() > 1 {
-        if let Ok(outcome) = MultiModelVoter::new().vote(task_description, &agents).await {
-            if outcome.consensus_level < 0.5 {
-                tracing::warn!("low-consensus multi-agent vote");
-            }
-        }
     }
 }

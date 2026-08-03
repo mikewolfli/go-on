@@ -14,7 +14,8 @@ pub struct SkillRecord {
 }
 
 /// Events received from the backend's `/v1/state/events` SSE endpoint.
-/// Mirrors `src/protocol/state_sync.rs::StateSyncEvent`.
+/// Single source of truth: `contracts/state-sync-events.json` (verified by
+/// `scripts/gen-state-sync-types.py`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StateSyncEvent {

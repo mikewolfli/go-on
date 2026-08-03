@@ -24,7 +24,6 @@
 //! - **`MEMORY_JETSAM_RISK_MB`** (128 MB): Immediate abort to avoid data corruption
 
 // anyhow not needed here — no fallible functions
-use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info, warn};
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
@@ -402,52 +401,13 @@ fn query_windows_memory() -> SystemMemoryInfo {
 
 // ── Runtime Memory Monitor ──────────────────────────────────────────────────
 
-/// Runtime memory state, accessed atomically.
-static RUNTIME_MEMORY_FREE_MB: AtomicU64 = AtomicU64::new(0);
-static RUNTIME_MEMORY_TOTAL_MB: AtomicU64 = AtomicU64::new(0);
-static RUNTIME_PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
-/// Get the last known free memory in MB (from the runtime monitor).
-#[allow(
-    dead_code,
-    reason = "Reserved for memory-pressure-aware callers / alert rules — returns last-known free RAM from the background monitor"
-)]
-pub fn runtime_free_mb() -> u64 {
-    RUNTIME_MEMORY_FREE_MB.load(Ordering::Relaxed)
-}
-
-/// Get the last known total memory in MB.
-#[allow(
-    dead_code,
-    reason = "Reserved for memory-pressure-awareness callers — returns last-known total RAM from the background monitor; wired once AlertManager rules reference it"
-)]
-pub fn runtime_total_mb() -> u64 {
-    RUNTIME_MEMORY_TOTAL_MB.load(Ordering::Relaxed)
-}
-
-/// Get the last known macOS memory pressure level.
-#[allow(
-    dead_code,
-    reason = "Reserved for memory-pressure-awareness callers — returns last-known macOS pressure level; wired once AlertManager rules reference it"
-)]
-pub fn runtime_pressure_level() -> u8 {
-    RUNTIME_PRESSURE_LEVEL.load(Ordering::Relaxed) as u8
-}
-
-/// Start a background task that periodically checks system memory.
-///
-/// Spawns a tokio task that queries `query_system_memory()` every
-/// Runs a one-shot memory check at startup, logs warnings if
+/// Start a one-shot memory check at startup: logs warnings if
 /// memory is critically low, and evaluates AlertManager rules.
-///
-/// Previously ran a continuous polling loop every 30s; that
-/// overhead was unnecessary since memory pressure is already
-/// visible through OS-level monitoring and periodic diagnostics.
+/// (The old 30s polling loop and the runtime_free_mb/runtime_total_mb/
+/// runtime_pressure_level statics were removed — they had zero callers.)
 pub fn start_memory_monitor() {
     let info = query_system_memory();
     let free_mb = info.free_mb();
-    RUNTIME_MEMORY_FREE_MB.store(free_mb, Ordering::Relaxed);
-    RUNTIME_MEMORY_TOTAL_MB.store(info.total_mb(), Ordering::Relaxed);
-    RUNTIME_PRESSURE_LEVEL.store(info.pressure_level as u64, Ordering::Relaxed);
 
     // Evaluate memory thresholds against AlertManager rules.
     // NOTE: a second evaluate("memory_jetsam_risk") was removed — the

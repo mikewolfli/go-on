@@ -129,9 +129,9 @@ impl Tool for SpawnAgentTool {
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // This tool is inherently async (agent chat is async). The sync `run()`
         // uses Handle::try_current() to detect an existing runtime; if present,
-        // it uses block_in_place + handle.block_on (principle #24). Otherwise it
-        // falls back to a dedicated blocking runtime. Async callers should always
-        // use run_async.
+        // it uses handle.block_on directly (principle #23: no block_in_place
+        // needed for block_on). Otherwise it falls back to a dedicated blocking
+        // runtime. Async callers should always use run_async.
         // Validate parameters FIRST so bad-input tests get a proper error.
         let task = input.payload["task"]
             .as_str()

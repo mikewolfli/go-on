@@ -887,7 +887,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "npx tsc -p ./ && node ./scripts/sync-locales.js",
+    "compile": "npm run build:sdk && npx tsc -p ./ && node ./scripts/sync-locales.js",
+    "build:sdk": "npm run build --prefix ../sdk/typescript",
     "watch": "npx tsc --watch -p ./",
     "watch:locales": "npx tsc --watch -p ./ & nodemon --watch src/locales --ext json -x 'cp -r src/locales/. out/locales'",
     "lint": "eslint src --ext ts",
@@ -911,6 +912,7 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
+    "go-on-sdk-typescript": "file:../sdk/typescript",
     "smol-toml": "^1.6.1",
     "tar": "^6.2.1"
   },

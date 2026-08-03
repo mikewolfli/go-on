@@ -258,10 +258,11 @@ pub async fn dispatch_server(
             .await
         }
         "mcp_stdio" => {
-            let tr = crate::orchestration::tool::ToolRegistry::new();
+            // Reuse the ACP server's fully-registered tool registry instead of
+            // building a second full registration just for the MCP arm.
             let s = crate::protocol::mcp_server::McpStdioServer::new(
                 mcp_registry,
-                Arc::new(tr),
+                Arc::clone(&acp_server.tool_registry),
                 "go-on".into(),
                 "1.2.0".into(),
                 Some(Arc::new(acp_server)),
@@ -269,10 +270,9 @@ pub async fn dispatch_server(
             s.run().await
         }
         "mcp_http" => {
-            let tr = crate::orchestration::tool::ToolRegistry::new();
             let s = crate::protocol::mcp_server::McpHttpServer::new_with_acp(
                 mcp_registry,
-                Arc::new(tr),
+                Arc::clone(&acp_server.tool_registry),
                 "go-on".into(),
                 "1.2.0".into(),
                 acp_http_bind.into(),

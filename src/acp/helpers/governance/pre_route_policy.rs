@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use regex::Regex;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::acp::r#impl::chat::ChatParams;
 use crate::acp::server::AcpServer;
@@ -62,17 +62,15 @@ pub(crate) async fn evaluate_pre_route_policies(
     let current_mode = ModeKind::from(params.mode.as_str());
     validate_mode_capability(&current_mode, &params.messages)?;
 
-    // ── HarnessBus pre-route policy evaluation ─────────────────────────
-    // Reset budget clock so long-running backends don't exceed wall clock budget.
+    // ── HarnessBus pre-route budget clock reset ────────────────────────
+    // Reset the wall-clock budget so long-running backends don't exceed their
+    // budget. NOTE: the full `harness.evaluate()` was previously run here with
+    // a FAKE context (task_type=Other, risk_score=0.3 hardcoded) — the real
+    // compliance evaluation runs in `CapabilityBus::decide()` with the actual
+    // task context, so this duplicate gate was removed.
     if let Some(ref harness) = server.governance_deps.harness_bus {
-        let task_ctx = crate::governance::pua::TaskContext {
-            task_type: crate::governance::pua::TaskType::Other,
-            file_count: params.messages.len(),
-            risk_score: 0.3,
-        };
-        // Reset budget before evaluation.
         // The budget lock is taken and released in a separate scope so the
-        // !Send MutexGuard is dropped BEFORE the .await below.
+        // !Send MutexGuard is dropped before any .await below.
         {
             let mut budget = match harness.evaluator.budget.lock() {
                 Ok(guard) => guard,
@@ -82,24 +80,7 @@ pub(crate) async fn evaluate_pre_route_policies(
                 }
             };
             budget.reset();
-            // MutexGuard dropped here, before .await
-        }
-        let verdict = harness.evaluate(&task_ctx).await;
-        match &verdict {
-            crate::governance::harness_bus::PolicyVerdict::Deny(v) => {
-                anyhow::bail!("harness policy denied: {}", v.detail);
-            }
-            crate::governance::harness_bus::PolicyVerdict::Escalate(r) => {
-                warn!("harness policy escalation: {}", r.reason);
-                // Continue with degraded mode — the runtime will apply
-                // stricter constraints via AgentExecutionPolicy later.
-            }
-            crate::governance::harness_bus::PolicyVerdict::Review(r) => {
-                info!("harness policy flagged for review: {}", r.reason);
-            }
-            _ => {
-                warn!("unexpected PolicyVerdict variant in gate evaluation");
-            }
+            // MutexGuard dropped here
         }
     }
 

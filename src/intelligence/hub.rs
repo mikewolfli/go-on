@@ -1,8 +1,7 @@
 //! BLUE48 — Intelligence Integration Hub
 //!
 //! Wires orphaned intelligence/governance modules into the hot execution path:
-//! - ConsensusEngine → multi-agent voting in CapabilityBus.decide()
-//! - MultiModelVoter → parallel model voting in FullAutoFlow
+//! - Weighted reputation voting + Delphi debate → decision rationalization
 //! - Rationalization → decision explanation in response assembly
 //! - Audit → governance audit trail
 //!
@@ -18,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use crate::config::AgentConfig;
-use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
+use crate::governance::audit::AuditLogEntry;
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::voter_impls::{
@@ -62,11 +61,6 @@ static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
 /// Global voters for the Delphi debate / weighted-vote system.
 /// Initialised via [`init_intelligence_hub`] at server startup.
 static GLOBAL_VOTERS: OnceLock<Vec<Box<dyn AgentVoter + Send + Sync>>> = OnceLock::new();
-
-static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
-    let audit_path: std::path::PathBuf = std::env::temp_dir().join("goon-audit.ndjson");
-    ThreadSafeAuditLog::new_with_path(10_000, audit_path)
-});
 
 /// Snapshot of all intelligence hub metric counters.
 ///
@@ -128,12 +122,18 @@ pub fn init_intelligence_hub(
     )));
 
     let deepseek_api_key = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
-    voters.push(Box::new(DeepSeekVoter::new(
-        "deepseek",
-        "https://api.deepseek.com",
-        "deepseek-v4-flash",
-        deepseek_api_key,
-    )));
+    if deepseek_api_key.trim().is_empty() {
+        tracing::warn!(
+            "intel_hub: DEEPSEEK_API_KEY not set — DeepSeekVoter not registered (delphi debates use local voters only)"
+        );
+    } else {
+        voters.push(Box::new(DeepSeekVoter::new(
+            "deepseek",
+            "https://api.deepseek.com",
+            "deepseek-v4-flash",
+            deepseek_api_key,
+        )));
+    }
 
     let _ = GLOBAL_VOTERS.set(voters).map_err(|_| {
         tracing::warn!("intel_hub: GLOBAL_VOTERS already initialised");
@@ -217,8 +217,10 @@ pub async fn consensus_vote_with_reputation(
     config: &VoteConfig,
 ) -> (bool, f64) {
     match config.mode {
-        VoteMode::Legacy | VoteMode::Weighted | VoteMode::DelphiDebate => {
-            // Continue with weighted / Delphi logic
+        VoteMode::DelphiDebate => {}
+        VoteMode::Legacy | VoteMode::Weighted => {
+            // Weighted / Legacy modes are reachable only through a custom
+            // `VoteConfig`; the runtime default is DelphiDebate.
         }
     }
 
@@ -341,9 +343,16 @@ pub async fn consensus_vote_with_reputation(
                         .collect();
                     let debate_question = debate_context.clone();
                     let delphi_config = config.delphi.clone();
-                    let result =
-                        delphi_debate(&agent_refs, &debate_question, reputations, &delphi_config)
-                            .await;
+                    // Seed round 0 with the votes already collected above so the
+                    // voters (including remote LLM voters) are not invoked twice.
+                    let result = delphi_debate(
+                        &agent_refs,
+                        &debate_question,
+                        reputations,
+                        &delphi_config,
+                        Some(raw_votes.clone()),
+                    )
+                    .await;
                     tracing::info!(
                         "delphi_debate: {} rounds, converged={}, approved={}",
                         result.rounds,
@@ -358,7 +367,6 @@ pub async fn consensus_vote_with_reputation(
                         reputations,
                         config.delphi.threshold,
                         config.delphi.default_weight,
-                        &debate_context,
                     )
                 }
             } else {
@@ -368,7 +376,6 @@ pub async fn consensus_vote_with_reputation(
                     reputations,
                     config.delphi.threshold,
                     config.delphi.default_weight,
-                    &debate_context,
                 )
             }
         }
@@ -377,7 +384,6 @@ pub async fn consensus_vote_with_reputation(
             reputations,
             config.weighted.threshold,
             config.weighted.default_weight,
-            "",
         ),
     };
 
@@ -560,7 +566,8 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
 /// Wired into `rationalize_decision` and `consensus_vote_with_reputation`
 /// at key decision points for governance audit trail completeness.
 pub fn record_audit_entry(entry: AuditLogEntry) {
-    GLOBAL_AUDIT.record(entry);
+    // Single process-wide audit sink (governance::audit::global_audit_log).
+    crate::governance::audit::global_audit_log().record(entry);
     AUDIT_ENTRY_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 

@@ -41,25 +41,6 @@ use tokio::sync::Mutex;
 pub(crate) trait Transport: Send + Sync {
     /// Write a JSON-RPC line to the transport.
     async fn write_json_line(&self, value: &Value) -> Result<()>;
-
-    /// Write an SSE event (only meaningful for SSE transport).
-    /// Default implementation is a no-op for non-SSE transports.
-    #[allow(
-        dead_code,
-        reason = "SseTransport writes SSE events; other transports use no-op default. Wiring awaits Phase 4 (WebSocket)."
-    )]
-    async fn write_sse_event(&self, _event: &str, _payload: &Value) -> Result<()> {
-        Ok(())
-    }
-
-    /// Flush pending data (only meaningful for buffered transports).
-    #[allow(
-        dead_code,
-        reason = "RpcBufferTransport implements flush; other transports use no-op default. Wiring awaits Phase 4."
-    )]
-    async fn flush(&self) -> Result<()> {
-        Ok(())
-    }
 }
 
 /// Transport that writes JSON-RPC lines directly to stdout.
@@ -120,23 +101,12 @@ impl SseTransport {
 #[async_trait::async_trait]
 impl Transport for SseTransport {
     async fn write_json_line(&self, value: &Value) -> Result<()> {
-        // SSE doesn't use bare JSON-RPC lines. This is a no-op.
-        let _ = value;
-        Ok(())
-    }
-
-    async fn write_sse_event(&self, event: &str, payload: &Value) -> Result<()> {
+        // SSE doesn't carry bare JSON-RPC lines — frame them as `event: message`
+        // (the JSON-RPC-over-SSE convention, matching MCP) so session updates,
+        // permission round-trips, and tool-call notifications are no longer
+        // silently dropped on the SSE transport.
         let mut socket = self.socket.lock().await;
-        // Delegate to the single buffer-pooled SSE frame writer (src/acp/impl/runtime/sse.rs)
-        // so the framing logic exists in exactly one place.
-        crate::acp::r#impl::runtime::sse::write_sse_event(&mut *socket, event, payload).await
-    }
-
-    async fn flush(&self) -> Result<()> {
-        let mut socket = self.socket.lock().await;
-        tokio::io::AsyncWriteExt::flush(&mut *socket)
-            .await
-            .map_err(|e| anyhow::anyhow!("socket flush error: {e}"))
+        crate::acp::r#impl::runtime::sse::write_sse_event(&mut *socket, "message", value).await
     }
 }
 

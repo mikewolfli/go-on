@@ -70,18 +70,6 @@ impl BrainLoop {
             .ok_or_else(|| anyhow::anyhow!("plan `{id}` not found"))
     }
 
-    /// Attach a progress reporter for streaming status hints.
-    ///
-    /// When set, the brain loop will emit phase and progress tokens
-    /// through the reporter during its Think-Act-Observe cycle.
-    pub async fn set_progress_reporter(
-        &self,
-        reporter: crate::agents::progress_reporter::ProgressReporter,
-    ) {
-        let mut inner = self.inner.write().await;
-        inner.progress_reporter = Some(reporter);
-    }
-
     /// Attach a metacognitive controller for self-correction feedback.
     ///
     /// When set, `run_async` will query the controller for historical
@@ -188,11 +176,6 @@ impl BrainLoop {
                 reasoning_chain: accumulated_reasoning,
             }
         };
-
-        // Emit phase hint for streaming consumers.
-        if let Some(ref mut reporter) = inner.progress_reporter {
-            reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_REFLECTING);
-        }
 
         const MAX_REFLECTIONS: usize = 1000;
         if inner.reflections.len() >= MAX_REFLECTIONS {
@@ -326,11 +309,6 @@ impl BrainLoop {
         }
         plan.phase = BrainLoopPhase::Replanning;
 
-        // Emit phase hint for streaming consumers.
-        if let Some(ref mut reporter) = inner.progress_reporter {
-            reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_PLANNING);
-        }
-
         Ok(())
     }
 }
@@ -354,11 +332,6 @@ impl BrainLoop {
         plan.phase = BrainLoopPhase::Completed;
         inner.completed_plans_total += 1;
 
-        // Emit completion hint for streaming consumers.
-        if let Some(ref mut reporter) = inner.progress_reporter {
-            reporter.report_complete();
-        }
-
         Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }
@@ -378,11 +351,6 @@ impl BrainLoop {
         plan.fail_reason = reason.to_string();
         inner.failed_plans_total += 1;
 
-        // Emit completion hint on terminal state.
-        if let Some(ref mut reporter) = inner.progress_reporter {
-            reporter.report_complete();
-        }
-
         Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }
@@ -400,11 +368,6 @@ impl BrainLoop {
         }
         plan.phase = BrainLoopPhase::Cancelled;
         inner.cancelled_plans_total += 1;
-
-        // Emit completion hint on terminal state.
-        if let Some(ref mut reporter) = inner.progress_reporter {
-            reporter.report_complete();
-        }
 
         Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())

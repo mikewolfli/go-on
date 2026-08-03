@@ -54,28 +54,12 @@ pub struct AutonomyLoopParams {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AutonomyLoopConfig {
     pub max_iterations: usize,
-    pub max_tools_per_round: usize,
-    pub enable_planner_guidance: bool,
-    pub enable_trace_alignment: bool,
-    pub require_replan_for_complex: bool,
-    pub enable_execution_intelligence: bool,
-    pub tool_timeout_ms: Option<u64>,
-    pub max_tool_retries: usize,
     pub use_brain_loop: bool,
-    pub enable_governance_gate: bool,
     /// When true, the loop is more persistent: if the first round produces
     /// text without tool calls, it continues with a planning prompt to
     /// encourage tool-based execution. This enables FullAuto to work like
     /// Zed's agent mode — loop until the task is solved, not just one pass.
     pub persistent_loop: bool,
-    pub max_messages: usize,
-    pub replan_complexity_threshold: u8,
-    pub enable_early_stop: bool,
-    pub early_stop_confidence_threshold: f64,
-    pub capability_signals: bool,
-    pub use_dag_execution: bool,
-    pub enable_agent_reroute: bool,
-    pub recovery_orchestrator: Option<String>,
     /// Sender for SSE progress events during tool execution.
     /// If set, progress frames are sent before/after each tool call to
     /// keep the SSE inactivity timeout from firing during long tool runs.
@@ -92,26 +76,10 @@ impl Default for AutonomyLoopConfig {
     fn default() -> Self {
         Self {
             max_iterations: 5,
-            max_tools_per_round: 8,
-            enable_planner_guidance: true,
-            enable_trace_alignment: false,
-            require_replan_for_complex: true,
-            enable_execution_intelligence: true,
-            tool_timeout_ms: None,
-            max_tool_retries: 2,
             use_brain_loop: false,
-            enable_governance_gate: true,
             persistent_loop: false,
-            max_messages: 200,
-            replan_complexity_threshold: 5,
-            enable_early_stop: true,
-            early_stop_confidence_threshold: 0.9,
-            capability_signals: false,
             operation_mode: "edit".to_string(),
             acp_session_id: None,
-            use_dag_execution: true,
-            enable_agent_reroute: true,
-            recovery_orchestrator: None,
             progress_tx: None,
         }
     }

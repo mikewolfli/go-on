@@ -366,10 +366,9 @@ mod tests {
 
     #[test]
     fn test_failover_instance_is_available() {
-        let ctx = OrchestrationContext::new();
-        let fo = ctx.failover();
-        let metrics = fo.metrics();
-        assert_eq!(metrics.failover_count, 0);
-        assert!(!fo.is_blacklisted("nonexistent-model"));
+        let mut hf = crate::intelligence::hot_failover::HotFailover::new();
+        hf.record_failure("model-x");
+        let metrics = hf.metrics();
+        assert_eq!(metrics.failover_count, 1);
     }
 }

@@ -1,48 +1,93 @@
+#!/usr/bin/env python3
+"""Cross-client i18n consistency check.
+
+Checks that each client's translation files are internally consistent
+(same key set across languages):
+
+  1. Backend  — config/languages/{en-US,zh-CN,zh-TW}.json (flat dot-keys)
+  2. VSCode   — vscode-addon/src/locales/{en-US,zh-CN,zh-TW}.json (nested)
+
+The GUI keeps its translations in Rust (`gui/src/i18n/*.rs`); its
+cross-language key consistency is enforced by the unit test
+`test_i18n_all_keys_have_all_languages` in `gui/src/tests.rs`.
+
+Exits non-zero when any client has a missing/extra key so CI can gate on it.
+"""
+
 import json
+import sys
+from pathlib import Path
 
-with open('config/languages/en-US.json') as f:
-    en = json.load(f)
-with open('config/languages/zh-CN.json') as f:
-    cn = json.load(f)
-with open('config/languages/zh-TW.json') as f:
-    tw = json.load(f)
+ROOT = Path(__file__).resolve().parent
 
-en_keys = set(en['messages'].keys())
-cn_keys = set(cn['messages'].keys())
-tw_keys = set(tw['messages'].keys())
 
-print("en-US: {} keys".format(len(en_keys)))
-print("zh-CN: {} keys".format(len(cn_keys)))
-print("zh-TW: {} keys".format(len(tw_keys)))
-print()
+def flatten(d, prefix=""):
+    """Flatten a nested dict into a set of dot-path keys."""
+    keys = set()
+    for k, v in d.items():
+        path = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            keys |= flatten(v, path)
+        else:
+            keys.add(path)
+    return keys
 
-missing_cn = sorted(en_keys - cn_keys)
-missing_tw = sorted(en_keys - tw_keys)
-extra_cn = sorted(cn_keys - en_keys)
-extra_tw = sorted(tw_keys - en_keys)
 
-if missing_cn:
-    print("=== Keys in en-US but NOT in zh-CN ({} missing) ===".format(len(missing_cn)))
-    for k in missing_cn:
-        print("  " + k)
-else:
-    print("=== zh-CN: no missing keys ===")
-print()
+def check_group(name, files):
+    """Verify all files in `files` expose the same key set."""
+    print(f"=== {name} ===")
+    loaded = {}
+    for f in files:
+        with open(f, encoding="utf-8") as fh:
+            data = json.load(fh)
+        loaded[f.name] = flatten(data)
 
-if missing_tw:
-    print("=== Keys in en-US but NOT in zh-TW ({} missing) ===".format(len(missing_tw)))
-    for k in missing_tw:
-        print("  " + k)
-else:
-    print("=== zh-TW: no missing keys ===")
-print()
+    reference_name = next(iter(loaded))
+    reference = loaded[reference_name]
+    print(f"{reference_name}: {len(reference)} keys")
 
-if extra_cn:
-    print("=== Keys in zh-CN but NOT in en-US ===")
-    for k in extra_cn:
-        print("  " + k)
+    ok = True
+    for fname, keys in loaded.items():
+        if fname == reference_name:
+            continue
+        missing = sorted(reference - keys)
+        extra = sorted(keys - reference)
+        print(f"{fname}: {len(keys)} keys")
+        if missing:
+            ok = False
+            print(f"  MISSING ({len(missing)}): {', '.join(missing[:10])}")
+        if extra:
+            ok = False
+            print(f"  EXTRA   ({len(extra)}): {', '.join(extra[:10])}")
+        if not missing and not extra:
+            print("  OK — key set identical")
+    return ok
 
-if extra_tw:
-    print("=== Keys in zh-TW but NOT in en-US ===")
-    for k in extra_tw:
-        print("  " + k)
+
+def main():
+    backend = check_group(
+        "Backend (config/languages)",
+        [
+            ROOT / "config" / "languages" / "en-US.json",
+            ROOT / "config" / "languages" / "zh-CN.json",
+            ROOT / "config" / "languages" / "zh-TW.json",
+        ],
+    )
+    vscode = check_group(
+        "VSCode (vscode-addon/src/locales)",
+        [
+            ROOT / "vscode-addon" / "src" / "locales" / "en-US.json",
+            ROOT / "vscode-addon" / "src" / "locales" / "zh-CN.json",
+            ROOT / "vscode-addon" / "src" / "locales" / "zh-TW.json",
+        ],
+    )
+    print("GUI: enforced by gui/src/tests.rs::test_i18n_all_keys_have_all_languages")
+
+    if not (backend and vscode):
+        print("\nFAIL: i18n key sets are not consistent across languages")
+        sys.exit(1)
+    print("\nOK: all i18n files internally consistent")
+
+
+if __name__ == "__main__":
+    main()

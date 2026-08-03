@@ -2,6 +2,7 @@ import { ChildProcess, spawn } from "child_process";
 import * as http from "http";
 import * as os from "os";
 import * as vscode from "vscode";
+import { GoOnClient } from "go-on-sdk-typescript";
 import { Logger } from "./logger";
 
 const log = Logger.forModule("runtimeManager");
@@ -779,46 +780,35 @@ export class GoOnManager {
           const canWrite = this.process.stdin.write(requestStr);
           if (!canWrite) {
             this._outputChannel?.appendLine("[warn] RPC stdin backpressure");
-            // Fallback to HTTP if available
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const g = globalThis as any;
-            if (
-              typeof globalThis !== "undefined" &&
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-              typeof g.fetch === "function"
-            ) {
-              (async () => {
-                try {
-                  const httpUrl = `${protocolContract.runtime.baseUrl}/rpc`;
-                  // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-assignment
-                  const httpResponse = await g.fetch(httpUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: requestStr,
-                  });
-                  const envelope = await httpResponse.json();
-                  // Extract the inner result from the JSON-RPC envelope
-                  // to match the stdin path's response shape.
-                  const result =
-                    envelope &&
-                    typeof envelope === "object" &&
-                    "result" in envelope
-                      ? envelope.result
-                      : envelope;
-                  if (this.pendingRequests.has(id)) {
-                    const pending = this.pendingRequests.get(id);
-                    this.pendingRequests.delete(id);
-                    pending?.resolve(result);
-                  }
-                  return;
-                } catch (httpErr) {
-                  this._outputChannel?.appendLine(
-                    `[warn] HTTP fallback also failed: ${httpErr}`,
-                  );
-                  // HTTP fallback also failed, continue to reject via timeout
+            // Fallback to HTTP via the shared TypeScript SDK client (reuses the
+            // JSON-RPC envelope handling / timeout / retry logic instead of a
+            // hand-written fetch).
+            (async () => {
+              try {
+                const client = new GoOnClient({
+                  baseUrl: protocolContract.runtime.baseUrl,
+                });
+                const params =
+                  typeof request.params === "object" && request.params !== null
+                    ? (request.params as Record<string, unknown>)
+                    : {};
+                const result = await client.request(
+                  request.method,
+                  params,
+                );
+                if (this.pendingRequests.has(id)) {
+                  const pending = this.pendingRequests.get(id);
+                  this.pendingRequests.delete(id);
+                  pending?.resolve(result);
                 }
-              })();
-            }
+                return;
+              } catch (httpErr) {
+                this._outputChannel?.appendLine(
+                  `[warn] HTTP fallback also failed: ${httpErr}`,
+                );
+                // HTTP fallback also failed, continue to reject via timeout
+              }
+            })();
           }
         }
       } catch (writeErr) {

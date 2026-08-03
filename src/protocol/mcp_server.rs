@@ -10,9 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{
-    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf,
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{Mutex, Notify, Semaphore};
@@ -83,10 +81,13 @@ impl McpStdioServer {
 
     /// Run the server (reads from stdin, writes to stdout)
     pub async fn run(&self) -> Result<()> {
-        let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
 
-        let mut reader = BufReader::new(stdin);
+        // Read stdin on a dedicated plain OS thread (shared with the ACP stdio
+        // loop). tokio::io::stdin() is a blocking read on the blocking pool that
+        // cannot be cancelled and hangs shutdown — see shared::stdio.
+        let mut stdin_rx = crate::shared::stdio::spawn_stdin_lines();
+
         let stdout = Arc::new(Mutex::new(stdout));
 
         // ── Shutdown coordination ──────────────────────────────────────
@@ -102,82 +103,35 @@ impl McpStdioServer {
             sig_notify.notify_one();
         });
 
-        let mut line = String::new();
         loop {
             tokio::select! {
-                _ = shutdown_notify.notified() => {
-                    info!("MCP stdio: shutting down gracefully");
-                    break;
+            _ = shutdown_notify.notified() => {
+                info!("MCP stdio: shutting down gracefully");
+                break;
+            }
+            line = stdin_rx.recv() => {
+                // None = stdin EOF (client closed the pipe) → shut down.
+                let Some(line) = line else { break };
+
+                // Skip empty lines
+                if line.trim().is_empty() {
+                    continue;
                 }
-                result = reader.read_line(&mut line) => {
-                    match result {
-                        Ok(0) => break, // EOF
-                        Ok(_) => {
-                            // Skip empty lines
-                            if line.trim().is_empty() {
-                                line.clear();
-                                continue;
-                            }
 
-                            let line_str = line.trim().to_string();
-                            line.clear();
+                let line_str = line.trim().to_string();
 
-                            // Attempt batch (JSON array) first, then fall back to single request.
-                            if line_str.starts_with('[') {
-                                match serde_json::from_str::<Vec<JsonRpcRequest>>(&line_str) {
-                                    Ok(requests) => {
-                                        for req in requests {
-                                            let req_id = req.id.clone();
-                                            match self.mcp_server.handle_request(req).await {
-                                                Ok(resp) => {
-                                                // Notifications (id=null or id=Value::Null sentinel) don't produce a response.
-                                                    if resp.id.is_none()
-                                                        || resp.id == Some(serde_json::Value::Null)
-                                                    {
-                                                        continue;
-                                                    }
-                                                    let mut stdout = stdout.lock().await;
-                                                    let response_line = serde_json::to_string(&resp)?;
-                                                    stdout.write_all(response_line.as_bytes()).await?;
-                                                    stdout.write_all(b"\n").await?;
-                                                    stdout.flush().await?;
-                                                }
-                                                Err(e) => {
-                                                    let err_msg = format!("{}", e);
-                                                    warn!(
-                                                        "{}",
-                                                        tf("error.handling_request", &[("error", &err_msg)])
-                                                    );
-                                                    let mut stdout = stdout.lock().await;
-                                                    send_handler_error(&mut *stdout, req_id, &err_msg).await?;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(parse_error) => {
-                                        warn!(
-                                            "{}",
-                                            tf(
-                                                "error.parse_error",
-                                                &[("error", &format!("{}", parse_error))],
-                                            )
-                                        );
-                                        let mut stdout = stdout.lock().await;
-                                        send_parse_error(&mut *stdout).await?;
-                                    }
-                                }
-                            } else {
-                                match serde_json::from_str::<JsonRpcRequest>(&line_str) {
-                                    Ok(request) => {
-                                        let request_id = request.id.clone();
-                                        let response = self.mcp_server.handle_request(request).await;
-                                        match response {
+                        // Attempt batch (JSON array) first, then fall back to single request.
+                        if line_str.starts_with('[') {
+                            match serde_json::from_str::<Vec<JsonRpcRequest>>(&line_str) {
+                                Ok(requests) => {
+                                    for req in requests {
+                                        let req_id = req.id.clone();
+                                        match self.mcp_server.handle_request(req).await {
                                             Ok(resp) => {
-                                                // MCP notifications (JSON-RPC with id=null or id=Value::Null
-                                                    // sentinel) must not produce any response per JSON-RPC 2.0 spec.
-                                                    if resp.id.is_none()
-                                                        || resp.id == Some(serde_json::Value::Null)
-                                                    {
+                                            // Notifications (id=null or id=Value::Null sentinel) don't produce a response.
+                                                if resp.id.is_none()
+                                                    || resp.id == Some(serde_json::Value::Null)
+                                                {
                                                     continue;
                                                 }
                                                 let mut stdout = stdout.lock().await;
@@ -188,33 +142,71 @@ impl McpStdioServer {
                                             }
                                             Err(e) => {
                                                 let err_msg = format!("{}", e);
-                                                warn!("{}", tf("error.handling_request", &[("error", &err_msg)]));
+                                                warn!(
+                                                    "{}",
+                                                    tf("error.handling_request", &[("error", &err_msg)])
+                                                );
                                                 let mut stdout = stdout.lock().await;
-                                                send_handler_error(&mut *stdout, request_id, &err_msg).await?;
+                                                send_handler_error(&mut *stdout, req_id, &err_msg).await?;
                                             }
                                         }
                                     }
-                                    Err(parse_error) => {
-                                        warn!(
-                                            "{}",
-                                            tf(
-                                                "error.parse_error",
-                                                &[("error", &format!("{}", parse_error))],
-                                            )
-                                        );
-                                        let mut stdout = stdout.lock().await;
-                                        send_parse_error(&mut *stdout).await?;
+                                }
+                                Err(parse_error) => {
+                                    warn!(
+                                        "{}",
+                                        tf(
+                                            "error.parse_error",
+                                            &[("error", &format!("{}", parse_error))],
+                                        )
+                                    );
+                                    let mut stdout = stdout.lock().await;
+                                    send_parse_error(&mut *stdout).await?;
+                                }
+                            }
+                        } else {
+                            match serde_json::from_str::<JsonRpcRequest>(&line_str) {
+                                Ok(request) => {
+                                    let request_id = request.id.clone();
+                                    let response = self.mcp_server.handle_request(request).await;
+                                    match response {
+                                        Ok(resp) => {
+                                            // MCP notifications (JSON-RPC with id=null or id=Value::Null
+                                                // sentinel) must not produce any response per JSON-RPC 2.0 spec.
+                                                if resp.id.is_none()
+                                                    || resp.id == Some(serde_json::Value::Null)
+                                                {
+                                                continue;
+                                            }
+                                            let mut stdout = stdout.lock().await;
+                                            let response_line = serde_json::to_string(&resp)?;
+                                            stdout.write_all(response_line.as_bytes()).await?;
+                                            stdout.write_all(b"\n").await?;
+                                            stdout.flush().await?;
+                                        }
+                                        Err(e) => {
+                                            let err_msg = format!("{}", e);
+                                            warn!("{}", tf("error.handling_request", &[("error", &err_msg)]));
+                                            let mut stdout = stdout.lock().await;
+                                            send_handler_error(&mut *stdout, request_id, &err_msg).await?;
+                                        }
                                     }
+                                }
+                                Err(parse_error) => {
+                                    warn!(
+                                        "{}",
+                                        tf(
+                                            "error.parse_error",
+                                            &[("error", &format!("{}", parse_error))],
+                                        )
+                                    );
+                                    let mut stdout = stdout.lock().await;
+                                    send_parse_error(&mut *stdout).await?;
                                 }
                             }
                         }
-                        Err(e) => {
-                            warn!("MCP stdio: read error: {}", e);
-                            break;
-                        }
                     }
                 }
-            }
         }
 
         Ok(())
@@ -663,7 +655,8 @@ async fn handle_http_connection(
     // ── Content-Length validation (before any auth processing) ────────
     // Check Content-Length before allocating buffers to prevent OOM.
     const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
-    let content_length = extract_content_length(header_part).unwrap_or(0);
+    let content_length =
+        crate::acp::r#impl::runtime::protocol::extract_content_length(header_part).unwrap_or(0);
     if content_length > MAX_BODY_SIZE {
         let error_body = inject_platform_profiles_if_absent(
             serde_json::json!({
@@ -708,9 +701,15 @@ async fn handle_http_connection(
     if method == "OPTIONS" {
         if let Some(ref server) = acp_server {
             if let Some(ref cfg) = server.runtime_config.cors_config() {
-                let origin = extract_mcp_header_value(header_part, "origin");
-                let preflight_headers = build_preflight_response_headers(origin, cfg);
-                let origin_val: &str = origin.filter(|o| is_origin_allowed(o, cfg)).unwrap_or("*");
+                let origin = crate::acp::r#impl::runtime::protocol::extract_header_value(
+                    header_part,
+                    "origin",
+                );
+                let preflight_headers = build_preflight_response_headers(origin.as_deref(), cfg);
+                let origin_val: &str = origin
+                    .as_deref()
+                    .filter(|o| is_origin_allowed(o, cfg))
+                    .unwrap_or("*");
 
                 let mut extra = format!("Access-Control-Allow-Origin: {}\r\n", origin_val);
                 for (k, v) in &preflight_headers {
@@ -755,9 +754,10 @@ async fn handle_http_connection(
                 .filter(|value| !value.is_empty());
 
             if let Some(ref expected) = expected_key {
-                let provided = extract_mcp_entry_token(header_part)
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty());
+                let provided =
+                    crate::acp::r#impl::runtime::security::extract_entry_token(header_part)
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty());
 
                 if !provided.is_some_and(|ref p| constant_time_eq(p, expected)) {
                     write_http_json_response(
@@ -883,7 +883,8 @@ async fn handle_http_connection(
         }
     }
 
-    let content_length = extract_content_length(header_part).unwrap_or(0);
+    let content_length =
+        crate::acp::r#impl::runtime::protocol::extract_content_length(header_part).unwrap_or(0);
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         // Safety check: body size bounded by MAX_BODY_SIZE (10MB) to
@@ -1132,31 +1133,14 @@ async fn handle_mcp_sse_connection(
     Ok(())
 }
 
-fn extract_content_length(headers: &str) -> Option<usize> {
-    let mut found: Option<usize> = None;
-    for line in headers.lines() {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        if !name.trim().eq_ignore_ascii_case("content-length") {
-            continue;
-        }
-        let val: usize = value.trim().parse().ok()?;
-        match found {
-            None => found = Some(val),
-            Some(prev) if prev == val => {} // duplicate with same value — OK
-            Some(prev) => {
-                // Conflict — RFC 7230 forbids differing Content-Length headers.
-                // Log a warning and use the last value to avoid body truncation.
-                warn!(
-                    "conflicting Content-Length headers: {} vs {}; using last value",
-                    prev, val
-                );
-                found = Some(val);
-            }
-        }
-    }
-    found
+// ---------------------------------------------------------------------------
+// Helper functions for MCP HTTP security hardening
+// ---------------------------------------------------------------------------
+
+/// Constant-time string comparison to prevent timing side-channel attacks.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 async fn write_http_json_response(
@@ -1218,44 +1202,6 @@ async fn write_http_json_response(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Helper functions for MCP HTTP security hardening
-// ---------------------------------------------------------------------------
-
-/// Constant-time string comparison to prevent timing side-channel attacks.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    use subtle::ConstantTimeEq;
-    a.as_bytes().ct_eq(b.as_bytes()).into()
-}
-
-/// Extract a Bearer token from MCP HTTP request headers.
-/// Checks `Authorization: Bearer <token>` first, then falls back to
-/// `X-Api-Key` and `X-Go-On-Key` headers.
-fn extract_mcp_entry_token(headers: &str) -> Option<String> {
-    if let Some(auth) = extract_mcp_header_value(headers, "authorization") {
-        let lower = auth.to_ascii_lowercase();
-        if lower.starts_with("bearer ") {
-            return Some(auth[7..].trim().to_string());
-        }
-    }
-    extract_mcp_header_value(headers, "x-api-key")
-        .or_else(|| extract_mcp_header_value(headers, "x-go-on-key"))
-        .filter(|value| !value.trim().is_empty())
-        .map(|s| s.to_string())
-}
-
-/// Extract a single header value from raw HTTP headers.
-fn extract_mcp_header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
-    for line in headers.lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            if key.trim().eq_ignore_ascii_case(name) {
-                return Some(value.trim());
-            }
-        }
-    }
-    None
-}
-
 /// Compute CORS response headers for the MCP HTTP server.
 /// Returns an empty string when no CORS config is present or the origin
 /// is not allowed.
@@ -1268,8 +1214,8 @@ fn compute_mcp_cors_headers(headers: &str, acp_server: &Option<Arc<AcpServer>>) 
         Some(c) => c,
         None => return String::new(),
     };
-    let origin = extract_mcp_header_value(headers, "origin");
-    let cors_headers = build_cors_headers(origin, &config);
+    let origin = crate::acp::r#impl::runtime::protocol::extract_header_value(headers, "origin");
+    let cors_headers = build_cors_headers(origin.as_deref(), &config);
     if cors_headers.is_empty() {
         return String::new();
     }
@@ -1290,7 +1236,7 @@ fn parse_request_target_for_test(raw_request: &str) -> Option<(String, String)> 
 
 #[cfg(test)]
 fn content_length_for_test(headers: &str) -> Option<usize> {
-    extract_content_length(headers)
+    crate::acp::r#impl::runtime::protocol::extract_content_length(headers)
 }
 
 /// Send a JSON-RPC Parse error response (-32700) to the client.

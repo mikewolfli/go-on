@@ -63,10 +63,6 @@ use crate::i18n::runtime::tf;
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
 use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
 use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
-use crate::orchestration::promotion_plugin::PromotionRegistry;
-use crate::orchestration::token_layers::{
-    estimate_cost, GateContext, TokenCostEstimate, TokenGateVerdict, TokenLayerChain,
-};
 use crate::resilience::hyper_resilience::{
     HyperResilienceEngine, ResilienceConfig, ResilienceProfile,
 };
@@ -91,8 +87,6 @@ pub struct HarnessBus {
     pub brain_loop: Arc<BrainLoop>,
     pub artifact_layer: Arc<ArtifactLayer>,
     pub omnipotent_mode: Arc<OmnipotentMode>,
-    pub promotion_registry: Arc<Mutex<PromotionRegistry>>,
-    pub token_chain: Arc<Mutex<TokenLayerChain>>,
     /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
@@ -135,8 +129,6 @@ impl HarnessBus {
             brain_loop: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             artifact_layer: Arc::new(ArtifactLayer::new()),
             omnipotent_mode: Arc::new(OmnipotentMode::new()),
-            promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
-            token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
 
             resilience_engine: external_resilience_engine.unwrap_or_else(|| {
                 Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
@@ -603,28 +595,6 @@ impl HarnessBus {
         self.omnipotent_mode.profile()
     }
 
-    /// Number of registered promotion plugins.
-    pub fn promotion_plugin_count(&self) -> usize {
-        self.promotion_registry
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .plugin_count()
-    }
-
-    /// Evaluate a token gate request through the L0-L5 chain.
-    pub fn evaluate_token_gate(&self, ctx: &GateContext) -> TokenGateVerdict {
-        self.token_chain
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .evaluate(ctx)
-    }
-
     /// Brain loop runner profile snapshot (consolidated flat version).
     pub async fn brain_runner_profile(&self) -> BrainLoopProfile {
         self.brain_loop.profile().await
@@ -638,16 +608,6 @@ impl HarnessBus {
     /// Fault tolerance profile snapshot (F-GAP-28)
     pub async fn fault_tolerance_profile(&self) -> FaultToleranceProfile {
         self.fault_tolerance.profile().await
-    }
-
-    /// Estimate token cost for a given input/output token count pair.
-    pub fn token_cost_estimate(
-        &self,
-        input: u64,
-        output: u64,
-        cost_per_1k: f64,
-    ) -> TokenCostEstimate {
-        estimate_cost(input, output, cost_per_1k)
     }
 
     /// Review gate prompt for LLM-based approval (PUA-wired).
@@ -829,7 +789,8 @@ pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
     let idempotency = Arc::new(Mutex::new(IdempotencyCache::new(Duration::from_secs(3600))));
     let runtime_control = Arc::new(Mutex::new(OnlineControllerState::default()));
     let guard = Arc::new(Mutex::new(SelfRationalizationGuard::new(0.6)));
-    let audit_log = Arc::new(ThreadSafeAuditLog::new_with_default_path(10_000));
+    // Share the process-wide canonical audit sink.
+    let audit_log = Arc::new(crate::governance::audit::global_audit_log().clone());
 
     HarnessBus::new(
         rule_engine,
@@ -899,7 +860,8 @@ pub fn config_aware_harness_bus(
 
     let runtime_control = Arc::new(Mutex::new(OnlineControllerState::default()));
     let guard = Arc::new(Mutex::new(SelfRationalizationGuard::new(0.6)));
-    let audit_log = Arc::new(ThreadSafeAuditLog::new_with_default_path(10_000));
+    // Share the process-wide canonical audit sink.
+    let audit_log = Arc::new(crate::governance::audit::global_audit_log().clone());
 
     HarnessBus::new(
         rule_engine,

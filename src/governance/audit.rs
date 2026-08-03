@@ -41,9 +41,8 @@ impl From<serde_json::Error> for AuditError {
 
 /// Unified audit record that spans both operational compliance and decision-path
 /// tracing concerns.  This type is a superset of every field in
-/// [`AuditLogEntry`] and [`crate::orchestration::audit::AuditEntry`]; use the
-/// `From` / `Into` impls to convert between types without changing existing call
-/// sites.
+/// [`AuditLogEntry`]; use the `From` / `Into` impls to convert between types
+/// without changing existing call sites.
 ///
 /// # Interop
 ///
@@ -51,8 +50,6 @@ impl From<serde_json::Error> for AuditError {
 /// |-----------|-----------|
 /// | `AuditLogEntry → AuditRecord` | `From` — all fields map directly |
 /// | `AuditRecord → AuditLogEntry` | `From` — default for missing optional fields |
-/// | `orchestration::AuditEntry → AuditRecord` | `From` — decision-path preserved |
-/// | `AuditRecord → orchestration::AuditEntry` | `From` — event_type required |
 ///
 /// # Related types
 /// - [`DecisionPoint`] — steps within `decision_path`.
@@ -95,10 +92,6 @@ pub struct AuditRecord {
 }
 
 /// A single decision point, enriched with agent and outcome metadata.
-///
-/// This type is a superset of the field set found in
-/// [`crate::orchestration::audit::DecisionPoint`]; see the `From` impl for
-/// lossy conversion in that direction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionPoint {
     /// Step index within the decision path.
@@ -161,68 +154,6 @@ impl From<AuditRecord> for AuditLogEntry {
     }
 }
 
-// ── Orchestration interop conversions ─────────────────────────────────────
-
-impl From<crate::orchestration::audit::AuditEntry> for AuditRecord {
-    fn from(e: crate::orchestration::audit::AuditEntry) -> Self {
-        let decision_path: Vec<DecisionPoint> = e
-            .decision_path
-            .into_iter()
-            .map(|dp| DecisionPoint {
-                step: dp.step,
-                agent: String::new(),
-                action: dp.action,
-                rationale: dp.rationale,
-                outcome: String::new(),
-                confidence: dp.confidence,
-            })
-            .collect();
-        AuditRecord {
-            timestamp: e.timestamp,
-            task_id: e.task_id,
-            agent_id: Some(e.agent_id),
-            phase: None,
-            event_type: e.event_type,
-            tool: None,
-            decision: None,
-            confidence: None,
-            input_snapshot: Some(e.input_snapshot),
-            output_snapshot: Some(e.output_snapshot),
-            data_classification: None,
-            compliance_tags: vec![],
-            retention_policy: None,
-            correlation_id: None,
-            decision_path,
-            error: None,
-        }
-    }
-}
-
-impl From<AuditRecord> for crate::orchestration::audit::AuditEntry {
-    fn from(r: AuditRecord) -> Self {
-        use crate::orchestration::audit::DecisionPoint as Odp;
-        let decision_path: Vec<Odp> = r
-            .decision_path
-            .into_iter()
-            .map(|dp| Odp {
-                step: dp.step,
-                action: dp.action,
-                rationale: dp.rationale,
-                confidence: dp.confidence,
-            })
-            .collect();
-        crate::orchestration::audit::AuditEntry {
-            timestamp: r.timestamp,
-            event_type: r.event_type,
-            agent_id: r.agent_id.unwrap_or_default(),
-            task_id: r.task_id,
-            input_snapshot: r.input_snapshot.unwrap_or(serde_json::Value::Null),
-            output_snapshot: r.output_snapshot.unwrap_or(serde_json::Value::Null),
-            decision_path,
-        }
-    }
-}
-
 // ─── AuditLogEntry (unchanged) ──────────────────────────────────────────────
 
 /// Audit log entry for all agent/tool/phase decisions
@@ -260,9 +191,14 @@ pub struct AuditLogEntry {
 /// When a `log_path` is configured, every recorded entry is appended as a JSON
 /// line to the file. Buffer overflow warnings are emitted via `tracing::warn!`.
 ///
-/// When the active file exceeds 100 MB it is compressed into a gzip archive
+/// When the active file exceeds 100 MB it is compressed into a gzip archive
 /// (`audit.ndjson.1.gz` → `.2.gz` → …) and a fresh file is started. Old
 /// archives beyond `max_archives` are deleted automatically.
+///
+/// Cloning shares the same underlying buffer (an `Arc`), so every handle
+/// observes the same entries — this is how the process-wide single sink is
+/// handed to multiple subsystems.
+#[derive(Clone)]
 pub struct ThreadSafeAuditLog {
     inner: Arc<Mutex<AuditLogInner>>,
 }
@@ -298,12 +234,18 @@ impl ThreadSafeAuditLog {
     }
 
     pub fn new_with_path(max_entries: usize, log_path: impl Into<PathBuf>) -> Self {
+        let log_path = log_path.into();
+        // Create the parent directory once at construction so the per-record
+        // append path doesn't need to stat/scan it on every write.
+        if let Some(parent) = log_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
         Self {
             inner: Arc::new(Mutex::new(AuditLogInner {
                 entries: VecDeque::new(),
                 max_entries,
                 dropped_count: 0,
-                log_path: Some(log_path.into()),
+                log_path: Some(log_path),
                 max_archives: 10,
             })),
         }
@@ -332,20 +274,25 @@ impl ThreadSafeAuditLog {
 
         inner.entries.push_back(entry.clone());
 
-        // NDJSON persistence — append entry as a JSON line to the log file
+        // NDJSON persistence — append entry as a JSON line to the log file.
+        // The archive cleanup (directory scan) only runs when the file was
+        // rotated — running it after every append was a per-record read_dir.
         if let Some(ref log_path) = inner.log_path {
             let max_archives = inner.max_archives;
-            if let Err(e) = append_ndjson_entry(log_path, &entry) {
-                tracing::warn!(
-                    "audit: failed to persist entry to {}: {}",
-                    log_path.display(),
-                    e
-                );
-            }
-            // After the append (which may have triggered rotation), clean up
-            // old archives beyond the configured maximum.
-            if let Some(parent) = log_path.parent() {
-                cleanup_old_archives(parent, "audit.ndjson", max_archives);
+            match append_ndjson_entry(log_path, &entry) {
+                Ok(true) => {
+                    if let Some(parent) = log_path.parent() {
+                        cleanup_old_archives(parent, "audit.ndjson", max_archives);
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "audit: failed to persist entry to {}: {}",
+                        log_path.display(),
+                        e
+                    );
+                }
             }
         }
     }
@@ -405,27 +352,36 @@ impl ThreadSafeAuditLog {
     }
 }
 
+/// Return the process-wide canonical audit sink.
+///
+/// All audit writers (HarnessBus, intelligence hub, SecurityGovernor, MCP
+/// tool audit) record through this single `ThreadSafeAuditLog`, which owns the
+/// one NDJSON persistence layer (`~/.goon/audit.ndjson`) and the one buffer.
+/// Subsystems receive a cheap `Clone` handle (shared `Arc`).
+pub fn global_audit_log() -> &'static ThreadSafeAuditLog {
+    static GLOBAL_AUDIT_LOG: std::sync::LazyLock<ThreadSafeAuditLog> =
+        std::sync::LazyLock::new(|| ThreadSafeAuditLog::new_with_default_path(10_000));
+    &GLOBAL_AUDIT_LOG
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /// Append a single entry as a JSON line (NDJSON) to the given file.
 ///
-/// If the file exceeds 100 MB, it is automatically compressed into a gzip
-/// archive (`<filename>.1.gz`) and a fresh file is started.
-fn append_ndjson_entry(path: &Path, entry: &AuditLogEntry) -> Result<(), AuditError> {
-    // Ensure parent directory exists — OpenOptions::create(true) only creates
-    // the file, not its parent directory. Without this, the first write after
-    // app startup (before the directory is created) would fail with ENOENT.
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+/// Returns `Ok(true)` when the file was rotated (archive cleanup should then
+/// run), `Ok(false)` otherwise. If the file exceeds 100 MB, it is automatically
+/// compressed into a gzip archive (`<filename>.1.gz`) and a fresh file starts.
+fn append_ndjson_entry(path: &Path, entry: &AuditLogEntry) -> Result<bool, AuditError> {
     // File rotation: compress+gzip archive when >100 MB
+    let mut rotated = false;
     if path.exists() && fs::metadata(path)?.len() > 100 * 1024 * 1024 {
         rotate_file(path)?;
+        rotated = true;
     }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     let line = serde_json::to_string(entry)?;
     writeln!(file, "{line}")?;
-    Ok(())
+    Ok(rotated)
 }
 
 /// Rotate a file by compressing it to a gzip archive and starting fresh.

@@ -82,32 +82,15 @@ pub(crate) async fn run_acp_autonomy_loop(
             .unwrap_or(default)
     };
     let config = AutonomyLoopConfig {
-        // Autonomy loop configuration
         max_iterations: 5,
-        max_tools_per_round: 8,
-        enable_planner_guidance: true,
-        enable_trace_alignment: false,
-        require_replan_for_complex: true,
-        replan_complexity_threshold: 4,
-        enable_early_stop: true,
-        early_stop_confidence_threshold: 0.85,
-        capability_signals: false,
-        use_dag_execution: option_bool("enable_dag_execution", true), // DAG on by default for autonomy loop
-        enable_agent_reroute: option_bool("enable_agent_reroute", true),
-        enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
-        recovery_orchestrator: Some("auto".to_string()),
-        progress_tx: params.progress_sse_tx.clone(),
-        max_messages: 200,
-        use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default.
-        tool_timeout_ms: None,
-        max_tool_retries: 2,
-        enable_governance_gate: true,
         // Enable persistent loop so the autonomy loop doesn't stop after
         // one text-only round — it continues with a planning prompt to
         // encourage tool-based autonomous execution (like Zed's agent).
         persistent_loop: true,
         operation_mode: params.operation_mode.clone(),
         acp_session_id: params.acp_session_id.clone(),
+        progress_tx: params.progress_sse_tx.clone(),
+        use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default.
     };
 
     let result = if config.use_brain_loop {

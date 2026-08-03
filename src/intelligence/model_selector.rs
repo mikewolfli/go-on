@@ -20,19 +20,6 @@ pub enum ModelSelectionStrategy {
     Explicit,
 }
 
-/// Automatic mode policies for different scenarios
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AutomaticModePolicy {
-    /// Always use most capable model regardless of cost
-    AlwaysMostCapable,
-    /// Use capability-based selection: simple→fast, complex→capable
-    AdaptiveCapability,
-    /// Minimize cost while meeting minimum capability threshold
-    CostOptimized,
-    /// Maximize speed (prefer faster models)
-    SpeedOptimized,
-}
-
 /// Model selection criteria based on task characteristics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionCriteria {
@@ -199,34 +186,6 @@ impl ModelSelector {
                     .map(|m| m.id.clone())
             }
             ModelSelectionStrategy::Explicit => None, // User must select explicitly
-        }
-    }
-
-    /// Suggest strategy based on automatic mode policy
-    ///
-    /// # Arguments
-    /// * `policy` - Automatic mode policy
-    /// * `criteria` - Task selection criteria
-    ///
-    /// # Returns
-    /// * `ModelSelectionStrategy` - Recommended selection strategy
-    pub fn recommended_strategy(
-        policy: &AutomaticModePolicy,
-        criteria: &SelectionCriteria,
-    ) -> ModelSelectionStrategy {
-        match policy {
-            AutomaticModePolicy::AlwaysMostCapable => ModelSelectionStrategy::MostCapable,
-            AutomaticModePolicy::AdaptiveCapability => {
-                if criteria.complexity_level >= 4 || criteria.requires_function_calling {
-                    ModelSelectionStrategy::MostCapable
-                } else if criteria.prefer_speed {
-                    ModelSelectionStrategy::Fastest
-                } else {
-                    ModelSelectionStrategy::Balanced
-                }
-            }
-            AutomaticModePolicy::CostOptimized => ModelSelectionStrategy::Cheapest,
-            AutomaticModePolicy::SpeedOptimized => ModelSelectionStrategy::Fastest,
         }
     }
 }

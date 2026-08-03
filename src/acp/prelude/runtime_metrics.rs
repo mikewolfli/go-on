@@ -217,26 +217,6 @@ impl RuntimeMetrics {
 
     // ── Aggregate updates (Mutex-protected) ────────────────────────────────
 
-    pub fn update_avg_duration(&self, duration_ms: f64) {
-        let total = self.total_requests.load(Ordering::Relaxed) as f64;
-        let mut guard = match self.aggregates.lock() {
-            Ok(g) => g,
-            Err(poisoned) => {
-                warn!("metrics aggregates lock poisoned, recovering");
-                poisoned.into_inner()
-            }
-        };
-        guard.avg_request_duration_ms = if total <= 1.0 {
-            duration_ms
-        } else {
-            (guard.avg_request_duration_ms * (total - 1.0) + duration_ms) / total
-        };
-        guard.request_latency_sum_ms += duration_ms;
-        let bucket_idx = latency_bucket_index_ms(duration_ms);
-        guard.request_latency_bucket_counts[bucket_idx] =
-            guard.request_latency_bucket_counts[bucket_idx].saturating_add(1);
-    }
-
     pub fn inc_review_gate(&self) {
         self.review_gate_total.fetch_add(1, Ordering::Relaxed);
     }

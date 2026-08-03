@@ -259,10 +259,7 @@ pub(super) fn summarize_hardness(task: &str, params: &Value) -> HardnessProfile 
 }
 
 pub(super) fn estimate_tokens_from_text(raw: &str) -> u64 {
-    if raw.trim().is_empty() {
-        return 0;
-    }
-    ((raw.chars().count() as f64) / 3.8).ceil() as u64
+    crate::shared::token_estimator::estimate_tokens(raw) as u64
 }
 
 pub(super) fn resolve_cost_tier(

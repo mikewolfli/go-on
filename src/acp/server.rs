@@ -29,14 +29,10 @@ use crate::flow::FlowManager;
 use crate::governance::harness_bus::HarnessBus;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
-use crate::memory::memory_retrieval::MemoryRetrievalEngine;
 use crate::memory::semantic_cache::SemanticResponseCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
-use crate::memory_response_cache::MemoryResponseCache;
 use crate::observability::alert_manager::AlertManager;
 use crate::observability::telemetry_enhanced::TelemetryRuntime;
-use crate::orchestration::fork_registry::{ForkConfig, ForkRegistry};
-use crate::orchestration::promotion_plugin::PromotionRegistry;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::scheduler::AgentWorkerScheduler;
 use crate::orchestration::skill::SkillRegistry;
@@ -217,9 +213,6 @@ impl Default for DrainGuard {
 pub struct CacheLayer {
     /// Response cache (SQLite-based)
     pub response_cache: Option<Arc<ResponseCache>>,
-    /// Memory response cache (L1).  `MemoryResponseCache` is internally thread-safe
-    /// via its own `RwLock`, so no outer mutex is needed.
-    pub memory_response_cache: Arc<MemoryResponseCache>,
     /// Vector store for similarity search and memory
     pub vector_store: Option<Arc<VectorStore>>,
     /// Multi-level token cache for Agent output reuse (L1 exact, L2 semantic, L3 template)
@@ -274,8 +267,6 @@ pub struct GovernanceServerDeps {
         Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
     /// Memory persistence manager (GAP-B52-11)
     pub memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
-    /// Memory retrieval engine with link graph and semantic search (GAP-B52-13)
-    pub memory_retrieval_engine: Option<Arc<MemoryRetrievalEngine>>,
     /// Self-evolution loop handle (GAP-B52-02) — designed extension point.
     /// The live loop is built and run inside start_background_tasks(); this
     /// field is reserved for embedding a loop in the server struct without
@@ -437,19 +428,6 @@ pub struct RegistryContext {
     // that complete and drop the guard before any async yield.
     pub optimizer_registry:
         Arc<StdMutex<crate::orchestration::workflow_optimizer::OptimizerRegistry>>,
-    /// PromotionRegistry — promotion plugin evaluation (ARCH-10)
-    // SAFETY: StdMutex is never held across `.await` — promotion evaluations are synchronous
-    // that complete and drop the guard before any async yield.
-    pub promotion_registry:
-        Arc<StdMutex<crate::orchestration::promotion_plugin::PromotionRegistry>>,
-    /// BenchmarkSuite — evaluation suite for agent quality (F-GAP-06)
-    // SAFETY: StdMutex is never held across `.await` — benchmark operations are synchronous
-    // that complete and drop the guard before any async yield.
-    pub evaluation_suite: Arc<StdMutex<crate::intelligence::evaluation::BenchmarkSuite>>,
-    /// ForkRegistry — sub-agent process isolation (ARCH-05)
-    // SAFETY: StdMutex is never held across `.await` — fork registry operations are synchronous
-    // that complete and drop the guard before any async yield.
-    pub fork_registry: Arc<StdMutex<ForkRegistry>>,
 }
 
 /// Persistence-related data stores grouped together
@@ -465,7 +443,7 @@ pub struct PersistenceContext {
     // SAFETY: StdMutex is never held across `.await` — artifact ledger operations are synchronous
     // that complete and drop the guard before any async yield.
     pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
-    /// Persistent task graph store for checkpoints and recovery
+    /// Task graph store for checkpoints and recovery
     pub task_graph_store: Option<Arc<TaskGraphStore>>,
 }
 
@@ -498,16 +476,6 @@ pub struct AcpServer {
     pub registries: RegistryContext,
     /// Persistence data stores
     pub persistence: PersistenceContext,
-    /// Optional SQLite-backed session persistence.
-    ///
-    /// When `Some`, session create / close / resume / update operations are
-    /// also written to the database so that state survives server restarts.
-    /// Only available with the `backend-sqlite` feature.
-    #[cfg(feature = "backend-sqlite")]
-    pub session_store: Option<Arc<crate::acp::session_persistence::SessionStore>>,
-    /// Session store placeholder for non-SQLite builds (always `None`).
-    #[cfg(not(feature = "backend-sqlite"))]
-    pub session_store: Option<Arc<()>>,
     /// PromptAssembler — 8-layer prompt assembly (ARCH-03)
     pub prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
     /// Prompt manager for prompt template management
@@ -529,10 +497,6 @@ pub struct AcpServer {
     /// via `get_or_init_memory_persistence()`, saving ~100-300ms of startup
     /// latency by deferring the SQLite connection creation.
     lazy_memory_persistence: OnceLock<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
-    /// Lazy-initialized memory retrieval engine. Created on first actual access
-    /// via `get_or_init_memory_retrieval_engine()`, reusing the same
-    /// `Arc<MemoryPersistence>` from `get_or_init_memory_persistence()` (S5).
-    lazy_memory_retrieval_engine: OnceLock<Option<Arc<MemoryRetrievalEngine>>>,
     /// Lazy initialization parameters for memory persistence.
     lazy_memory_persistence_params: OnceLock<LazyMemoryPersistenceParams>,
     /// Pending outbound ACP client requests waiting for JSON-RPC responses.
@@ -639,32 +603,6 @@ impl AcpServer {
             }
         });
         Some(Arc::clone(mp))
-    }
-
-    /// Get or lazily initialize the memory retrieval engine.
-    ///
-    /// S5 optimization: shares the same `Arc<MemoryPersistence>` from
-    /// `get_or_init_memory_persistence()` instead of opening a second SQLite
-    /// connection (+DDL overhead). The retrieval engine now holds
-    /// `Arc<MemoryPersistence>`, so both components reuse the same warm store
-    /// connection, saving ~30-50ms of deferred SQLite init on first access.
-    pub fn get_or_init_memory_retrieval_engine(&self) -> Option<Arc<MemoryRetrievalEngine>> {
-        // Check if governance_deps already has it (eager path from builder).
-        if let Some(ref engine) = self.governance_deps.memory_retrieval_engine {
-            return Some(Arc::clone(engine));
-        }
-        let engine = self.lazy_memory_retrieval_engine.get_or_init(|| {
-            // S5: Use the same persistence instance (Arc clone) as the main
-            // MemoryPersistence. No new SQLite connection is created.
-            match self.get_or_init_memory_persistence() {
-                Some(mp) => {
-                    let engine = crate::memory::wire_memory_retrieval(Arc::clone(&mp));
-                    Some(Arc::new(engine))
-                }
-                None => None,
-            }
-        });
-        engine.clone()
     }
 
     /// Get the flow manager handle
@@ -853,11 +791,16 @@ impl AcpServer {
 
     /// Get audit health information: total entries and last write time.
     ///
-    /// NOTE: `session.audit_log` was removed — it was a never-written dead
-    /// instance (zero record() callers); the canonical audit sink lives on
-    /// HarnessBus.audit_log. Kept as a constant payload for API compatibility.
+    /// Reads the canonical audit sink (HarnessBus.audit_log) so the payload
+    /// reflects real buffered entries instead of a constant stub.
     pub fn audit_health(&self) -> serde_json::Value {
-        serde_json::json!({ "total_entries": 0, "last_write_time": 0 })
+        match self.governance_deps.harness_bus.as_ref() {
+            Some(hb) => serde_json::json!({
+                "total_entries": hb.audit_log.len(),
+                "last_write_time": hb.audit_log.last_write_time().unwrap_or_default(),
+            }),
+            None => serde_json::json!({ "total_entries": 0, "last_write_time": "" }),
+        }
     }
 
     /// Get the artifact ledger handle
@@ -887,14 +830,6 @@ impl AcpServer {
         if let Err(err) = registry.register(skill) {
             tracing::warn!("skill registration failed: {err}");
         }
-    }
-
-    /// Create a `FullAutoFlow` using this server's real skill and tool registries.
-    pub fn full_auto_flow(&self) -> crate::orchestration::full_auto::FullAutoFlow {
-        crate::orchestration::full_auto::FullAutoFlow::new(
-            self.orchestration_deps.skill_registry.clone(),
-            self.tool_registry.clone(),
-        )
     }
 
     // ── B51-25: Key subsystem accessors ────────────────────────────────────
@@ -963,7 +898,6 @@ pub struct ServerBuilder {
     response_cache: Option<Arc<ResponseCache>>,
     vector_store: Option<Arc<VectorStore>>,
     artifact_ledger: Option<ArtifactLedger>,
-    memory_response_cache: Option<MemoryResponseCache>,
     config_path: Option<String>,
     verbose: bool,
     harness_bus: Option<Arc<HarnessBus>>,
@@ -979,7 +913,6 @@ pub struct ServerBuilder {
     hash_chain_auditor:
         Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
     memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
-    memory_retrieval_engine: Option<Arc<MemoryRetrievalEngine>>,
     evolution_loop: Option<
         Arc<
             tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,
@@ -1002,12 +935,6 @@ pub struct ServerBuilder {
     lazy_memory_persistence_params: Option<LazyMemoryPersistenceParams>,
     /// Runtime config for gating governance, tenant quotas, etc.
     runtime_config: Option<RuntimeConfig>,
-    /// Optional SQLite-backed session persistence.
-    #[cfg(feature = "backend-sqlite")]
-    session_store: Option<Arc<crate::acp::session_persistence::SessionStore>>,
-    /// Session store placeholder for non-SQLite builds.
-    #[cfg(not(feature = "backend-sqlite"))]
-    session_store: Option<Arc<()>>,
 }
 
 impl ServerBuilder {
@@ -1019,7 +946,6 @@ impl ServerBuilder {
             response_cache: None,
             vector_store: None,
             artifact_ledger: None,
-            memory_response_cache: None,
             config_path: None,
             verbose: false,
             harness_bus: None,
@@ -1032,7 +958,6 @@ impl ServerBuilder {
             injection_detector: None,
             hash_chain_auditor: None,
             memory_persistence: None,
-            memory_retrieval_engine: None,
             evolution_loop: None,
             dependency_vulnerability_scanner: None,
             secret_exposure_detector: None,
@@ -1042,10 +967,6 @@ impl ServerBuilder {
             multimodal_processor: None,
             lazy_memory_persistence_params: None,
             runtime_config: None,
-            #[cfg(feature = "backend-sqlite")]
-            session_store: None,
-            #[cfg(not(feature = "backend-sqlite"))]
-            session_store: None,
         }
     }
 
@@ -1216,7 +1137,6 @@ impl ServerBuilder {
         if let Ok(mut cb) = circuit_breakers.lock() {
             cb.attach_source(Arc::clone(&failure_prevention));
         }
-        let memory_response_cache = Arc::new(self.memory_response_cache.unwrap_or_default());
         let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
 
         // Initialize skill registry — use pre-loaded from bootstrap if available,
@@ -1346,7 +1266,6 @@ impl ServerBuilder {
 
         let cache_layer = CacheLayer {
             response_cache: self.response_cache,
-            memory_response_cache,
             vector_store: self.vector_store,
             token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
                 500,
@@ -1434,11 +1353,6 @@ impl ServerBuilder {
                 } else {
                     None
                 },
-                memory_retrieval_engine: if governance_enabled {
-                    self.memory_retrieval_engine
-                } else {
-                    None
-                },
                 evolution_loop: if governance_enabled {
                     self.evolution_loop
                 } else {
@@ -1518,28 +1432,26 @@ impl ServerBuilder {
             registries: RegistryContext {
                 schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),
                 optimizer_registry: Arc::new(StdMutex::new(OptimizerRegistry::new())),
-                promotion_registry: Arc::new(StdMutex::new(PromotionRegistry::new())),
-                evaluation_suite: Arc::new(StdMutex::new(
-                    crate::intelligence::evaluation::BenchmarkSuite::new(),
-                )),
-                fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(ForkConfig::default()))),
             },
             persistence: PersistenceContext {
                 memory_store,
                 artifact_ledger,
                 task_graph_store: self.task_graph_store,
             },
-            session_store: self.session_store,
             prompt_assembler: PromptAssembler,
             prompt_manager,
             verbose: self.verbose,
             shutdown_notify: Arc::new(Notify::new()),
             skill_market_registry: None,
             drain_guard: DrainGuard::default(),
-            tool_registry: Arc::new(ToolRegistry::new()),
+            // Share the process-wide registry so the ACP server, ToolBus, and
+            // MCP arms all execute against the same tool set (single full
+            // registration per process).
+            tool_registry: Arc::clone(
+                crate::acp::r#impl::request::tools_pack::global_tool_registry(),
+            ),
             multimodal_processor: self.multimodal_processor,
             lazy_memory_persistence: OnceLock::new(),
-            lazy_memory_retrieval_engine: OnceLock::new(),
             lazy_memory_persistence_params: {
                 let lock = OnceLock::new();
                 if let Some(params) = self.lazy_memory_persistence_params {

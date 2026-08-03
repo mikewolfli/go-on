@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use tracing::trace;
 
-use crate::shared::token_bucket::BucketMap;
+use crate::shared::token_bucket::{rpm_to_refill_per_second, BucketMap};
 
 // ============================================================================
 // Phase rate limiter (public API)
@@ -26,7 +26,7 @@ impl PhaseRateLimiter {
             return false;
         }
 
-        let refill_per_second = rpm_limit as f64 / 60.0;
+        let refill_per_second = rpm_to_refill_per_second(rpm_limit);
         let capacity = burst_capacity.unwrap_or(rpm_limit).max(1) as f64;
 
         self.inner

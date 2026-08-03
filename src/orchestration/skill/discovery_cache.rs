@@ -61,7 +61,6 @@ pub struct ScoredSkill {
 /// ## Integration
 ///
 /// - `tools_pack.rs` uses `SkillDiscovery` for the `skill-finder` tool.
-/// - `ThresholdLearner` provides dynamic min_score thresholds.
 pub struct SkillDiscovery {
     cache: HashMap<String, CachedResult>,
     /// FIFO queue tracking insertion order for cache eviction.

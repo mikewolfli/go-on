@@ -1,0 +1,47 @@
+{
+  "$comment": "Single source of truth for the cross-client StateSyncEvent protocol. Generate client types with: python3 scripts/gen-state-sync-types.py (writes vscode-addon/src/generated/stateSyncTypes.ts and verifies the backend/gui Rust enums match).",
+  "schema_version": "1.0.0",
+  "sse": {
+    "endpoint": "/v1/state/events",
+    "event_name": "state_sync"
+  },
+  "events": [
+    {
+      "type": "models_changed",
+      "rust_variant": "ModelsChanged",
+      "fields": [
+        { "name": "models", "ts_type": "string[]" }
+      ]
+    },
+    {
+      "type": "config_reloaded",
+      "rust_variant": "ConfigReloaded",
+      "fields": [
+        { "name": "changed_keys", "ts_type": "string[]" }
+      ]
+    },
+    {
+      "type": "agents_changed",
+      "rust_variant": "AgentsChanged",
+      "fields": [
+        { "name": "added", "ts_type": "string[]" },
+        { "name": "removed", "ts_type": "string[]" }
+      ]
+    },
+    {
+      "type": "backend_restarting",
+      "rust_variant": "BackendRestarting",
+      "fields": [
+        { "name": "reason", "ts_type": "string" },
+        { "name": "restart_in_ms", "ts_type": "number" }
+      ]
+    },
+    {
+      "type": "heartbeat",
+      "rust_variant": "Heartbeat",
+      "fields": [
+        { "name": "timestamp", "ts_type": "number" }
+      ]
+    }
+  ]
+}

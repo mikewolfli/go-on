@@ -12,6 +12,9 @@
  */
 
 import * as vscode from "vscode";
+import { StateSyncEvent } from "./generated/stateSyncTypes";
+
+export { StateSyncEvent };
 
 /** Default SSE connection timeout (in ms). */
 const DEFAULT_SSE_TIMEOUT_MS = 15_000;
@@ -21,14 +24,6 @@ const MAX_BACKOFF_MS = 60_000;
 
 /** Base delay for exponential backoff (1 second). */
 const BASE_DELAY_MS = 1_000;
-
-/** Mirror of the backend's `StateSyncEvent` (see src/protocol/state_sync.rs). */
-export type StateSyncEvent =
-  | { type: "models_changed"; models: string[] }
-  | { type: "config_reloaded"; changed_keys: string[] }
-  | { type: "agents_changed"; added: string[]; removed: string[] }
-  | { type: "backend_restarting"; reason: string; restart_in_ms: number }
-  | { type: "heartbeat"; timestamp: number };
 
 /** Callbacks for each event type. */
 export interface StateSyncCallbacks {

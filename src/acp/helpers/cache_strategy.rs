@@ -106,7 +106,7 @@ impl CacheStrategy {
             "L2" => {
                 let input_vec = crate::intelligence::token_cache::simple_embedding(input_text);
                 let cached_vec = crate::intelligence::token_cache::simple_embedding(&entry.input);
-                crate::intelligence::token_cache::cosine_similarity(&input_vec, &cached_vec)
+                crate::shared::math::cosine_similarity_f32(&input_vec, &cached_vec)
             }
             "L3" if entry.output.len() > 50 => 0.96,
             "L3" => 0.0,

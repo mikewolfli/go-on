@@ -36,6 +36,59 @@ pub(crate) struct HighRiskVoteExecutionResult {
 }
 
 /// Execute the high-risk vote pipeline.
+/// Select the winning candidate index using vote count, then reputation, then
+/// response-length tiebreakers.
+///
+/// Shared by the strong-model vote round and the escalation round (previously
+/// two copy-pasted ~20-line loops differing only in variable names).
+fn select_vote_winner(
+    candidates: &[AgentStrongVoteOutcome],
+    counts: &HashMap<String, usize>,
+    reputation_scores: &HashMap<String, f64>,
+) -> (usize, usize, f64, usize) {
+    let mut winner_index = 0usize;
+    let mut winner_votes = 0usize;
+    let mut winner_rep = 0.0f64;
+    let mut winner_len = 0usize;
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let key = normalize_vote_key(&candidate.response);
+        let votes = counts.get(&key).copied().unwrap_or(0);
+        let rep = reputation_scores
+            .get(&candidate.agent)
+            .copied()
+            .unwrap_or(0.5);
+        let length = candidate.response.chars().count();
+        if votes > winner_votes
+            || (votes == winner_votes && rep > winner_rep)
+            || (votes == winner_votes
+                && (rep - winner_rep).abs() < f64::EPSILON
+                && length > winner_len)
+        {
+            winner_index = idx;
+            winner_votes = votes;
+            winner_rep = rep;
+            winner_len = length;
+        }
+    }
+    (winner_index, winner_votes, winner_rep, winner_len)
+}
+
+/// Count candidates whose vote count equals `max_vote_count` (tie detection).
+fn count_tied_candidates(
+    candidates: &[AgentStrongVoteOutcome],
+    counts: &HashMap<String, usize>,
+    max_vote_count: usize,
+) -> usize {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            let key = normalize_vote_key(&candidate.response);
+            counts.get(&key).copied().unwrap_or(0) == max_vote_count
+        })
+        .count()
+}
+
+/// Execute the high-risk vote pipeline.
 ///
 /// 1. Runs `join_all` over `high_risk_vote_jobs` → `run_high_risk_vote_attempt()`
 /// 2. Collects vote candidates, failures, sources
@@ -148,40 +201,13 @@ pub(crate) async fn execute_high_risk_vote(
             *entry += 1;
         }
 
-        let mut winner_index = 0usize;
-        let mut winner_votes = 0usize;
-        let mut winner_rep = 0.0f64;
-        let mut winner_len = 0usize;
-        for (idx, candidate) in agent_vote_candidates.iter().enumerate() {
-            let key = normalize_vote_key(&candidate.response);
-            let votes = vote_counts.get(&key).copied().unwrap_or(0);
-            let rep = reputation_scores
-                .get(&candidate.agent)
-                .copied()
-                .unwrap_or(0.5);
-            let length = candidate.response.chars().count();
-            if votes > winner_votes
-                || (votes == winner_votes && rep > winner_rep)
-                || (votes == winner_votes
-                    && (rep - winner_rep).abs() < f64::EPSILON
-                    && length > winner_len)
-            {
-                winner_index = idx;
-                winner_votes = votes;
-                winner_rep = rep;
-                winner_len = length;
-            }
-        }
+        let (winner_index, winner_votes, _, _) =
+            select_vote_winner(&agent_vote_candidates, &vote_counts, reputation_scores);
 
         // Record tiebreak if multiple candidates are tied for highest vote count
         let max_vote_count = winner_votes;
-        let tied_candidates = agent_vote_candidates
-            .iter()
-            .filter(|candidate| {
-                let key = normalize_vote_key(&candidate.response);
-                vote_counts.get(&key).copied().unwrap_or(0) == max_vote_count
-            })
-            .count();
+        let tied_candidates =
+            count_tied_candidates(&agent_vote_candidates, &vote_counts, max_vote_count);
         if tied_candidates > 1 {
             record_vote_reputation_tiebreak();
             routing_provenance.push("vote_tiebreaked_by_reputation".to_string());
@@ -297,36 +323,14 @@ pub(crate) async fn execute_high_risk_vote(
                     *entry += 1;
                 }
 
-                let mut escalation_winner_index = 0usize;
-                let mut escalation_winner_votes = 0usize;
-                let mut escalation_winner_rep = 0.0f64;
-                let mut escalation_winner_len = 0usize;
-                for (idx, ballot) in escalation_ballots.iter().enumerate() {
-                    let key = normalize_vote_key(&ballot.response);
-                    let votes = escalation_counts.get(&key).copied().unwrap_or(0);
-                    let rep = reputation_scores.get(&ballot.agent).copied().unwrap_or(0.5);
-                    let length = ballot.response.chars().count();
-                    if votes > escalation_winner_votes
-                        || (votes == escalation_winner_votes && rep > escalation_winner_rep)
-                        || (votes == escalation_winner_votes
-                            && (rep - escalation_winner_rep).abs() < f64::EPSILON
-                            && length > escalation_winner_len)
-                    {
-                        escalation_winner_index = idx;
-                        escalation_winner_votes = votes;
-                        escalation_winner_rep = rep;
-                        escalation_winner_len = length;
-                    }
-                }
+                let (escalation_winner_index, escalation_winner_votes, _, _) =
+                    select_vote_winner(&escalation_ballots, &escalation_counts, reputation_scores);
                 let escalation_max_vote_count = escalation_winner_votes;
-                let escalation_tied_candidates = escalation_ballots
-                    .iter()
-                    .filter(|ballot| {
-                        let key = normalize_vote_key(&ballot.response);
-                        escalation_counts.get(&key).copied().unwrap_or(0)
-                            == escalation_max_vote_count
-                    })
-                    .count();
+                let escalation_tied_candidates = count_tied_candidates(
+                    &escalation_ballots,
+                    &escalation_counts,
+                    escalation_max_vote_count,
+                );
                 if escalation_tied_candidates > 1 {
                     record_vote_reputation_tiebreak();
                     routing_provenance.push("escalation_vote_tiebreaked_by_reputation".to_string());

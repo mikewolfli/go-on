@@ -13,7 +13,6 @@
 
 pub mod adaptive_selector;
 pub mod causal_bayesian_graph;
-pub mod consensus;
 pub mod continuous_learning;
 pub mod discovery;
 pub mod hot_failover;
@@ -46,8 +45,3 @@ pub mod triple_fusion;
 pub mod voter_impls;
 pub mod weighted_vote;
 pub mod world_model;
-
-// Multi-model voter for high-stakes decision consensus.
-// Gated behind sub-bus-voter-future feature for advanced deployment profiles.
-#[cfg(feature = "sub-bus-voter-future")]
-pub mod multi_model_voter;

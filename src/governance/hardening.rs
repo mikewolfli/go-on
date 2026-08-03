@@ -13,9 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -474,85 +472,52 @@ fn tenant_from_key(key: &str) -> &str {
     key.split(':').next().unwrap_or("_default")
 }
 
-#[derive(Debug, Clone)]
-pub struct AuditLogger {
-    log_dir: PathBuf,
+impl From<AutonomousEditAuditEntry> for crate::governance::audit::AuditLogEntry {
+    fn from(e: AutonomousEditAuditEntry) -> Self {
+        crate::governance::audit::AuditLogEntry {
+            timestamp: e.timestamp,
+            task_id: e.file_path.clone(),
+            phase: "autonomous_edit".to_string(),
+            agent: Some(e.agent),
+            tool: None,
+            decision: format!("approval={}", e.approval_reason),
+            inputs: serde_json::json!({
+                "file_path": e.file_path,
+                "change_summary": e.change_summary,
+                "reversible": e.reversible,
+            }),
+            outputs: None,
+            error: None,
+            confidence: Some(e.confidence_score),
+            data_classification: None,
+            compliance_tags: Vec::new(),
+            retention_policy: None,
+            correlation_id: None,
+        }
+    }
 }
+
+/// Records autonomous-edit audit events into the process-wide canonical sink
+/// ([`crate::governance::audit::global_audit_log`]).
+///
+/// The former second NDJSON writer (`.goon/audit/audit.ndjson`) was removed:
+/// all audit writers now share the single `ThreadSafeAuditLog` persistence
+/// layer (`~/.goon/audit.ndjson`).
+#[derive(Debug, Clone)]
+pub struct AuditLogger;
 
 impl AuditLogger {
-    pub fn new(log_dir: PathBuf) -> Self {
-        let _ = std::fs::create_dir_all(&log_dir);
-        Self { log_dir }
+    /// Create a logger. The argument is kept for API compatibility with the
+    /// previous per-directory logger; persistence now goes to the global sink.
+    pub fn new(_log_dir: PathBuf) -> Self {
+        Self
     }
 
-    /// Append one audit entry in NDJSON format.
+    /// Append one audit entry to the canonical global audit sink.
     pub fn record(&self, entry: &AutonomousEditAuditEntry) -> std::io::Result<()> {
-        fs::create_dir_all(&self.log_dir)?;
-        let path = self.log_dir.join("audit.ndjson");
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        let line = serde_json::to_string(entry).map_err(std::io::Error::other)?;
-        writeln!(file, "{}", line)?;
+        crate::governance::audit::global_audit_log().record(entry.clone().into());
         Ok(())
     }
-
-    /// Read the latest `limit` audit entries.
-    pub fn recent(&self, limit: usize) -> std::io::Result<Vec<AutonomousEditAuditEntry>> {
-        let mut entries = self.read_all_entries()?;
-        if entries.len() > limit {
-            entries = entries.split_off(entries.len().saturating_sub(limit));
-        }
-        Ok(entries)
-    }
-
-    /// Query audit entries by exact file path match.
-    pub fn query_by_path(&self, file_path: &str) -> std::io::Result<Vec<AutonomousEditAuditEntry>> {
-        let entries = self.read_all_entries()?;
-        Ok(entries
-            .into_iter()
-            .filter(|entry| entry.file_path == file_path)
-            .collect())
-    }
-
-    fn read_all_entries(&self) -> std::io::Result<Vec<AutonomousEditAuditEntry>> {
-        if !self.log_dir.exists() {
-            return Ok(Vec::new());
-        }
-        let mut files = list_ndjson_files(&self.log_dir)?;
-        files.sort();
-
-        let mut entries = Vec::new();
-        for file in files {
-            let file = File::open(file)?;
-            let reader = BufReader::new(file);
-            for line in reader.lines() {
-                let line = line?;
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if let Ok(entry) = serde_json::from_str::<AutonomousEditAuditEntry>(&line) {
-                    entries.push(entry);
-                }
-            }
-        }
-        Ok(entries)
-    }
-}
-
-fn list_ndjson_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("ndjson"))
-            .unwrap_or(false)
-        {
-            files.push(path);
-        }
-    }
-    Ok(files)
 }
 
 impl IdempotencyCache {
@@ -928,7 +893,6 @@ mod tests {
     use super::*;
     use crate::pua::{PuaEnforcementPlan, PuaRuleEngine};
     use std::sync::{Arc, Mutex as StdMutex};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn policy_bundle_for_target_maps_ci_and_managed() {
@@ -1071,13 +1035,8 @@ mod tests {
     }
 
     #[test]
-    fn audit_logger_writes_and_reads_back_entry() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("goon-audit-test-{unique}"));
-        let logger = AuditLogger::new(dir.clone());
+    fn audit_logger_writes_to_global_sink_via_from_conversion() {
+        let logger = AuditLogger::new(PathBuf::from(".goon/audit"));
 
         let entry = AutonomousEditAuditEntry {
             timestamp: "2026-04-14T00:00:00Z".to_string(),
@@ -1090,51 +1049,34 @@ mod tests {
         };
 
         logger.record(&entry).expect("record should succeed");
-        let items = logger.recent(1).expect("recent should succeed");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].file_path, "src/main.rs");
 
-        let _ = fs::remove_dir_all(dir);
+        // The entry lands in the canonical global sink with the file path
+        // preserved in `task_id` (see the From conversion).
+        let entries = crate::governance::audit::global_audit_log().entries();
+        let last = entries.last().expect("global sink should have the entry");
+        assert_eq!(last.task_id, "src/main.rs");
+        assert_eq!(last.phase, "autonomous_edit");
+        assert_eq!(last.agent.as_deref(), Some("mcp.tools.call"));
+        assert_eq!(last.inputs["change_summary"], "write_file success");
     }
 
     #[test]
     fn audit_logger_query_by_path_filters_correctly() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("goon-audit-query-test-{unique}"));
-        let logger = AuditLogger::new(dir.clone());
-
-        logger
-            .record(&AutonomousEditAuditEntry {
-                timestamp: "2026-04-14T00:00:00Z".to_string(),
-                agent: "mcp.tools.call".to_string(),
-                file_path: "src/main.rs".to_string(),
-                change_summary: "write_file success".to_string(),
-                approval_reason: "ok".to_string(),
-                confidence_score: 0.8,
-                reversible: true,
-            })
-            .expect("record #1 should succeed");
-        logger
-            .record(&AutonomousEditAuditEntry {
-                timestamp: "2026-04-14T00:00:01Z".to_string(),
-                agent: "mcp.tools.call".to_string(),
-                file_path: "src/lib.rs".to_string(),
-                change_summary: "read_file success".to_string(),
-                approval_reason: "ok".to_string(),
-                confidence_score: 1.0,
-                reversible: true,
-            })
-            .expect("record #2 should succeed");
-
-        let filtered = logger
-            .query_by_path("src/main.rs")
-            .expect("query should succeed");
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].file_path, "src/main.rs");
-
-        let _ = fs::remove_dir_all(dir);
+        // The old query_by_path reader was removed together with the second
+        // NDJSON writer; the From conversion must preserve the file path in
+        // the canonical AuditLogEntry so the info survives in the single sink.
+        let source = AutonomousEditAuditEntry {
+            timestamp: "2026-04-14T00:00:01Z".to_string(),
+            agent: "mcp.tools.call".to_string(),
+            file_path: "src/lib.rs".to_string(),
+            change_summary: "read_file success".to_string(),
+            approval_reason: "ok".to_string(),
+            confidence_score: 1.0,
+            reversible: true,
+        };
+        let entry: crate::governance::audit::AuditLogEntry = source.into();
+        assert_eq!(entry.task_id, "src/lib.rs");
+        assert_eq!(entry.phase, "autonomous_edit");
+        assert!(entry.inputs["change_summary"].as_str().is_some());
     }
 }

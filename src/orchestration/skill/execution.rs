@@ -399,7 +399,7 @@ fn tokenize_text(text: &str) -> std::collections::BTreeSet<String> {
 fn embedding_cosine_similarity(left: &str, right: &str) -> f64 {
     let left_vec = hashed_embedding(left, 96);
     let right_vec = hashed_embedding(right, 96);
-    cosine_similarity(&left_vec, &right_vec)
+    crate::shared::math::cosine_similarity(&left_vec, &right_vec)
 }
 
 fn hashed_embedding(text: &str, dim: usize) -> Vec<f64> {
@@ -418,23 +418,6 @@ fn hashed_embedding(text: &str, dim: usize) -> Vec<f64> {
         }
     }
     vec
-}
-
-fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
-    if left.len() != right.len() || left.is_empty() {
-        return 0.0;
-    }
-    let dot = left
-        .iter()
-        .zip(right.iter())
-        .map(|(l, r)| l * r)
-        .sum::<f64>();
-    let left_norm = left.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let right_norm = right.iter().map(|x| x * x).sum::<f64>().sqrt();
-    if left_norm <= f64::EPSILON || right_norm <= f64::EPSILON {
-        return 0.0;
-    }
-    (dot / (left_norm * right_norm)).clamp(0.0, 1.0)
 }
 
 /// Built-in echo skill.

@@ -4,8 +4,7 @@
 //! routing decisions, tool selections, and execution strategies.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -52,27 +51,6 @@ pub struct ScenarioRouting {
     pub add_tags: Vec<String>,
 }
 
-/// Match statistics for a single scenario.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScenarioStats {
-    pub match_count: u64,
-    pub success_count: u64,
-    pub failure_count: u64,
-    pub avg_duration_ms: f64,
-    pub last_matched_ms: u64,
-}
-
-/// Overall matcher profile snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatcherProfile {
-    pub enabled: bool,
-    pub total_scenarios: u32,
-    pub active_scenarios: u32,
-    pub total_matches: u64,
-    pub match_rate: f64,
-    pub last_match_duration_ms: u64,
-}
-
 /// Result returned by a matching attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchResult {
@@ -96,10 +74,6 @@ const MAX_SCENARIOS: usize = 1000;
 pub struct ScenarioMatcher {
     /// Registered scenarios.
     scenarios: Arc<RwLock<Vec<Scenario>>>,
-    /// Match statistics.
-    match_stats: Arc<Mutex<HashMap<String, ScenarioStats>>>,
-    /// Profile metrics.
-    profile: Arc<Mutex<MatcherProfile>>,
 }
 
 impl Default for ScenarioMatcher {
@@ -113,15 +87,6 @@ impl ScenarioMatcher {
     pub fn new() -> Self {
         Self {
             scenarios: Arc::new(RwLock::new(Vec::new())),
-            match_stats: Arc::new(Mutex::new(HashMap::new())),
-            profile: Arc::new(Mutex::new(MatcherProfile {
-                enabled: true,
-                total_scenarios: 0,
-                active_scenarios: 0,
-                total_matches: 0,
-                match_rate: 0.0,
-                last_match_duration_ms: 0,
-            })),
         }
     }
 
@@ -146,27 +111,6 @@ impl ScenarioMatcher {
             }
             scenarios.push(scenario);
         }
-
-        // Update profile counters.
-        let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
-        let total = scenarios.len() as u32;
-        let active = scenarios.iter().filter(|s| s.is_active).count() as u32;
-        profile.total_scenarios = total;
-        profile.active_scenarios = active;
-    }
-
-    /// Deactivate a scenario by its `id`. This is a no-op if the id does not
-    /// exist.
-    pub fn deactivate_scenario(&self, scenario_id: &str) {
-        let mut scenarios = crate::write_or_recover!(self.scenarios.as_ref(), "intelligence");
-        if let Some(scenario) = scenarios.iter_mut().find(|s| s.id == scenario_id) {
-            scenario.is_active = false;
-        }
-
-        // Update active count in profile.
-        let active = scenarios.iter().filter(|s| s.is_active).count() as u32;
-        let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
-        profile.active_scenarios = active;
     }
 
     /// Find the best matching scenario for the given task attributes.
@@ -308,42 +252,6 @@ impl ScenarioMatcher {
             (Some(top_scored), alt_scenarios)
         };
 
-        // Update match statistics.
-        {
-            let mut stats_map = crate::lock_or_recover!(self.match_stats.as_ref(), "intelligence");
-            let now = crate::shared::timestamps::now_ts_ms() as u64;
-            if let Some(ref top) = top {
-                let entry =
-                    stats_map
-                        .entry(top.scenario.id.clone())
-                        .or_insert_with(|| ScenarioStats {
-                            match_count: 0,
-                            success_count: 0,
-                            failure_count: 0,
-                            avg_duration_ms: 0.0,
-                            last_matched_ms: 0,
-                        });
-                entry.match_count += 1;
-                entry.last_matched_ms = now;
-            }
-        }
-
-        // Update profile.
-        {
-            let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
-            profile.total_matches += 1;
-            profile.last_match_duration_ms = duration_ms;
-            let total = profile.total_matches;
-            // match_rate = how many recent matches actually matched something.
-            // We approximate it as a simple ratio of matched / total.
-            let matched_count = if top.is_some() { 1u64 } else { 0u64 };
-            profile.match_rate = if total > 0 {
-                (matched_count as f64) / (total as f64)
-            } else {
-                0.0
-            };
-        }
-
         let (matched, scenario, confidence, match_reasons) = match top {
             Some(scored) => {
                 let reasons = scored.reasons;
@@ -362,43 +270,6 @@ impl ScenarioMatcher {
             alternatives,
             duration_ms,
         }
-    }
-
-    /// Record an outcome for the scenario identified by `scenario_id`.
-    /// Updates the running average duration and success/failure counts.
-    pub fn record_outcome(&self, scenario_id: &str, success: bool, duration_ms: u64) {
-        let mut stats_map = crate::lock_or_recover!(self.match_stats.as_ref(), "intelligence");
-        let entry = stats_map
-            .entry(scenario_id.to_string())
-            .or_insert_with(|| ScenarioStats {
-                match_count: 0,
-                success_count: 0,
-                failure_count: 0,
-                avg_duration_ms: 0.0,
-                last_matched_ms: 0,
-            });
-
-        if success {
-            entry.success_count += 1;
-        } else {
-            entry.failure_count += 1;
-        }
-
-        // Running average of duration.
-        let total = entry.success_count + entry.failure_count;
-        if total == 1 {
-            entry.avg_duration_ms = duration_ms as f64;
-        } else {
-            // Welford-style incremental update.
-            let prev = entry.avg_duration_ms;
-            entry.avg_duration_ms = prev + (duration_ms as f64 - prev) / (total as f64);
-        }
-    }
-
-    /// Return a snapshot of the current matcher profile.
-    pub fn profile(&self) -> MatcherProfile {
-        let profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
-        profile.clone()
     }
 }
 

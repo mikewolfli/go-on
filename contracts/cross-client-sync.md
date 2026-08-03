@@ -92,6 +92,16 @@ All events use server-sent events (SSE) with `event: state_sync` and a JSON body
 | `backend_restarting` | `{ reason: string, restart_in_ms: number }` | Backend about to restart |
 | `heartbeat` | `{ timestamp: number }` | Periodic keep-alive (30s) |
 
+**Single source of truth**: `contracts/state-sync-events.json`. The VSCode
+TypeScript union (`vscode-addon/src/generated/stateSyncTypes.ts`) is generated
+from it; `scripts/gen-state-sync-types.py` also verifies the backend
+(`src/protocol/state_sync.rs`) and GUI (`gui/src/state_sync.rs`) Rust enums stay
+in sync. Regenerate after any event change:
+
+```
+python3 scripts/gen-state-sync-types.py
+```
+
 ### Sync REST Endpoints
 
 ```

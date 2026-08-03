@@ -246,12 +246,24 @@ impl AgentVoter for DeepSeekVoter {
         let payload = self.build_payload(context);
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
+        // Fail fast with a conservative vote when no API key is configured
+        // (previously an empty Authorization header was sent and the HTTP
+        // request had NO timeout — a stuck request could hang delphi debates).
+        if self.api_key.trim().is_empty() {
+            return Vote {
+                approves: false,
+                reasoning: "DeepSeekVoter: no DEEPSEEK_API_KEY configured".to_string(),
+                confidence: 0.0,
+            };
+        }
+
         match self
             .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&payload)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
         {

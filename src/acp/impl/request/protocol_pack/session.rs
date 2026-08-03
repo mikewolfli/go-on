@@ -67,26 +67,6 @@ pub async fn session_new_payload(server: &AcpServer, params: Value) -> Result<Va
         );
     }
 
-    #[cfg(feature = "backend-sqlite")]
-    {
-        let now = crate::shared::timestamps::now_ts_ms();
-        if let Some(ref store) = server.session_store {
-            use crate::acp::session_persistence::PersistedSession;
-            let persisted = PersistedSession {
-                session_id: session_id.clone(),
-                cwd: cwd.clone(),
-                mode: current_mode.clone(),
-                additional_directories: additional_directories.clone(),
-                config_options: config_options_init.clone(),
-                created_at_ms: now,
-                last_active_ms: now,
-            };
-            if let Err(e) = store.upsert(&persisted).await {
-                tracing::warn!(error = %e, session_id = %session_id, "Failed to persist new session to SQLite");
-            }
-        }
-    }
-
     let config_options = super::build_model_config_options(server, None);
 
     Ok(serde_json::to_value(
@@ -102,27 +82,6 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
         .get("sessionId")
         .and_then(Value::as_str)
         .unwrap_or_default();
-
-    #[cfg(feature = "backend-sqlite")]
-    if !session_id.is_empty() {
-        if let Some(ref store) = server.session_store {
-            let mut state = super::acp_session_state().write().await;
-            if !state.contains_key(session_id) {
-                if let Ok(Some(persisted)) = store.load(session_id).await {
-                    state.insert(
-                        session_id.to_string(),
-                        super::AcpSessionState {
-                            cwd: persisted.cwd.clone(),
-                            mode: persisted.mode.clone(),
-                            additional_directories: persisted.additional_directories.clone(),
-                            config_options: persisted.config_options.clone(),
-                            favorite_config_values: Default::default(),
-                        },
-                    );
-                }
-            }
-        }
-    }
 
     // Build response
     let stored = {
@@ -549,23 +508,6 @@ pub async fn session_list_payload(_server: &AcpServer, _params: Value) -> Result
         }
     }
 
-    #[cfg(feature = "backend-sqlite")]
-    if let Some(ref store) = _server.session_store {
-        if let Ok(persisted) = store.list_all().await {
-            let existing: std::collections::HashSet<String> = sessions
-                .iter()
-                .filter_map(|s| s.get("id").and_then(Value::as_str).map(String::from))
-                .collect();
-            for s in &persisted {
-                if !existing.contains(&s.session_id) {
-                    sessions.push(serde_json::json!({
-                        "id": s.session_id,
-                    }));
-                }
-            }
-        }
-    }
-
     Ok(serde_json::to_value(
         &crate::schema::ListSessionsResponse {
             sessions,
@@ -586,43 +528,10 @@ pub async fn session_set_mode_payload(server: &AcpServer, params: Value) -> Resu
         .unwrap_or_default();
     let mode_id = super::normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
     if !session_id.is_empty() {
-        let _snapshot = {
+        {
             let mut state = super::acp_session_state().write().await;
             let entry = state.entry(session_id.to_string()).or_default();
             entry.mode = mode_id.clone();
-            #[cfg(feature = "backend-sqlite")]
-            {
-                (
-                    entry.cwd.clone(),
-                    entry.mode.clone(),
-                    entry.additional_directories.clone(),
-                    entry.config_options.clone(),
-                )
-            }
-            // No snapshot needed under backend-postgres (no async store call
-            // follows); a non-unit placeholder keeps the block type consistent.
-            #[cfg(not(feature = "backend-sqlite"))]
-            {
-                false
-            }
-        };
-
-        #[cfg(feature = "backend-sqlite")]
-        if let Some(ref store) = server.session_store {
-            use crate::acp::session_persistence::PersistedSession;
-            let now = crate::shared::timestamps::now_ts_ms();
-            let persisted = PersistedSession {
-                session_id: session_id.to_string(),
-                cwd: _snapshot.0,
-                mode: _snapshot.1,
-                additional_directories: _snapshot.2,
-                config_options: _snapshot.3,
-                created_at_ms: now,
-                last_active_ms: now,
-            };
-            if let Err(e) = store.upsert(&persisted).await {
-                tracing::warn!(error = %e, session_id = %session_id, "Failed to persist mode change to SQLite");
-            }
         }
 
         let notif = SessionNotification::new(
@@ -656,27 +565,6 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
         .filter(|v| !v.is_empty())
         .map(ToString::to_string);
 
-    #[cfg(feature = "backend-sqlite")]
-    if !session_id.is_empty() {
-        if let Some(ref store) = server.session_store {
-            let mut state = super::acp_session_state().write().await;
-            if !state.contains_key(session_id) {
-                if let Ok(Some(persisted)) = store.load(session_id).await {
-                    state.insert(
-                        session_id.to_string(),
-                        super::AcpSessionState {
-                            cwd: persisted.cwd.clone(),
-                            mode: persisted.mode.clone(),
-                            additional_directories: persisted.additional_directories.clone(),
-                            config_options: persisted.config_options.clone(),
-                            favorite_config_values: Default::default(),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
     let (current_mode, _additional_dirs) = if !session_id.is_empty() {
         let mut state = super::acp_session_state().write().await;
         let entry = state.entry(session_id.to_string()).or_default();
@@ -708,7 +596,7 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
 }
 
 /// Handle `session/close` — closes and cleans up a session.
-pub async fn session_close_payload(server: &AcpServer, params: Value) -> Result<Value> {
+pub async fn session_close_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -731,14 +619,8 @@ pub async fn session_close_payload(server: &AcpServer, params: Value) -> Result<
         }
 
         #[cfg(feature = "multi-users-server")]
-        if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
+        if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
             limiter.evict_tenant(session_id);
-        }
-        #[cfg(feature = "backend-sqlite")]
-        if let Some(ref store) = server.session_store {
-            if let Err(e) = store.delete(session_id).await {
-                tracing::warn!(error = %e, session_id = %session_id, "Failed to delete session from SQLite");
-            }
         }
     }
     Ok(serde_json::to_value(
@@ -820,7 +702,7 @@ pub async fn session_set_config_option_payload(server: &AcpServer, params: Value
     let value = params.get("value").cloned().unwrap_or(Value::Null);
 
     if !session_id.is_empty() && !config_id.is_empty() {
-        let _snapshot = {
+        {
             let mut state = super::acp_session_state().write().await;
             let session = state.entry(session_id.to_string()).or_default();
             session
@@ -828,39 +710,6 @@ pub async fn session_set_config_option_payload(server: &AcpServer, params: Value
                 .insert(config_id.to_string(), value.clone());
             if config_id == "mode" {
                 session.mode = super::normalize_acp_mode(value.as_str());
-            }
-            #[cfg(feature = "backend-sqlite")]
-            {
-                (
-                    session.cwd.clone(),
-                    session.mode.clone(),
-                    session.additional_directories.clone(),
-                    session.config_options.clone(),
-                )
-            }
-            // No snapshot needed under backend-postgres (no async store call
-            // follows); a non-unit placeholder keeps the block type consistent.
-            #[cfg(not(feature = "backend-sqlite"))]
-            {
-                false
-            }
-        };
-
-        #[cfg(feature = "backend-sqlite")]
-        if let Some(ref store) = server.session_store {
-            use crate::acp::session_persistence::PersistedSession;
-            let now = crate::shared::timestamps::now_ts_ms();
-            let persisted = PersistedSession {
-                session_id: session_id.to_string(),
-                cwd: _snapshot.0,
-                mode: _snapshot.1,
-                additional_directories: _snapshot.2,
-                config_options: _snapshot.3,
-                created_at_ms: now,
-                last_active_ms: now,
-            };
-            if let Err(e) = store.upsert(&persisted).await {
-                tracing::warn!(error = %e, session_id = %session_id, "Failed to persist config option change to SQLite");
             }
         }
 
@@ -931,13 +780,6 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
             #[cfg(feature = "multi-users-server")]
             if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
                 limiter.evict_tenant(session_id);
-            }
-
-            #[cfg(feature = "backend-sqlite")]
-            if let Some(ref store) = _server.session_store {
-                if let Err(e) = store.delete(session_id).await {
-                    tracing::warn!(error = %e, session_id = %session_id, "Failed to delete session from SQLite");
-                }
             }
         } else {
             tracing::warn!(

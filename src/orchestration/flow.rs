@@ -15,7 +15,7 @@ use tracing::{info, warn};
 use crate::agent::{Agent, AgentRegistry, ModelInfo};
 use crate::config::{AppConfig, PhaseConfig, PhaseOptions};
 use crate::error::ProxyError;
-use crate::model_selector::{AutomaticModePolicy, ModelSelectionStrategy, SelectionCriteria};
+use crate::model_selector::{ModelSelectionStrategy, SelectionCriteria};
 use crate::orchestration::orchestrator::{
     select_model_for_task, select_model_semantic, OrchestrationContext,
 };
@@ -344,16 +344,6 @@ impl FlowManager {
             min_context_window: if complexity >= 4 { Some(4096) } else { None },
             max_cost_cents: None,
             prefer_speed: lower.contains("quick") || lower.contains("fast"),
-        }
-    }
-
-    /// Get recommended policy based on system configuration.
-    pub fn recommended_model_policy(config: &AppConfig) -> AutomaticModePolicy {
-        match config.model_selection_mode() {
-            "cost" => AutomaticModePolicy::CostOptimized,
-            "speed" => AutomaticModePolicy::SpeedOptimized,
-            "capable" => AutomaticModePolicy::AlwaysMostCapable,
-            _ => AutomaticModePolicy::AdaptiveCapability,
         }
     }
 }

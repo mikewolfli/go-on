@@ -19,6 +19,53 @@ use crate::acp::r#impl::chat::{
 };
 use crate::rpc_protocol::RequestTraceContext;
 
+/// Record an agent-execution outcome in the intelligence subsystems
+/// (consciousness, self-model, world model, triple-fusion cycle).
+///
+/// Shared by the success and failure paths of fallback execution — the two
+/// blocks were previously copy-pasted with only the metric values differing.
+///
+/// NOTE: no std Mutex guard is held across the `.await` points (the fusion
+/// bridge lock is a tokio::sync::Mutex).
+async fn record_agent_intelligence_outcome(
+    server: &AcpServer,
+    agent_name: &str,
+    success: bool,
+    phase_name: &str,
+    duration_ms: u64,
+) {
+    use crate::intelligence::consciousness::AwarenessMetricType;
+    if let Some(ref cb) = server.governance_deps.capability_bus {
+        let (awareness, confidence) = if success { (1.0, 0.9) } else { (0.0, 0.8) };
+        let _ = cb.consciousness.record_metric(
+            AwarenessMetricType::SelfAwareness,
+            awareness,
+            confidence,
+        );
+        cb.self_model
+            .record_execution_result(agent_name, success, duration_ms);
+        // BLUE56-B08: Record agent execution event in WorldModel
+        let mut payload = std::collections::HashMap::new();
+        payload.insert(
+            "status".to_string(),
+            if success { "success" } else { "failure" }.to_string(),
+        );
+        payload.insert("phase".to_string(), phase_name.to_string());
+        payload.insert("duration_ms".to_string(), duration_ms.to_string());
+        let _ = cb
+            .world_model
+            .record_event("agent_execution", agent_name, payload);
+        // BLUE56-B09: Run TripleFusion fusion cycle after execution
+        // Uses the shared global singleton so fusion_cycles accumulate across requests.
+        let fusion_bridge = crate::intelligence::triple_fusion::global_triple_fusion_bridge();
+        let triggers = fusion_bridge
+            .lock()
+            .await
+            .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
+        crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
+    }
+}
+
 pub(crate) fn is_quota_or_token_limit_error(error_text: &str) -> bool {
     let text = error_text.to_ascii_lowercase();
     // HTTP 429 rate limit / quota errors
@@ -112,6 +159,10 @@ pub(crate) async fn execute_fallback_agents(
         }
         // High-risk multi-agent vote collection: skip regular execution
         if enable_high_risk_multi_agent_vote {
+            // Honor the configured cap before collecting another vote agent.
+            if high_risk_vote_jobs.len() >= max_vote_agents {
+                continue;
+            }
             let strong_model = if agent.supports_model_override() {
                 select_strong_model_id(agent.as_ref())
             } else {
@@ -127,9 +178,6 @@ pub(crate) async fn execute_fallback_agents(
                 vote_options,
                 strong_model,
             ));
-            if high_risk_vote_jobs.len() >= max_vote_agents {
-                continue;
-            }
             continue;
         }
 
@@ -256,6 +304,13 @@ pub(crate) async fn execute_fallback_agents(
     // Collect results using JoinAll
     let results = join_all(futures).await;
 
+    // Outcome-recording side-effects are independent per agent; defer them
+    // and run them concurrently after the sync result assembly below instead
+    // of serializing N awaited recordings on the response path.
+    let mut outcome_futures: Vec<
+        std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>,
+    > = Vec::new();
+
     for (agent_name, attempt_started, agent_result) in results {
         match agent_result {
             Ok((output_text, reasoning_output, agent_selected_model)) => {
@@ -276,51 +331,30 @@ pub(crate) async fn execute_fallback_agents(
                             duration_ms: attempt_started.elapsed().as_millis() as u64,
                         });
 
-                    // BLUE56-GAP-B06/B07: Record consciousness metric and self-model on failure
-                    if let Some(ref cb) = server.governance_deps.capability_bus {
-                        use crate::intelligence::consciousness::AwarenessMetricType;
-                        let _ = cb.consciousness.record_metric(
-                            AwarenessMetricType::SelfAwareness,
-                            0.0,
-                            0.8,
-                        );
-                        cb.self_model.record_execution_result(
-                            &agent_name,
+                    // BLUE56-GAP-B06/B07/B08/B09: Record the execution outcome in
+                    // consciousness, self-model, world model, and the triple-fusion
+                    // cycle. Shared by the success and failure paths.
+                    let agent_key = agent_name.clone();
+                    let dur = attempt_started.elapsed().as_millis() as u64;
+                    outcome_futures.push(Box::pin(async move {
+                        record_agent_intelligence_outcome(
+                            server,
+                            &agent_key,
                             false,
-                            attempt_started.elapsed().as_millis() as u64,
-                        );
-                        // BLUE56-B08: Record agent failure event in WorldModel
-                        let mut payload = std::collections::HashMap::new();
-                        payload.insert("status".to_string(), "failure".to_string());
-                        payload.insert("phase".to_string(), phase_name.to_string());
-                        payload.insert(
-                            "duration_ms".to_string(),
-                            attempt_started.elapsed().as_millis().to_string(),
-                        );
-                        let _ =
-                            cb.world_model
-                                .record_event("agent_execution", &agent_name, payload);
-                        // BLUE56-B09: Run TripleFusion fusion cycle after execution
-                        // Uses the shared global singleton so fusion_cycles accumulate across requests.
-                        let fusion_bridge =
-                            crate::intelligence::triple_fusion::global_triple_fusion_bridge();
-                        let triggers = fusion_bridge
-                            .lock()
-                            .await
-                            .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
-                        crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(
-                            triggers,
-                        );
-                    }
-                    // BLUE56-GAP-C04: Record failure in HyperResilienceEngine
-                    let _ = server
-                        .resilience
-                        .hyper_resilience
-                        .record_failure_with_mode(
-                            &agent_name,
-                            crate::resilience::hyper_resilience::FailureMode::ResourceExhaustion,
+                            phase_name,
+                            dur,
                         )
                         .await;
+                        // BLUE56-GAP-C04: Record failure in HyperResilienceEngine
+                        let _ = server
+                            .resilience
+                            .hyper_resilience
+                            .record_failure_with_mode(
+                                &agent_key,
+                                crate::resilience::hyper_resilience::FailureMode::ResourceExhaustion,
+                            )
+                            .await;
+                    }));
                     // BLUE56-B05: Record failure in HotFailover (global singleton)
                     {
                         use crate::intelligence::hot_failover::HOT_FAILOVER_INSTANCE;
@@ -342,48 +376,21 @@ pub(crate) async fn execute_fallback_agents(
                         duration_ms: attempt_started.elapsed().as_millis() as u64,
                     });
 
-                // BLUE56-GAP-B06/B07: Record consciousness metric and self-model on success
-                if let Some(ref cb) = server.governance_deps.capability_bus {
-                    use crate::intelligence::consciousness::AwarenessMetricType;
-                    let _ = cb.consciousness.record_metric(
-                        AwarenessMetricType::SelfAwareness,
-                        1.0,
-                        0.9,
-                    );
-                    cb.self_model.record_execution_result(
-                        &agent_name,
-                        true,
-                        attempt_started.elapsed().as_millis() as u64,
-                    );
-                    // BLUE56-B08: Record agent success event in WorldModel
-                    let mut payload = std::collections::HashMap::new();
-                    payload.insert("status".to_string(), "success".to_string());
-                    payload.insert("phase".to_string(), phase_name.to_string());
-                    payload.insert(
-                        "duration_ms".to_string(),
-                        attempt_started.elapsed().as_millis().to_string(),
-                    );
-                    let _ = cb
-                        .world_model
-                        .record_event("agent_execution", &agent_name, payload);
-                    // BLUE56-B09: Run TripleFusion fusion cycle after execution
-                    // Uses the shared global singleton so fusion_cycles accumulate across requests.
-                    let fusion_bridge =
-                        crate::intelligence::triple_fusion::global_triple_fusion_bridge();
-                    let triggers = fusion_bridge
-                        .lock()
-                        .await
-                        .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
-                    crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(
-                        triggers,
-                    );
-                }
-                // BLUE56-GAP-C04: Record success in HyperResilienceEngine
-                let _ = server
-                    .resilience
-                    .hyper_resilience
-                    .record_success(&agent_name)
-                    .await;
+                // BLUE56-GAP-B06/B07/B08/B09: Record the execution outcome in
+                // consciousness, self-model, world model, and the triple-fusion
+                // cycle. Shared by the success and failure paths.
+                let agent_key = agent_name.clone();
+                let dur = attempt_started.elapsed().as_millis() as u64;
+                outcome_futures.push(Box::pin(async move {
+                    record_agent_intelligence_outcome(server, &agent_key, true, phase_name, dur)
+                        .await;
+                    // BLUE56-GAP-C04: Record success in HyperResilienceEngine
+                    let _ = server
+                        .resilience
+                        .hyper_resilience
+                        .record_success(&agent_key)
+                        .await;
+                }));
 
                 agent_attempts.push(json!({
                     "agent": agent_name,
@@ -451,6 +458,9 @@ pub(crate) async fn execute_fallback_agents(
             }
         }
     }
+
+    // Run the deferred per-agent outcome recordings concurrently.
+    join_all(outcome_futures).await;
 
     FallbackExecutionResult {
         selected_agent,

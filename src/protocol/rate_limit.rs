@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
-use crate::shared::token_bucket::{BucketMap, TokenBucket};
+use crate::shared::token_bucket::{rpm_to_refill_per_second, BucketMap};
 
 /// Rate limit configuration for a tenant
 #[derive(Debug, Clone)]
@@ -104,7 +104,7 @@ impl RateLimitMiddleware {
         }
 
         let burst = self.default_limit.burst as f64;
-        let refill_rate = self.default_limit.rpm as f64 / 60.0;
+        let refill_rate = rpm_to_refill_per_second(self.default_limit.rpm);
 
         if self.buckets.try_consume(tenant_id, burst, refill_rate) {
             Ok(())
@@ -119,91 +119,16 @@ impl RateLimitMiddleware {
         }
     }
 
-    /// Get current rate limit state for a tenant
-    pub fn state(&self, tenant_id: &str) -> RateLimitState {
-        self.buckets.with_lock(|buckets| {
-            if let Some(bucket) = buckets.get(tenant_id) {
-                RateLimitState {
-                    remaining: bucket.tokens as u64,
-                    capacity: bucket.capacity as u64,
-                    refill_per_second: bucket.refill_rate,
-                }
-            } else {
-                RateLimitState {
-                    remaining: self.default_limit.burst,
-                    capacity: self.default_limit.burst,
-                    refill_per_second: self.default_limit.rpm as f64 / 60.0,
-                }
-            }
-        })
-    }
-
-    /// Compute the Retry-After header value in seconds for the given tenant.
-    pub fn retry_after(&self, tenant_id: &str) -> u64 {
-        self.buckets.with_lock(|buckets| {
-            if let Some(bucket) = buckets.get(tenant_id) {
-                let wait_ms = bucket.wait_time_ms();
-                (wait_ms / 1000).max(1)
-            } else {
-                0
-            }
-        })
-    }
-
-    /// Start a background eviction task for idle tenants.
-    pub fn start_background_eviction(
-        &self,
-        check_interval: Duration,
-    ) -> tokio::task::JoinHandle<()> {
-        let buckets = Arc::clone(&self.buckets);
-        let idle_timeout = self.idle_timeout;
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(check_interval).await;
-                let before = buckets.len();
-                buckets.retain(|_, bucket| !bucket.is_idle(idle_timeout));
-                let after = buckets.len();
-                if before != after {
-                    warn!(
-                        "rate limit eviction: removed {} idle tenants ({} remaining)",
-                        before - after,
-                        after
-                    );
-                }
-            }
-        })
-    }
-
-    /// Start background eviction with a default 5-minute check interval.
-    pub fn start_background_eviction_default(&self) -> tokio::task::JoinHandle<()> {
-        self.start_background_eviction(Duration::from_secs(300))
-    }
-
     /// Try to consume tokens for a tenant (sync, no async required).
-    /// Looks up or creates a token bucket and attempts to consume tokens.
+    ///
+    /// Delegates to the canonical `BucketMap::try_consume_n` primitive so the
+    /// create-or-recreate + refill logic lives in exactly one place.
     pub fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
         let burst = self.default_limit.burst as f64;
-        // TokenBucket::new expects tokens per SECOND (see shared::token_bucket).
-        // Passing rpm directly made the refill 60x faster than configured,
-        // silently disabling tenant rate limits. `/60.0` matches the rate
-        // used by `check()` so both entry points enforce the same RPM.
-        let refill_rate = self.default_limit.rpm as f64 / 60.0;
-        // For multi-token consumption we bypass the single-token try_consume
-        // and operate directly on the bucket.
-        self.buckets.with_lock(|buckets| {
-            let bucket = buckets
-                .entry(tenant_id.to_string())
-                .or_insert_with(|| TokenBucket::new(burst, refill_rate));
-            bucket.try_consume(tokens)
-        })
+        let refill_rate = rpm_to_refill_per_second(self.default_limit.rpm);
+        self.buckets
+            .try_consume_n(tenant_id, tokens, burst, refill_rate)
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct RateLimitState {
-    pub remaining: u64,
-    pub capacity: u64,
-    pub refill_per_second: f64,
 }
 
 #[cfg(test)]
@@ -234,16 +159,5 @@ mod tests {
         assert!(limiter.check("test").is_ok());
         let err = limiter.check("test").unwrap_err();
         assert!(err >= 1);
-    }
-
-    #[test]
-    fn test_state_reporting() {
-        let limiter = RateLimitMiddleware::new(TenantRateLimit {
-            rpm: 120,
-            burst: 10,
-        });
-        let state = limiter.state("test");
-        assert_eq!(state.capacity, 10);
-        assert!((state.refill_per_second - 2.0).abs() < 0.001);
     }
 }

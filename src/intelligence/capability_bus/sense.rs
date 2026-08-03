@@ -58,28 +58,27 @@ impl CapabilityBus {
                 .collect::<Vec<_>>()
         };
         // BLUE70: Read from LearningOptimizationBus (replaces legacy WorkflowLearningBus)
-        let _learning_rates = {
-            let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
-            lob.events_snapshot()
-                .iter()
-                .map(|e| e.agent.clone())
-                .collect::<Vec<_>>()
-        };
-        let learning_snapshot: Vec<WorkflowLearningEvent> = {
-            let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
-            lob.events_snapshot()
-                .into_iter()
-                .map(|e| WorkflowLearningEvent {
-                    task_type: e.task_type,
-                    agent: e.agent,
-                    success: e.success,
-                    duration_ms: e.duration_ms,
-                    token_cost: e.token_cost,
-                    quality_score: e.quality_score,
-                    timestamp_ms: e.timestamp_ms,
-                })
-                .collect()
-        };
+        // Single snapshot, two derived views: `recent_agents` (names, for
+        // recency scoring in decide) and `learning_snapshot` (full events).
+        // Previously two full `events_snapshot()` clones were taken.
+        let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
+        let lob_events = lob.events_snapshot();
+        let recent_agents = lob_events
+            .iter()
+            .map(|e| e.agent.clone())
+            .collect::<Vec<_>>();
+        let learning_snapshot: Vec<WorkflowLearningEvent> = lob_events
+            .into_iter()
+            .map(|e| WorkflowLearningEvent {
+                task_type: e.task_type,
+                agent: e.agent,
+                success: e.success,
+                duration_ms: e.duration_ms,
+                token_cost: e.token_cost,
+                quality_score: e.quality_score,
+                timestamp_ms: e.timestamp_ms,
+            })
+            .collect();
 
         // Phase 4: Query ObservabilityBus for healthy agents
         #[cfg(feature = "sub-bus-observability")]
@@ -131,7 +130,7 @@ impl CapabilityBus {
         SensingOutput {
             capability_agent_count: cap_agents,
             reputation_snapshot: rep_snapshot,
-            recent_agents: _learning_rates,
+            recent_agents,
             learning_snapshot,
             #[cfg(feature = "sub-bus-observability")]
             healthy_agents: healthy,
