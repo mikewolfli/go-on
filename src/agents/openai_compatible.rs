@@ -10,8 +10,7 @@ use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::agent::chat_request_failed_msg;
 use crate::agents::{
-    apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
-    stream_sse_to_sender_compressed, StreamingConfig,
+    apply_openai_common_options, option_string, principles_to_text, StreamingConfig,
 };
 
 pub struct OpenAiCompatibleAgent {
@@ -123,45 +122,6 @@ impl OpenAiCompatibleAgent {
         )
     }
 
-    /// Chat with SSE compression support.
-    ///
-    /// When `enable_compression` is true, the SSE stream is gzip-decompressed
-    /// before parsing, reducing bandwidth on large responses. This is
-    /// transparent to the token extraction layer.
-    async fn chat_once_compressed(
-        &self,
-        messages: &[Message],
-        principles: &Option<Vec<String>>,
-        options: &Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-        compress_cfg: &StreamingConfig,
-    ) -> anyhow::Result<()> {
-        let api_key = resolve_secret(&self.api_key_env, "openai_compatible.api_key_env")?;
-
-        let merged = self.merge_principles_into_messages(messages, principles);
-        let endpoint = self.chat_endpoint();
-        let payload = self.build_payload(merged, options);
-
-        let response = self
-            .client
-            .post(endpoint)
-            .bearer_auth(api_key)
-            .json(&payload)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("openai_compatible", &status.to_string(), &body)
-            );
-        }
-
-        stream_sse_to_sender_compressed(response, sender, compress_cfg).await
-    }
-
     fn build_payload(
         &self,
         messages: Vec<Message>,
@@ -183,48 +143,6 @@ impl OpenAiCompatibleAgent {
 
 #[async_trait]
 impl Agent for OpenAiCompatibleAgent {
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> crate::core::error::Result<()> {
-        if self.enable_compression {
-            let compress_cfg = StreamingConfig {
-                enable_compression: true,
-                ..Default::default()
-            };
-
-            crate::agents::agent::retry_chat_once(
-                || async {
-                    self.chat_once_compressed(
-                        &messages,
-                        &principles,
-                        &options,
-                        sender.clone(),
-                        &compress_cfg,
-                    )
-                    .await
-                    .map_err(Into::into)
-                },
-                3,
-            )
-            .await
-        } else {
-            // Wraps chat_once with retry (same as the default Agent::chat)
-            crate::agents::agent::retry_chat_once(
-                || async {
-                    self.chat_once(&messages, &principles, &options, sender.clone())
-                        .await
-                        .map_err(Into::into)
-                },
-                3,
-            )
-            .await
-        }
-    }
-
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -255,7 +173,16 @@ impl Agent for OpenAiCompatibleAgent {
             );
         }
 
-        stream_sse_to_sender(response, sender).await
+        let use_compression = options
+            .as_ref()
+            .and_then(|o| o.get("sse_compress"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(self.enable_compression);
+        let compress_cfg = StreamingConfig {
+            enable_compression: use_compression,
+            ..Default::default()
+        };
+        crate::agents::stream_sse_to_sender(response, sender, &compress_cfg).await
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {

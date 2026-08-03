@@ -701,17 +701,26 @@ pub fn init_performance_monitoring() -> Arc<Mutex<PerformanceMonitor>> {
 static PERFORMANCE_MONITOR: OnceLock<Arc<Mutex<PerformanceMonitor>>> = OnceLock::new();
 
 pub fn record_global_operation(success: bool, latency_ms: f64) {
-    if let Some(monitor) = PERFORMANCE_MONITOR.get() {
-        let mut guard = monitor.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("performance monitor lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        guard.record_operation(success, latency_ms);
-    }
+    // Lazily initialize on first use so the metrics pipeline is active even
+    // when startup wiring never called init_performance_monitoring().
+    let monitor = PERFORMANCE_MONITOR.get_or_init(|| {
+        let m = Arc::new(Mutex::new(PerformanceMonitor::new(1000)));
+        info!("Performance monitoring initialized (lazy on first record)");
+        m
+    });
+    let mut guard = monitor.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("performance monitor lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    guard.record_operation(success, latency_ms);
 }
 
 pub fn global_metrics_snapshot() -> Option<PerformanceMetrics> {
-    let monitor = PERFORMANCE_MONITOR.get()?;
+    let monitor = PERFORMANCE_MONITOR.get_or_init(|| {
+        let m = Arc::new(Mutex::new(PerformanceMonitor::new(1000)));
+        info!("Performance monitoring initialized (lazy snapshot)");
+        m
+    });
     Some(
         monitor
             .lock()

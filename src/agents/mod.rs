@@ -498,30 +498,17 @@ fn sse_event_to_sender(event: &str, sender: &crate::agent::StreamingSender) -> b
 pub async fn stream_sse_to_sender(
     response: reqwest::Response,
     sender: crate::agent::StreamingSender,
-) -> anyhow::Result<()> {
-    stream_sse_events(response, move |data| {
-        if sse_event_to_sender(data, &sender) {
-            Ok(SseEventAction::Stop)
-        } else {
-            Ok(SseEventAction::Continue)
-        }
-    })
-    .await
-}
-
-/// Stream SSE events to sender with optional gzip compression.
-///
-/// When `config.enable_compression` is true, response chunks are buffered
-/// and compressed with gzip before being processed, reducing bandwidth for
-/// large streaming responses. This is particularly useful for models that
-/// return verbose output or when operating over constrained networks.
-pub async fn stream_sse_to_sender_compressed(
-    response: reqwest::Response,
-    sender: crate::agent::StreamingSender,
     config: &StreamingConfig,
 ) -> anyhow::Result<()> {
     if !config.enable_compression {
-        return stream_sse_to_sender(response, sender).await;
+        return stream_sse_events(response, move |data| {
+            if sse_event_to_sender(data, &sender) {
+                Ok(SseEventAction::Stop)
+            } else {
+                Ok(SseEventAction::Continue)
+            }
+        })
+        .await;
     }
 
     let cfg = config.clone();
@@ -529,7 +516,14 @@ pub async fn stream_sse_to_sender_compressed(
 
     // Verify compression is active and track buffer state
     if !decompressor.is_enabled() {
-        return stream_sse_to_sender(response, sender).await;
+        return stream_sse_events(response, move |data| {
+            if sse_event_to_sender(data, &sender) {
+                Ok(SseEventAction::Stop)
+            } else {
+                Ok(SseEventAction::Continue)
+            }
+        })
+        .await;
     }
     debug!(
         "SSE compression active, buffer threshold={}, initial_size={}",

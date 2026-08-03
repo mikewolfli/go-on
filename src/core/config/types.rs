@@ -244,9 +244,6 @@ pub struct AppConfig {
     /// Startup context loader configuration (S5)
     #[serde(default)]
     pub startup_context: Option<StartupContextConfig>,
-    /// Scheduler configuration (S8/S9)
-    #[serde(default)]
-    pub scheduler: Option<SchedulerConfig>,
     /// Reputation tracking configuration (S13)
     #[serde(default)]
     pub reputation: Option<ReputationConfig>,
@@ -736,16 +733,6 @@ pub struct StartupContextConfig {
     pub readme_max_chars: usize,
     #[serde(default = "super::defaults::default_startup_recent_commits")]
     pub recent_commits: usize,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SchedulerConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "super::defaults::default_scheduler_workers")]
-    pub worker_slots: usize,
-    #[serde(default = "super::defaults::default_scheduler_max_depth")]
-    pub max_queue_depth: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -118,6 +118,7 @@ use self::hardness_pack::*;
 use self::health_pack::*;
 use self::learning_pack::*;
 use self::lifecycle_pack::*;
+pub(crate) use self::protocol::is_acp_request;
 use self::protocol::*;
 pub use self::protocol_pack::record_tool_call_audit_with_protocol;
 use self::protocol_pack::*;
@@ -597,6 +598,24 @@ pub async fn handle_request(
 
     let started = Instant::now();
     server.observability.metrics.inc_active_requests();
+    // DrainGuard: track this request so graceful shutdown can wait for it.
+    // The RAII permit is released on every exit path (including the early
+    // returns above and the dispatch below).
+    let _drain_permit = server.drain_guard.acquire().await;
+    if _drain_permit.is_none() {
+        // Server is draining — reject new requests immediately.
+        return send_error(
+            server,
+            request.id,
+            -32000,
+            "Server is shutting down".into(),
+            Some(serde_json::json!({
+                "code": "SERVER_DRAINING",
+                "reason": "The server is draining in-flight requests before shutdown",
+            })),
+        )
+        .await;
+    }
     let trace = new_request_trace(server, &request);
     let _request_span = {
         let telemetry_guard = server
@@ -641,7 +660,7 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        protocol_pack::initialize_payload(server).await,
+                        protocol_pack::initialize_payload(server, &request.params).await,
                     )
                     .await
                 }

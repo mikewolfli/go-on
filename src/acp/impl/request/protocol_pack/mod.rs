@@ -156,6 +156,30 @@ pub(super) fn acp_terminal_state() -> &'static StdMutex<HashMap<String, Terminal
 
 pub(super) static NEGOTIATED_PROTOCOL_VERSION: OnceLock<ProtocolVersion> = OnceLock::new();
 
+/// Negotiate the protocol version against the client's requested version.
+///
+/// Picks the highest supported version that does not exceed the client's
+/// request (falling back to the latest supported version when the client
+/// sends none or a version newer than anything we support). The result is
+/// memoised process-wide on first call.
+pub(super) fn negotiate_protocol_version(requested: Option<ProtocolVersion>) -> ProtocolVersion {
+    let negotiated = match requested {
+        Some(client) => {
+            let supported = ProtocolVersion::supported_versions();
+            let mut best = ProtocolVersion::V1;
+            for version in supported {
+                if *version <= client {
+                    best = *version;
+                }
+            }
+            best
+        }
+        None => ProtocolVersion::LATEST,
+    };
+    let _ = NEGOTIATED_PROTOCOL_VERSION.set(negotiated);
+    negotiated
+}
+
 // ── Atomic counters ──────────────────────────────────────────────────────
 
 static ACP_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);

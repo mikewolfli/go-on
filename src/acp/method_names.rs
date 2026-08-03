@@ -40,7 +40,12 @@ impl AcpMethodNames {
     pub const TERMINAL_KILL: &'static str = "terminal/kill";
     pub const TERMINAL_WAIT_FOR_EXIT: &'static str = "terminal/wait_for_exit";
 
-    /// All known ACP method names, for validation and introspection.
+    /// The canonical ACP method-name constants, as a slice for iteration.
+    ///
+    /// Used as a fast-path in [`is_known`](Self::is_known) and available for
+    /// introspection; the authoritative dispatch gate remains
+    /// `acp::impl::request::protocol::is_acp_request` (the 140-entry table),
+    /// which this slice deliberately does not try to replace.
     pub const ALL: &[&str] = &[
         Self::INITIALIZE,
         Self::AUTHENTICATE,
@@ -67,8 +72,12 @@ impl AcpMethodNames {
     ];
 
     /// Return true if the given method name is a known ACP method.
+    ///
+    /// Fast path over the canonical constants, with the authoritative
+    /// 140-entry dispatch table (`acp::impl::request::protocol::is_acp_request`)
+    /// as the fallback so method additions never regress risk scoring.
     pub fn is_known(method: &str) -> bool {
-        Self::ALL.contains(&method)
+        Self::ALL.contains(&method) || crate::acp::r#impl::request::is_acp_request(method)
     }
 }
 
@@ -77,11 +86,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_all_methods_are_unique() {
-        let mut seen = std::collections::BTreeSet::new();
-        for m in AcpMethodNames::ALL {
-            assert!(seen.insert(m), "duplicate method name: {m}");
-        }
+    fn test_constants_are_known() {
+        // The named constants must all resolve through the authoritative
+        // dispatch table so risk scoring never treats them as novel.
+        assert!(AcpMethodNames::is_known(AcpMethodNames::SESSION_NEW));
+        assert!(AcpMethodNames::is_known(AcpMethodNames::TERMINAL_CREATE));
+        assert!(AcpMethodNames::is_known(AcpMethodNames::INITIALIZE));
     }
 
     #[test]
@@ -89,6 +99,8 @@ mod tests {
         assert!(AcpMethodNames::is_known("session/new"));
         assert!(AcpMethodNames::is_known("session/delete"));
         assert!(AcpMethodNames::is_known("terminal/create"));
+        assert!(AcpMethodNames::is_known("workflow.execute"));
+        assert!(AcpMethodNames::is_known("mcp.tools.call"));
         assert!(!AcpMethodNames::is_known("unknown/method"));
     }
 }

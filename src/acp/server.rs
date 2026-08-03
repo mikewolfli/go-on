@@ -34,9 +34,7 @@ use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::observability::alert_manager::AlertManager;
 use crate::observability::telemetry_enhanced::TelemetryRuntime;
 use crate::orchestration::prompt_layers::PromptAssembler;
-use crate::orchestration::scheduler::AgentWorkerScheduler;
 use crate::orchestration::skill::SkillRegistry;
-use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::task_graph_store::TaskGraphStore;
 use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::tool::ToolRegistry;
@@ -291,10 +289,8 @@ pub struct GovernanceServerDeps {
         Option<Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>>,
 }
 
-/// Orchestration subsystems grouped together (scheduler + planner + skill)
+/// Orchestration subsystems grouped together (planner + skill)
 pub struct OrchestrationServerDeps {
-    /// Dual-level task scheduler for priority queue and worker pool
-    pub scheduler: Option<Arc<AgentWorkerScheduler>>,
     /// Planner — task decomposition engine (F-GAP-05)
     pub planner: crate::orchestration::brain_loop::plan_construction::Planner,
     /// Reserved for future planner-executor configuration.
@@ -484,8 +480,6 @@ pub struct AcpServer {
     pub verbose: bool,
     /// Shutdown notification mechanism
     pub shutdown_notify: Arc<Notify>,
-    /// Skill market registry for external skill discovery and installation
-    pub skill_market_registry: Option<Arc<SkillMarketRegistry>>,
     /// DrainGuard for graceful shutdown
     pub drain_guard: DrainGuard,
     /// Tool registry for built-in tool execution
@@ -903,7 +897,6 @@ pub struct ServerBuilder {
     harness_bus: Option<Arc<HarnessBus>>,
     capability_bus: Option<Arc<CapabilityBus>>,
     task_graph_store: Option<Arc<TaskGraphStore>>,
-    scheduler: Option<Arc<AgentWorkerScheduler>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
     /// Planner-executor configuration (reserved for future use, currently unit).
     planner_executor_config: (),
@@ -951,7 +944,6 @@ impl ServerBuilder {
             harness_bus: None,
             capability_bus: None,
             task_graph_store: None,
-            scheduler: None,
             provenance_ledger: None,
             planner_executor_config: (),
             approval_engine: None,
@@ -1268,9 +1260,7 @@ impl ServerBuilder {
             response_cache: self.response_cache,
             vector_store: self.vector_store,
             token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
-                500,
-                200,
-                ".goon/token_cache",
+                500, 200,
             )),
             semantic_cache: Arc::new(std::sync::RwLock::new(
                 crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
@@ -1380,7 +1370,6 @@ impl ServerBuilder {
                 },
             },
             orchestration_deps: OrchestrationServerDeps {
-                scheduler: self.scheduler,
                 planner: crate::orchestration::brain_loop::plan_construction::Planner,
                 planner_executor_config: self.planner_executor_config,
                 skill_registry,
@@ -1442,7 +1431,6 @@ impl ServerBuilder {
             prompt_manager,
             verbose: self.verbose,
             shutdown_notify: Arc::new(Notify::new()),
-            skill_market_registry: None,
             drain_guard: DrainGuard::default(),
             // Share the process-wide registry so the ACP server, ToolBus, and
             // MCP arms all execute against the same tool set (single full

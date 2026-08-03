@@ -69,7 +69,7 @@ pub(super) fn normalize_mcp_method(method: &str) -> String {
 }
 
 /// Returns true if the method belongs to the ACP/A2A protocol.
-pub(super) fn is_acp_request(method: &str) -> bool {
+pub(crate) fn is_acp_request(method: &str) -> bool {
     // Common ACP/A2A JSON-RPC methods. Sorted alphabetically for binary_search.
     const ACP_METHODS: &[&str] = &[
         "$/cancel_request",

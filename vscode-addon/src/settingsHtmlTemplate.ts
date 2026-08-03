@@ -203,7 +203,7 @@ export function getSettingsHtml(
                         <h3>🧭 Workflow And AI Routing</h3>
                         <div class="setting-item">
                             <label for="defaultPhaseInput">Default Phase:</label>
-                            <input type="text" id="defaultPhaseInput" placeholder="coding">
+                            <input type="text" id="defaultPhaseInput" placeholder="think">
                         </div>
                         <div class="setting-item">
                             <label for="workflowMapping">Node Mapping JSON:</label>

@@ -1,6 +1,4 @@
-use super::types::{
-    ComplianceConfig, ReputationConfig, RuntimeConfig, SchedulerConfig, StartupContextConfig,
-};
+use super::types::{ComplianceConfig, ReputationConfig, RuntimeConfig, StartupContextConfig};
 
 pub(crate) use crate::core::providers::{provider_spec_by_name, provider_specs};
 
@@ -84,14 +82,6 @@ mod default_functions {
     }
     pub fn default_startup_recent_commits() -> usize {
         5
-    }
-
-    // ── Scheduler defaults ──────────────────────────────────────
-    pub fn default_scheduler_workers() -> usize {
-        4
-    }
-    pub fn default_scheduler_max_depth() -> usize {
-        1000
     }
 
     // ── Reputation defaults ─────────────────────────────────────
@@ -246,16 +236,6 @@ impl Default for StartupContextConfig {
             enabled: false,
             readme_max_chars: default_startup_readme_max_chars(),
             recent_commits: default_startup_recent_commits(),
-        }
-    }
-}
-
-impl Default for SchedulerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            worker_slots: default_scheduler_workers(),
-            max_queue_depth: default_scheduler_max_depth(),
         }
     }
 }
@@ -585,7 +565,6 @@ mod adaptive {
                 },
                 compliance: None,
                 startup_context: None,
-                scheduler: None,
                 reputation: None,
                 protocol: None,
             }

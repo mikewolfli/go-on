@@ -272,27 +272,29 @@ class ConfigManager {
    * (source of truth). Keep field values in sync when it changes.
    */
   private createDefaultConfig(): void {
+    // Values mirror the authoritative backend template config/config.toml.
+    // Keep in sync when that file changes.
     this.config = {
-      default_phase: "coding",
+      default_phase: "think",
       cache: {
         enabled: true,
         path: "acp_cache.sqlite3",
-        default_ttl_seconds: 3600,
-        max_entries: 5000,
+        default_ttl_seconds: 1800,
+        max_entries: 2000,
       },
       vector: {
         enabled: true,
         auto_mode: true,
         path: "acp_vector.sqlite3",
-        dimensions: 192,
-        min_query_chars: 80,
+        dimensions: 128,
+        min_query_chars: 120,
         top_k: 2,
         min_similarity: 0.82,
-        max_snippet_chars: 800,
-        max_entries: 10000,
+        max_snippet_chars: 600,
+        max_entries: 3000,
         summary_enabled: true,
-        summary_trigger_messages: 8,
-        summary_max_chars: 1200,
+        summary_trigger_messages: 4,
+        summary_max_chars: 800,
       },
       autotune: {
         // Matches backend default (core/config/autotune.rs default_autotune_config).
@@ -318,24 +320,24 @@ class ConfigManager {
       agents: {
         copilot: {
           type: "copilot",
-          url: "http://127.0.0.1:8080",
-          api_key_env: "keyring://go-on/github_copilot_token",
+          url: "https://api.githubcopilot.com",
+          api_key_env: "keyring://go-on/copilot_api_key",
           region: "us",
         },
         deepseek: {
           type: "deepseek",
           api_key_env: "keyring://go-on/deepseek_api_key",
-          model: "deepseek-chat",
+          model: "deepseek-v4-flash",
           region: "cn",
         },
       },
       flow: {
-        name: "Explicit Software Development Flow",
-        phases: ["planning", "coding", "review", "delivery"],
+        name: "Universal Adaptive",
+        phases: ["think", "act", "check", "done"],
       },
       phases: {
-        planning: {
-          description: "Planning phase",
+        think: {
+          description: "Think — analyze, plan, gather context",
           agents: ["deepseek", "copilot"],
           fallback: true,
           principles: [
@@ -343,8 +345,8 @@ class ConfigManager {
             "Identify risky files, compatibility constraints, and rollback points early",
           ],
         },
-        coding: {
-          description: "Coding phase",
+        act: {
+          description: "Act — execute, generate, implement",
           agents: ["copilot", "deepseek"],
           fallback: true,
           principles: [
@@ -352,14 +354,14 @@ class ConfigManager {
             "Each function should be no more than 50 lines",
           ],
         },
-        review: {
-          description: "Review phase",
+        check: {
+          description: "Check — verify output",
           agents: ["deepseek"],
           fallback: true,
           principles: ["Only return APPROVE when the implementation is safe"],
         },
-        delivery: {
-          description: "Delivery phase",
+        done: {
+          description: "Done — finalize",
           agents: ["copilot"],
           fallback: false,
           principles: ["Deploy the approved changes"],

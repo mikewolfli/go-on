@@ -18,6 +18,17 @@ use crate::acp::r#impl::chat::{
 };
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
+use crate::orchestration::bulkhead::Bulkhead;
+
+/// Process-wide bulkhead for high-risk vote LLM calls.
+///
+/// Each agent gets its own concurrency limit so a slow/hung agent cannot
+/// pile up parallel vote attempts and starve the rest of the request path.
+static VOTE_BULKHEAD: std::sync::OnceLock<Bulkhead> = std::sync::OnceLock::new();
+
+fn vote_bulkhead() -> &'static Bulkhead {
+    VOTE_BULKHEAD.get_or_init(|| Bulkhead::new(2))
+}
 
 /// Result of executing the high-risk vote pipeline (ballot + optional escalation).
 pub(crate) struct HighRiskVoteExecutionResult {
@@ -138,7 +149,19 @@ pub(crate) async fn execute_high_risk_vote(
 
     // ── Step 1 & 2: Run all vote attempts, collect results ──────────────
     if !high_risk_vote_jobs.is_empty() {
-        let vote_results = join_all(high_risk_vote_jobs.into_iter().map(
+        // Bulkhead isolation: per-agent concurrency cap so a slow agent cannot
+        // consume all parallel slots. Permits that cannot be acquired are
+        // skipped (the vote still proceeds with the remaining agents).
+        let vote_jobs = high_risk_vote_jobs
+            .into_iter()
+            .filter(|(agent_name, _, _, _)| {
+                vote_bulkhead()
+                    .try_acquire(agent_name)
+                    .unwrap_or_default()
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        let vote_results = join_all(vote_jobs.into_iter().map(
             |(agent_name, agent, vote_options, strong_model)| {
                 let server_ref = server;
                 let phase_principles = phase_principles.clone();

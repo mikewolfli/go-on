@@ -1,17 +1,27 @@
 use super::*;
 
 /// Handle `initialize` — agent capability negotiation.
-pub async fn initialize_payload(_server: &AcpServer) -> Result<Value> {
+///
+/// Negotiates the protocol version against the client's requested version
+/// (params.protocolVersion if present): the server picks the highest version
+/// it supports that does not exceed the client's request. The negotiated
+/// version is stored process-wide so later handlers (e.g. SSE capability
+/// reporting) can honour it.
+pub async fn initialize_payload(_server: &AcpServer, params: &Option<Value>) -> Result<Value> {
     use crate::schema::{
         AgentCapabilities, AuthMethod, AuthMethodAgent, Implementation, InitializeResponse,
         McpCapabilities, PromptCapabilities, ProtocolVersion, SessionCapabilities,
         SessionCloseCapabilities, SessionListCapabilities, SessionResumeCapabilities,
     };
 
-    let negotiated_version = super::NEGOTIATED_PROTOCOL_VERSION
-        .get()
-        .copied()
-        .unwrap_or(ProtocolVersion::LATEST);
+    // ── Real version negotiation (was decorative: always LATEST) ───────
+    let requested = params
+        .as_ref()
+        .and_then(|p| p.get("protocolVersion"))
+        .and_then(Value::as_u64)
+        .map(|v| ProtocolVersion::from_u16(v as u16));
+    let negotiated_version = super::negotiate_protocol_version(requested);
+
     let auth_methods = vec![AuthMethod::Agent(AuthMethodAgent {
         id: "bearer_token".to_string(),
         name: "Bearer Token".to_string(),
@@ -88,11 +98,19 @@ pub async fn initialize_payload(_server: &AcpServer) -> Result<Value> {
 }
 
 /// Handle `mcp.initialize` — MCP protocol initialization.
+///
+/// Mirrors the native MCP handler's capability declaration so the ACP bridge
+/// entry advertises the same capabilities as the standalone MCP transport.
 pub async fn mcp_initialize_payload(_server: &AcpServer) -> Result<Value> {
     use crate::mcp::{McpInitializeResult, ServerInfo};
     let result = McpInitializeResult::new(
         MCP_VERSION,
-        serde_json::Map::new().into(),
+        serde_json::json!({
+            "sampling": {},
+            "experimental": {
+                "agents": {}
+            }
+        }),
         ServerInfo {
             name: "go-on".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),

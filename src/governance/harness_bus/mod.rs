@@ -837,17 +837,10 @@ pub fn config_aware_harness_bus(
             .unwrap_or(SandboxLevel::None),
     ));
 
-    let worker_factor = config
-        .scheduler
-        .as_ref()
-        .map(|s| {
-            if s.enabled {
-                (s.worker_slots.max(1) as u64).min(16)
-            } else {
-                1u64
-            }
-        })
-        .unwrap_or(1u64);
+    // Worker factor: the dual-level scheduler (which scaled the budget) was
+    // removed as a production no-op; budgets default to the single-worker
+    // factor (1).
+    let worker_factor = 1u64;
 
     let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget {
         max_tokens: (120_000 * worker_factor) as usize,

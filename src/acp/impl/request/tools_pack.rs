@@ -337,9 +337,24 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
         // tools (docx, pdf, excel, cad, image, etc.) also get their proper
         // schema exposed in tools/list, not just a generic fallback.
         if let Some(tool) = registry.get(name) {
+            // Prefer the Tool trait's description, but fall back to the shared
+            // tool_descriptors table when the trait returns an empty string
+            // (several core built-in tools do not override description()).
+            let description: String = {
+                let own = tool.description();
+                if own.is_empty() {
+                    crate::shared::tool_descriptors::tool_descriptor_value(name)
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Registered MCP tool")
+                        .to_string()
+                } else {
+                    own.to_string()
+                }
+            };
             json!({
                 "name": name,
-                "description": tool.description(),
+                "description": description,
                 "input_schema": tool.input_schema(),
             })
         } else {

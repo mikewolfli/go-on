@@ -26,7 +26,6 @@ pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG
 pub mod planner_executor;
 pub mod prompt_layers;
 pub mod roles;
-pub mod scheduler;
 pub mod self_evolution; // GAP-B52: Self-evolution infrastructure
 pub mod session_compressor; // BLUE44: Session summary compression for memory management
 pub mod session_context; // BLUE44: Key concept extraction & intelligent message retention

@@ -11,10 +11,9 @@ use tracing::warn;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::retry_chat_once;
 use crate::agents::{
     check_api_response, option_f64, option_u64, principles_to_text, resolve_effective_model,
-    stream_sse_events, stream_sse_to_sender_compressed, SseEventAction, StreamingConfig,
+    stream_sse_events, SseEventAction, StreamingConfig,
 };
 
 /// Anthropic Claude agent
@@ -381,39 +380,6 @@ impl AnthropicAgent {
         })
         .await
     }
-
-    /// Chat with optional SSE compression.
-    ///
-    /// When `compress_cfg` is configured, the SSE stream is gzip-decompressed
-    /// before parsing, reducing bandwidth on large responses. This is
-    /// transparent to the token extraction layer.
-    async fn chat_once_compressed(
-        &self,
-        messages: &[Message],
-        principles: &Option<Vec<String>>,
-        options: &Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-        compress_cfg: &StreamingConfig,
-    ) -> anyhow::Result<()> {
-        let api_key = resolve_secret(&self.api_key_env, "claude.api_key_env")?;
-
-        let payload = self.to_anthropic_payload(messages, principles, options, None);
-        let endpoint = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
-
-        let response = self
-            .client
-            .post(endpoint)
-            .header("x-api-key", api_key)
-            .header("anthropic-version", &self.anthropic_version)
-            .header("content-type", "application/json")
-            .json(&payload)
-            .send()
-            .await?;
-
-        let response = check_api_response(response, "claude").await?;
-
-        stream_sse_to_sender_compressed(response, sender, compress_cfg).await
-    }
 }
 
 /// Parse Anthropic SSE event
@@ -455,54 +421,13 @@ fn truncate_event_data(data: &str, max_chars: usize) -> String {
 
 #[async_trait]
 impl Agent for AnthropicAgent {
-    async fn chat(
-        &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
-        sender: crate::agent::StreamingSender,
-    ) -> crate::core::error::Result<()> {
-        // Check if SSE compression is requested via options
-        let use_compression = options
-            .as_ref()
-            .and_then(|o| o.get("sse_compress"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        if use_compression {
-            let compress_cfg = StreamingConfig {
-                enable_compression: true,
-                ..Default::default()
-            };
-
-            retry_chat_once(
-                || async {
-                    self.chat_once_compressed(
-                        &messages,
-                        &principles,
-                        &options,
-                        sender.clone(),
-                        &compress_cfg,
-                    )
-                    .await
-                    .map_err(Into::into)
-                },
-                3,
-            )
-            .await
-        } else {
-            retry_chat_once(
-                || async {
-                    self.chat_once(&messages, &principles, &options, sender.clone())
-                        .await
-                        .map_err(Into::into)
-                },
-                3,
-            )
-            .await
-        }
-    }
-
+    /// Build a single chat attempt (no retry).
+    ///
+    /// SSE compression is applied when `options["sse_compress"]` is set.
+    /// The non-compressed path uses the Anthropic-specific SSE parser (which
+    /// accumulates native tool_use input deltas); the compressed path uses the
+    /// shared decompressing stream helper (same as the former
+    /// `chat_once_compressed`).
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -527,7 +452,20 @@ impl Agent for AnthropicAgent {
 
         let response = check_api_response(response, "claude").await?;
 
-        self.stream_sse(response, sender).await
+        let use_compression = options
+            .as_ref()
+            .and_then(|o| o.get("sse_compress"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if use_compression {
+            let compress_cfg = StreamingConfig {
+                enable_compression: true,
+                ..Default::default()
+            };
+            crate::agents::stream_sse_to_sender(response, sender, &compress_cfg).await
+        } else {
+            self.stream_sse(response, sender).await
+        }
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {

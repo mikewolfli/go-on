@@ -59,26 +59,6 @@ impl McpStdioServer {
         }
     }
 
-    /// Create a new MCP stdio server with an optional AcpServer reference
-    pub fn new_with_acp(
-        agent_registry: Arc<AgentRegistry>,
-        tool_registry: Arc<ToolRegistry>,
-        server_name: String,
-        server_version: String,
-        acp_server: Option<Arc<AcpServer>>,
-    ) -> Self {
-        let mcp_server = McpServer::new_with_acp(
-            agent_registry,
-            tool_registry,
-            server_name,
-            server_version,
-            acp_server,
-        );
-        Self {
-            mcp_server: Arc::new(mcp_server),
-        }
-    }
-
     /// Run the server (reads from stdin, writes to stdout)
     pub async fn run(&self) -> Result<()> {
         let stdout = tokio::io::stdout();
@@ -304,8 +284,7 @@ impl McpHttpServer {
         bind_addr: String,
     ) -> Self {
         let sse_broadcaster = Arc::new(tokio::sync::broadcast::channel::<String>(256).0);
-        let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version)
-            .with_sse_broadcaster(Arc::clone(&sse_broadcaster));
+        let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version);
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
@@ -337,8 +316,7 @@ impl McpHttpServer {
             server_name,
             server_version,
             acp_server.clone(),
-        )
-        .with_sse_broadcaster(Arc::clone(&sse_broadcaster));
+        );
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
@@ -544,20 +522,6 @@ impl McpHttpServer {
     /// and other subscription-based notifications to connected SSE clients.
     pub fn sse_broadcaster(&self) -> Arc<SseBroadcaster> {
         Arc::clone(&self.sse_broadcaster)
-    }
-
-    /// Broadcast a JSON-RPC notification to all connected SSE clients.
-    ///
-    /// The notification is serialised as an SSE `event: message` frame with
-    /// the JSON-RPC notification body as the `data:` field.
-    pub fn broadcast_sse(&self, method: &str, params: &serde_json::Value) {
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
-        let payload = serde_json::to_string(&notification).unwrap_or_default();
-        let _ = self.sse_broadcaster.send(payload);
     }
 }
 

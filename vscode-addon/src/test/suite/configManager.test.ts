@@ -6,7 +6,7 @@ suite("configManager", () => {
     test("getConfig() returns a default config when not initialized", () => {
       const config = configManager.getConfig();
       assert.ok(config, "config should be defined");
-      assert.strictEqual(config.default_phase, "coding");
+      assert.strictEqual(config.default_phase, "think");
     });
 
     test("default config has all required sections", () => {
@@ -23,8 +23,8 @@ suite("configManager", () => {
     test("default cache config has expected values", () => {
       const config = configManager.getConfig();
       assert.strictEqual(config.cache.enabled, true);
-      assert.strictEqual(config.cache.default_ttl_seconds, 3600);
-      assert.strictEqual(config.cache.max_entries, 5000);
+      assert.strictEqual(config.cache.default_ttl_seconds, 1800);
+      assert.strictEqual(config.cache.max_entries, 2000);
       assert.ok(config.cache.path.length > 0);
     });
 
@@ -32,15 +32,15 @@ suite("configManager", () => {
       const config = configManager.getConfig();
       assert.strictEqual(config.vector.enabled, true);
       assert.strictEqual(config.vector.auto_mode, true);
-      assert.strictEqual(config.vector.dimensions, 192);
+      assert.strictEqual(config.vector.dimensions, 128);
       assert.strictEqual(config.vector.top_k, 2);
       assert.strictEqual(config.vector.min_similarity, 0.82);
-      assert.strictEqual(config.vector.max_entries, 10000);
+      assert.strictEqual(config.vector.max_entries, 3000);
     });
 
     test("default autotune config has expected values", () => {
       const config = configManager.getConfig();
-      assert.strictEqual(config.autotune.enabled, true);
+      assert.strictEqual(config.autotune.enabled, false);
       assert.strictEqual(config.autotune.evaluate_interval, 20);
       assert.strictEqual(config.autotune.max_top_k, 4);
     });
@@ -62,33 +62,30 @@ suite("configManager", () => {
 
     test("default flow has four phases", () => {
       const config = configManager.getConfig();
-      assert.strictEqual(
-        config.flow.name,
-        "Explicit Software Development Flow",
-      );
+      assert.strictEqual(config.flow.name, "Universal Adaptive");
       assert.deepStrictEqual(config.flow.phases, [
-        "planning",
-        "coding",
-        "review",
-        "delivery",
+        "think",
+        "act",
+        "check",
+        "done",
       ]);
     });
 
-    test("default phases contain planning, coding, review, delivery", () => {
+    test("default phases contain think, act, check, done", () => {
       const config = configManager.getConfig();
-      assert.ok(config.phases.planning, "planning phase should exist");
-      assert.ok(config.phases.coding, "coding phase should exist");
-      assert.ok(config.phases.review, "review phase should exist");
-      assert.ok(config.phases.delivery, "delivery phase should exist");
-      assert.strictEqual(config.phases.planning.fallback, true);
-      assert.strictEqual(config.phases.delivery.fallback, false);
+      assert.ok(config.phases.think, "think phase should exist");
+      assert.ok(config.phases.act, "act phase should exist");
+      assert.ok(config.phases.check, "check phase should exist");
+      assert.ok(config.phases.done, "done phase should exist");
+      assert.strictEqual(config.phases.think.fallback, true);
+      assert.strictEqual(config.phases.done.fallback, false);
     });
   });
 
   suite("getConfigValue", () => {
     test("returns value for a top-level key", () => {
       const val = configManager.getConfigValue("default_phase");
-      assert.strictEqual(val, "coding");
+      assert.strictEqual(val, "think");
     });
 
     test("returns value for a nested key (dot notation)", () => {
@@ -123,7 +120,7 @@ suite("configManager", () => {
       const val = configManager.getConfigValue("default_phase");
       assert.strictEqual(val, "review");
       // Reset
-      configManager.setConfigValue("default_phase", "coding");
+      configManager.setConfigValue("default_phase", "think");
     });
 
     test("sets a nested value", () => {
@@ -131,7 +128,7 @@ suite("configManager", () => {
       const val = configManager.getConfigValue("cache.max_entries");
       assert.strictEqual(val, 1000);
       // Reset
-      configManager.setConfigValue("cache.max_entries", 5000);
+      configManager.setConfigValue("cache.max_entries", 2000);
     });
 
     test("creates intermediate objects for a deeply nested path", () => {
@@ -204,12 +201,12 @@ suite("configManager", () => {
 
     test("getConfigValue for agent.model", () => {
       const model = configManager.getConfigValue("agents.deepseek.model");
-      assert.strictEqual(model, "deepseek-chat");
+      assert.strictEqual(model, "deepseek-v4-flash");
     });
 
     test("phases have principles array", () => {
       const principles = configManager.getConfigValue(
-        "phases.planning.principles",
+        "phases.think.principles",
       ) as string[];
       assert.ok(Array.isArray(principles));
       assert.ok(principles.length > 0);

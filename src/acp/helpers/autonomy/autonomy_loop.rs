@@ -642,7 +642,9 @@ mod tests {
     fn default_config_is_reasonable() {
         let cfg = AutonomyLoopConfig::default();
         assert_eq!(cfg.max_iterations, 5);
-        assert_eq!(cfg.max_tools_per_round, 8);
+        assert!(!cfg.use_brain_loop, "brain loop must be opt-in");
+        assert!(!cfg.persistent_loop, "persistent loop must be opt-in");
+        assert_eq!(cfg.operation_mode, "edit");
     }
 
     #[test]

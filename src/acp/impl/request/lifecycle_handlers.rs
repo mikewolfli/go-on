@@ -324,10 +324,6 @@ pub(super) async fn build_health_probes_payload(server: &AcpServer) -> Result<Va
                     "hits": token_cache_stats.l2_hits,
                     "misses": token_cache_stats.l2_misses,
                 },
-                "l3": {
-                    "hits": token_cache_stats.l3_hits,
-                    "misses": token_cache_stats.l3_misses,
-                },
                 "overall": {
                     "hit_rate": token_cache_stats.hit_rate(),
                     "total_tokens_saved": token_cache_stats.total_tokens_saved,

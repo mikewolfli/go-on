@@ -1828,40 +1828,6 @@ pub(crate) async fn reflect_phase(
         );
     }
 
-    // BrainLoop post-execution reflection
-    if let Some(ref harness) = server.governance_deps.harness_bus {
-        let bl = harness.brain_loop.clone();
-        let task_type = extract_task_description(&params.messages);
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        tokio::spawn(async move {
-            let _ = bl
-                .run_async(
-                    "post-chat-reflection",
-                    vec![crate::orchestration::brain_loop::BrainLoopStep {
-                        id: format!("post-chat-{}", now_ms),
-                        phase: crate::orchestration::brain_loop::BrainLoopPhase::Executing,
-                        description: format!("Post-chat reflection: {}", task_type),
-                        input: task_type,
-                        output: String::new(),
-                        started_ms: now_ms,
-                        completed_ms: 0,
-                        duration_ms: 0,
-                        status: crate::orchestration::brain_loop::StepStatus::Done,
-                        context: None,
-                        depends_on: vec![],
-                        mode: "auto".to_string(),
-                        agent: None,
-                        timeout_seconds: 60,
-                        parallel_group: None,
-                    }],
-                )
-                .await;
-        });
-    }
-
     // Metacognitive observation
     if let Some(ref cb) = server.governance_deps.capability_bus {
         let success = !exec_out.response_text.is_empty() && exec_out.last_err.is_none();

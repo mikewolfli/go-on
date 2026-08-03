@@ -1,12 +1,11 @@
-//! # Unified Execution Loop — AutonomyLoop + BrainLoop
+//! # Unified Execution Loop — AutonomyLoop
 //!
 //! This module is the **single entry point** for all tool-execution loops
-//! in go-on.  It packages two complementary engines into one cohesive API:
+//! in go-on.  It packages the real agent-driven execution loop into one API:
 //!
 //! | Layer | Module | Role |
 //! |-------|--------|------|
 //! | **Execution** | `acp/helpers/autonomy/autonomy_loop.rs` | Thin agent-driven tool executor: call LLM → parse tool tokens → run tools → loop |
-//! | **Orchestration** | `orchestration/brain_loop/` | Plan state machine: Plan → Execute → Reflect → Replan, with DAG, deep reasoning, world model |
 //!
 //! ## Architecture
 //!
@@ -16,17 +15,13 @@
 //!         ▼
 //!   run_acp_autonomy_loop()    ← YOU ARE HERE — the unified entry point
 //!         │
-//!         ├─ use_brain_loop=false ──► run_autonomy_loop()    [Execution layer]
-//!         │                                  (agent → tools → loop)
-//!         └─ use_brain_loop=true  ──► BrainLoop.run_async()  [Orchestration layer]
-//!                                            (plan → execute → reflect → replan)
+//!         └─► run_autonomy_loop()    [Execution layer]
+//!                  (agent → tools → loop)
 //! ```
 //!
-//! The two engines are **not** duplicates — they operate at different
-//! abstraction levels.  AutonomyLoop handles the raw agent/tool cycle;
-//! BrainLoop adds structured plan management on top.  The `use_brain_loop`
-//! flag selects which engine drives execution; both return the same
-//! [`AutonomyLoopResult`] format so callers are insulated from the choice.
+//! The former `use_brain_loop` branch (BrainLoop orchestration) was
+//! bookkeeping-only — it never invoked the agent or tools — so it has been
+//! removed; every request now drives the same real execution path.
 
 use std::sync::Arc;
 
@@ -38,11 +33,7 @@ use crate::acp::r#impl::chat::StreamFrame;
 use crate::agent::{Agent, Message};
 
 use super::autonomy_loop::{
-    run_autonomy_loop, AutonomyLoopConfig, AutonomyLoopParams, AutonomyLoopReport,
-    AutonomyLoopResult,
-};
-use crate::orchestration::brain_loop::{
-    BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopProfile, BrainLoopStep, StepStatus,
+    run_autonomy_loop, AutonomyLoopConfig, AutonomyLoopParams, AutonomyLoopResult,
 };
 use crate::orchestration::tool::ToolRegistry;
 
@@ -73,14 +64,6 @@ pub(crate) async fn run_acp_autonomy_loop(
     params: AcpAutonomyLoopParams,
 ) -> Result<AutonomyLoopResult> {
     let objective = extract_objective(&params.messages);
-    let option_bool = |key: &str, default: bool| -> bool {
-        params
-            .options
-            .as_ref()
-            .and_then(|map| map.get(key))
-            .and_then(Value::as_bool)
-            .unwrap_or(default)
-    };
     let config = AutonomyLoopConfig {
         max_iterations: 5,
         // Enable persistent loop so the autonomy loop doesn't stop after
@@ -90,23 +73,23 @@ pub(crate) async fn run_acp_autonomy_loop(
         operation_mode: params.operation_mode.clone(),
         acp_session_id: params.acp_session_id.clone(),
         progress_tx: params.progress_sse_tx.clone(),
-        use_brain_loop: option_bool("use_brain_loop", false), // Disabled by default.
+        // The `use_brain_loop` option is accepted for backward compatibility
+        // but both branches drive the same real execution loop: the former
+        // BrainLoop orchestration path was bookkeeping-only (it never called
+        // the agent or tools), so it has been removed in favour of the single
+        // real execution path below.
+        use_brain_loop: false,
     };
 
-    let result = if config.use_brain_loop {
-        run_acp_autonomy_loop_with_brain_loop(params.agent, &objective, &params.messages, config)
-            .await?
-    } else {
-        let loop_params = AutonomyLoopParams {
-            agent: params.agent,
-            tool_registry: params.tool_registry,
-            objective,
-            messages: params.messages,
-            principles: params.principles,
-            options: params.options,
-        };
-        run_autonomy_loop(loop_params, config, params.timeout_duration).await?
+    let loop_params = AutonomyLoopParams {
+        agent: params.agent,
+        tool_registry: params.tool_registry,
+        objective,
+        messages: params.messages,
+        principles: params.principles,
+        options: params.options,
     };
+    let result = run_autonomy_loop(loop_params, config, params.timeout_duration).await?;
 
     // Stream the final response if a channel was provided
     if let Some(tx) = params.stream_tx {
@@ -119,103 +102,6 @@ pub(crate) async fn run_acp_autonomy_loop(
     }
 
     Ok(result)
-}
-
-/// Run the autonomy loop via BrainLoop orchestrator (B51-07).
-///
-/// Converts the ACP messages and objective into a `BrainLoop` plan,
-/// runs the plan → execute → reflect → replan cycle, then converts the
-/// resulting [`BrainLoopProfile`] back into [`AutonomyLoopResult`] format.
-async fn run_acp_autonomy_loop_with_brain_loop(
-    _agent: Arc<dyn Agent>,
-    objective: &str,
-    messages: &[Message],
-    config: AutonomyLoopConfig,
-) -> Result<AutonomyLoopResult> {
-    // ── Convert messages into BrainLoop steps ────────────────────────
-    let steps: Vec<BrainLoopStep> = messages
-        .iter()
-        .enumerate()
-        .map(|(i, msg)| BrainLoopStep {
-            id: format!("msg-{}-{}", msg.role, i),
-            phase: BrainLoopPhase::Planning,
-            description: format!(
-                "{} message: {}",
-                msg.role,
-                msg.content.chars().take(120).collect::<String>()
-            ),
-            input: msg.content.clone(),
-            output: String::new(),
-            started_ms: 0,
-            completed_ms: 0,
-            duration_ms: 0,
-            status: StepStatus::Pending,
-            context: None,
-            depends_on: vec![],
-            mode: "auto".to_string(),
-            agent: None,
-            timeout_seconds: 60,
-            parallel_group: None,
-        })
-        .collect();
-
-    // ── Run the BrainLoop ────────────────────────────────────────────
-    let brain_config = BrainLoopConfig {
-        max_iterations: config.max_iterations as u32,
-        ..Default::default()
-    };
-    let brain_loop = BrainLoop::new(brain_config);
-    let profile: BrainLoopProfile = brain_loop.run_async(objective, steps).await?;
-
-    // ── Convert profile back to AutonomyLoopResult ───────────────────
-    Ok(brain_loop_profile_to_result(&profile, objective))
-}
-
-/// Convert a [`BrainLoopProfile`] to an [`AutonomyLoopResult`].
-fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> AutonomyLoopResult {
-    let response = serde_json::json!({
-        "brain_loop": true,
-        "objective": objective,
-        "total_plans": profile.total_plans,
-        "active_plans": profile.active_plans,
-        "completed_plans": profile.completed_plans,
-        "failed_plans": profile.failed_plans,
-        "total_cycles": profile.total_cycles,
-        "total_steps": profile.total_steps,
-        "avg_cycles_per_plan": profile.avg_cycles_per_plan,
-        "avg_step_score": profile.avg_step_score,
-        "convergence_info": profile.convergence_info,
-    });
-
-    let all_tools_failed = profile.failed_plans > 0 && profile.completed_plans == 0;
-    AutonomyLoopResult {
-        response: response.to_string(),
-        report: AutonomyLoopReport {
-            total_rounds: profile.total_cycles as usize,
-            total_tools: profile.total_steps as usize,
-            final_phase: if profile.failed_plans > 0 {
-                super::autonomy_loop::AutonomyPhase::Failed
-            } else if profile.completed_plans > 0 {
-                super::autonomy_loop::AutonomyPhase::Completed
-            } else {
-                super::autonomy_loop::AutonomyPhase::Planning
-            },
-            rounds: Vec::new(),
-            planner_guidance_used: false,
-            trace_alignment_coverage: 0.0,
-            total_duration_ms: 0,
-            corrective_actions_applied_total: 0,
-            corrective_action_effectiveness_ratio: 0.0,
-            stop_reason: if all_tools_failed {
-                "all_tools_failed".to_string()
-            } else if profile.failed_plans > 0 {
-                "failed".to_string()
-            } else {
-                "completed".to_string()
-            },
-        },
-        all_tools_failed,
-    }
 }
 
 /// Extract a concise objective from the message list.

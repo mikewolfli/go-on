@@ -263,10 +263,38 @@ impl WatchDog {
 
                 info!("Config hot-reloaded successfully from: {:?}", path);
                 let mut guard = self.active_config.write().await;
-                *guard = snapshot.clone();
+                let old_config = std::mem::replace(&mut *guard, snapshot.clone());
                 drop(guard);
 
-                // Notify all connected clients via state sync broadcaster
+                // Notify all connected clients via state sync broadcaster.
+                // Publish the full event set so GUI/VSCode consumers can react:
+                // ConfigReloaded always fires; AgentsChanged/ModelsChanged fire
+                // when the corresponding lists actually changed.
+                let old_agents: std::collections::HashSet<String> =
+                    old_config.provider.agents.keys().cloned().collect();
+                let new_agents: std::collections::HashSet<String> =
+                    snapshot.provider.agents.keys().cloned().collect();
+                let added: Vec<String> = new_agents.difference(&old_agents).cloned().collect();
+                let removed: Vec<String> = old_agents.difference(&new_agents).cloned().collect();
+                if !added.is_empty() || !removed.is_empty() {
+                    state_sync::publish_event(StateSyncEvent::AgentsChanged { added, removed });
+                }
+                let old_models: std::collections::HashSet<String> = old_config
+                    .provider
+                    .agents
+                    .values()
+                    .flat_map(|a| a.model.clone())
+                    .collect();
+                let new_models: std::collections::HashSet<String> = snapshot
+                    .provider
+                    .agents
+                    .values()
+                    .flat_map(|a| a.model.clone())
+                    .collect();
+                if old_models != new_models {
+                    let models: Vec<String> = new_models.into_iter().collect();
+                    state_sync::publish_event(StateSyncEvent::ModelsChanged { models });
+                }
                 state_sync::publish_event(StateSyncEvent::ConfigReloaded {
                     changed_keys: vec![], // fine-grained key tracking could be added later
                 });

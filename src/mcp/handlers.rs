@@ -296,68 +296,23 @@ impl McpServer {
             "resources/list" => Ok(self.handle_list_resources(&request).await),
             "resources/read" => self.handle_read_resource(&request).await,
             "resources/subscribe" => {
-                let uri = request
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("uri"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let uri = match uri {
-                    Some(u) => u,
-                    None => return Err(invalid_params("missing 'uri' in params")),
-                };
-                {
-                    let mut subs = self
-                        .resource_subscriptions
-                        .lock()
-                        .unwrap_or_else(|poisoned| {
-                            warn!("resource_subscriptions lock poisoned, recovering");
-                            poisoned.into_inner()
-                        });
-                    // Use the request id as the subscriber identifier.
-                    let subscriber = request
-                        .id
-                        .as_ref()
-                        .map(|id| id.to_string())
-                        .unwrap_or_default();
-                    subs.entry(uri.clone()).or_default().insert(subscriber);
-                }
-                info!("MCP: subscribed to resource '{}'", uri);
-                Ok(json!({"meta": {}}))
+                // Resource change notifications are not implemented (no event
+                // source; the resource list is static). The initialize payload
+                // no longer advertises `resources.subscribe`, so this method
+                // is rejected rather than silently accepting a subscription
+                // that would never receive updates.
+                warn!("MCP: resources/subscribe rejected (no change-notification source)");
+                return Err(coded_error(
+                    super::error_codes::METHOD_NOT_FOUND,
+                    "resources/subscribe is not supported".to_string(),
+                ));
             }
             "resources/unsubscribe" => {
-                let uri = request
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("uri"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let uri = match uri {
-                    Some(u) => u,
-                    None => return Err(invalid_params("missing 'uri' in params")),
-                };
-                {
-                    let mut subs = self
-                        .resource_subscriptions
-                        .lock()
-                        .unwrap_or_else(|poisoned| {
-                            warn!("resource_subscriptions lock poisoned, recovering");
-                            poisoned.into_inner()
-                        });
-                    let subscriber = request
-                        .id
-                        .as_ref()
-                        .map(|id| id.to_string())
-                        .unwrap_or_default();
-                    if let Some(members) = subs.get_mut(&uri) {
-                        members.retain(|s| s != &subscriber);
-                        if members.is_empty() {
-                            subs.remove(&uri);
-                        }
-                    }
-                }
-                info!("MCP: unsubscribed from resource '{}'", uri);
-                Ok(json!({"meta": {}}))
+                warn!("MCP: resources/unsubscribe rejected (no change-notification source)");
+                return Err(coded_error(
+                    super::error_codes::METHOD_NOT_FOUND,
+                    "resources/unsubscribe is not supported".to_string(),
+                ));
             }
             "prompts/list" => Ok(self.handle_list_prompts(&request).await),
             "prompts/get" => self.handle_get_prompt(&request).await,
@@ -522,9 +477,10 @@ impl McpServer {
                         }
                     }
                     "ref/resource" => {
-                        // Resource template argument completions — at minimum return
-                        // an empty list; this avoids silent failures for supported types.
-                        vec![]
+                        // Resource template argument completions — return the
+                        // actual resource URIs advertised by resources/list so
+                        // the completion is functional, not a silent empty list.
+                        vec!["go-on://agents".to_string(), "go-on://tools".to_string()]
                     }
                     other => {
                         return Err(coded_error(
@@ -639,19 +595,11 @@ impl McpServer {
         serde_json::to_value(McpInitializeResult::new(
             negotiated_version,
             json!({
-                "resources": {
-                    "subscribe": true,
-                    "listChanged": true
-                },
-                "tools": {
-                    "listChanged": true
-                },
-                "prompts": {
-                    "listChanged": true
-                },
-                "roots": {
-                    "listChanged": false
-                },
+                // No change-notification event source exists for resources,
+                // tools, or prompts (resource list is static), so listChanged
+                // capabilities are NOT advertised — a server must not declare
+                // listChanged when it never sends the corresponding
+                // notifications. SSE heartbeats still keep connections alive.
                 "sampling": {},
                 "experimental": {
                     "agents": {}

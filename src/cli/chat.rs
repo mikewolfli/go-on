@@ -91,9 +91,6 @@ fn save_notify() -> &'static Notify {
 /// Debounce flag for session auto-save — prevents concurrent disk writes.
 static SAVE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-/// Cached ToolRegistry — created once to avoid recreating ~100 tools per call.
-static TOOL_REGISTRY: OnceLock<ToolRegistry> = OnceLock::new();
-
 /// Cached InjectionDetector for terminal chat — created once per session.
 /// Uses default detection config (threshold 0.7, contamination check enabled).
 static INJECTION_DETECTOR: OnceLock<crate::security::prompt_injection::InjectionDetector> =
@@ -110,9 +107,11 @@ fn injection_detector() -> &'static crate::security::prompt_injection::Injection
 /// Type alias for the safeguard approval return type to satisfy clippy::type_complexity.
 type SafeguardApprovalResult<'a> = Result<(&'a [(String, String)], Option<usize>)>;
 
-/// Returns the global ToolRegistry reference.
+/// Returns the global ToolRegistry reference (shared process-wide singleton).
 fn tool_registry() -> &'static ToolRegistry {
-    TOOL_REGISTRY.get_or_init(ToolRegistry::default)
+    static REGISTRY: OnceLock<&'static ToolRegistry> = OnceLock::new();
+    let arc = crate::acp::r#impl::request::tools_pack::global_tool_registry();
+    REGISTRY.get_or_init(|| Arc::as_ref(arc))
 }
 
 /// RAII guard that resets SAVE_IN_FLIGHT and notifies waiters on drop (prevents permanent lock).

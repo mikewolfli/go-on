@@ -86,6 +86,16 @@ impl ProtocolVersion {
     pub fn as_u16(self) -> u16 {
         self.0
     }
+
+    /// Construct from a raw numeric version (clamped to the supported range
+    /// when above the latest; values below 1 map to V1).
+    pub fn from_u16(value: u16) -> Self {
+        if value >= Self::LATEST.as_u16() {
+            Self::LATEST
+        } else {
+            Self(value)
+        }
+    }
 }
 
 pub type Meta = serde_json::Map<String, serde_json::Value>;

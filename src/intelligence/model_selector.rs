@@ -323,28 +323,22 @@ mod tests {
     }
 
     #[test]
-    fn test_recommended_strategy_adaptive() {
-        let policy = AutomaticModePolicy::AdaptiveCapability;
-
+    fn test_complex_vs_simple_criteria_strategy() {
+        // Verifies selection strategy is respected per criteria class.
         let complex = SelectionCriteria::complex();
-        assert_eq!(
-            ModelSelector::recommended_strategy(&policy, &complex),
-            ModelSelectionStrategy::MostCapable,
-            "complex tasks should use most capable"
-        );
+        let models = vec![ModelCharacteristics {
+            id: "m1".to_string(),
+            cost_per_request_cents: 10,
+            latency_ms: 100,
+            capability_tier: 5,
+            supports_vision: false,
+            supports_function_calling: true,
+            excels_at_code: true,
+            context_window: 8192,
+        }];
 
-        let fast = SelectionCriteria::fast_response();
-        assert_eq!(
-            ModelSelector::recommended_strategy(&policy, &fast),
-            ModelSelectionStrategy::Fastest,
-            "fast response should use fastest"
-        );
-
-        let simple = SelectionCriteria::minimal();
-        assert_eq!(
-            ModelSelector::recommended_strategy(&policy, &simple),
-            ModelSelectionStrategy::Balanced,
-            "simple tasks should use balanced"
-        );
+        let selected =
+            ModelSelector::select_model(&complex, &models, ModelSelectionStrategy::MostCapable);
+        assert_eq!(selected.as_deref(), Some("m1"));
     }
 }

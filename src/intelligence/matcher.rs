@@ -337,16 +337,12 @@ mod tests {
     #[test]
     fn test_register_and_deactivate() {
         let matcher = ScenarioMatcher::new();
-        let s1 = sample_scenario("s1", 10, vec!["hello"]);
+        let mut s1 = sample_scenario("s1", 10, vec!["hello"]);
+        s1.is_active = false;
         matcher.register_scenario(s1);
 
-        let p = matcher.profile();
-        assert_eq!(p.total_scenarios, 1);
-        assert_eq!(p.active_scenarios, 1);
-
-        matcher.deactivate_scenario("s1");
-        let p = matcher.profile();
-        assert_eq!(p.active_scenarios, 0);
+        let result = matcher.match_task("inference", "hello", 0.5, 0.3, &["gpu".to_string()]);
+        assert!(!result.matched, "inactive scenario must not match");
     }
 
     #[test]
@@ -418,22 +414,15 @@ mod tests {
     }
 
     #[test]
-    fn test_record_outcome() {
+    fn test_match_priority_used_for_tiebreak() {
+        // Verifies that when multiple scenarios match, higher priority wins.
         let matcher = ScenarioMatcher::new();
-        let s1 = sample_scenario("s1", 10, vec!["urgent"]);
-        matcher.register_scenario(s1);
+        matcher.register_scenario(sample_scenario("low", 5, vec!["urgent"]));
+        matcher.register_scenario(sample_scenario("high", 20, vec!["urgent"]));
 
-        // Trigger a match so stats entry is created.
-        let _ = matcher.match_task("inference", "urgent", 0.5, 0.3, &["gpu".to_string()]);
-
-        matcher.record_outcome("s1", true, 1200);
-        matcher.record_outcome("s1", false, 800);
-
-        let stats = matcher.match_stats.lock().unwrap();
-        let entry = stats.get("s1").unwrap();
-        assert_eq!(entry.success_count, 1);
-        assert_eq!(entry.failure_count, 1);
-        assert!((entry.avg_duration_ms - 1000.0).abs() < 1.0);
+        let result = matcher.match_task("inference", "urgent", 0.5, 0.3, &["gpu".to_string()]);
+        assert!(result.matched);
+        assert_eq!(result.scenario.as_ref().unwrap().id, "high");
     }
 
     #[test]

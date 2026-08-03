@@ -146,7 +146,6 @@ fn openai_config_with_inflight(
         },
         compliance: None,
         startup_context: None,
-        scheduler: None,
         reputation: None,
         protocol: None,
     }

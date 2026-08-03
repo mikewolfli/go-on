@@ -4,18 +4,16 @@
 //!
 //! - **L1**: Exact-match cache (fastest, smallest — in-memory LRU HashMap)
 //! - **L2**: Semantic-similarity cache (medium — in-memory vector index)
-//! - **L3**: Template-structure cache (largest, persistent — SQLite-backed)
 //!
 //! Each level targets a specific context-length class:
 //! - **Short** (0-500 tokens):  L1 optimized
-//! - **Medium** (500-2000 tokens): L2 optimized
-//! - **Long** (2000+ tokens): L3 optimized
+//! - **Medium/Long** (500+ tokens): L2 optimized
 //!
 //! The cache integrates with the Agent trait via `CachedAgentWrapper` and feeds
 //! statistics back into the reinforcement-learning loop for adaptive eviction.
 
 // All sub-module code is inlined in this file.
-// L1, L2, L3, stats, and wrapper are in the same module.
+// L1, L2, stats, and wrapper are in the same module.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -41,9 +39,9 @@ use crate::core::error::Result as AppResult;
 pub enum ContextLengthClass {
     /// 0-500 tokens → L1 cache targets this class
     Short,
-    /// 500-2000 tokens → L2 cache targets this class
+    /// 500+ tokens → L2 cache targets this class
     Medium,
-    /// 2000+ tokens → L3 cache targets this class
+    /// 2000+ tokens — legacy long-input class; served by L2 like Medium
     Long,
 }
 
@@ -105,15 +103,13 @@ impl CacheEntry {
 
 /// Multi-level token cache orchestrator.
 ///
-/// Routes lookup requests through L1 → L2 → L3, tracks hit rates per level,
+/// Routes lookup requests through L1 → L2, tracks hit rates per level,
 /// and reports savings statistics.
 pub struct TokenMultiLevelCache {
     /// L1: Exact-match cache
     pub l1: RwLock<L1ExactCache>,
     /// L2: Semantic-similarity cache
     pub l2: RwLock<L2SemanticCache>,
-    /// L3: Template-structure cache
-    pub l3: RwLock<L3TemplateCache>,
     /// Aggregate statistics across all levels
     pub stats: RwLock<TokenCacheStats>,
     /// Whether the cache is enabled (lock-free atomic flag)
@@ -124,11 +120,10 @@ pub struct TokenMultiLevelCache {
 
 impl TokenMultiLevelCache {
     /// Create a new multi-level cache with default capacities.
-    pub fn new(l1_capacity: usize, l2_capacity: usize, l3_store_path: &str) -> Self {
+    pub fn new(l1_capacity: usize, l2_capacity: usize) -> Self {
         Self {
             l1: RwLock::new(L1ExactCache::new(l1_capacity)),
             l2: RwLock::new(L2SemanticCache::new(l2_capacity)),
-            l3: RwLock::new(L3TemplateCache::new(l3_store_path)),
             stats: RwLock::new(TokenCacheStats::default()),
             enabled: AtomicBool::new(true),
             ttl_ms: AtomicU64::new(0),
@@ -137,7 +132,7 @@ impl TokenMultiLevelCache {
 
     /// Look up a cache entry by input text.
     ///
-    /// Routes: L1 (exact) → L2 (semantic) → L3 (template).
+    /// Routes: L1 (exact) → L2 (semantic).
     /// Uses **read** locks for the lookup path to avoid unnecessary contention.
     /// Returns the best matching entry and which level it was found at.
     pub async fn lookup(
@@ -172,7 +167,7 @@ impl TokenMultiLevelCache {
             }
         }
 
-        // L2: Semantic match (medium-length inputs) — read-only peek
+        // L2: Semantic match (medium/long inputs) — read-only peek
         if context_class != ContextLengthClass::Short {
             let query_vec = simple_embedding(input);
             if let Some(entry) = self.l2.read().await.peek_similar(&query_vec) {
@@ -186,21 +181,6 @@ impl TokenMultiLevelCache {
                             .record_hit(CacheLevel::L2, entry.token_count);
                         return Some((CacheLevel::L2, entry));
                     }
-                }
-            }
-        }
-
-        // L3: Template match (long inputs)
-        if context_class == ContextLengthClass::Long {
-            if let Some(entry) = self.l3.read().await.match_template(input) {
-                if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
-                    // Skip expired template entry
-                } else if entry.output.len() > 10 {
-                    self.stats
-                        .write()
-                        .await
-                        .record_hit(CacheLevel::L3, entry.token_count);
-                    return Some((CacheLevel::L3, entry));
                 }
             }
         }
@@ -251,11 +231,6 @@ impl TokenMultiLevelCache {
             self.l2.write().await.add(vec, entry.clone());
         }
 
-        // Store in L3 if very long
-        if token_count > 2000 {
-            self.l3.write().await.add_template(&entry);
-        }
-
         self.stats.write().await.total_entries += 1;
     }
 
@@ -282,7 +257,6 @@ impl TokenMultiLevelCache {
 pub enum CacheLevel {
     L1,
     L2,
-    L3,
 }
 
 impl std::fmt::Display for CacheLevel {
@@ -290,7 +264,6 @@ impl std::fmt::Display for CacheLevel {
         match self {
             CacheLevel::L1 => write!(f, "L1"),
             CacheLevel::L2 => write!(f, "L2"),
-            CacheLevel::L3 => write!(f, "L3"),
         }
     }
 }
@@ -578,250 +551,6 @@ impl L2SemanticCache {
     }
 }
 
-// L3: Template-Structure Cache
-//
-// Largest, most persistent tier. Identifies structural patterns in
-// long-context queries (2000+ tokens) and caches reusable templates.
-// Uses SQLite for persistence across restarts.
-
-// CacheEntry is already in scope from the shared types above.
-
-/// A reusable template extracted from a long-context interaction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplatePattern {
-    /// Pattern name / category (e.g., "code_review", "arch_design", "debug_analysis")
-    pub pattern_type: String,
-    /// Input structural signature (hash of normalized structure)
-    pub structure_signature: String,
-    /// Common structural tokens (canonicalized)
-    pub structural_prefix: String,
-    /// Output template with `{placeholder}` markers
-    pub output_template: String,
-    /// How many times this template has been reused
-    pub hit_count: u64,
-    /// Estimated tokens saved per use
-    pub estimated_savings: usize,
-}
-
-/// L3 template-structure cache.
-pub struct L3TemplateCache {
-    /// Known templates by structure signature
-    templates: HashMap<String, TemplatePattern>,
-    /// Disk path for template persistence
-    store_path: Option<String>,
-    /// Maximum number of templates before FIFO eviction
-    max_templates: usize,
-}
-
-impl L3TemplateCache {
-    pub fn new(store_path: &str) -> Self {
-        let store_path = if store_path.is_empty() {
-            None
-        } else {
-            Some(store_path.to_string())
-        };
-        let mut cache = Self {
-            templates: HashMap::new(),
-            store_path,
-            max_templates: 500,
-        };
-        // Restore any previously persisted templates.
-        if let Err(e) = cache.load_from_disk() {
-            tracing::warn!("L3TemplateCache: failed to load from disk: {e}");
-        }
-        cache
-    }
-
-    /// Extract a structural signature from input text.
-    ///
-    /// Normalizes the text by:
-    /// - Lowercasing
-    /// - Replacing variable names with `{var}`
-    /// - Replacing numbers with `{n}`
-    /// - Keeping structural keywords (if, for, class, fn, etc.)
-    fn extract_signature(input: &str) -> String {
-        let mut sig = String::new();
-        let mut prev_was_code = false;
-
-        for word in input.split_whitespace() {
-            let lower = word.to_ascii_lowercase();
-            let is_code_keyword = matches!(
-                lower.as_str(),
-                "fn" | "struct"
-                    | "impl"
-                    | "trait"
-                    | "enum"
-                    | "class"
-                    | "def"
-                    | "function"
-                    | "if"
-                    | "for"
-                    | "while"
-                    | "match"
-                    | "import"
-                    | "use"
-                    | "mod"
-                    | "pub"
-                    | "async"
-                    | "await"
-                    | "let"
-                    | "mut"
-                    | "const"
-                    | "return"
-                    | "type"
-                    | "where"
-                    | "error"
-                    | "result"
-                    | "option"
-                    | "ok"
-                    | "none"
-            );
-
-            if is_code_keyword {
-                sig.push_str(&lower);
-                sig.push(' ');
-                prev_was_code = true;
-            } else if lower.chars().all(|c| c.is_numeric() || c == '.') {
-                sig.push_str("{n} ");
-                prev_was_code = false;
-            } else {
-                // Check if it looks like a variable/symbol
-                let is_symbol = word.contains(|c: char| !c.is_alphanumeric() && c != ' ');
-                if prev_was_code && is_symbol {
-                    sig.push_str("{var} ");
-                }
-                prev_was_code = false;
-            }
-        }
-
-        sig
-    }
-
-    /// Try to match input against known templates.
-    pub fn match_template(&self, input: &str) -> Option<CacheEntry> {
-        let sig = Self::extract_signature(input);
-        if sig.len() < 10 {
-            return None;
-        }
-
-        // Check for exact structural match
-        if let Some(template) = self.templates.get(&sig) {
-            let filled = template.output_template.replace("{input}", input);
-            // Return a synthetic CacheEntry for this template hit
-            return Some(CacheEntry {
-                key: template.structure_signature.clone(),
-                input: input.to_string(),
-                output: filled,
-                token_count: template.estimated_savings,
-                context_class: ContextLengthClass::Long,
-                hit_count: template.hit_count,
-                created_at: 0,
-                last_access_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64,
-                agent_name: None,
-                model: None,
-            });
-        }
-
-        None
-    }
-
-    /// Add a new template derived from a cache entry.
-    pub fn add_template(&mut self, entry: &CacheEntry) {
-        let sig = Self::extract_signature(&entry.input);
-        if sig.len() < 10 || self.templates.contains_key(&sig) {
-            return;
-        }
-
-        // Evict oldest template when at capacity.
-        if self.templates.len() >= self.max_templates {
-            if let Some(oldest) = self.templates.keys().next().cloned() {
-                self.templates.remove(&oldest);
-            }
-        }
-
-        let pattern = TemplatePattern {
-            pattern_type: if entry.input.contains("bug")
-                || entry.input.contains("fix")
-                || entry.input.contains("error")
-            {
-                "debug_analysis".to_string()
-            } else if entry.input.contains("review") || entry.input.contains("audit") {
-                "code_review".to_string()
-            } else if entry.input.contains("design") || entry.input.contains("architecture") {
-                "arch_design".to_string()
-            } else {
-                "general".to_string()
-            },
-            structure_signature: sig.clone(),
-            structural_prefix: entry.input.chars().take(200).collect(),
-            output_template: entry.output.clone(),
-            hit_count: 0,
-            estimated_savings: entry.token_count / 2,
-        };
-
-        self.templates.insert(sig, pattern);
-
-        // Persist to disk after each new template.
-        if let Err(e) = self.save_to_disk() {
-            tracing::warn!("L3TemplateCache: failed to persist to disk: {e}");
-        }
-    }
-
-    /// Clear all templates.
-    pub fn clear(&mut self) {
-        self.templates.clear();
-    }
-
-    /// Number of known templates.
-    pub fn len(&self) -> usize {
-        self.templates.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.templates.is_empty()
-    }
-
-    /// All known patterns (for reporting).
-    pub fn patterns(&self) -> Vec<TemplatePattern> {
-        self.templates.values().cloned().collect()
-    }
-
-    /// Persist all templates to disk at `store_path`.
-    /// Does nothing if `store_path` is `None`.
-    pub fn save_to_disk(&self) -> std::io::Result<()> {
-        let path = match &self.store_path {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-        let json = serde_json::to_string_pretty(&self.templates).map_err(std::io::Error::other)?;
-        // Write atomically via a temp file, then rename.
-        let tmp = format!("{}.tmp", path);
-        std::fs::write(&tmp, &json)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
-    }
-
-    /// Load templates from disk at `store_path`.
-    /// Does nothing if `store_path` is `None` or the file does not exist.
-    pub fn load_from_disk(&mut self) -> std::io::Result<()> {
-        let path = match &self.store_path {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-        if !std::path::Path::new(path).exists() {
-            return Ok(());
-        }
-        let content = std::fs::read_to_string(path)?;
-        let loaded: HashMap<String, TemplatePattern> =
-            serde_json::from_str(&content).map_err(std::io::Error::other)?;
-        self.templates = loaded;
-        Ok(())
-    }
-}
-
 // Cache statistics tracking and reporting.
 
 // CacheLevel and ContextLengthClass are already in scope from the shared types above.
@@ -835,9 +564,6 @@ pub struct TokenCacheStats {
     // L2 stats
     pub l2_hits: u64,
     pub l2_misses: u64,
-    // L3 stats
-    pub l3_hits: u64,
-    pub l3_misses: u64,
     // Total tracking
     pub total_entries: usize,
     pub total_tokens_saved: u64,
@@ -857,7 +583,6 @@ impl TokenCacheStats {
         match level {
             CacheLevel::L1 => self.l1_hits += 1,
             CacheLevel::L2 => self.l2_hits += 1,
-            CacheLevel::L3 => self.l3_hits += 1,
         }
         self.total_tokens_saved += tokens_saved as u64;
         self.total_tokens_served += tokens_saved as u64;
@@ -875,7 +600,7 @@ impl TokenCacheStats {
                 self.medium_misses += 1;
             }
             ContextLengthClass::Long => {
-                self.l3_misses += 1;
+                self.l2_misses += 1;
                 self.long_misses += 1;
             }
         }
@@ -888,8 +613,8 @@ impl TokenCacheStats {
 
     /// Hit rate for a given level (0.0 - 1.0).
     pub fn hit_rate(&self) -> f64 {
-        let total_hits = self.l1_hits + self.l2_hits + self.l3_hits;
-        let total_misses = self.l1_misses + self.l2_misses + self.l3_misses;
+        let total_hits = self.l1_hits + self.l2_hits;
+        let total_misses = self.l1_misses + self.l2_misses;
         let total = total_hits + total_misses;
         if total == 0 {
             0.0
@@ -900,8 +625,8 @@ impl TokenCacheStats {
 
     /// Convert to JSON for reporting.
     pub fn to_json(&self) -> serde_json::Value {
-        let total_hits = self.l1_hits + self.l2_hits + self.l3_hits;
-        let total_misses = self.l1_misses + self.l2_misses + self.l3_misses;
+        let total_hits = self.l1_hits + self.l2_hits;
+        let total_misses = self.l1_misses + self.l2_misses;
         let total = total_hits + total_misses;
         let overall_hit_rate = if total == 0 {
             0.0
@@ -919,11 +644,6 @@ impl TokenCacheStats {
                 "hits": self.l2_hits,
                 "misses": self.l2_misses,
                 "hit_rate": if self.l2_hits + self.l2_misses == 0 { 0.0 } else { self.l2_hits as f64 / (self.l2_hits + self.l2_misses) as f64 },
-            },
-            "l3": {
-                "hits": self.l3_hits,
-                "misses": self.l3_misses,
-                "hit_rate": if self.l3_hits + self.l3_misses == 0 { 0.0 } else { self.l3_hits as f64 / (self.l3_hits + self.l3_misses) as f64 },
             },
             "overall": {
                 "hit_rate": overall_hit_rate,

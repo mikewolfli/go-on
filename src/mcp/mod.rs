@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) compatibility layer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use crate::acp::server::AcpServer;
@@ -41,12 +41,6 @@ pub struct McpServer {
     pub logging_level: Arc<Mutex<Option<String>>>,
     /// Request IDs flagged by `notifications/cancelled`.
     pub(crate) cancelled_requests: Arc<Mutex<HashSet<String>>>,
-    /// Resource subscription tracking: resource URI → set of subscriber identifiers.
-    pub(crate) resource_subscriptions: Arc<Mutex<HashMap<String, HashSet<String>>>>,
-    /// Optional SSE broadcaster for pushing real-time notifications to
-    /// connected SSE clients (resource changes, tool list changes, etc.).
-    /// Set by `McpHttpServer` during construction.
-    pub(crate) sse_broadcaster: Option<Arc<crate::protocol::mcp_server::SseBroadcaster>>,
 
     /// Tracks whether the client has sent a valid `initialize` request.
     /// Used to enforce MCP two-phase initialization ordering — the server
@@ -55,27 +49,20 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    /// Create a new MCP server instance
+    /// Create a new MCP server instance (no ACP features).
     pub fn new(
         agent_registry: Arc<AgentRegistry>,
         tool_registry: Arc<ToolRegistry>,
         server_name: String,
         server_version: String,
     ) -> Self {
-        Self {
+        Self::new_with_acp(
             agent_registry,
             tool_registry,
-            server_info: ServerInfo {
-                name: server_name,
-                version: server_version,
-            },
-            logging_level: Arc::new(Mutex::new(None)),
-            cancelled_requests: Arc::new(Mutex::new(HashSet::new())),
-            resource_subscriptions: Arc::new(Mutex::new(HashMap::new())),
-            acp_server: None,
-            sse_broadcaster: None,
-            initialized: AtomicBool::new(false),
-        }
+            server_name,
+            server_version,
+            None,
+        )
     }
 
     /// Create a new MCP server instance with an optional AcpServer reference
@@ -95,22 +82,9 @@ impl McpServer {
             },
             logging_level: Arc::new(Mutex::new(None)),
             cancelled_requests: Arc::new(Mutex::new(HashSet::new())),
-            resource_subscriptions: Arc::new(Mutex::new(HashMap::new())),
             acp_server,
-            sse_broadcaster: None,
             initialized: AtomicBool::new(false),
         }
-    }
-
-    /// Attach an SSE broadcaster to this MCP server instance.
-    /// Enables real-time push of resource-change and other subscription-based
-    /// notifications to SSE-connected clients.
-    pub fn with_sse_broadcaster(
-        mut self,
-        broadcaster: Arc<crate::protocol::mcp_server::SseBroadcaster>,
-    ) -> Self {
-        self.sse_broadcaster = Some(broadcaster);
-        self
     }
 
     /// Get the skill registry if connected to an ACP server.

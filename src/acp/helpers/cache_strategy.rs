@@ -108,8 +108,6 @@ impl CacheStrategy {
                 let cached_vec = crate::intelligence::token_cache::simple_embedding(&entry.input);
                 crate::shared::math::cosine_similarity_f32(&input_vec, &cached_vec)
             }
-            "L3" if entry.output.len() > 50 => 0.96,
-            "L3" => 0.0,
             _ => 0.0,
         };
 
@@ -200,16 +198,17 @@ mod tests {
     }
 
     #[test]
-    fn decide_from_entry_handles_l3_template_hits() {
+    fn decide_from_entry_handles_unknown_level_as_miss() {
+        // L3 template tier was removed (fake implementation); any unknown
+        // level string falls back to the default Miss path.
         let entry = CacheEntry::new(
             "k".to_string(),
             "input".to_string(),
-            "a very long cached output that should qualify as a strong structural match"
-                .to_string(),
+            "a very long cached output".to_string(),
             20,
         );
         let decision = CacheStrategy::decide_from_entry("L3", &entry, "input", false);
-        assert!(matches!(decision, CacheDecision::Hit { .. }));
+        assert!(matches!(decision, CacheDecision::Miss));
     }
 
     // ── Cache strategy: more bypass edge cases ───────────────────────
@@ -282,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_from_entry_l3_short_output_is_miss() {
+    fn decide_from_entry_unknown_level_short_output_is_miss() {
         let entry = CacheEntry::new("k".to_string(), "in".to_string(), "ab".to_string(), 2);
         let decision = CacheStrategy::decide_from_entry("L3", &entry, "in", false);
         assert!(matches!(decision, CacheDecision::Miss));

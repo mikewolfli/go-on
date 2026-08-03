@@ -140,26 +140,19 @@ pub struct SkillMarketRegistry {
 /// Internal index structure for `goon-skill-index.yaml` / `.json` parsing.
 #[derive(Deserialize)]
 struct SkillIndex {
-    #[expect(
-        dead_code,
-        reason = "Deserialized from skill index; reserved for future validation"
-    )]
+    // Deserialization-only fields: required by the index schema but not read
+    // by the mapping logic (kept for forward-compatible schema validation).
+    #[allow(dead_code)]
     schema_version: String,
     updated_at: String,
-    #[expect(
-        dead_code,
-        reason = "Deserialized from skill index; reserved for future display"
-    )]
+    #[allow(dead_code)]
     maintainers: Option<Vec<MaintainerEntry>>,
     skills: Vec<SkillIndexEntry>,
 }
 
 #[derive(Deserialize)]
 struct MaintainerEntry {
-    #[expect(
-        dead_code,
-        reason = "Deserialized from skill index; reserved for future attribution"
-    )]
+    #[allow(dead_code)]
     github: String,
 }
 
@@ -253,6 +246,10 @@ impl SkillMarketRegistry {
     }
 
     /// Fetch the latest skill listings from the remote registry.
+    ///
+    /// Tries, in order: the registry JSON API, the GitHub skill index at
+    /// `<registry>/goon-skill-index.json` (when the API returns nothing), and
+    /// finally the built-in sample list.
     pub async fn refresh(&self) -> Result<usize> {
         // Try fetching remote skills from the registry API endpoint.
         let remote_result = self.fetch_remote_skills().await;
@@ -267,13 +264,32 @@ impl SkillMarketRegistry {
                 remote_skills
             }
             _ => {
-                // Fall back to built-in sample skills
-                let builtin = Self::builtin_skills();
-                info!(
-                    "Using {} built-in skills (remote fetch failed or returned empty)",
-                    builtin.len()
+                // Try the community GitHub skill index before falling back to
+                // the built-in samples. Supports both goon-skill-index.json and
+                // goon-skill-index.yaml (feature-gated).
+                let index_url = format!(
+                    "{}/goon-skill-index.json",
+                    self.registry_url.trim_end_matches('/')
                 );
-                builtin
+                match self.fetch_github_index(&index_url).await {
+                    Ok(indexed) if !indexed.is_empty() => {
+                        info!(
+                            "Fetched {} skills from GitHub skill index {}",
+                            indexed.len(),
+                            index_url
+                        );
+                        indexed
+                    }
+                    _ => {
+                        // Fall back to built-in sample skills
+                        let builtin = Self::builtin_skills();
+                        info!(
+                            "Using {} built-in skills (remote fetch failed or returned empty)",
+                            builtin.len()
+                        );
+                        builtin
+                    }
+                }
             }
         };
 
@@ -391,23 +407,32 @@ impl SkillMarketRegistry {
 
         self.installations.write().await.push(installation.clone());
 
-        // Register into the local skill registry
+        // Register into the local skill registry using the real SKILL.md
+        // content when available (builtin skills map to skills/<name>/SKILL.md).
+        // A placeholder prompt_template is never registered: a skill that
+        // cannot be resolved to real instructions is rejected instead.
         {
+            let prompt_template = Self::resolve_market_skill_template(&item).await?;
+            let manifest =
+                crate::orchestration::skill_import::parse_skill_md(prompt_template.as_bytes())
+                    .with_context(|| format!("failed to parse SKILL.md for '{}'", item.name))?;
+            let input_schema = match &manifest.input_schema {
+                serde_json::Value::Object(map) => map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect::<HashMap<String, String>>(),
+                _ => HashMap::new(),
+            };
             let mut registry = self
                 .skill_registry
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
-            let skill = crate::orchestration::skill::PromptBasedSkill {
-                name: item.name.clone(),
-                description: item.description.clone(),
-                prompt_template: format!("You are the '{}' skill. {}", item.name, item.description),
-                input_schema: HashMap::new(),
-                timeout_secs: 120,
-                max_retries: 2,
-                disable_model_invocation: false,
-                policy: None,
-            };
-            if let Err(e) = registry.register(Arc::new(skill)) {
+            if let Err(e) = registry.create_skill_from_prompt(
+                &item.name,
+                &item.description,
+                &prompt_template,
+                input_schema,
+            ) {
                 info!(
                     "Failed to register '{}' into skill registry: {}",
                     item.name, e
@@ -426,6 +451,99 @@ impl SkillMarketRegistry {
         );
 
         Ok(installation)
+    }
+
+    /// Resolve the real SKILL.md template content for a marketplace item.
+    ///
+    /// - `SkillSource::Registry` (builtin): reads `skills/<name>/SKILL.md` from the
+    ///   project directory.
+    /// - `SkillSource::Local`: reads the file directly.
+    /// - `SkillSource::Url` / `SkillSource::GitHub`: fetched over HTTP (raw URL).
+    ///
+    /// Returns an error when the content cannot be resolved, so installs never
+    /// register a placeholder template.
+    async fn resolve_market_skill_template(item: &SkillMarketItem) -> Result<String> {
+        match &item.source {
+            SkillSource::Registry { name, .. } => {
+                // Builtin listing names may differ from the on-disk directory
+                // (e.g. "code-reviewer" maps to skills/code-review/).
+                let dir = match name.as_str() {
+                    "code-reviewer" => "code-review",
+                    "review-pr" => "code-review",
+                    "embed-text" => "classify-text",
+                    "commit-message-generator" => "changelog-generator",
+                    "decision-logger" => "note-taking",
+                    "dependency-analyzer" => "data-pipeline-optimizer",
+                    other => other,
+                };
+                let path = std::path::Path::new("skills").join(dir).join("SKILL.md");
+                tokio::fs::read_to_string(&path)
+                    .await
+                    .with_context(|| format!("builtin skill file {} not found", path.display()))
+            }
+            SkillSource::Local { path } => tokio::fs::read_to_string(path)
+                .await
+                .with_context(|| format!("local skill file {} not found", path)),
+            SkillSource::Url { url, .. } => {
+                static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+                let client = HTTP_CLIENT.get_or_init(|| {
+                    reqwest::Client::builder()
+                        .timeout(Duration::from_secs(15))
+                        .user_agent("go-on-skill-market/1.0")
+                        .build()
+                        .expect("failed to create HTTP client for skill fetch")
+                });
+                let response = client
+                    .get(url)
+                    .send()
+                    .await
+                    .context("failed to fetch skill template")?;
+                if !response.status().is_success() {
+                    anyhow::bail!("skill fetch returned status {}", response.status());
+                }
+                response
+                    .text()
+                    .await
+                    .context("failed to read skill template body")
+            }
+            SkillSource::GitHub {
+                owner,
+                repo,
+                path,
+                branch,
+            } => {
+                let skill_path = if path.is_empty() {
+                    "SKILL.md".to_string()
+                } else if path.ends_with('/') {
+                    format!("{path}SKILL.md")
+                } else {
+                    format!("{path}/SKILL.md")
+                };
+                let raw_url = format!(
+                    "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{skill_path}"
+                );
+                static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+                let client = HTTP_CLIENT.get_or_init(|| {
+                    reqwest::Client::builder()
+                        .timeout(Duration::from_secs(15))
+                        .user_agent("go-on-skill-market/1.0")
+                        .build()
+                        .expect("failed to create HTTP client for skill fetch")
+                });
+                let response = client
+                    .get(&raw_url)
+                    .send()
+                    .await
+                    .context("failed to fetch skill template from GitHub")?;
+                if !response.status().is_success() {
+                    anyhow::bail!("skill fetch returned status {}", response.status());
+                }
+                response
+                    .text()
+                    .await
+                    .context("failed to read skill template body")
+            }
+        }
     }
 
     /// Recursively install dependencies for a skill.

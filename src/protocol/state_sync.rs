@@ -61,40 +61,6 @@ pub enum StateSyncEvent {
     },
 }
 
-impl StateSyncEvent {
-    /// Human-readable summary for display in client status bars / notifications.
-    /// Public API surface for state sync event consumers
-    #[allow(dead_code, reason = "public API for external crate consumers")]
-    pub fn summary(&self) -> String {
-        match self {
-            StateSyncEvent::ModelsChanged { models } => {
-                format!("Models changed ({} models)", models.len())
-            }
-            StateSyncEvent::ConfigReloaded { changed_keys } => {
-                if changed_keys.is_empty() {
-                    "Config reloaded".to_string()
-                } else {
-                    format!("Config reloaded: {}", changed_keys.join(", "))
-                }
-            }
-            StateSyncEvent::AgentsChanged { added, removed } => {
-                let mut parts = vec![];
-                if !added.is_empty() {
-                    parts.push(format!("+{} agents", added.len()));
-                }
-                if !removed.is_empty() {
-                    parts.push(format!("-{} agents", removed.len()));
-                }
-                format!("Agents changed ({})", parts.join(", "))
-            }
-            StateSyncEvent::BackendRestarting { reason, .. } => {
-                format!("Backend restarting: {}", reason)
-            }
-            StateSyncEvent::Heartbeat { .. } => "heartbeat".to_string(),
-        }
-    }
-}
-
 /// Shared state sync broadcaster accessible from anywhere in the backend.
 ///
 /// Uses a global static `broadcast::Sender` so that config reload observers,
@@ -175,18 +141,33 @@ mod tests {
     }
 
     #[test]
-    fn test_summary() {
-        let e1 = StateSyncEvent::ModelsChanged {
-            models: vec!["gpt-4".into(), "claude-3".into()],
-        };
-        assert!(e1.summary().contains("2 models"));
-
-        let e2 = StateSyncEvent::ConfigReloaded {
-            changed_keys: vec![],
-        };
-        assert_eq!(e2.summary(), "Config reloaded");
-
-        let e3 = StateSyncEvent::Heartbeat { timestamp: 0 };
-        assert_eq!(e3.summary(), "heartbeat");
+    fn test_all_event_variants_roundtrip_serde() {
+        // Structured event fields are the single contract consumed by clients;
+        // verify every variant serializes/deserializes losslessly.
+        let events = vec![
+            StateSyncEvent::ModelsChanged {
+                models: vec!["gpt-4".into(), "claude-3".into()],
+            },
+            StateSyncEvent::ConfigReloaded {
+                changed_keys: vec!["cache".into()],
+            },
+            StateSyncEvent::AgentsChanged {
+                added: vec!["coder".into()],
+                removed: vec![],
+            },
+            StateSyncEvent::BackendRestarting {
+                reason: "config changed".into(),
+                restart_in_ms: 3000,
+            },
+            StateSyncEvent::Heartbeat { timestamp: 0 },
+        ];
+        for event in events {
+            let encoded = serde_json::to_string(&event).expect("serialize");
+            let decoded: StateSyncEvent = serde_json::from_str(&encoded).expect("deserialize");
+            // Structural equality via wire representation: the decoded event
+            // must round-trip to the same serialized form.
+            let re_encoded = serde_json::to_string(&decoded).expect("re-serialize");
+            assert_eq!(re_encoded, encoded, "roundtrip failed for {}", encoded);
+        }
     }
 }

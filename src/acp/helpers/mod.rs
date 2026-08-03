@@ -45,9 +45,6 @@ pub mod autonomy_metrics;
 #[path = "autonomy/execution_intelligence.rs"]
 #[cfg(any(feature = "execution-intelligence", test))]
 pub mod execution_intelligence;
-#[path = "autonomy/intelligence_bridge.rs"]
-#[cfg(any(feature = "execution-intelligence", test))]
-pub mod intelligence_bridge;
 
 // ── Governance & policy ────────────────────────────────────────────────────
 #[path = "governance/policy.rs"]

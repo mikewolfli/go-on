@@ -322,14 +322,6 @@ mod tests {
             1,
             &[],
             &["coder-agent".to_string()],
-            &[],
-            &HashMap::new(),
-            None,
-            &None,
-            &None,
-            &None,
-            false,
-            false,
             "Fix the bug",
         )
         .await;
@@ -379,14 +371,6 @@ mod tests {
             2,
             &[],
             &[],
-            &[],
-            &HashMap::new(),
-            None,
-            &None,
-            &None,
-            &None,
-            false,
-            false,
             "Test objective",
         )
         .await;
@@ -438,14 +422,6 @@ mod tests {
             1,
             &tool_results,
             &["researcher-agent".to_string()],
-            &[],
-            &HashMap::new(),
-            None,
-            &None,
-            &None,
-            &None,
-            false,
-            false,
             "Research the codebase for the authentication bug",
         )
         .await;

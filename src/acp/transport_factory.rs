@@ -277,7 +277,12 @@ pub async fn dispatch_server(
                 "1.2.0".into(),
                 acp_http_bind.into(),
                 Some(Arc::new(acp_server)),
-            );
+            )
+            .with_rate_limiter(Arc::new(
+                crate::protocol::rate_limit::RateLimitMiddleware::new(
+                    crate::protocol::rate_limit::TenantRateLimit::default(),
+                ),
+            ));
             s.run().await
         }
         other => anyhow::bail!("unsupported protocol mode: {other}"),

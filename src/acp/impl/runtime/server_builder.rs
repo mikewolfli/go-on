@@ -391,7 +391,6 @@ pub async fn new_acp_server(
     server.governance_deps.capability_bus = Some(capability_bus);
     server.governance_deps.provenance_ledger = Some(provenance_ledger);
     server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
-    server.skill_market_registry = None;
 
     #[cfg(feature = "multi-users-server")]
     {
@@ -598,31 +597,6 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
             Some(Arc::new(SessionManager::with_auth_config(auth_config)));
     }
 
-    // Wire dual-level task scheduler (ARCH-02): create the scheduler and
-    // register one worker per known agent so the priority queue has real routing
-    // targets.  The scheduler tracks queue depth and active-worker counts that
-    // are surfaced in governance.status.
-    {
-        let config = crate::orchestration::scheduler::SchedulerConfig::default();
-        let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
-            config,
-        ));
-        for agent_name in registry.names() {
-            if let Err(e) = s.register_worker(&agent_name, &agent_name) {
-                tracing::warn!(
-                    "failed to register worker for agent '{}': {}",
-                    agent_name,
-                    e
-                );
-            }
-        }
-        // Start the aging timer so queued tasks receive periodic priority
-        // boosts and don't starve (B51-09).
-        s.level1
-            .start_aging_timer(std::time::Duration::from_secs(5));
-        server.orchestration_deps.scheduler = Some(s);
-    }
-
     if server.runtime_config.skills_enabled {
         server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
         server.register_skill(Arc::new(
@@ -703,7 +677,7 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 }),
             },
             crate::orchestration::skill::PromptBasedSkill {
-                name: "analyze-text".to_string(),
+                name: "classify-text".to_string(),
                 description: "Classify text into predefined categories or generate semantic embeddings/vector representations for similarity search".to_string(),
                 prompt_template: include_str!("../../../../skills/classify-text/SKILL.md").to_string(),
                 input_schema: [("input".to_string(), "string".to_string())].into(),

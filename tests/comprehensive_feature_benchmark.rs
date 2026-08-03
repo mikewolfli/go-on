@@ -44,7 +44,6 @@ enum Capability {
     McpCancelTimeoutParity,
     ThreeEntryParity,
 }
-}
 
 impl Capability {
     fn label(self) -> &'static str {
@@ -340,7 +339,7 @@ fn measure_chat_hotpath_decomposition() -> DimensionScore {
         "async fn select_and_score_agents",
         "async fn execute_autonomy_round",
         "async fn execute_fallback_agents",
-        "async fn run_full_auto_execution",
+        "async fn run_mode_runtime_and_multi_agent",
         "async fn apply_review_gate_assemble",
         "async fn emit_stream_chunk",
         "async fn emit_stream_done",
@@ -395,13 +394,13 @@ fn measure_three_entry_parity() -> DimensionScore {
         "127.0.0.1:0".into(),
     );
 
-    // CLI: Check that main.rs defines the Cli struct with expected subcommands
-    let cli_source = include_str!("../src/main.rs");
-    let has_cli = cli_source.contains("struct Cli");
-    let has_start_cmd = cli_source.contains("Start") || cli_source.contains("start_server");
-    let _has_mcp_cmd = cli_source.contains("mcp_server")
-        || cli_source.contains("McpServer")
-        || cli_source.contains("\"mcp\"");
+    // CLI: Check that the CLI entrypoint is defined in the main module tree.
+    let cli_source = include_str!("../src/main/cli.rs");
+    let has_cli = cli_source.contains("pub struct Cli");
+    let has_start_cmd = include_str!("../src/main/mod.rs").contains("start_server");
+    let _has_mcp_cmd = cli_source.contains("McpServer")
+        || cli_source.contains("mcp_server")
+        || include_str!("../src/main/cli.rs").contains("\"mcp\"");
 
     let mut pass_count = 0u64;
     let total = 3u64;

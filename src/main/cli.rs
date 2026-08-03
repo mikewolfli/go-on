@@ -202,6 +202,23 @@ pub enum SkillCommand {
         #[arg(long)]
         tag: Option<String>,
     },
+    /// Search marketplace skills by name or description
+    Search {
+        /// Search query
+        query: String,
+    },
+    /// List skills installed from the marketplace
+    ListInstalled,
+    /// Enable a marketplace-installed skill
+    Enable {
+        /// Name of the skill to enable
+        name: String,
+    },
+    /// Disable a marketplace-installed skill
+    Disable {
+        /// Name of the skill to disable
+        name: String,
+    },
     /// Import a skill from a source
     Import {
         /// Source: "github:owner/repo" | "url:<url>" | "local:<path>"
@@ -252,9 +269,10 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             );
             for skill in &skills {
                 let tags = skill.tags.join(", ");
+                let installs = market_registry.get_install_count(&skill.name).await;
                 println!(
-                    "  {:<20} v{:<8} [{:>5.1}]  {:<40} tags: {}",
-                    skill.name, skill.version, skill.rating, skill.description, tags,
+                    "  {:<20} v{:<8} [{:>5.1}] installs:{:<4} {:<40} tags: {}",
+                    skill.name, skill.version, skill.rating, installs, skill.description, tags,
                 );
             }
             if skills.is_empty() {
@@ -263,6 +281,16 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
                     tag.map_or(String::new(), |t| format!(" for tag '{}'", t))
                 );
             }
+        }
+        SkillCommand::Enable { name } => {
+            market_registry.refresh().await?;
+            market_registry.set_enabled(&name, true).await?;
+            println!("Skill '{}' enabled", name);
+        }
+        SkillCommand::Disable { name } => {
+            market_registry.refresh().await?;
+            market_registry.set_enabled(&name, false).await?;
+            println!("Skill '{}' disabled", name);
         }
         SkillCommand::Import { source } => {
             println!("Importing skill from: {}", source);
@@ -280,6 +308,38 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
                 Err(e) => {
                     anyhow::bail!("Failed to import skill '{}': {}", source, e);
                 }
+            }
+        }
+        SkillCommand::Search { query } => {
+            market_registry.refresh().await?;
+            let results = market_registry.search_skills(&query).await;
+            println!("Search results for '{}' ({}):", query, results.len());
+            for skill in &results {
+                let tags = skill.tags.join(", ");
+                let installs = market_registry.get_install_count(&skill.name).await;
+                println!(
+                    "  {:<20} v{:<8} [{:>5.1}] installs:{:<4} {:<40} tags: {}",
+                    skill.name, skill.version, skill.rating, installs, skill.description, tags,
+                );
+            }
+            if results.is_empty() {
+                println!("  (no matching skills)");
+            }
+        }
+        SkillCommand::ListInstalled => {
+            let installed = market_registry.list_installed().await;
+            println!("Marketplace-installed skills ({}):", installed.len());
+            for inst in &installed {
+                println!(
+                    "  {:<20} v{:<8} enabled:{}  {}",
+                    inst.name,
+                    inst.version,
+                    inst.enabled,
+                    inst.installed_path.display()
+                );
+            }
+            if installed.is_empty() {
+                println!("  (no marketplace-installed skills)");
             }
         }
         SkillCommand::ListImported => {
@@ -337,11 +397,20 @@ pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
             }
         }
         SkillCommand::Remove { name } => {
-            let mut registry = skill_registry.write().unwrap_or_else(|e| e.into_inner());
-            if registry.unregister(&name) {
+            // Remove from the local registry first.
+            let removed = {
+                let mut registry = skill_registry.write().unwrap_or_else(|e| e.into_inner());
+                registry.unregister(&name)
+            };
+            if removed {
                 println!("Skill '{}' removed from registry", name);
-            } else {
-                anyhow::bail!("skill '{}' not found in registry", name);
+            }
+            // Also uninstall from the marketplace if present.
+            if market_registry.is_installed(&name).await {
+                market_registry.uninstall_skill(&name).await?;
+                println!("Skill '{}' uninstalled from marketplace", name);
+            } else if !removed {
+                anyhow::bail!("skill '{}' not found in registry or marketplace", name);
             }
         }
     }

@@ -1578,9 +1578,10 @@ impl ChatView {
                                     }
                                 }
                                 if self.last_token_estimate == 0 {
-                                    Self::estimate_tokens_improved(&m.content);
+                                    // Re-estimate against the actual assistant reply so
+                                    // the recorded totals reflect the delivered content.
                                     self.last_token_estimate =
-                                        self.input_token_estimate + self.output_token_estimate;
+                                        Self::estimate_tokens_improved(&m.content);
                                 }
                                 m.output_tokens = self.output_token_estimate.max(m.output_tokens);
                                 m.total_tokens = self.last_token_estimate.max(m.total_tokens);

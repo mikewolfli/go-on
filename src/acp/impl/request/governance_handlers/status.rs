@@ -1430,19 +1430,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             },
             "multi_priority_scheduler": {
                 "ready": multi_priority_scheduler_ready,
-                "dual_level_scheduler_profile": {
-                    "l1_queue_depth": server
-                        .orchestration_deps.scheduler
-                        .as_ref()
-                        .map(|s| s.profile().l1_queue_depth)
-                        .unwrap_or(0),
-                },
-            },
-            "worker_scheduler_backpressure": {
-                "ready": worker_scheduler_backpressure_ready,
-                "priority_queue_profile": {
-                    "starvation_events_prevented": 0,
-                },
             },
             "fork_isolation_guard": {
                 "ready": fork_isolation_guard_ready,
