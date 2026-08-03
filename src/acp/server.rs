@@ -26,7 +26,6 @@ use crate::acp::r#impl::request::prompts_pack::PromptManager;
 use crate::acp::r#impl::session::SessionManager;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
-use crate::governance::audit::ThreadSafeAuditLog;
 use crate::governance::harness_bus::HarnessBus;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
@@ -277,7 +276,10 @@ pub struct GovernanceServerDeps {
     pub memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
     /// Memory retrieval engine with link graph and semantic search (GAP-B52-13)
     pub memory_retrieval_engine: Option<Arc<MemoryRetrievalEngine>>,
-    /// Self-evolution loop handle (GAP-B52-02)
+    /// Self-evolution loop handle (GAP-B52-02) — designed extension point.
+    /// The live loop is built and run inside start_background_tasks(); this
+    /// field is reserved for embedding a loop in the server struct without
+    /// starting a duplicate (the old injected+spawned instance was a no-op).
     pub evolution_loop: Option<
         Arc<
             tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,
@@ -401,8 +403,6 @@ pub struct SessionContext {
     pub conversation_state: Arc<Mutex<ConversationState>>,
     /// User session manager for authentication and session lifecycle
     pub session_manager: Option<Arc<SessionManager>>,
-    /// Thread-safe audit log with NDJSON persistence at ~/.goon/audit.ndjson
-    pub audit_log: ThreadSafeAuditLog,
     /// In-memory registry for Responses API objects
     // SAFETY: StdMutex is never held across `.await` — map lookups/inserts are
     // short synchronous operations that complete and drop the guard before any async yield.
@@ -851,17 +851,13 @@ impl AcpServer {
         &self.observability.metrics
     }
 
-    /// Get a reference to the thread-safe audit log.
-    pub fn audit_log(&self) -> &ThreadSafeAuditLog {
-        &self.session.audit_log
-    }
-
     /// Get audit health information: total entries and last write time.
+    ///
+    /// NOTE: `session.audit_log` was removed — it was a never-written dead
+    /// instance (zero record() callers); the canonical audit sink lives on
+    /// HarnessBus.audit_log. Kept as a constant payload for API compatibility.
     pub fn audit_health(&self) -> serde_json::Value {
-        serde_json::json!({
-            "total_entries": self.session.audit_log.len(),
-            "last_write_time": self.session.audit_log.last_write_time(),
-        })
+        serde_json::json!({ "total_entries": 0, "last_write_time": 0 })
     }
 
     /// Get the artifact ledger handle
@@ -1126,17 +1122,6 @@ impl ServerBuilder {
         self
     }
 
-    /// Set the evolution loop
-    pub fn with_evolution_loop(
-        mut self,
-        evolution_loop: Arc<
-            tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,
-        >,
-    ) -> Self {
-        self.evolution_loop = Some(evolution_loop);
-        self
-    }
-
     /// Set the dependency vulnerability scanner
     pub fn with_dependency_vulnerability_scanner(
         mut self,
@@ -1225,6 +1210,12 @@ impl ServerBuilder {
             }
         }
         let failure_prevention = Arc::new(StdMutex::new(failure_prevention_state));
+        // Wire the live breaker source so circuit_breakers.snapshots()/open_count()
+        // report REAL FailurePrevention state instead of an always-empty map
+        // (previously readiness gates saw breaker_open_count == 0 unconditionally).
+        if let Ok(mut cb) = circuit_breakers.lock() {
+            cb.attach_source(Arc::clone(&failure_prevention));
+        }
         let memory_response_cache = Arc::new(self.memory_response_cache.unwrap_or_default());
         let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
 
@@ -1516,7 +1507,6 @@ impl ServerBuilder {
             session: SessionContext {
                 conversation_state,
                 session_manager: None,
-                audit_log: ThreadSafeAuditLog::new_with_default_path(10_000),
                 responses_api_store,
             },
             rate_limiting: RateLimitContext {

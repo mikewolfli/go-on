@@ -157,16 +157,6 @@ pub async fn acp_tools_call_payload(server: &AcpServer, params: Value) -> Result
     }))
 }
 
-// ── Tools list/call (alias) ──────────────────────────────────────────────
-
-pub async fn tools_list_payload(server: &AcpServer) -> Result<Value> {
-    acp_tools_list_payload(server).await
-}
-
-pub async fn tools_call_payload(server: &AcpServer, params: Value) -> Result<Value> {
-    acp_tools_call_payload(server, params).await
-}
-
 // ── Audit helpers for tool calls ────────────────────────────────────────
 
 pub fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &str) {

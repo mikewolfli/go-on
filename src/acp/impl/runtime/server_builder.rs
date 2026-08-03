@@ -267,11 +267,12 @@ pub async fn new_acp_server(
         }
     }
 
-    // Wire secret manager — REMOVED: the injected SecretManager (backed by a
-    // MemoryRotator) was never read by any code path (register_key/get_key/
-    // rotate_key have no production callers), making it dead weight. The
-    // active rotation path is start_secret_rotation_if_configured() in
-    // src/security/mod.rs (VaultRotator, gated on VAULT_ADDR).
+    // Wire secret manager — REMOVED: the SecretManager rotation subsystem
+    // (register_key/get_key/rotate_key/VaultRotator) had zero production
+    // callers and no key registration path, so the 24h rotation loop rotated
+    // an always-empty store. The whole dormant subsystem was deleted in
+    // log-20260730-18; secret material lives in the keyring-backed secret
+    // commands and the Hub vault instead.
 
     // Wire memory persistence and memory retrieval engine (GAP-B58-D03) — LAZY INIT
     //
@@ -307,13 +308,11 @@ pub async fn new_acp_server(
         builder = builder.with_lazy_memory_persistence_params(db_path, cold_path, Some(summarizer));
     }
 
-    // Wire evolution loop
-    {
-        use crate::orchestration::self_evolution::evolution_loop::EvolutionLoop;
-        let workdir = std::path::PathBuf::from(".goon/evolution");
-        let evolution_loop = Arc::new(tokio::sync::Mutex::new(EvolutionLoop::new(workdir)));
-        builder = builder.with_evolution_loop(evolution_loop);
-    }
+    // Wire evolution loop — REMOVED: the injected bare EvolutionLoop had no
+    // trigger sources / agent / alert manager, so the 60s spawn in
+    // run_acp_server was a no-op. The fully-wired loop (default trigger
+    // sources + alert manager + SelfEvolutionAgent + fusion bridge) runs in
+    // start_background_tasks (log-20260730-18).
 
     // ── Security scanning (GAP-B52-24, GAP-B52-30) ──────────────────────
     // Wire dependency vulnerability scanner
@@ -824,18 +823,11 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
 
     // ── Wire security subsystems (GAP-B52, S-FIX3) ────────────────────
     crate::security::wire_cert_monitor(&server.runtime_config);
-    crate::security::start_secret_rotation_if_configured(&server.runtime_config);
-
-    // ── TokenCache background cleanup ──────────────────────────
-    // Start periodic cleanup of expired token cache entries (L1 TTL eviction).
-    // Without this, only lazy lookup-time eviction runs.
-    let token_cache = Arc::clone(&server.cache_deps.cache.token_cache);
-    tokio::spawn(async move {
-        token_cache.start_background_cleanup(60_000).await;
-    });
-    info!("token_cache background cleanup started (interval: 60s)");
 
     // ── SemanticResponseCache background cleanup ───────────────
+    // NOTE: the TokenMultiLevelCache background-cleanup spawn was removed —
+    // ttl_ms defaults to 0 and set_ttl_ms has no callers, so the 60s loop
+    // ticked forever doing nothing. Lazy lookup-time eviction still runs.
     // Start periodic eviction of expired semantic cache entries.
     // Without this, expired entries accumulate until lazy get()-time eviction.
     if let Ok(mut guard) = server.cache_deps.cache.semantic_cache.write() {

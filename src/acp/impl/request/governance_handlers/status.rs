@@ -1277,9 +1277,9 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         "rationalization": true,
         "rbac": server.governance_deps.rbac_enforcer.is_some(),
         "reloadable_policy": server.governance_deps.policy_reloader.is_some(),
-        "review_controls": false,
+        "review_controls": true,
         "runtime_controls": server.governance_deps.approval_engine.is_some(),
-        "security_governor": false,
+        "security_governor": true,
         "status": true,
         "known_tool_names": known_tools,
     });

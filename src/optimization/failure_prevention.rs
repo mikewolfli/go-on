@@ -249,6 +249,25 @@ impl FailurePrevention {
             .unwrap_or(CircuitBreakerState::Closed)
     }
 
+    /// Snapshot all tracked circuit breakers as (name, state, failure_count,
+    /// total_requests, successful_requests) tuples so observability endpoints
+    /// can report REAL breaker state (the ACP CircuitBreakerRegistry reads
+    /// this instead of its previously-empty built-in map).
+    pub fn breaker_snapshots(&self) -> Vec<(String, CircuitBreakerState, u32, u64, u64)> {
+        self.circuit_breakers
+            .iter()
+            .map(|(name, state)| {
+                (
+                    name.clone(),
+                    *state,
+                    self.failure_counts.get(name).copied().unwrap_or(0),
+                    self.total_requests.get(name).copied().unwrap_or(0),
+                    self.successful_requests.get(name).copied().unwrap_or(0),
+                )
+            })
+            .collect()
+    }
+
     /// Register service for health monitoring
     pub fn register_service(&mut self, name: &str) {
         if self.health_monitors.len() >= MAX_HEALTH_MONITORS

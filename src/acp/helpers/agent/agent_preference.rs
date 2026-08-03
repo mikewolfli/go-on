@@ -6,14 +6,12 @@
 //! the agent switch state global, and computes conversation/branch/plan IDs.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::{OnceLock, RwLock};
 
 use anyhow::Result;
 
 use crate::acp::r#impl::chat::ChatParams;
 use crate::acp::server::AcpServer;
-use crate::agent::Agent;
 use crate::flow::ResolvedPhase;
 use crate::flow::ResolvedRouting;
 use crate::i18n::runtime::tf;
@@ -83,24 +81,8 @@ pub(crate) fn reset_agent_switch_state_for_test() {
 }
 
 // ── Agent reordering helper ──────────────────────────────────────────────
-
-/// Move the named agent to the front of the agent list.
-///
-/// Returns `true` if the agent was found and reordered, `false` if the name
-/// was not present in the list.
-fn reorder_agents_with_priority(
-    agents: &mut Vec<(String, Arc<dyn Agent>)>,
-    preferred: &str,
-) -> bool {
-    if let Some(index) = agents.iter().position(|(name, _)| name == preferred) {
-        if index > 0 {
-            let selected = agents.remove(index);
-            agents.insert(0, selected);
-        }
-        return true;
-    }
-    false
-}
+// NOTE: `reorder_agents_with_priority` lives once in
+// crate::acp::r#impl::chat (moved here after dedup); this module calls it.
 
 /// Resolve agent preferences, switch state, conversation/branch IDs, and plan artifacts.
 ///
@@ -167,7 +149,7 @@ pub fn resolve_agent_preferences(
     // 2) Otherwise, if the phase has a stored forced fallback, probe the
     //    primary agent first and then the forced agent (auto-recover strategy).
     if let Some(preferred) = preferred_agent_from_request.as_deref() {
-        if reorder_agents_with_priority(&mut resolved.agents, preferred) {
+        if crate::acp::r#impl::chat::reorder_agents_with_priority(&mut resolved.agents, preferred) {
             let mut state = agent_switch_state().write().unwrap_or_else(|poisoned| {
                 tracing::warn!("agent_switch_state lock poisoned — forced_agent_by_phase");
                 poisoned.into_inner()
@@ -188,8 +170,14 @@ pub fn resolve_agent_preferences(
             let primary = state.primary_agent_by_phase.get(phase_name);
             if let Some(primary_name) = primary {
                 // Auto-recover strategy: always probe primary first, then fallback agent.
-                let _ = reorder_agents_with_priority(&mut resolved.agents, forced);
-                let _ = reorder_agents_with_priority(&mut resolved.agents, primary_name);
+                let _ = crate::acp::r#impl::chat::reorder_agents_with_priority(
+                    &mut resolved.agents,
+                    forced,
+                );
+                let _ = crate::acp::r#impl::chat::reorder_agents_with_priority(
+                    &mut resolved.agents,
+                    primary_name,
+                );
             }
         }
     }

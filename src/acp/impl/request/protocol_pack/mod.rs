@@ -58,13 +58,10 @@ pub(crate) use skill::{
     skill_update_payload, skill_version_list_payload, skill_version_rollback_payload,
 };
 
-// Tools handlers (acp_tools_list_payload, acp_tools_call_payload, tools_list_payload,
-// tools_call_payload)
+// Tools handlers (acp_tools_list_payload, acp_tools_call_payload)
 // record_tool_call_audit_with_protocol must be pub for re-export from request.rs
 pub use mcp::record_tool_call_audit_with_protocol;
-pub(super) use mcp::{
-    acp_tools_call_payload, acp_tools_list_payload, tools_call_payload, tools_list_payload,
-};
+pub(super) use mcp::{acp_tools_call_payload, acp_tools_list_payload};
 
 pub(super) use terminal::{
     handle_terminal_kill, handle_terminal_release, terminal_create_payload,

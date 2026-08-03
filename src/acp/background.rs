@@ -3,7 +3,7 @@
 //! This module contains background task implementations for the ACP server,
 //! including maintenance cycles, health checks, and periodic operations.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -19,7 +19,7 @@ use crate::observability::metrics_exporter::bridge_metrics_recorder;
 use crate::observability::telemetry_enhanced::global_metrics_recorder;
 use crate::orchestration::self_evolution::evolution_loop::PubsubTriggerSource;
 
-use super::prelude::{with_acp_lock_async, MaintenanceTracker};
+use super::prelude::{with_acp_lock, with_acp_lock_async, MaintenanceTracker};
 
 /// Maintenance cycle result
 #[derive(Debug, Default, Clone, Copy)]
@@ -37,7 +37,9 @@ pub struct MaintenanceCycleResult {
 #[derive(Debug)]
 pub struct BackgroundContext {
     pub memory_cache: Arc<MemoryResponseCache>,
-    pub memory_store: Arc<tokio::sync::Mutex<MemoryStore>>,
+    /// The server's live memory store (GC must run on the store request paths
+    /// actually write to, not on a fresh empty instance).
+    pub memory_store: Arc<StdMutex<MemoryStore>>,
     pub maintenance: Arc<tokio::sync::Mutex<MaintenanceTracker>>,
 }
 
@@ -57,7 +59,7 @@ static SHARED_BG_CTX: OnceLock<BackgroundContext> = OnceLock::new();
 /// Perform maintenance cycle
 pub async fn perform_maintenance_cycle(
     memory_cache: Arc<MemoryResponseCache>,
-    memory_store: Arc<TokioMutex<MemoryStore>>,
+    memory_store: Arc<StdMutex<MemoryStore>>,
     maintenance: Arc<TokioMutex<MaintenanceTracker>>,
     source: &str,
 ) -> Result<MaintenanceCycleResult> {
@@ -73,14 +75,11 @@ pub async fn perform_maintenance_cycle(
         source, result.memory_expired_removed
     );
 
-    if with_acp_lock_async(memory_store.as_ref(), |guard| {
+    // GC the live memory store (the one request paths write to).
+    result.memory_store_gc_ran = with_acp_lock(memory_store.as_ref(), |guard| {
         guard.gc();
         true
-    })
-    .await
-    {
-        result.memory_store_gc_ran = true;
-    }
+    });
 
     with_acp_lock_async(maintenance.as_ref(), |guard| {
         guard.note_completed(result.memory_expired_removed);
@@ -121,9 +120,10 @@ pub async fn start_background_tasks(
     // Share the live memory_response_cache so background GC actually
     // purges expired entries from the cache serving live requests.
     let memory_cache = server.cache_deps.cache.memory_response_cache.clone();
-    let memory_store = Arc::new(tokio::sync::Mutex::new(
-        MemoryStore::new(Default::default()),
-    ));
+    // GC the server's live memory store (previously a fresh empty MemoryStore
+    // was created here and GC'd — the health/lifecycle APIs reported "GC ran"
+    // while doing nothing).
+    let memory_store = Arc::clone(&server.persistence.memory_store);
 
     let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
     // Store shared context for reuse by one-shot maintenance/health-check calls.
@@ -299,6 +299,7 @@ pub async fn start_background_tasks(
     // BLUE56-D01: Policy reloader — check for policy file changes every 60 seconds (GAP-B58-D04)
     if let Some(ref reloader) = server.governance_deps.policy_reloader {
         let reloader = Arc::clone(reloader);
+        let harness_bus = server.governance_deps.harness_bus.clone();
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
@@ -310,6 +311,12 @@ pub async fn start_background_tasks(
                         _ = ticker.tick() => {
                             if let Ok(mut guard) = reloader.lock() {
                                 guard.reload_all();
+                            }
+                            // Merge reloaded TOML policies into the evaluator's
+                            // runtime policy map (no-op until an embedder wires
+                            // the reloader into harness_bus; keeps hot path RO).
+                            if let Some(ref hb) = harness_bus {
+                                hb.evaluator.merge_reloadable_policies();
                             }
                             debug!("Policy reloader: checked for policy updates");
                         }
@@ -342,50 +349,6 @@ pub async fn start_background_tasks(
             approval_engine,
             pending_count,
             timeout_secs,
-        );
-    }
-
-    // ── Code quality scan every 5 minutes (GAP-B53-57) ─────────────────
-    // S6 startup optimization: delay 500ms to let server accept requests first.
-    {
-        let shutdown = shutdown_notify.clone();
-        spawn_background_task(
-            async move {
-                // S6: delay 500ms to let the server start accepting requests first
-                tokio::time::sleep(Duration::from_millis(500)).await;
-
-                let mut interval = tokio::time::interval(Duration::from_secs(300));
-                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                // Skip first tick, start after one interval
-                interval.tick().await;
-                loop {
-                    tokio::select! {
-                        _ = shutdown.notified() => break,
-                        _ = interval.tick() => {}
-                    }
-                    let report = tokio::task::spawn_blocking(move || {
-                        crate::intelligence::code_quality::run_code_quality_scan()
-                    })
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("code quality scan task failed: {}", e);
-                        crate::intelligence::code_quality::CodeQualityReport {
-                            issues: Vec::new(),
-                            health_score: 1.0,
-                            modules_scanned: 0,
-                            scanned_at_ms: crate::shared::timestamps::now_ts_ms() as u64,
-                        }
-                    });
-                    tracing::info!(
-                        target: "intelligence",
-                        health_score = report.health_score,
-                        modules_scanned = report.modules_scanned,
-                        issues = report.issues.len(),
-                        "code quality scan complete"
-                    );
-                }
-            },
-            "code_quality_scan",
         );
     }
 
@@ -502,53 +465,6 @@ pub async fn start_background_tasks(
         target: "resilience",
         "HyperResilienceEngine health checks started"
     );
-
-    // ── Fault tolerance recovery cycle (F-GAP-28) ───────────────────-
-    // Periodically check heartbeats, detect failed nodes, create recovery
-    // plans, and attempt automatic reintegration every 30 seconds.
-    if let Some(ref harness_bus) = server.governance_deps.harness_bus {
-        let ft = Arc::clone(&harness_bus.fault_tolerance);
-        let shutdown = shutdown_notify.clone();
-        spawn_background_task(
-            async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(30));
-                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                // Skip first tick to give startup time
-                interval.tick().await;
-                loop {
-                    tokio::select! {
-                        _ = shutdown.notified() => {
-                            tracing::info!(target: "fault_tolerance", "recovery cycle shutting down");
-                            break;
-                        }
-                        _ = interval.tick() => {
-                            let summary = ft.run_recovery_cycle().await;
-                            if !summary.offenders.is_empty() || summary.plans_created > 0 {
-                                tracing::info!(
-                                    target: "fault_tolerance",
-                                    offenders = summary.offenders.len(),
-                                    plans_created = summary.plans_created,
-                                    plans_activated = summary.plans_activated,
-                                    cluster_health = ?summary.cluster_health,
-                                    "fault tolerance recovery cycle complete"
-                                );
-                            }
-                        }
-                    }
-                }
-            },
-            "fault_tolerance_recovery",
-        );
-        tracing::info!(
-            target: "fault_tolerance",
-            "FaultToleranceEngine recovery cycle started (interval=30s)"
-        );
-    } else {
-        tracing::warn!(
-            target: "fault_tolerance",
-            "harness_bus is None — fault tolerance recovery cycle not started"
-        );
-    }
 
     // ── Memory bridge: auto-migrate every 5 minutes (PERF-FIX: moved from new_acp_server) ──
     // Uses the server's lazy MemoryPersistence (S1 startup optimization) instead of
@@ -675,9 +591,7 @@ pub async fn run_maintenance_cycle(
 
     // Fallback: create fresh state (before start_background_tasks is called).
     let memory_cache = Arc::new(MemoryResponseCache::default());
-    let memory_store = Arc::new(tokio::sync::Mutex::new(
-        MemoryStore::new(Default::default()),
-    ));
+    let memory_store = Arc::new(StdMutex::new(MemoryStore::new(Default::default())));
     let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
 
     perform_maintenance_cycle(memory_cache, memory_store, maintenance, "manual").await

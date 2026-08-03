@@ -437,27 +437,8 @@ impl ToolBus {
 }
 
 // ---------------------------------------------------------------------------
-// Feature-gated remote-skill import (multi-users-server only)
+// Tests
 // ---------------------------------------------------------------------------
-
-/// Register a remote skill from a remote MCP endpoint.
-///
-/// Only available under the `multi-users-server` feature flag.
-#[cfg(feature = "multi-users-server")]
-pub fn import_remote_skill(tool_bus: &ToolBus, endpoint: &str, skill_name: &str) -> Result<()> {
-    use crate::orchestration::skill_import::RemoteSkill;
-
-    let remote = RemoteSkill::new(endpoint, skill_name, None, None)?;
-
-    let skill: Arc<dyn crate::orchestration::skill::Skill> = Arc::new(remote);
-    tool_bus
-        .skill_registry
-        .write()
-        .map_err(|e| anyhow::anyhow!("SkillRegistry lock poisoned: {}", e))?
-        .register(skill)?;
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

@@ -591,15 +591,20 @@ pub async fn session_set_mode_payload(server: &AcpServer, params: Value) -> Resu
             let entry = state.entry(session_id.to_string()).or_default();
             entry.mode = mode_id.clone();
             #[cfg(feature = "backend-sqlite")]
-            let _snapshot = (
-                entry.cwd.clone(),
-                entry.mode.clone(),
-                entry.additional_directories.clone(),
-                entry.config_options.clone(),
-            );
+            {
+                (
+                    entry.cwd.clone(),
+                    entry.mode.clone(),
+                    entry.additional_directories.clone(),
+                    entry.config_options.clone(),
+                )
+            }
+            // No snapshot needed under backend-postgres (no async store call
+            // follows); a non-unit placeholder keeps the block type consistent.
             #[cfg(not(feature = "backend-sqlite"))]
-            let _snapshot = ();
-            _snapshot
+            {
+                false
+            }
         };
 
         #[cfg(feature = "backend-sqlite")]
@@ -825,15 +830,20 @@ pub async fn session_set_config_option_payload(server: &AcpServer, params: Value
                 session.mode = super::normalize_acp_mode(value.as_str());
             }
             #[cfg(feature = "backend-sqlite")]
-            let _snapshot = (
-                session.cwd.clone(),
-                session.mode.clone(),
-                session.additional_directories.clone(),
-                session.config_options.clone(),
-            );
+            {
+                (
+                    session.cwd.clone(),
+                    session.mode.clone(),
+                    session.additional_directories.clone(),
+                    session.config_options.clone(),
+                )
+            }
+            // No snapshot needed under backend-postgres (no async store call
+            // follows); a non-unit placeholder keeps the block type consistent.
             #[cfg(not(feature = "backend-sqlite"))]
-            let _snapshot = ();
-            _snapshot
+            {
+                false
+            }
         };
 
         #[cfg(feature = "backend-sqlite")]

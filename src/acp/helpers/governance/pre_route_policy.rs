@@ -116,23 +116,24 @@ pub(crate) async fn evaluate_pre_route_policies(
             let budget_guard = server.rate_limiting.tenant_budget.lock();
             match budget_guard {
                 Ok(mut budget) => {
+                    // check_and_start_task atomically validates and consumes the
+                    // concurrent-task slot (avoids the TOCTOU race of the old
+                    // separate check_can_start + start_task pair).
                     if server.runtime_config.production_strict {
-                        if let Err(e) = budget.check_can_start(_tenant_id) {
+                        if let Err(e) = budget.check_and_start_task(_tenant_id) {
                             warn!("tenant budget limit reached for {}: {}", _tenant_id, e);
                             false
                         } else {
-                            budget.start_task(_tenant_id);
                             true
                         }
                     } else {
                         // Non-strict mode: warn but allow through.
-                        if let Err(e) = budget.check_can_start(_tenant_id) {
+                        if let Err(e) = budget.check_and_start_task(_tenant_id) {
                             warn!(
                                 "tenant budget limit reached for {}: {} (non-strict, allowing)",
                                 _tenant_id, e
                             );
                         }
-                        budget.start_task(_tenant_id);
                         true
                     }
                 }

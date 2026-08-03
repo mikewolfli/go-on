@@ -101,7 +101,7 @@ pub(crate) fn run_council_deliberation_and_fallback(
             if let Some((winner, decision)) =
                 run_council_route_deliberation(cb, phase_name, &candidate_names, reputation_scores)
             {
-                if reorder_agents_with_priority(agents, &winner) {
+                if crate::acp::r#impl::chat::reorder_agents_with_priority(agents, &winner) {
                     routing_provenance.push("council_deliberation_selected_route".to_string());
                 }
                 council_decision = Some(decision);
@@ -240,19 +240,5 @@ fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bo
         .unwrap_or(default)
 }
 
-// ---------------------------------------------------------------------------
-// Re-export the reordering helper used by council deliberation
-// ---------------------------------------------------------------------------
-fn reorder_agents_with_priority(
-    agents: &mut Vec<(String, Arc<dyn Agent>)>,
-    preferred: &str,
-) -> bool {
-    if let Some(index) = agents.iter().position(|(name, _)| name == preferred) {
-        if index > 0 {
-            let selected = agents.remove(index);
-            agents.insert(0, selected);
-        }
-        return true;
-    }
-    false
-}
+// NOTE: `reorder_agents_with_priority` lives once in crate::acp::r#impl::chat
+// (deduplicated from this module); council deliberation calls it via that path.

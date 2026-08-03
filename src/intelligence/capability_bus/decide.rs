@@ -68,43 +68,48 @@ pub struct DecisionOutput {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
-    fn read_weight(key: &str, fallback: f64) -> f64 {
-        env::var(key)
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0)
-            .unwrap_or(fallback)
-    }
+    // Cache: env weights are startup-time configuration; re-reading 5 env vars
+    // on every decide() (up to ~30 lookups/request) is wasted work.
+    static CACHED: std::sync::OnceLock<CandidateScoreWeights> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        fn read_weight(key: &str, fallback: f64) -> f64 {
+            env::var(key)
+                .ok()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .unwrap_or(fallback)
+        }
 
-    let weights = CandidateScoreWeights {
-        reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.40),
-        recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.12),
-        task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.23),
-        recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.15),
-        causal_insight: read_weight("GO_ON_CAPABILITY_WEIGHT_CAUSAL_INSIGHT", 0.10),
-    };
-    let total = weights.reputation
-        + weights.recency
-        + weights.task_fit
-        + weights.recent_outcome
-        + weights.causal_insight;
-    if total <= f64::EPSILON {
-        CandidateScoreWeights {
-            reputation: 0.40,
-            recency: 0.12,
-            task_fit: 0.23,
-            recent_outcome: 0.15,
-            causal_insight: 0.10,
+        let weights = CandidateScoreWeights {
+            reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.40),
+            recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.12),
+            task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.23),
+            recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.15),
+            causal_insight: read_weight("GO_ON_CAPABILITY_WEIGHT_CAUSAL_INSIGHT", 0.10),
+        };
+        let total = weights.reputation
+            + weights.recency
+            + weights.task_fit
+            + weights.recent_outcome
+            + weights.causal_insight;
+        if total <= f64::EPSILON {
+            CandidateScoreWeights {
+                reputation: 0.40,
+                recency: 0.12,
+                task_fit: 0.23,
+                recent_outcome: 0.15,
+                causal_insight: 0.10,
+            }
+        } else {
+            CandidateScoreWeights {
+                reputation: weights.reputation / total,
+                recency: weights.recency / total,
+                task_fit: weights.task_fit / total,
+                recent_outcome: weights.recent_outcome / total,
+                causal_insight: weights.causal_insight / total,
+            }
         }
-    } else {
-        CandidateScoreWeights {
-            reputation: weights.reputation / total,
-            recency: weights.recency / total,
-            task_fit: weights.task_fit / total,
-            recent_outcome: weights.recent_outcome / total,
-            causal_insight: weights.causal_insight / total,
-        }
-    }
+    })
 }
 
 pub(crate) fn task_fit_score(task: &TaskContext, agent_name: &str) -> f64 {

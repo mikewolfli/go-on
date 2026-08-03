@@ -212,25 +212,6 @@ impl AlertManager {
         fired
     }
 
-    /// Evaluate all rule types against their respective named metrics (O-FIX6).
-    ///
-    /// Takes a slice of `(metric_type, value)` pairs and checks each alert rule
-    /// against the metric that matches its name prefix:
-    /// - Rules containing "latency" / "p95" check the `"latency"` metric
-    /// - Rules containing "error_rate" check the `"error_rate"` metric
-    /// - Rules containing "circuit_breaker" check the `"circuit_breaker"` metric
-    /// - Rules containing "cache_hit" check the `"cache_hit"` metric
-    /// - Rules containing "memory" check the `"memory"` metric
-    /// - Rules containing "agent_timeout" check the `"agent_timeout"` metric
-    /// - All other rules are evaluated against every metric (safe fallback).
-    pub fn evaluate_all(&mut self, metrics: &[(&str, f64)]) -> Vec<Alert> {
-        let mut all_fired = Vec::new();
-        for &(metric_type, value) in metrics {
-            all_fired.extend(self.evaluate(metric_type, value));
-        }
-        all_fired
-    }
-
     /// Configure webhook from environment variables.
     /// Reads `GO_ON_ALERT_WEBHOOK_URL`, `GO_ON_ALERT_WEBHOOK_ENABLED`,
     /// and `GO_ON_ALERT_WEBHOOK_TIMEOUT`.

@@ -1791,11 +1791,10 @@ impl VectorStore {
         // Dynamic DDL: HNSW index uses the configured dimensions.
         // The base table was created by the migration; the HNSW index
         // is added here since its dimensions are configurable.
-        let dynamic_sql = format!(
+        conn.batch_execute(
             "CREATE INDEX IF NOT EXISTS idx_vector_memory_embedding_cosine
-             ON vector_memory USING hnsw (embedding vector_cosine_ops);"
-        );
-        conn.batch_execute(&dynamic_sql)?;
+             ON vector_memory USING hnsw (embedding vector_cosine_ops);",
+        )?;
 
         // Startup health check: verify the connection is alive.
         conn.query_one("SELECT 1", &[])

@@ -14,7 +14,6 @@
 //!   - `protocol` — Protocol negotiation, HTTP request parsing, version handshake
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use tokio::io::AsyncWriteExt;
@@ -101,39 +100,16 @@ pub async fn run_acp_server(server: Arc<AcpServer>) -> Result<()> {
     let bg_server = Arc::clone(&server);
     let bg_shutdown = shutdown_notify.clone();
     tokio::spawn(async move {
-        // Spawn memory bridge promote (BOTTLENECK-03) — small delay lets stdin loop start first
-        // Uses lazy initialization (S1 startup optimization) to defer SQLite connection creation.
-        if let Some(mp) = bg_server.get_or_init_memory_persistence() {
-            let memory_store = bg_server.persistence.memory_store.clone();
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if let Err(e) = crate::memory::memory_bridge::bridge_promote(&memory_store, &mp).await {
-                tracing::warn!("memory bridge: initial promote failed (background): {e}");
-            }
-        }
-
-        // Start background tasks (BOTTLENECK-01) — GC, maintenance, security scans, etc.
+        // Start background tasks (BOTTLENECK-01) — GC, maintenance, security
+        // scans, memory bridge initial promote (all protocol modes), etc.
+        // NOTE: the memory-bridge initial promote is NOT duplicated here —
+        // start_background_tasks() runs it once for every protocol mode.
         if let Err(e) =
             crate::acp::background::start_background_tasks(&bg_server, bg_shutdown.clone()).await
         {
             tracing::error!("Background tasks ultimately failed: {e}");
         }
     });
-
-    // ── Spawn EvolutionLoop (BLUE56-B03) — never blocks stdin ──
-    if let Some(ref evo) = server.governance_deps.evolution_loop {
-        let evo_clone = Arc::clone(evo);
-        tokio::spawn(async move {
-            loop {
-                let mut guard = evo_clone.lock().await;
-                if let Err(e) = guard.run().await {
-                    tracing::warn!("Evolution loop cycle ended: {}; retrying after 60s", e);
-                }
-                drop(guard);
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }
-        });
-        tracing::info!(target: "intelligence", "EvolutionLoop spawned");
-    }
 
     info!("ACP server running");
 

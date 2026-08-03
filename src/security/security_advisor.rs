@@ -490,41 +490,6 @@ impl SecurityAdvisorAgent {
         Ok(())
     }
 
-    /// Create a security alert from a permit scan result and push it.
-    pub async fn alert_from_permit_scan(
-        &self,
-        scan_result: &PermitScanResult,
-    ) -> Result<(), SecurityAdvisorError> {
-        for issue in &scan_result.issues {
-            if issue.risk < crate::security::vulnerability_scan::PermitRisk::High {
-                continue;
-            }
-
-            let alert = SecurityAlert {
-                id: format!("permit-{}", uuid::Uuid::new_v4()),
-                severity: match issue.risk {
-                    crate::security::vulnerability_scan::PermitRisk::Critical => Severity::Critical,
-                    crate::security::vulnerability_scan::PermitRisk::High => Severity::High,
-                    _ => Severity::Medium,
-                },
-                title: format!("Permission issue: {}", issue.description),
-                description: format!(
-                    "{}: current mode {} (recommended: {})",
-                    issue.file_path, issue.current_mode, issue.recommended_mode
-                ),
-                source: AlertSource::PermitExposure,
-                timestamp: SystemTime::now(),
-                acknowledged: false,
-                advisory_id: None,
-                suggested_fix: None,
-                affected_component: Some(issue.file_path.clone()),
-            };
-
-            self.notify_ws(alert).await?;
-        }
-        Ok(())
-    }
-
     // ── Daily digest ───────────────────────────────────────────────────
 
     /// Build the daily security digest from accumulated alerts.

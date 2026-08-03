@@ -1,66 +1,6 @@
 //! Audit trail and governance profile for HarnessBus — F-GAP-13
 
-use crate::governance::harness_bus::types::AuditEntry;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
-
-/// Maximum number of audit entries retained in memory to prevent unbounded growth.
-const MAX_AUDIT_ENTRIES: usize = 10_000;
-
-/// HarnessAuditTrail — in-memory audit log for governance events.
-///
-/// Optionally delegates to a HashChainAuditor for tamper-evident persistence.
-#[derive(Debug, Clone, Default)]
-pub struct HarnessAuditTrail {
-    pub entries: Vec<AuditEntry>,
-    /// Optional hash-chain auditor for tamper-evident disk persistence.
-    pub hash_chain: Option<Arc<Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
-}
-
-impl HarnessAuditTrail {
-    /// Push an entry, evicting the oldest if the cap is exceeded.
-    /// Also forwards to the HashChainAuditor if configured.
-    pub fn push(&mut self, entry: AuditEntry) {
-        if self.entries.len() >= MAX_AUDIT_ENTRIES {
-            // Evict oldest half to amortize cost.
-            let keep = MAX_AUDIT_ENTRIES / 2;
-            let drain_end = self.entries.len() - keep;
-            self.entries.drain(0..drain_end);
-        }
-        self.entries.push(entry.clone());
-
-        // Delegate to hash-chain auditor for tamper-evident persistence.
-        if let Some(ref hash_chain) = self.hash_chain {
-            let mut guard = hash_chain.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            let payload = serde_json::json!({
-                "timestamp": entry.timestamp,
-                "request_id": entry.request_id,
-                "stage": entry.stage,
-                "verdict": entry.verdict,
-                "dispatch_policy": entry.dispatch_policy,
-                "execution_policy": entry.execution_policy,
-                "governance_policy": entry.governance_policy,
-                "violations": entry.violations,
-                "context_snapshot": entry.context_snapshot,
-            });
-            if let Err(e) = guard.append(payload) {
-                tracing::warn!(error = %e, "Failed to append to hash-chain auditor");
-            }
-        }
-    }
-
-    /// Set the hash-chain auditor for this trail.
-    pub fn with_hash_chain(
-        mut self,
-        auditor: Arc<Mutex<crate::security::audit_integrity::HashChainAuditor>>,
-    ) -> Self {
-        self.hash_chain = Some(auditor);
-        self
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Top-level HarnessBus metrics, for push into governance.status

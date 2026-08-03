@@ -87,7 +87,6 @@ mod health_pack;
 mod learning_pack;
 mod lifecycle_handlers;
 mod lifecycle_pack;
-mod method_router;
 mod metrics_pack;
 mod ops_pack;
 pub mod prompts_pack;
@@ -621,22 +620,12 @@ pub async fn handle_request(
     );
     let request_id = request.id.clone();
 
-    // Try MethodRouter first (registration-based dispatch)
-    {
-        let router = crate::acp::r#impl::request::method_router::global_router();
-        if let Some(result) = router
-            .dispatch(
-                &request.method,
-                server,
-                request.params.clone().unwrap_or_default(),
-                request_id.clone(),
-                &trace,
-            )
-            .await
-        {
-            return result;
-        }
-    }
+    // Single dispatch table (the match below). The former registration-based
+    // MethodRouter (B51-28) was merged back into this match: every handler it
+    // registered was a thin forward to the same protocol_pack payload functions
+    // used here, and its early `return` skipped the request-complete metrics /
+    // trace tail, leaking active_requests. Merging restores a single dispatch
+    // path with correct accounting.
 
     // Use the potentially normalized method for dispatch.
     let result = DISPATCH_REQUEST_METHOD
@@ -764,6 +753,56 @@ pub async fn handle_request(
                         server,
                         request_id,
                         protocol_pack::session_request_permission_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                // Former MethodRouter-only session methods (kept reachable in
+                // Auto mode; ACP mode still gates them via is_acp_request).
+                "session/delete" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::session_delete_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                "session/config/set" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::session_config_set_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                "session/config/get" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::session_config_get_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                "session/config/favorite/toggle" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::session_config_favorite_toggle_payload(
                             server,
                             request.params.unwrap_or_default(),
                         )
@@ -2144,7 +2183,6 @@ pub async fn handle_request(
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
-    use std::sync::Arc;
 
     #[cfg(not(feature = "backend-postgres"))]
     use super::collect_vector_context_snippets;
@@ -2155,6 +2193,8 @@ mod tests {
     };
     #[cfg(not(feature = "backend-postgres"))]
     use crate::vector::VectorStore;
+    #[cfg(not(feature = "backend-postgres"))]
+    use std::sync::Arc;
 
     #[test]
     fn is_acp_request_recognizes_known_methods() {

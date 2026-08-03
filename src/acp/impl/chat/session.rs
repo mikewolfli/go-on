@@ -324,6 +324,9 @@ pub(crate) async fn handle_chat(
         .record_chat_latency(duration_ms as f64);
 
     // ── AlertManager evaluation ─────────────────────────────────────────
+    // NOTE: chat_latency_ms evaluate was removed — no alert rule matches the
+    // "chat" keyword prefix, so it always returned empty (dead per-request
+    // lock + scan). Only the cache-hit-ratio rule is relevant here.
     {
         let mut alert_mgr = server
             .observability
@@ -333,17 +336,6 @@ pub(crate) async fn handle_chat(
                 warn!("handle_chat: alert_manager poisoned, recovering");
                 poisoned.into_inner()
             });
-        let fired = alert_mgr.evaluate("chat_latency_ms", duration_ms as f64);
-        for alert in &fired {
-            tracing::warn!(
-                target = "alert_manager",
-                rule = %alert.rule,
-                severity = %alert.severity,
-                value = %alert.value,
-                threshold = %alert.threshold,
-                "AlertManager: {}", alert.message
-            );
-        }
         // Also evaluate cache hit ratio if applicable
         if let Ok(stats) = server.cache_deps.cache.semantic_cache.read() {
             let s = stats.stats();

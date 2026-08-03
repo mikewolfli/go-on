@@ -223,6 +223,50 @@ impl PolicyEvaluator {
         }
     }
 
+    /// Reload + merge hot-reloadable policies (RULES/ directory) into the
+    /// runtime policy map. Called from the background policy-reload task so
+    /// the request hot path stays read-only. No-ops when no reloader is
+    /// wired (production currently passes None; embedding a reloader here is
+    /// an operator decision because the default RedLine policy denies
+    /// risk_score >= 0.5).
+    pub fn merge_reloadable_policies(&self) {
+        if let Some(ref reloader) = self.policy_reloader {
+            if let Ok(mut guard) = reloader.lock() {
+                guard.reload_all();
+                if let Ok(mut policies) = self.policies.write() {
+                    let count = guard.policies().len();
+                    for (i, policy) in guard.policies().iter().enumerate() {
+                        let key = format!("reloadable_{}", i);
+                        if !policies.contains_key(&key) {
+                            if let Some(evaluator) = policy.as_evaluator_fn() {
+                                tracing::debug!(
+                                    "Registered reloadable policy '{}' with evaluator",
+                                    key
+                                );
+                                policies.insert(key, evaluator);
+                            } else {
+                                policies.insert(
+                                    key.clone(),
+                                    Box::new(|_: &TaskContext| -> Option<PolicyVerdict> { None }),
+                                );
+                                tracing::debug!(
+                                    "Registered reloadable policy '{}' (no evaluator — tracking only)",
+                                    key
+                                );
+                            }
+                        }
+                    }
+                    if count > 0 {
+                        tracing::debug!(
+                            count = %count,
+                            "Merged reloadable policies into runtime policy map"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Pre-route composite evaluation.
     /// Returns a PolicyVerdict that the caller (CapabilityBus) should respect.
     ///
@@ -263,46 +307,13 @@ impl PolicyEvaluator {
             }
         }
 
-        // P1-1: Load policies from PolicyReloader (RULES/ directory)
-        if let Some(ref reloader) = self.policy_reloader {
-            if let Ok(mut guard) = reloader.lock() {
-                guard.reload_all();
-                // Merge reloaded policies into the runtime policy map
-                // Each reloadable policy provides its own evaluator closure via
-                // as_evaluator_fn(), so the TOML configuration actually participates
-                // in the evaluation pipeline.
-                if let Ok(mut policies) = self.policies.write() {
-                    let count = guard.policies().len();
-                    for (i, policy) in guard.policies().iter().enumerate() {
-                        let key = format!("reloadable_{}", i);
-                        if !policies.contains_key(&key) {
-                            if let Some(evaluator) = policy.as_evaluator_fn() {
-                                tracing::debug!(
-                                    "Registered reloadable policy '{}' with evaluator",
-                                    key
-                                );
-                                policies.insert(key, evaluator);
-                            } else {
-                                policies.insert(
-                                    key.clone(),
-                                    Box::new(|_: &TaskContext| -> Option<PolicyVerdict> { None }),
-                                );
-                                tracing::debug!(
-                                    "Registered reloadable policy '{}' (no evaluator — tracking only)",
-                                    key
-                                );
-                            }
-                        }
-                    }
-                    if count > 0 {
-                        tracing::debug!(
-                            count = %count,
-                            "Merged reloadable policies into runtime policy map"
-                        );
-                    }
-                }
-            }
-        }
+        // P1-1: Reloadable policies (RULES/ directory) are loaded and merged
+        // by `merge_reloadable_policies()`, invoked from the background policy
+        // reload task — NOT on the per-request hot path. Keeping this out of
+        // evaluate() avoids a per-request reloader Mutex + policies write lock
+        // (the old inline block never even ran in production because the
+        // evaluator's policy_reloader is wired to None; the hot path stays
+        // read-only here).
 
         // 1. Red-line check (hard block)
         let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {

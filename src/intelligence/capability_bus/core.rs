@@ -561,85 +561,15 @@ impl CapabilityBus {
     }
 
     // ── Phase 4 sub-bus builder methods ───────────────────────────────────
-
-    /// Attach a ToolBus to the CapabilityBus
-    #[cfg(feature = "sub-bus-tool")]
-    pub fn with_tool_bus(mut self, tool_bus: ToolBus) -> Self {
-        self.tool_bus = tool_bus;
-        self
-    }
-
-    /// Import remote skills from the given endpoint/skill-name pairs.
-    ///
-    /// Each entry is a `(endpoint, skill_name)` tuple. This is only available
-    /// under the `multi-users-server` feature flag.
-    #[cfg(feature = "multi-users-server")]
-    pub fn with_remote_skills(self, skills: &[(&str, &str)]) -> Self {
-        for (endpoint, skill_name) in skills {
-            crate::intelligence::capability_bus::tool_bus::import_remote_skill(
-                &self.tool_bus,
-                endpoint,
-                skill_name,
-            )
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    "Failed to import remote skill {} from {}: {}",
-                    skill_name,
-                    endpoint,
-                    e
-                );
-            });
-        }
-        self
-    }
-
-    /// Attach an ObservabilityBus to the CapabilityBus
-    #[cfg(feature = "sub-bus-observability")]
-    pub fn with_observability_bus(mut self, bus: ObservabilityBus) -> Self {
-        self.observability_bus = bus;
-        self
-    }
-
-    /// Attach an OptimizationBus to the CapabilityBus
-    #[cfg(feature = "sub-bus-optimization")]
-    pub fn with_optimization_bus(mut self, bus: OptimizationBus) -> Self {
-        self.optimization_bus = bus;
-        self
-    }
-
-    /// Attach a MemoryBus to the CapabilityBus
-    #[cfg(feature = "sub-bus-memory")]
-    pub fn with_memory_bus(mut self, bus: MemoryBus) -> Self {
-        self.memory_bus = bus;
-        self
-    }
-
-    /// Attach a ProtocolBus to the CapabilityBus
-    #[cfg(feature = "sub-bus-protocol")]
-    pub fn with_protocol_bus(mut self, bus: ProtocolBus) -> Self {
-        self.protocol_bus = bus;
-        self
-    }
-
-    /// Attach an OrchestrationBus to the CapabilityBus
-    #[cfg(feature = "sub-bus-orchestration")]
-    pub fn with_orchestration_bus(mut self, bus: OrchestrationBus) -> Self {
-        self.orchestration_bus = bus;
-        self
-    }
-
-    /// Attach a DistributedMemoryBus to the CapabilityBus
-    #[cfg(feature = "sub-bus-distributed-memory")]
-    pub fn with_distributed_memory_bus(mut self, bus: DistributedMemoryBus) -> Self {
-        self.distributed_memory_bus = bus;
-        self
-    }
-
-    /// Set configuration for the CapabilityBus (GAP-B50-21)
-    pub fn with_config(mut self, config: CapabilityBusConfig) -> Self {
-        self.config = config;
-        self
-    }
+    // NOTE: the per-bus builder methods (with_tool_bus / with_observability_bus /
+    // with_optimization_bus / with_memory_bus / with_protocol_bus /
+    // with_orchestration_bus / with_distributed_memory_bus / with_config /
+    // with_remote_skills / with_token_cache / with_model_selector /
+    // with_federated_learning / with_hot_failover) had zero callers and were
+    // removed. The buses are wired directly through their fields
+    // (e.g. memory_bus.set_backends in server_builder) and the P2-* fields
+    // (token_cache/model_selector/federated_learning/hot_failover) remain
+    // designed extension points (always None unless set by an embedder).
 
     /// Inject an LLM agent into the MetacognitiveController (BLUE56-GAP-B02).
     ///
@@ -647,24 +577,6 @@ impl CapabilityBus {
     /// root cause analysis instead of template-based fallback.
     pub fn with_metacognitive_llm(mut self, agent: Arc<dyn crate::agent::Agent>) -> Self {
         self.metacognitive.set_llm_agent(agent);
-        self
-    }
-
-    /// Attach a TokenMultiLevelCache to the CapabilityBus (P2-1).
-    pub fn with_token_cache(mut self, cache: Arc<TokenMultiLevelCache>) -> Self {
-        self.token_cache = Some(cache);
-        self
-    }
-
-    /// Attach an AdaptiveModelSelector to the CapabilityBus (P2-3).
-    pub fn with_model_selector(mut self, selector: AdaptiveModelSelector) -> Self {
-        self.model_selector = Some(Mutex::new(selector));
-        self
-    }
-
-    /// Attach a FederatedLearning coordinator to the CapabilityBus (P2-4).
-    pub fn with_federated_learning(mut self, fl: Arc<Mutex<FederatedLearning>>) -> Self {
-        self.federated_learning = Some(fl);
         self
     }
 
@@ -679,12 +591,6 @@ impl CapabilityBus {
     /// Attach a LivePerformanceFeed to the CapabilityBus
     pub fn with_live_performance(mut self, feed: Arc<LivePerformanceFeed>) -> Self {
         self.live_performance = Some(feed);
-        self
-    }
-
-    /// Attach a HotFailover manager to the CapabilityBus (P2-7).
-    pub fn with_hot_failover(mut self, hf: Arc<HotFailover>) -> Self {
-        self.hot_failover = Some(hf);
         self
     }
 

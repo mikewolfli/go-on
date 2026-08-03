@@ -449,7 +449,10 @@ pub fn start_memory_monitor() {
     RUNTIME_MEMORY_TOTAL_MB.store(info.total_mb(), Ordering::Relaxed);
     RUNTIME_PRESSURE_LEVEL.store(info.pressure_level as u64, Ordering::Relaxed);
 
-    // Evaluate memory thresholds against AlertManager rules
+    // Evaluate memory thresholds against AlertManager rules.
+    // NOTE: a second evaluate("memory_jetsam_risk") was removed — the
+    // "memory_free_mb" call above already evaluates every rule sharing the
+    // "memory" keyword prefix (including memory_jetsam_risk).
     let alert_manager = crate::observability::alert_manager::alert_manager();
     if let Ok(mut am) = alert_manager.lock() {
         let alerts = am.evaluate("memory_free_mb", free_mb as f64);
@@ -462,11 +465,6 @@ pub fn start_memory_monitor() {
                     alert.message
                 );
             }
-        }
-
-        // Also check jetsam risk specifically
-        if free_mb < MEMORY_JETSAM_RISK_MB && info.total_bytes > 0 {
-            let _jetsam_alerts = am.evaluate("memory_jetsam_risk", free_mb as f64);
         }
     }
 

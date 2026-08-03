@@ -127,16 +127,9 @@ impl Transport for SseTransport {
 
     async fn write_sse_event(&self, event: &str, payload: &Value) -> Result<()> {
         let mut socket = self.socket.lock().await;
-        // Use the existing buffer-pooled SSE writer
-        let mut frame = crate::acp::r#impl::chat::acquire_sse_buffer();
-        frame.extend_from_slice(b"event: ");
-        frame.extend_from_slice(event.as_bytes());
-        frame.extend_from_slice(b"\ndata: ");
-        serde_json::to_writer(&mut frame, payload)?;
-        frame.extend_from_slice(b"\n\n");
-        crate::acp::r#impl::runtime::tcp_write_timeout(&mut *socket, &frame).await?;
-        crate::acp::r#impl::chat::release_sse_buffer(frame);
-        Ok(())
+        // Delegate to the single buffer-pooled SSE frame writer (src/acp/impl/runtime/sse.rs)
+        // so the framing logic exists in exactly one place.
+        crate::acp::r#impl::runtime::sse::write_sse_event(&mut *socket, event, payload).await
     }
 
     async fn flush(&self) -> Result<()> {

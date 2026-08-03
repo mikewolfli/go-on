@@ -14,6 +14,7 @@
 //! Open/HalfOpen variants and transition_to() method.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::acp::prelude::functions::now_ts;
 use serde::Serialize;
@@ -27,7 +28,7 @@ use serde::Serialize;
 pub struct CircuitBreakerSnapshot {
     /// Circuit breaker name
     pub name: String,
-    /// Current state (always "closed" in this registry)
+    /// Current state ("open"/"closed"/"halfopen") from the live source
     pub state: String,
     /// Failure count
     pub failure_count: u32,
@@ -59,13 +60,16 @@ pub(crate) struct CircuitBreakerState {
 
 /// Circuit breaker registry — stores states for metrics/UI reporting.
 ///
-/// State transitions happen in `HyperResilienceEngine`. This registry is
-/// populated by the health-check cycle and is read-only from the ACP side.
-///
-/// Thread safety is guaranteed by the outer `Arc<StdMutex<>>` in AcpServer.
+/// Real breaker state lives in `optimization::failure_prevention::FailurePrevention`
+/// (the per-agent circuit breakers driven by request outcomes). When a
+/// `source` is attached, `snapshots()` / `open_count()` / `is_healthy()`
+/// read the live state from it instead of the (previously always-empty)
+/// built-in map.
 #[derive(Debug, Default)]
 pub struct CircuitBreakerRegistry {
     pub(crate) inner: HashMap<String, CircuitBreakerState>,
+    /// Live source of truth for breaker state (the server's FailurePrevention).
+    source: Option<Arc<StdMutex<crate::optimization::failure_prevention::FailurePrevention>>>,
 }
 
 impl CircuitBreakerRegistry {
@@ -74,13 +78,56 @@ impl CircuitBreakerRegistry {
         Self::default()
     }
 
-    /// Get the number of open circuit breakers (always 0 — HRE tracks actual state).
+    /// Attach the live FailurePrevention as the snapshot source.
+    /// Called once during ServerBuilder::build(); without a source the
+    /// registry reports empty/closed (degraded observability, no fake data).
+    pub(crate) fn attach_source(
+        &mut self,
+        fp: Arc<StdMutex<crate::optimization::failure_prevention::FailurePrevention>>,
+    ) {
+        self.source = Some(fp);
+    }
+
+    /// Get the number of open circuit breakers.
     pub fn open_count(&self) -> u32 {
+        use crate::optimization::failure_prevention::CircuitBreakerState as FpState;
+        if let Some(ref fp) = self.source {
+            let fp = fp.lock().unwrap_or_else(|e| e.into_inner());
+            return fp
+                .breaker_snapshots()
+                .iter()
+                .filter(|(_, state, ..)| *state == FpState::Open)
+                .count() as u32;
+        }
+        // No source attached — the built-in map has no producer, so nothing is open.
         0
     }
 
-    /// Get circuit breaker snapshots (all report "closed" — HRE is the state authority).
+    /// Get circuit breaker snapshots.
     pub fn snapshots(&self) -> Vec<CircuitBreakerSnapshot> {
+        use crate::optimization::failure_prevention::CircuitBreakerState as FpState;
+        if let Some(ref fp) = self.source {
+            let fp = fp.lock().unwrap_or_else(|e| e.into_inner());
+            return fp
+                .breaker_snapshots()
+                .into_iter()
+                .map(
+                    |(name, state, failures, total, successes)| CircuitBreakerSnapshot {
+                        name,
+                        state: match state {
+                            FpState::Open => "open".to_string(),
+                            FpState::HalfOpen => "halfopen".to_string(),
+                            FpState::Closed => "closed".to_string(),
+                        },
+                        failure_count: failures,
+                        success_count: successes as u32,
+                        last_state_change: now_ts(),
+                        total_failures: failures as u64,
+                        total_successes: total,
+                    },
+                )
+                .collect();
+        }
         self.inner
             .iter()
             .map(|(name, state)| CircuitBreakerSnapshot {
@@ -95,9 +142,9 @@ impl CircuitBreakerRegistry {
             .collect()
     }
 
-    /// Check if all circuit breakers are closed (always true — HRE is the authority).
+    /// Check if all circuit breakers are closed.
     pub fn is_healthy(&self) -> bool {
-        true
+        self.open_count() == 0
     }
 
     /// Reset one circuit breaker or all tracked breakers back to initial state.

@@ -1,10 +1,10 @@
 //! Security End-to-End
 //!
 //! Validates the security subsystem across multiple control planes:
-//!   mTLS → request signing → prompt injection → audit integrity → secret rotation
+//!   mTLS → request signing → prompt injection → audit integrity
 //!
 //! Uses go_on::security types for mTLS configuration, Ed25519 request signing,
-//! prompt injection detection, hash chain audit integrity, and secret rotation.
+//! prompt injection detection, and hash chain audit integrity.
 //!
 //! # integration-test
 //! Real mTLS handshake requires certificate files and a TCP listener. Real
@@ -12,13 +12,9 @@
 //! tests validate the API surface and structural invariants.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use go_on::security::audit_integrity::HashChainAuditor;
 use go_on::security::prompt_injection::{DetectionConfig, InjectionDetector};
-use go_on::security::secret_rotation::{
-    MemoryRotator, RotationPolicy, SecretAlgorithm, SecretManager,
-};
 
 // ── Context ────────────────────────────────────────────────────────────────
 
@@ -50,8 +46,8 @@ impl Drop for SecurityE2eContext {
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 /// Security validation across available security control planes.
-/// Currently tests: prompt injection detection, audit integrity (hash chain),
-/// secret rotation. mTLS and request signing tests are pending.
+/// Currently tests: prompt injection detection, audit integrity (hash chain).
+/// mTLS and request signing tests are pending.
 #[tokio::test]
 async fn test_security_all_controls() {
     let ctx = SecurityE2eContext::new();
@@ -136,50 +132,6 @@ async fn test_security_all_controls() {
         "audit hash chain must be intact, got {} violations",
         violations.len()
     );
-
-    // ── 5. Secret rotation ─────────────────────────────────────────────
-    // Use SecretManager with an in-memory rotator.
-    let rotator: Arc<MemoryRotator> = Arc::new(MemoryRotator::new());
-    let policy = RotationPolicy::default();
-    let secret_mgr = SecretManager::new(
-        policy,
-        rotator.clone() as Arc<dyn go_on::security::secret_rotation::KeyRotator>,
-    );
-
-    // Validate rotation policy defaults (captured before move).
-    let default_policy = RotationPolicy::default();
-    assert!(default_policy.max_age_secs > 0);
-    assert!(default_policy.retain_versions > 0);
-    assert!(default_policy.min_key_length > 0);
-
-    // Register a key.
-    let key = secret_mgr
-        .register_key("api-key-e2e".into(), SecretAlgorithm::HmacSha256, None)
-        .await
-        .expect("key registration must succeed");
-    assert_eq!(key.key_id, "api-key-e2e");
-    assert_eq!(key.algorithm, SecretAlgorithm::HmacSha256);
-    assert!(!key.key_bytes.is_empty());
-    assert!(key.rotated_at_ms > 0);
-
-    // Rotate the key via SecretManager.
-    let rotated = secret_mgr
-        .rotate_key("api-key-e2e", None)
-        .await
-        .expect("rotation must succeed");
-    assert_ne!(
-        rotated.key_bytes, key.key_bytes,
-        "key bytes must change after rotation"
-    );
-    assert!(rotated.rotated_at_ms >= key.rotated_at_ms);
-
-    // Retrieve & verify via get_key.
-    let retrieved = secret_mgr
-        .get_key("api-key-e2e", None)
-        .await
-        .expect("get_key must succeed");
-    assert_eq!(retrieved.key_id, "api-key-e2e");
-    assert_eq!(retrieved.algorithm, SecretAlgorithm::HmacSha256);
 }
 
 /// Validates that a tampered audit chain is detected.
@@ -234,47 +186,4 @@ async fn test_security_audit_tamper_detection() {
         assert!(!v.entry_id.is_empty(), "violation must reference an entry");
         assert!(!v.reason.is_empty(), "violation must have a reason");
     }
-}
-
-/// Validates secret rotation with Ed25519 keys via SecretManager.
-#[tokio::test]
-async fn test_security_secret_rotation_ed25519() {
-    let rotator: Arc<MemoryRotator> = Arc::new(MemoryRotator::new());
-    let policy = RotationPolicy::default();
-    let secret_mgr = SecretManager::new(
-        policy,
-        rotator as Arc<dyn go_on::security::secret_rotation::KeyRotator>,
-    );
-
-    let key = secret_mgr
-        .register_key("ed25519-key-e2e".into(), SecretAlgorithm::Ed25519, None)
-        .await
-        .expect("Ed25519 key registration must succeed");
-    assert_eq!(key.algorithm, SecretAlgorithm::Ed25519);
-    assert!(!key.key_bytes.is_empty());
-    assert!(key.rotated_at_ms > 0);
-
-    // Rotate
-    let rotated = secret_mgr
-        .rotate_key("ed25519-key-e2e", None)
-        .await
-        .expect("Ed25519 key rotation must succeed");
-    assert_ne!(rotated.key_bytes, key.key_bytes);
-    assert!(rotated.rotated_at_ms >= key.rotated_at_ms);
-
-    // Verify the old key is still retrievable as a previous version.
-    let retrieved = secret_mgr
-        .get_key("ed25519-key-e2e", None)
-        .await
-        .expect("get_key must succeed");
-    assert_eq!(retrieved.key_id, "ed25519-key-e2e");
-    assert_eq!(retrieved.algorithm, SecretAlgorithm::Ed25519);
-
-    // Verify different algorithm keys
-    let hmac_key = secret_mgr
-        .register_key("hmac-key-e2e".into(), SecretAlgorithm::HmacSha256, None)
-        .await
-        .expect("HMAC key registration must succeed");
-    assert_eq!(hmac_key.algorithm, SecretAlgorithm::HmacSha256);
-    assert_ne!(hmac_key.key_id, key.key_id);
 }

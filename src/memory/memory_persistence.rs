@@ -617,7 +617,7 @@ fn query_all(
     params: &[&(dyn postgres::types::ToSql + Sync)],
 ) -> Result<Vec<MemoryEntry>> {
     let rows = conn.query(sql, params)?;
-    Ok(rows.iter().map(|row| row_to_memory_entry(row)).collect())
+    Ok(rows.iter().map(row_to_memory_entry).collect())
 }
 
 /// Wrapper around the warm store (SQLite or PostgreSQL).
@@ -981,7 +981,7 @@ impl WarmStore {
             }
             #[cfg(not(feature = "backend-sqlite"))]
             {
-                query_all(&mut *conn, &sql, &[&min_usefulness, &(limit as i64)])
+                query_all(&mut conn, &sql, &[&min_usefulness, &(limit as i64)])
             }
         })
         .await
@@ -1042,7 +1042,7 @@ impl WarmStore {
             #[cfg(not(feature = "backend-sqlite"))]
             {
                 let empty_params: [&(dyn postgres::types::ToSql + Sync); 0] = [];
-                query_all(&mut *conn, &sql, &empty_params)
+                query_all(&mut conn, &sql, &empty_params)
             }
         })
         .await
@@ -1077,7 +1077,7 @@ impl WarmStore {
             }
             #[cfg(not(feature = "backend-sqlite"))]
             {
-                query_all(&mut *conn, &sql, &[&session_id, &(limit as i64)])
+                query_all(&mut conn, &sql, &[&session_id, &(limit as i64)])
             }
         })
         .await

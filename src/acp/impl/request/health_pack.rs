@@ -34,6 +34,14 @@ pub(super) async fn breaker_reset_payload(server: &AcpServer, params: Value) -> 
         .get("agent")
         .or_else(|| params.get("name"))
         .and_then(Value::as_str);
+    // Reset the REAL per-agent breakers (FailurePrevention). The registry
+    // reset below only clears its (source-backed) bookkeeping map.
+    let recovered = server
+        .resilience
+        .failure_prevention
+        .lock()
+        .map(|mut fp| fp.recover(target))
+        .unwrap_or_default();
     let reset_count = server
         .resilience
         .circuit_breakers
@@ -50,6 +58,7 @@ pub(super) async fn breaker_reset_payload(server: &AcpServer, params: Value) -> 
     Ok(json!({
         "ok": true,
         "removed": reset_count,
+        "recovered": recovered,
         "target": target,
         "breakers": breakers,
     }))

@@ -91,7 +91,7 @@ pub(crate) fn run_migrations(client: &mut Client, target_version: usize) -> Resu
     let current: usize = client
         .query("SELECT COALESCE(MAX(version), 0) FROM _schema_version", &[])
         .ok()
-        .and_then(|rows| rows.get(0).map(|r| r.get::<_, i32>(0) as usize))
+        .and_then(|rows| rows.first().map(|r| r.get::<_, i32>(0) as usize))
         .unwrap_or(0);
 
     // Apply each pending migration in order.

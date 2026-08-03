@@ -61,12 +61,12 @@ pub async fn initialize_cache(
             .ok_or_else(|| anyhow::anyhow!("cache.connection_string required"))?;
         let default_ttl_seconds = cfg.default_ttl_seconds;
         let max_entries = cfg.max_entries;
-        Ok(initialize_postgres_backend(&url, move |conn_str| {
+        initialize_postgres_backend(&url, move |conn_str| {
             ResponseCache::new(&conn_str, default_ttl_seconds, max_entries)
                 .map(Arc::new)
                 .map(Some)
         })
-        .await?)
+        .await
     }
 
     #[cfg(not(feature = "backend-postgres"))]
@@ -130,13 +130,13 @@ pub async fn initialize_vector_store(
         let provider = embedding_provider;
         let dimensions = cfg.dimensions;
         let max_entries = cfg.max_entries;
-        Ok(initialize_postgres_backend(&url, move |conn_str| {
+        initialize_postgres_backend(&url, move |conn_str| {
             let store = VectorStore::new(&conn_str, dimensions, max_entries)?
                 .with_embedding_provider(provider);
             tracing::info!("vector store: embedding provider injected");
             Ok::<_, anyhow::Error>(Some(Arc::new(store)))
         })
-        .await?)
+        .await
     }
 
     #[cfg(not(feature = "backend-postgres"))]

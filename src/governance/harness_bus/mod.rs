@@ -35,7 +35,7 @@ pub mod evaluator;
 pub mod types;
 
 // Re-export all public types from submodules for backward compatibility.
-pub use audit::{HarnessAuditTrail, PuaGovernanceProfile};
+pub use audit::PuaGovernanceProfile;
 pub use evaluator::{PolicyEvaluator, PolicyFn};
 pub use types::{
     AgentExecutionPolicy, AuditConfig, AuditEntry, AuditLevel, CodeExecutionPolicy, Constraint,
@@ -145,14 +145,6 @@ impl HarnessBus {
             audit_log,
             consecutive_allows: AtomicU32::new(0),
         };
-
-        // Start background health checks for the resilience engine.
-        {
-            let engine = Arc::clone(&bus.resilience_engine);
-            tokio::spawn(async move {
-                engine.start_health_checks().await;
-            });
-        }
 
         // GAP-B58-C16: Start drift monitor (checks for metric drift every 60 seconds).
         bus.start_drift_monitor(60);

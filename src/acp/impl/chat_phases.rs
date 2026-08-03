@@ -223,13 +223,18 @@ pub(crate) async fn observe_phase(
         use crate::security::severity::DetectionSeverity as InjectionSeverity;
 
         // Detect and classify severity across ALL messages first.
+        // detect_and_sanitize runs ONE detect() pass per message and returns
+        // the sanitized form; re-detecting in the enforcement loop below
+        // would scan every message twice.
         let mut has_high_or_critical = false;
         let mut all_violations: Vec<crate::security::prompt_injection::SafetyViolation> =
             Vec::new();
         let mut max_contamination = 0.0_f64;
+        let mut sanitized_messages: Vec<(bool, String)> = Vec::with_capacity(params.messages.len());
 
         for msg in &params.messages {
-            let result = detector.detect(&msg.content);
+            let (sanitized, result) = detector.detect_and_sanitize(&msg.content);
+            sanitized_messages.push((result.detected, sanitized));
             if result.detected {
                 all_violations.extend(result.violations.clone());
                 max_contamination = max_contamination.max(result.contamination_score);
@@ -268,10 +273,14 @@ pub(crate) async fn observe_phase(
                 );
             }
 
-            // ── MEDIUM/LOW: sanitize each message individually ────────
-            for msg in &mut params.messages {
-                let (sanitized, _) = detector.detect_and_sanitize(&msg.content);
-                msg.content = sanitized;
+            // ── MEDIUM/LOW: sanitize each message (apply the sanitized form
+            // computed during the single detect pass above) ────────────
+            for (msg, (was_detected, sanitized)) in
+                params.messages.iter_mut().zip(sanitized_messages.iter())
+            {
+                if *was_detected {
+                    msg.content = sanitized.clone();
+                }
             }
         }
     }
@@ -1790,18 +1799,21 @@ pub(crate) async fn reflect_phase(
     .await?;
 
     // Background skill/workflow generation
-    // Codex-style: skip for simple chat — no meaningful patterns to extract
+    // Codex-style: skip for simple chat — no meaningful patterns to extract.
+    // The two generators are independent; run them concurrently so the worst
+    // case is one 2s timeout instead of two serialized 2s timeouts.
     if !is_simple_chat(params) {
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            auto_create_skills_from_conversation(server, params, &exec_out.response_text),
-        )
-        .await;
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            auto_generate_workflow_from_conversation(server, params, &exec_out.response_text),
-        )
-        .await;
+        let (skills_res, workflow_res) = tokio::join!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                auto_create_skills_from_conversation(server, params, &exec_out.response_text),
+            ),
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                auto_generate_workflow_from_conversation(server, params, &exec_out.response_text),
+            ),
+        );
+        let _ = (skills_res, workflow_res);
     }
 
     // Rationalization
