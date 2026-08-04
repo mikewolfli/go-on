@@ -606,19 +606,9 @@ impl CausalBayesianGraph {
         &self.edges
     }
 
-    /// Number of nodes in the graph.
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
-    }
-
     /// Number of edges in the graph.
     pub fn edge_count(&self) -> usize {
         self.edges.len()
-    }
-
-    /// Total observations recorded.
-    pub fn total_observations(&self) -> u64 {
-        self.total_observations
     }
 
     // ── Hierarchical Abstraction ──────────────────────────────────────────
@@ -817,7 +807,7 @@ mod tests {
 
         graph.record_observation(&cause, &effect, 100, &[], 0);
         // 4 nodes: 2 wildcard (cause+effect) + 2 specific-value (cause+effect)
-        assert_eq!(graph.node_count(), 4);
+        assert_eq!(graph.nodes().len(), 4);
         // 2 edges: 1 wildcard + 1 specific
         assert_eq!(graph.edge_count(), 2);
         assert!((graph.edges()[0].probability - 1.0).abs() < 0.01);

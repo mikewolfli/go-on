@@ -5,8 +5,6 @@
 
 use serde_json::{json, Value};
 
-use crate::acp::server::AcpServer;
-use crate::orchestration::core_dag::{TaskGraph, TaskNode};
 use crate::orchestration::roles::{AgentRole, RoleRegistry};
 
 /// Bundles all parameters required to assemble a chat response payload.
@@ -206,149 +204,9 @@ pub fn build_role_routing(task_description: &str) -> Value {
     })
 }
 
-/// Build task graph checkpoint from conversation execution state.
-#[allow(clippy::too_many_arguments)]
-pub async fn build_task_graph_checkpoint(
-    server: &AcpServer,
-    conversation_id: &str,
-    task_description: &str,
-    mode: &str,
-    phase_name: &str,
-    response_text: &str,
-    tool_execution_results: &[Value],
-    memory_promotion_result: Option<&Value>,
-    duration_ms: u64,
-) -> (Option<Value>, Option<String>, Option<String>) {
-    if let Some(ref store) = server.persistence.task_graph_store {
-        let root_node = TaskNode {
-            id: format!("chat-{}-root", conversation_id),
-            kind: "chat_request".to_string(),
-            state: "done".to_string(),
-            input: json!({
-                "task": task_description,
-                "mode": mode,
-                "phase": phase_name,
-            }),
-            output: Some(json!({
-                "response": response_text,
-                "duration_ms": duration_ms,
-            })),
-            dependencies: std::collections::HashSet::new(),
-            retries: 0,
-        };
-
-        let mut task_graph = TaskGraph::new(root_node);
-
-        if !tool_execution_results.is_empty() {
-            let tool_node = TaskNode {
-                id: format!("chat-{}-tools", conversation_id),
-                kind: "tool_execution".to_string(),
-                state: "done".to_string(),
-                input: json!({
-                    "task": task_description,
-                    "mode": mode,
-                }),
-                output: Some(json!({
-                    "results": tool_execution_results,
-                    "count": tool_execution_results.len(),
-                })),
-                dependencies: {
-                    let mut s = std::collections::HashSet::new();
-                    s.insert(format!("chat-{}-root", conversation_id));
-                    s
-                },
-                retries: 0,
-            };
-            task_graph.add_node(tool_node);
-            if let Err(e) = task_graph.add_edge(
-                format!("chat-{}-root", conversation_id),
-                format!("chat-{}-tools", conversation_id),
-            ) {
-                tracing::warn!(%conversation_id, error = %e, "response_assembler: failed to add tool edge to task graph");
-            }
-        }
-
-        if let Some(memory_result) = memory_promotion_result {
-            let memory_node = TaskNode {
-                id: format!("chat-{}-memory", conversation_id),
-                kind: "memory_promotion".to_string(),
-                state: "done".to_string(),
-                input: json!({ "task": task_description }),
-                output: Some(memory_result.clone()),
-                dependencies: {
-                    let mut s = std::collections::HashSet::new();
-                    s.insert(format!("chat-{}-root", conversation_id));
-                    s
-                },
-                retries: 0,
-            };
-            task_graph.add_node(memory_node);
-            if let Err(e) = task_graph.add_edge(
-                format!("chat-{}-root", conversation_id),
-                format!("chat-{}-memory", conversation_id),
-            ) {
-                tracing::warn!(%conversation_id, error = %e, "response_assembler: failed to add memory edge to task graph");
-            }
-        }
-
-        let graph_id = format!("graph-{}", conversation_id);
-        let checkpoint_id = format!("ckpt-{}", crate::acp::prelude::now_ts());
-
-        if let Err(e) = store.save_graph(&graph_id, &task_graph).await {
-            tracing::warn!(target: "task_graph", "failed to save graph: {e}");
-        }
-
-        let subtask_records: Vec<crate::orchestration::core_dag::PlannedSubtaskRecord> = task_graph
-            .nodes
-            .values()
-            .filter(|n| n.id != task_graph.root)
-            .map(|n| crate::orchestration::core_dag::PlannedSubtaskRecord {
-                subtask_id: n.id.clone(),
-                description: n
-                    .input
-                    .get("task")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                phase: n.kind.clone(),
-                outcome: Some(if n.state == "done" {
-                    "completed".to_string()
-                } else {
-                    n.state.clone()
-                }),
-                result_summary: n.output.as_ref().map(|o| o.to_string()),
-                dependencies: n.dependencies.iter().cloned().collect(),
-            })
-            .collect();
-
-        let checkpoint = task_graph.snapshot(task_description, 1, subtask_records);
-        if let Err(e) = store.save_checkpoint(&checkpoint, &graph_id).await {
-            tracing::warn!(target: "task_graph", "failed to save checkpoint: {e}");
-        }
-
-        (
-            Some(json!({
-                "task_graph": {
-                    "node_count": task_graph.nodes.len(),
-                    "edge_count": task_graph.edges.len(),
-                    "root": task_graph.root,
-                    "execution_complete": true,
-                    "graph_id": graph_id,
-                    "checkpoint_id": checkpoint_id,
-                }
-            })),
-            Some(graph_id),
-            Some(checkpoint_id),
-        )
-    } else {
-        (None, None, None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::server::ServerBuilder;
     use std::time::Instant;
 
     #[test]
@@ -436,28 +294,6 @@ mod tests {
             .get("task_analysis")
             .and_then(|v| v.as_str())
             .is_some());
-    }
-
-    #[tokio::test]
-    async fn build_task_graph_checkpoint_contains_state() {
-        let server = ServerBuilder::new().build();
-        let (checkpoint, graph_id, ckpt_id) = build_task_graph_checkpoint(
-            &server,
-            "conv-1",
-            "test task",
-            "auto",
-            "coding",
-            "response text",
-            &[],
-            None,
-            100,
-        )
-        .await;
-
-        // With no task_graph_store configured, all results are None
-        assert!(checkpoint.is_none());
-        assert!(graph_id.is_none());
-        assert!(ckpt_id.is_none());
     }
 
     #[test]

@@ -87,6 +87,7 @@ impl VectorPrecisionFeedback {
 #[derive(Debug, Clone)]
 struct HnswNodeMeta {
     memory_key: String,
+    phase: String,
     response_text: String,
     updated_at: i64,
 }
@@ -356,6 +357,7 @@ impl HnswIndex {
             // Clear metadata so the node won't be matched again
             self.metadata[pos] = HnswNodeMeta {
                 memory_key: String::new(),
+                phase: String::new(),
                 response_text: String::new(),
                 updated_at: 0,
             };
@@ -654,6 +656,7 @@ impl VectorStore {
                         embedding,
                         HnswNodeMeta {
                             memory_key,
+                            phase: phase.clone(),
                             response_text: response.to_string(),
                             updated_at: now,
                         },
@@ -995,7 +998,7 @@ impl VectorStore {
             });
 
             let mut stmt = conn.prepare(
-                "SELECT memory_key, response_text, updated_at, embedding_blob, embedding_json
+                "SELECT memory_key, phase, response_text, updated_at, embedding_blob, embedding_json
                  FROM vector_memory
                  ORDER BY updated_at ASC",
             )?;
@@ -1005,10 +1008,11 @@ impl VectorStore {
 
             while let Some(row) = rows.next()? {
                 let memory_key: String = row.get(0)?;
-                let response_text: String = row.get(1)?;
-                let updated_at: i64 = row.get(2)?;
-                let embedding_blob: Option<Vec<u8>> = row.get(3)?;
-                let embedding_json: Option<String> = row.get(4)?;
+                let phase: String = row.get(1)?;
+                let response_text: String = row.get(2)?;
+                let updated_at: i64 = row.get(3)?;
+                let embedding_blob: Option<Vec<u8>> = row.get(4)?;
+                let embedding_json: Option<String> = row.get(5)?;
 
                 let embedding: Vec<f32> = match (embedding_blob, embedding_json) {
                     (Some(blob), _) => blob
@@ -1030,6 +1034,7 @@ impl VectorStore {
                     embedding,
                     HnswNodeMeta {
                         memory_key,
+                        phase,
                         response_text,
                         updated_at,
                     },
@@ -1056,7 +1061,7 @@ impl VectorStore {
     fn hnsw_search(
         &self,
         query_embedding: &[f32],
-        _phase: &str,
+        phase: &str,
         top_k: usize,
         min_similarity: f32,
         max_snippet_chars: usize,
@@ -1083,8 +1088,14 @@ impl VectorStore {
             if nd.dist > 1.0 - min_similarity {
                 continue;
             }
-            let similarity = (1.0_f32 - nd.dist).clamp(0.0, 1.0);
             let meta = &metadata[nd.idx];
+            // The SQLite paths filter by phase (`WHERE phase = ?1`); the HNSW
+            // path must do the same so the two paths never disagree on which
+            // memories are visible.
+            if meta.phase != phase {
+                continue;
+            }
+            let similarity = (1.0_f32 - nd.dist).clamp(0.0, 1.0);
             let blended = blend_similarity_with_recency(similarity, now, meta.updated_at);
             scored.push((meta.memory_key.clone(), blended, meta.response_text.clone()));
         }

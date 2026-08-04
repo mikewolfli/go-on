@@ -35,7 +35,6 @@ pub use prelude::{
     CircuitBreakerSnapshot,
     ConversationCheckpoint,
     ConversationState,
-    InflightLimiter,
     LifecycleSnapshot,
     LifecycleState,
     MaintenanceSnapshot,

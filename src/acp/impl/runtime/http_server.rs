@@ -3,20 +3,13 @@
 //! Contains the main HTTP server accept loop and connection management.
 //! Extracted from the parent `runtime.rs` to reduce the monolithic file size.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::net::{TcpListener, TcpSocket};
-use tokio::signal;
-use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
 use crate::acp::background::start_background_tasks;
 use crate::acp::server::AcpServer;
-
-/// Limits concurrent ACP HTTP connections to prevent unbounded tokio task growth.
-static CONNECTION_SEMAPHORE: Semaphore = Semaphore::const_new(1000);
 
 use super::http::handle_http_connection;
 use super::tls::{handle_mtls_http_connection, handle_tls_http_connection};
@@ -24,7 +17,8 @@ use super::tls::{handle_mtls_http_connection, handle_tls_http_connection};
 /// Start the ACP HTTP server.
 ///
 /// Creates a TCP listener, optionally configures TLS/mTLS, and enters the
-/// accept loop. Handles graceful shutdown on SIGINT, SIGTERM, or notification.
+/// shared accept loop (see `shared::tcp_accept_loop::run_http_accept_loop`).
+/// Handles graceful shutdown on SIGINT, SIGTERM, or notification.
 pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> Result<()> {
     info!("ACP HTTP server starting on {}", bind_addr);
 
@@ -42,19 +36,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         });
     }
 
-    // Create socket with SO_REUSEADDR to avoid "Address already in use" after restart
-    let listener = match bind_addr.parse::<SocketAddr>() {
-        Ok(addr) => {
-            let s = match addr {
-                SocketAddr::V4(_) => TcpSocket::new_v4()?,
-                SocketAddr::V6(_) => TcpSocket::new_v6()?,
-            };
-            s.set_reuseaddr(true)?;
-            s.bind(addr)?;
-            s.listen(1024)?
-        }
-        Err(_) => TcpListener::bind(&bind_addr).await?,
-    };
+    let listener = crate::shared::tcp_accept_loop::bind_tcp_listener(&bind_addr).await?;
 
     // GAP-B52-24: Configure mTLS acceptor when enabled
     // The MtlsAcceptor wraps each accepted TCP stream with mTLS before
@@ -210,106 +192,58 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         }
     };
 
-    // Set up signal watchers for graceful shutdown
-    let mut sigterm = std::pin::pin!(async {
-        #[cfg(unix)]
-        {
-            match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-                Ok(mut stream) => {
-                    stream.recv().await;
-                }
-                Err(e) => {
-                    warn!("failed to register SIGTERM handler: {e}; graceful shutdown via SIGTERM disabled");
-                    std::future::pending::<()>().await;
-                }
-            }
-        }
-        #[cfg(not(unix))]
-        std::future::pending::<()>().await;
-    });
-
-    loop {
-        tokio::select! {
-            _ = shutdown_notify.notified() => {
-                break;
-            }
-            _ = signal::ctrl_c() => {
-                info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
-                break;
-            }
-            _ = sigterm.as_mut() => {
-                info!("Received SIGTERM, initiating graceful shutdown...");
-                break;
-            }
-            // Poll the shutdown flag so a shutdown requested by a handler task is
-            // honored even when the Notify notification was missed (notify_waiters
-            // does not store a permit for future waiters).
-            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
-                if server.shutdown_requested() {
-                    break;
-                }
-                continue;
-            }
-            incoming = listener.accept() => {
-                // Check if draining before accepting new connections
-                if server.drain_guard.is_draining() {
-                    drop(incoming);
-                    continue;
-                }
-                // Bound concurrent connections — backpressure if we already have
-                // 1000 active connections, preventing unbounded tokio task growth.
-                let _permit = CONNECTION_SEMAPHORE.acquire().await;
-                let (socket, peer_addr) = incoming?;
-                let server_ref = Arc::clone(&server);
-                if let Some(ref acceptor) = mtls_acceptor {
-                    // mTLS path: perform TLS handshake, then handle through
-                    // the dedicated mTLS HTTP handler.
-                    let acceptor_clone = acceptor.clone();
-                    tokio::spawn(async move {
-                        let _permit = _permit;
+    // Shared accept loop: signal handling, accept dispatch, and per-connection
+    // spawn all live in `shared::tcp_accept_loop`. Protocol-specific concerns
+    // (TLS wrapping, handler) stay in the closure below.
+    let stop_server = Arc::clone(&server);
+    let conn_server = Arc::clone(&server);
+    crate::shared::tcp_accept_loop::run_http_accept_loop(
+        listener,
+        shutdown_notify.clone(),
+        1000,
+        // Stop accepting new connections once draining begins.
+        move || stop_server.drain_guard.is_draining(),
+        std::sync::Arc::new(
+            move |socket: tokio::net::TcpStream, peer_addr: std::net::SocketAddr| {
+                let server = Arc::clone(&conn_server);
+                let mtls = mtls_acceptor.clone();
+                let tls = tls_acceptor.clone();
+                async move {
+                    if let Some(ref acceptor) = mtls {
+                        // mTLS path: perform TLS handshake, then handle through
+                        // the dedicated mTLS HTTP handler.
                         if let Err(err) = handle_mtls_http_connection(
-                            acceptor_clone.as_ref(),
+                            acceptor.as_ref(),
                             socket,
-                            server_ref,
+                            server,
                             peer_addr,
                         )
                         .await
                         {
                             warn!("ACP mTLS connection {} failed: {}", peer_addr, err);
                         }
-                    });
-                } else if let Some(ref acceptor) = tls_acceptor {
-                    // Plain TLS path: perform TLS handshake, then handle
-                    // through the same HTTP handler (no client cert).
-                    let acceptor_clone = acceptor.clone();
-                    tokio::spawn(async move {
-                        let _permit = _permit;
-                        if let Err(err) = handle_tls_http_connection(
-                            &acceptor_clone,
-                            socket,
-                            server_ref,
-                            peer_addr,
-                        )
-                        .await
+                    } else if let Some(ref acceptor) = tls {
+                        // Plain TLS path: perform TLS handshake, then handle
+                        // through the same HTTP handler (no client cert).
+                        if let Err(err) =
+                            handle_tls_http_connection(acceptor, socket, server, peer_addr).await
                         {
                             warn!("ACP TLS connection {} failed: {}", peer_addr, err);
                         }
-                    });
-                } else {
-                    // Plain TCP path
-                    tokio::spawn(async move {
-                        let _permit = _permit;
+                    } else {
+                        // Plain TCP path
                         let mut socket = socket;
                         if let Err(err) =
-                            handle_http_connection(&mut socket, server_ref, peer_addr).await
+                            handle_http_connection(&mut socket, server, peer_addr).await
                         {
                             warn!("ACP HTTP connection {} failed: {}", peer_addr, err);
                         }
-                    });
+                    }
                 }
-            }
-        }
-    }
+            },
+        ),
+    )
+    .await?;
 
     // ── Graceful shutdown with DrainGuard ───────────────────────────
     // Shutdown order: stop_accepting → drain_requests → stop_bg_tasks → close_db → exit

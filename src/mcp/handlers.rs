@@ -600,10 +600,15 @@ impl McpServer {
                 // capabilities are NOT advertised — a server must not declare
                 // listChanged when it never sends the corresponding
                 // notifications. SSE heartbeats still keep connections alive.
+                // The base capability keys are still declared so clients know
+                // the endpoints exist.
                 "sampling": {},
                 "experimental": {
                     "agents": {}
-                }
+                },
+                "resources": {},
+                "tools": {},
+                "prompts": {},
             }),
             self.server_info.clone(),
         ))

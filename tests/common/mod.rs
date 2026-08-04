@@ -2,6 +2,11 @@
 //!
 //! Provides a cross-process file lock that prevents concurrent test
 //! processes from interfering with shared resources (ports, databases).
+//
+// These helpers are used across multiple integration-test targets. Clippy
+// analyzes each target independently, so a helper unused by one target is
+// reported as dead code even though other targets use it.
+#![allow(dead_code)]
 
 use std::fs;
 use std::io::{Read, Write};

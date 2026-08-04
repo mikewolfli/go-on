@@ -7,16 +7,16 @@
 //!
 //! ## Relationship with `telemetry_enhanced`
 //!
-//! GAP-B58-C15: The project has two parallel metrics systems:
+//! GAP-B58-C15: `metrics_exporter` is the single metrics system:
 //!
 //! - **`metrics_exporter`** (this file) — reads `AcpServer::RuntimeMetrics` and
 //!   renders a Prometheus `/metrics` endpoint. This is the **primary** path for
 //!   Prometheus scraping.
-//! - **`telemetry_enhanced::MetricsRecorder`** — a legacy standalone `AppMetrics`
-//!   collector with **zero production writers**; kept only for backward
-//!   compatibility. The old `bridge_metrics_recorder` sync (which merged its
-//!   all-zero values into `RuntimeMetrics` on every scrape / background tick)
-//!   was removed.
+//!
+//! The legacy `telemetry_enhanced::MetricsRecorder` / `AppMetrics` standalone
+//! collector had **zero production writers** and was removed together with the
+//! `bridge_metrics_recorder` sync (which merged its all-zero values into
+//! `RuntimeMetrics` on every scrape / background tick).
 
 use crate::acp::server::AcpServer;
 use std::sync::LazyLock;

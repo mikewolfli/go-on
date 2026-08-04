@@ -121,6 +121,7 @@ fn openai_config_with_inflight(
             max_entries: 5000,
             connection_string: None,
             read_replica_connection_string: None,
+            persist_enabled: true,
         }),
         vector: Some(VectorConfig {
             enabled: true,

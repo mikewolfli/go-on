@@ -172,18 +172,20 @@ impl FlowManager {
             // Path B: no agents configured — auto-map by using all registered agents.
             // Fallback is always enabled in this path.
             //
-            // Uses batch `all()` instead of N× `names()` + `get()` to avoid
-            // N individual HashMap lookups and repeated token-cache lock acquisitions.
-            resolved_agents = registry.all();
+            // Uses batch `all_unwrapped()` instead of N× `names()` + `get()` to
+            // avoid N individual HashMap lookups. Unwrapped: the chat phases
+            // path runs its own single cache gate (act_phase) and executing a
+            // wrapped agent here would trigger a second lookup/store per call.
+            resolved_agents = registry.all_unwrapped();
             if resolved_agents.is_empty() {
-                return Err(ProxyError::AgentNotFound("(auto)".to_string()).into());
+                return Err(ProxyError::AgentNotFound("(auto)".into()).into());
             }
         } else {
             // Path A: explicit agent list configured — deterministic path.
             // If fallback is disabled, only the first configured agent can be used.
             // If fallback is enabled, iterate in order and keep all currently available agents.
             for (idx, agent_name) in resolved_phase.agent_names.iter().enumerate() {
-                if let Some(agent) = registry.get(agent_name) {
+                if let Some(agent) = registry.get_unwrapped(agent_name) {
                     resolved_agents.push((agent_name.clone(), agent));
                 } else if idx == 0 && !resolved_phase.fallback {
                     return Err(ProxyError::AgentNotFound(agent_name.clone()).into());

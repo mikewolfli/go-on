@@ -150,6 +150,14 @@ pub(crate) async fn start_server(
         }
     });
 
+    // persist_cache defaults to true (CacheConfig::persist_enabled) so existing
+    // [cache] enabled=true deployments get the token-cache L3 durable layer.
+    // Read it before `adjusted_cache_cfg` is moved into initialize_cache below.
+    let persist_cache = adjusted_cache_cfg
+        .as_ref()
+        .map(|c| c.persist_enabled)
+        .unwrap_or(true);
+
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(
         crate::acp::transport_factory::initialize_cache(config_path, adjusted_cache_cfg),
         crate::acp::transport_factory::initialize_vector_store(config_path, adjusted_vector_cfg),
@@ -267,6 +275,7 @@ pub(crate) async fn start_server(
         http_client,
         skill_registry,
         Some(Arc::clone(&config)),
+        persist_cache,
     )
     .await
 }

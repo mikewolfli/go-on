@@ -7,17 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
-// Type aliases for complex types used in causal analysis
-// ---------------------------------------------------------------------------
-
-/// Event data: (source, payload, timestamp_ms)
-pub(crate) type EventData = (String, HashMap<String, String>, u64);
-/// Collection of events grouped by source (payload, timestamp_ms).
-/// The source is the map key, so only a 2-tuple is stored.
-pub(crate) type SourceEvents = HashMap<String, Vec<(HashMap<String, String>, u64)>>;
-
-// ---------------------------------------------------------------------------
-// Causal inference & prediction
+// Causal inference
 // ---------------------------------------------------------------------------
 
 /// A causal link between two entities: action_entity causes effect_entity.
@@ -37,55 +27,6 @@ pub struct CausalLink {
     pub context_tags: Vec<String>,
 }
 
-/// A prediction about a future entity state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Prediction {
-    /// The entity being predicted
-    pub entity_id: String,
-    /// The predicted attribute values
-    pub predicted_attributes: serde_json::Value,
-    /// Confidence in prediction (0.0 – 1.0)
-    pub confidence: f64,
-    /// Time horizon of the prediction (ms from now)
-    pub horizon_ms: u64,
-    /// What action/event this prediction is based on
-    pub based_on: String,
-}
-
-/// The type of a causal path, describing how multiple causes relate to an outcome.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum CausalPathType {
-    /// A single, direct causal link (A → B).
-    Direct,
-    /// All listed causes must be present for the effect to occur (A ∧ B → C).
-    And(Vec<String>),
-    /// Any one of the listed causes can trigger the effect (A ∨ B → C).
-    Or(Vec<String>),
-}
-
-/// A chain of causal links discovered from correlation analysis.
-///
-/// Supports branching paths (`And`/`Or`), feedback loop detection,
-/// and probabilistic confidence decay over chain length.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CausalChain {
-    /// The ordered sequence of causal links forming the chain.
-    pub links: Vec<CausalLink>,
-    /// Aggregate confidence for the entire chain (0.0 – 1.0),
-    /// computed with decay over chain length.
-    pub confidence: f64,
-    /// Whether this chain is a linear path or a branching path.
-    pub path_type: CausalPathType,
-    /// Set to `true` when the chain forms a cycle (A→B→C→A).
-    pub is_feedback_loop: bool,
-    /// Number of links in this chain.
-    pub chain_length: usize,
-}
-
-// ---------------------------------------------------------------------------
-// Causal Reasoner — state-tracking correlation engine
-// ---------------------------------------------------------------------------
-
 /// A snapshot of an entity's properties at a point in time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityStateSnapshot {
@@ -95,25 +36,6 @@ pub struct EntityStateSnapshot {
     pub properties: HashMap<String, String>,
     /// Epoch millisecond when the snapshot was taken.
     pub timestamp_ms: u64,
-}
-
-/// A discovered correlation between two property changes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Correlation {
-    /// The entity whose property change is the suspected cause.
-    pub cause_entity: String,
-    /// The property on the cause entity that changed.
-    pub cause_property: String,
-    /// The entity whose property change is the suspected effect.
-    pub effect_entity: String,
-    /// The property on the effect entity that changed.
-    pub effect_property: String,
-    /// How many times this co-occurrence has been observed.
-    pub co_occurrence_count: u64,
-    /// Confidence score (0.0 – 1.0) based on co-occurrence frequency.
-    pub confidence: f64,
-    /// Average time delta (ms) between cause and effect observations.
-    pub avg_time_delta_ms: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +67,7 @@ impl Default for WorldModelConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Enums — EntityType & RelationshipType
+// Entity classification
 // ---------------------------------------------------------------------------
 
 /// Classification of an entity in the world model.
@@ -158,17 +80,6 @@ pub enum EntityType {
     Service,
     DataStore,
     External,
-}
-
-/// Classification of a relationship between two entities.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum RelationshipType {
-    DependsOn,
-    Owns,
-    CommunicatesWith,
-    Contains,
-    Manages,
-    Unknown,
 }
 
 // ---------------------------------------------------------------------------
@@ -194,21 +105,6 @@ pub struct WorldEntity {
     pub created_ms: u64,
 }
 
-/// A directed relationship between two entities.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Relationship {
-    /// ID of the source entity.
-    pub source_id: String,
-    /// ID of the target entity.
-    pub target_id: String,
-    /// Classification of this relationship.
-    pub rel_type: RelationshipType,
-    /// Weight of the relationship in [0.0, 1.0].
-    pub weight: f64,
-    /// Unix timestamp (milliseconds) when this relationship was discovered.
-    pub discovered_ms: u64,
-}
-
 /// An event that occurred in the world.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldEvent {
@@ -226,34 +122,4 @@ pub struct WorldEvent {
     pub confidence: f64,
     /// Unix timestamp (milliseconds) when this event occurred.
     pub timestamp_ms: u64,
-}
-
-/// A point-in-time snapshot of the world model's state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateSnapshot {
-    /// Unique identifier for this snapshot.
-    pub snapshot_id: String,
-    /// Entities at the time of capture.
-    pub entities: Vec<WorldEntity>,
-    /// Relationships at the time of capture.
-    pub relationships: Vec<Relationship>,
-    /// Unix timestamp (milliseconds) when this snapshot was captured.
-    pub captured_ms: u64,
-}
-
-/// Runtime profile of the world model's current state.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WorldModelProfile {
-    /// Total number of registered entities.
-    pub total_entities: usize,
-    /// Total number of recorded relationships.
-    pub total_relationships: usize,
-    /// Total number of recorded events.
-    pub total_events: usize,
-    /// Average confidence across all entities.
-    pub avg_entity_confidence: f64,
-    /// Unix timestamp (milliseconds) of the last update.
-    pub last_update_ms: u64,
-    /// Number of entities that are currently stale.
-    pub stale_entity_count: usize,
 }

@@ -560,7 +560,10 @@ impl BrainLoop {
         // ── Query real world model data (B51-08) ───────────────────────
         let wm = WorldModel::new(WorldModelConfig::default());
 
-        // Register the current plan goal as a tracked entity.
+        // Register the current plan goal as a tracked entity and summarize the
+        // just-registered entity directly (the fresh model contains exactly the
+        // entity registered below; the former `query_entities` round-trip was
+        // removed with the world-model query API).
         let goal = {
             let inner = self.inner.read().await;
             inner
@@ -570,25 +573,21 @@ impl BrainLoop {
                 .unwrap_or_default()
         };
 
-        if let Err(e) =
-            wm.register_entity(&format!("brain-loop-plan-{plan_id}"), EntityType::System)
+        let entity_name = format!("brain-loop-plan-{plan_id}");
+        let entity_summary: Vec<Value> = match wm.register_entity(&entity_name, EntityType::System)
         {
-            tracing::warn!("query_world_model: failed to register plan entity: {e}");
-        }
-
-        let entities = wm.query_entities(None, 0.0);
-        let entity_summary: Vec<Value> = entities
-            .iter()
-            .map(|e: &crate::intelligence::world_model::WorldEntity| {
-                serde_json::json!({
-                    "id": e.id,
-                    "name": e.name,
-                    "entity_type": format!("{:?}", e.entity_type),
-                    "confidence": e.confidence,
-                    "properties": e.properties,
-                })
-            })
-            .collect();
+            Ok(entity_id) => vec![serde_json::json!({
+                "id": entity_id,
+                "name": entity_name,
+                "entity_type": "System",
+                "confidence": 1.0,
+                "properties": {},
+            })],
+            Err(e) => {
+                tracing::warn!("query_world_model: failed to register plan entity: {e}");
+                Vec::new()
+            }
+        };
 
         let mut data = HashMap::new();
         data.insert(

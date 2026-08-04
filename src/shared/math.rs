@@ -7,7 +7,6 @@
 
 macro_rules! define_cosine_similarity {
     ($name:ident, $float:ty) => {
-        #[allow(dead_code)]
         /// Compute cosine similarity between two equal-length vectors.
         ///
         /// Returns `0.0` if either vector is empty, lengths differ, or either

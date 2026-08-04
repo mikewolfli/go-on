@@ -65,7 +65,6 @@ use crate::intelligence::capability_bus::reinforcement_bus::ReinforcementBus;
 use crate::intelligence::capability_bus::unified_knowledge_bus::UnifiedKnowledgeBus;
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
-use crate::intelligence::matcher::ScenarioMatcher;
 
 /// A named evolve() subsystem future (stage-2 concurrent dispatch).
 pub(crate) type EvolveSubsystem<'a> =
@@ -367,7 +366,6 @@ pub struct CapabilityBus {
     pub metacognitive: MetacognitiveController,
     pub world_model: WorldModel,
     pub self_model: SelfModelCore,
-    pub matcher: ScenarioMatcher,
     pub discovery: DiscoveryCenter,
 
     /// Agent factory — dynamic sub-agent creation (F-GAP-13)
@@ -490,7 +488,6 @@ impl CapabilityBus {
                         metacognitive: crate::intelligence::metacognitive::shared_metacognitive_controller(),
             world_model: WorldModel::new(Default::default()),
             self_model: SelfModelCore::new(Default::default()),
-            matcher: ScenarioMatcher::default(),
             discovery: DiscoveryCenter::new(),
             #[cfg(any(
                 feature = "sub-bus-tool",
@@ -957,42 +954,6 @@ impl CapabilityBus {
                 }),
             ),
             (
-                "scenario",
-                Box::pin(async move {
-                    use crate::intelligence::matcher::{MatchRules, ScenarioRouting};
-                    let scenario_id = format!("evolve_{}_{}", state.0, action);
-                    self.matcher
-                        .register_scenario(crate::intelligence::matcher::Scenario {
-                            id: scenario_id.clone(),
-                            name: format!("Evolved: {} via {}", state.0, action),
-                            description: format!(
-                                "Auto-generated scenario from evolution: state={:?} action={} success={}",
-                                state, action, success
-                            ),
-                            priority: if quality_score > 0.8 { 50 } else { 20 },
-                            match_rules: MatchRules {
-                                keywords: vec![state.0.clone(), action.to_string()],
-                                task_types: vec![state.1.clone()],
-                                agent_tags: vec![],
-                                complexity_range: None,
-                                risk_range: None,
-                            },
-                            routing: ScenarioRouting {
-                                preferred_agent: None,
-                                recommended_mode: if success {
-                                    "auto".into()
-                                } else {
-                                    "ask".into()
-                                },
-                                enabled_tools: vec![],
-                                add_tags: vec![state.0.clone(), action.to_string()],
-                            },
-                            created_ms: now,
-                            is_active: success && quality_score > 0.6,
-                        });
-                }),
-            ),
-            (
                 "drift_protection",
                 Box::pin(async move {
                     self.evolve_drift_protection(quality_score, success);
@@ -1251,8 +1212,6 @@ pub(crate) mod tests {
                         total_tasks: r.total_tasks,
                         success_count: r.successful_tasks,
                         failure_count: r.total_tasks.saturating_sub(r.successful_tasks),
-                        consecutive_failures: 0,
-                        last_updated_ms: 0,
                     })
                     .collect::<Vec<_>>()
             })

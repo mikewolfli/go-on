@@ -3,17 +3,15 @@
 //! This module provides structured logging, metrics collection, and distributed tracing
 //! for comprehensive observability.
 //!
-//! ## Metrics: Legacy vs Primary
+//! ## Metrics
 //!
-//! - **`MetricsRecorder` / `AppMetrics`** (this file) — **Legacy** in-memory metrics
-//!   collector with atomic counters. Kept for backward compatibility.
 //! - **`metrics_exporter::PrometheusMetricsRecorder` / `build_prometheus_metrics`** —
 //!   **Primary** Prometheus-format metrics path via `RuntimeMetrics`. New code should
 //!   use this system.
 //!
-//! The [`bridge_metrics_recorder`] function in `metrics_exporter` synchronizes the legacy
-//! recorder values into the primary `RuntimeMetrics` path so that manual recordings made
-//! through the legacy API are still visible on the `/metrics` endpoint.
+//! The legacy `MetricsRecorder` / `AppMetrics` collector and its
+//! `bridge_metrics_recorder` sync were removed — they had zero production
+//! writers, so every bridge call merged all-zero values on each metrics scrape.
 //!
 //! # Features
 //!
@@ -53,10 +51,6 @@
 //!
 //! // Use structured logging
 //! info!("application started", service_name = "my-service");
-//!
-//! // Record metrics
-//! let metrics_recorder = MetricsRecorder::new();
-//! metrics_recorder.record_request("api_call", 150.0);
 //! ```
 //!
 //! # Configuration
@@ -88,7 +82,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::LazyLock;
 use std::sync::Once;
 use std::sync::OnceLock;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use opentelemetry::global;
 use opentelemetry::trace::{TraceContextExt, Tracer};
@@ -469,173 +463,6 @@ fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Application metrics
-#[derive(Debug, Clone)]
-pub struct AppMetrics {
-    /// Total requests processed
-    pub requests_total: u64,
-    /// Successful requests
-    pub requests_success: u64,
-    /// Failed requests
-    pub requests_failed: u64,
-    /// Cache hits
-    pub cache_hits: u64,
-    /// Cache misses
-    pub cache_misses: u64,
-    /// Average request latency in milliseconds
-    pub avg_latency_ms: f64,
-    /// Active connections
-    pub active_connections: u64,
-    /// Memory usage in bytes
-    pub memory_usage_bytes: u64,
-}
-
-impl Default for AppMetrics {
-    fn default() -> Self {
-        Self {
-            requests_total: 0,
-            requests_success: 0,
-            requests_failed: 0,
-            cache_hits: 0,
-            cache_misses: 0,
-            avg_latency_ms: 0.0,
-            active_connections: 0,
-            memory_usage_bytes: 0,
-        }
-    }
-}
-
-/// Legacy in-memory metrics collector.
-///
-/// Deprecated: Use `metrics_exporter::PrometheusMetricsRecorder` / `build_prometheus_metrics`
-/// (the primary Prometheus-format metrics path) instead. This recorder is kept for backward
-/// compatibility and is bridged into the primary path via `bridge_metrics_recorder`.
-pub struct MetricsRecorder {
-    metrics: std::sync::RwLock<AppMetrics>,
-}
-
-impl MetricsRecorder {
-    /// Create a new metrics recorder
-    pub fn new() -> Self {
-        Self {
-            metrics: std::sync::RwLock::new(AppMetrics::default()),
-        }
-    }
-
-    fn read_metrics(&self) -> std::sync::RwLockReadGuard<'_, AppMetrics> {
-        match self.metrics.read() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                warn!("enhanced telemetry metrics lock poisoned during read; recovering metrics state");
-                poisoned.into_inner()
-            }
-        }
-    }
-
-    fn write_metrics(&self) -> std::sync::RwLockWriteGuard<'_, AppMetrics> {
-        match self.metrics.write() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                warn!("enhanced telemetry metrics lock poisoned during write; recovering metrics state");
-                poisoned.into_inner()
-            }
-        }
-    }
-
-    /// Record a request
-    pub fn record_request(&self, success: bool, latency_ms: f64) {
-        let mut metrics = self.write_metrics();
-        metrics.requests_total += 1;
-        if success {
-            metrics.requests_success += 1;
-        } else {
-            metrics.requests_failed += 1;
-        }
-
-        // Update average latency using exponential moving average
-        if metrics.avg_latency_ms == 0.0 {
-            metrics.avg_latency_ms = latency_ms;
-        } else {
-            metrics.avg_latency_ms = 0.9 * metrics.avg_latency_ms + 0.1 * latency_ms;
-        }
-    }
-
-    /// Record a cache hit
-    pub fn record_cache_hit(&self) {
-        let mut metrics = self.write_metrics();
-        metrics.cache_hits += 1;
-    }
-
-    /// Record a cache miss
-    pub fn record_cache_miss(&self) {
-        let mut metrics = self.write_metrics();
-        metrics.cache_misses += 1;
-    }
-
-    /// Update active connections
-    pub fn update_active_connections(&self, count: u64) {
-        let mut metrics = self.write_metrics();
-        metrics.active_connections = count;
-    }
-
-    /// Update memory usage
-    pub fn update_memory_usage(&self, bytes: u64) {
-        let mut metrics = self.write_metrics();
-        metrics.memory_usage_bytes = bytes;
-    }
-
-    /// Get current metrics snapshot
-    pub fn get_metrics(&self) -> AppMetrics {
-        self.read_metrics().clone()
-    }
-
-    /// Export metrics as JSON
-    pub fn export_json(&self) -> serde_json::Value {
-        let metrics = self.get_metrics();
-        serde_json::json!({
-            "requests_total": metrics.requests_total,
-            "requests_success": metrics.requests_success,
-            "requests_failed": metrics.requests_failed,
-            "cache_hits": metrics.cache_hits,
-            "cache_misses": metrics.cache_misses,
-            "cache_hit_rate": if metrics.cache_hits + metrics.cache_misses > 0 {
-                metrics.cache_hits as f64 / (metrics.cache_hits + metrics.cache_misses) as f64
-            } else {
-                0.0
-            },
-            "avg_latency_ms": metrics.avg_latency_ms,
-            "active_connections": metrics.active_connections,
-            "memory_usage_mb": metrics.memory_usage_bytes as f64 / 1024.0 / 1024.0,
-        })
-    }
-}
-
-impl Default for MetricsRecorder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Global singleton `MetricsRecorder` for use across the observability stack.
-///
-/// This allows the Prometheus metrics exporter bridge to access the OTLP
-/// metrics recorder without needing to pass it through every constructor.
-static GLOBAL_METRICS_RECORDER: std::sync::LazyLock<MetricsRecorder> =
-    std::sync::LazyLock::new(MetricsRecorder::new);
-
-/// Return a reference to the legacy global `MetricsRecorder` singleton.
-///
-/// Deprecated: Use `metrics_exporter`'s Prometheus-based metrics path for new code.
-/// This global recorder is bridged into `RuntimeMetrics` automatically via
-/// `bridge_metrics_recorder` on each metrics scrape.
-///
-/// The recorder is lazily initialized on first access and can be safely
-/// shared across threads for recording requests, cache operations, and
-/// exporting metrics snapshots.
-pub fn global_metrics_recorder() -> &'static MetricsRecorder {
-    &GLOBAL_METRICS_RECORDER
-}
-
 /// Structured logging macros for common patterns
 pub mod log {
     use super::*;
@@ -991,57 +818,6 @@ mod tests {
             ..Default::default()
         };
         let _ = init_telemetry(&config_tracing);
-    }
-
-    // ── MetricsRecorder ──────────────────────────────────────────────
-
-    /// Verify that `MetricsRecorder::record_request` correctly increments
-    /// counters for both success and failure cases.
-    #[test]
-    fn test_record_request_increments_counters() {
-        let recorder = MetricsRecorder::new();
-
-        // Record 3 successful requests
-        recorder.record_request(true, 10.0);
-        recorder.record_request(true, 20.0);
-        recorder.record_request(true, 30.0);
-
-        let metrics = recorder.get_metrics();
-        assert_eq!(metrics.requests_total, 3);
-        assert_eq!(metrics.requests_success, 3);
-        assert_eq!(metrics.requests_failed, 0);
-        // With requests of 10, 20, 30ms, EMA = 0.9*11 + 0.1*30 = 12.9
-        assert!((metrics.avg_latency_ms - 12.9).abs() < 1.0);
-
-        // Record 2 failed requests
-        recorder.record_request(false, 50.0);
-        recorder.record_request(false, 100.0);
-
-        let metrics = recorder.get_metrics();
-        assert_eq!(metrics.requests_total, 5);
-        assert_eq!(metrics.requests_success, 3);
-        assert_eq!(metrics.requests_failed, 2);
-    }
-
-    /// Verify that recording many requests produces correct final state.
-    #[test]
-    fn test_record_request_latency_ema() {
-        let recorder = MetricsRecorder::new();
-
-        // First request sets baseline
-        recorder.record_request(true, 100.0);
-        let m1 = recorder.get_metrics();
-        assert!((m1.avg_latency_ms - 100.0).abs() < 0.01);
-
-        // Second request: 0.9 * 100 + 0.1 * 200 = 110
-        recorder.record_request(true, 200.0);
-        let m2 = recorder.get_metrics();
-        assert!((m2.avg_latency_ms - 110.0).abs() < 0.01);
-
-        // Third request: 0.9 * 110 + 0.1 * 50 = 104
-        recorder.record_request(true, 50.0);
-        let m3 = recorder.get_metrics();
-        assert!((m3.avg_latency_ms - 104.0).abs() < 0.01);
     }
 
     // ── HealthMetrics ─────────────────────────────────────────────────

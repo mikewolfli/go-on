@@ -35,6 +35,8 @@ pub async fn new_acp_server(
 
     app_config: Option<Arc<crate::config::AppConfig>>,
     skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
+    // Whether to wire the durable response cache as the token cache's L3 layer.
+    persist_cache: bool,
 ) -> AcpServer {
     // Use ServerBuilder to create the server with correct field names and types
     use crate::acp::server::ServerBuilder;
@@ -54,6 +56,7 @@ pub async fn new_acp_server(
     if let Some(ref cache) = cache {
         builder = builder.with_response_cache(cache.clone());
     }
+    builder = builder.with_persist_cache(persist_cache);
 
     if let Some(ref vector_store) = vector_store {
         builder = builder.with_vector_store(vector_store.clone());
@@ -500,15 +503,7 @@ pub async fn new_acp_server(
         });
         let alert_manager = Arc::clone(&server.observability.alert_manager);
         tokio::spawn(async move {
-            use crate::shared::alert_severity::AlertSeverity;
             while let Some(security_alert) = alert_rx.recv().await {
-                let _severity = match &security_alert.severity {
-                    crate::security::vulnerability_scan::Severity::Critical => {
-                        AlertSeverity::Critical
-                    }
-                    crate::security::vulnerability_scan::Severity::High => AlertSeverity::Warning,
-                    _ => AlertSeverity::Info,
-                };
                 let mut mgr = alert_manager.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!("alert_manager lock poisoned");
                     poisoned.into_inner()

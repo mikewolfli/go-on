@@ -903,7 +903,9 @@ fn rpc_initialize_health_phase_and_shutdown() {
 
     let phase_status = harness.request(3, "phase.status", None);
     assert!(phase_status["result"]["rate_limiter"].is_object());
-    assert!(phase_status["result"]["inflight"].is_object());
+    // NOTE: the `inflight` field was removed — the former InflightLimiter
+    // never received writes (always reported (0, {}) fake data). Real
+    // concurrency accounting lives in DrainGuard's semaphore.
 
     let prometheus = harness.request(30, "metrics.prometheus", None);
     // DispatchOutput::Text is wrapped in the __text_plain__ sentinel field.

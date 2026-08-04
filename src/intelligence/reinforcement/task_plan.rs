@@ -10,7 +10,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::orchestration::core_dag::TaskGraphCheckpointArtifact;
 use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 
@@ -419,25 +418,6 @@ pub fn build_task_plan(task: &str) -> TaskPlanArtifact {
 /// Persist a task plan to the artifact ledger.
 pub fn persist_task_plan(ledger: &ArtifactLedger, plan: &TaskPlanArtifact) -> Result<PathBuf> {
     ledger.write_json("spec", "latest-plan.json", plan)
-}
-
-/// Persist a task graph checkpoint to the artifact ledger.
-pub fn persist_task_graph_checkpoint(
-    ledger: &ArtifactLedger,
-    checkpoint: &TaskGraphCheckpointArtifact,
-) -> Result<PathBuf> {
-    ledger.write_json(
-        "checkpoints",
-        "latest-taskgraph-checkpoint.json",
-        checkpoint,
-    )
-}
-
-/// Load the most recent task graph checkpoint, if available.
-pub fn load_task_graph_checkpoint(ledger: &ArtifactLedger) -> Option<TaskGraphCheckpointArtifact> {
-    let path = ledger.latest_path("checkpoints", "latest-taskgraph-checkpoint.json");
-    let bytes = std::fs::read(&path).ok()?;
-    serde_json::from_slice(&bytes).ok()
 }
 
 /// Build a `WorkflowGeneratedArtifact` from a task plan.

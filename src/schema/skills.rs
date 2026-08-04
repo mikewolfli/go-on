@@ -73,7 +73,6 @@ pub struct SkillVersionSnapshot {
 #[derive(Debug, Clone, Serialize)]
 pub struct PhaseResponse {
     pub rate_limiter: Value,
-    pub inflight: Value,
 }
 
 /// Models list response.

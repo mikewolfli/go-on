@@ -15,6 +15,21 @@ pub enum DetectionSeverity {
     Critical,
 }
 
+impl DetectionSeverity {
+    /// Canonical detection-confidence score for this severity level.
+    ///
+    /// Used by detectors (e.g. prompt-injection) to compare against a
+    /// configurable detection threshold.
+    pub fn to_score(&self) -> f64 {
+        match self {
+            Self::Low => 0.3,
+            Self::Medium => 0.5,
+            Self::High => 0.7,
+            Self::Critical => 0.9,
+        }
+    }
+}
+
 /// Shared base for [`SafetyViolation`](crate::security::content_safety::SafetyViolation)
 /// in [`content_safety`](crate::security::content_safety) and
 /// [`prompt_injection`](crate::security::prompt_injection).

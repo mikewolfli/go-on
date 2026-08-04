@@ -2,7 +2,6 @@ pub mod artifact;
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
 pub mod bulkhead;
-pub mod cache_layer; // BLUE65: Unified CacheLayer trait and global metrics collector
 
 pub mod plan_output; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
 
@@ -35,7 +34,6 @@ pub mod skill_import;
 pub mod skill_market;
 pub mod startup_context;
 pub mod task_decomposer;
-pub mod task_graph_store;
 pub mod task_router;
 pub mod task_schema;
 pub mod tool;

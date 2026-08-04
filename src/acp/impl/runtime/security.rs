@@ -253,7 +253,16 @@ async fn apply_entry_guards(
         let provided = extract_entry_token(headers)
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        if provided != expected_key {
+        // Constant-time comparison (matches the MCP entry-auth check) so token
+        // verification does not leak timing information about the key.
+        let matches = match (provided.as_deref(), expected_key.as_deref()) {
+            (Some(p), Some(k)) => {
+                use subtle::ConstantTimeEq;
+                p.as_bytes().ct_eq(k.as_bytes()).into()
+            }
+            _ => false,
+        };
+        if !matches {
             warn!(
                 "entry auth rejected {} {} from {} (missing or invalid key)",
                 method, path, source

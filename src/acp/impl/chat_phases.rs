@@ -858,6 +858,14 @@ pub(crate) async fn act_phase(
     let estimated_tokens = estimate_messages_token_count(&routing_out.agent_messages);
     let context_class = ContextLengthClass::from_token_count(estimated_tokens);
 
+    // Duplicate-user detection must run BEFORE the canonical lookup: if the
+    // last user message repeats an earlier one, serving the cached answer would
+    // silently return a stale response (previously the CachedAgentWrapper's
+    // duplicate check never ran when act_phase's lookup hit first).
+    let is_duplicate_user = crate::intelligence::token_cache::last_user_message_is_duplicate(
+        &routing_out.agent_messages,
+    );
+
     #[derive(Default)]
     struct TokenOutcome {
         response_text: String,
@@ -874,7 +882,20 @@ pub(crate) async fn act_phase(
     let (token_outcome, semantic_outcome) = tokio::join!(
         // ── Token cache lookup ────────────────────────────────────────
         async {
-            if let Some((level, entry)) = server
+            if is_duplicate_user {
+                // Repeated user message → bypass cache so the agent produces
+                // a fresh response (same intent as CachedAgentWrapper).
+                tracing::debug!(
+                    target = "token_cache",
+                    "act_phase: last user message is a duplicate — bypassing cache"
+                );
+                TokenOutcome {
+                    agent_entry: Some(
+                        json!({"agent": "cache", "ok": false, "duplicate_user": true}),
+                    ),
+                    ..Default::default()
+                }
+            } else if let Some((level, entry)) = server
                 .cache_deps
                 .cache
                 .token_cache
@@ -927,7 +948,7 @@ pub(crate) async fn act_phase(
         },
         // ── Semantic cache lookup ─────────────────────────────────────
         async {
-            if !cache_bypassed_for_execution {
+            if !cache_bypassed_for_execution && !is_duplicate_user {
                 if let Some(text) = try_semantic_cache(server, &input_text) {
                     let agent = resolve_out
                         .resolved

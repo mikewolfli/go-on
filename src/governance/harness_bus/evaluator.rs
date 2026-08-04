@@ -25,12 +25,13 @@ use crate::governance::review_controls::{review_verdict, verdict_as_str, verdict
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{
     AuditEntry as SgAuditEntry, ConditionOperator, PolicyAction, PolicyComposition,
-    PolicyCondition, PolicySeverity, SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
+    PolicyCondition, SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
 };
 use crate::i18n::runtime::tf;
 use crate::intelligence::quality_models::QualityVerdict;
 use crate::security::content_safety::SafetyChecker;
 use crate::security::prompt_injection::InjectionDetector;
+use crate::security::severity::DetectionSeverity;
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -153,7 +154,7 @@ impl PolicyEvaluator {
                 description:
                     "Permits read and search operations for zero-risk tasks with no file writes"
                         .into(),
-                severity: PolicySeverity::Low,
+                severity: DetectionSeverity::Low,
                 action: PolicyAction::Allow,
                 conditions: vec![
                     PolicyCondition {
@@ -175,7 +176,7 @@ impl PolicyEvaluator {
                 id: "write_require_approval".into(),
                 name: "Write operations require approval".into(),
                 description: "Tasks that modify files require manual review approval".into(),
-                severity: PolicySeverity::Medium,
+                severity: DetectionSeverity::Medium,
                 action: PolicyAction::RequireReview,
                 conditions: vec![PolicyCondition {
                     field: "file_count".into(),
@@ -191,7 +192,7 @@ impl PolicyEvaluator {
                 name: "Shell operations require code execution review".into(),
                 description: "Shell and terminal operations require additional review approval"
                     .into(),
-                severity: PolicySeverity::High,
+                severity: DetectionSeverity::High,
                 action: PolicyAction::RequireReview,
                 conditions: vec![PolicyCondition {
                     field: "risk_score".into(),

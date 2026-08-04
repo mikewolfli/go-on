@@ -23,8 +23,6 @@ use tokio_util::sync::CancellationToken;
 struct CacheEntry {
     /// Response content
     response: Value,
-    /// Original request text for Jaccard similarity matching
-    request_text: String,
     /// Request hash for exact matching
     request_hash: u64,
     /// When this entry was created
@@ -83,31 +81,6 @@ fn bigrams_set(s: &str) -> HashSet<Vec<u8>> {
     s.as_bytes().windows(2).map(|w| w.to_vec()).collect()
 }
 
-/// Simple Jaccard similarity for request comparison
-fn jaccard_similarity(a: &str, b: &str) -> f64 {
-    let a_bigrams: Vec<&[u8]> = a.as_bytes().windows(2).collect();
-    let b_bigrams: Vec<&[u8]> = b.as_bytes().windows(2).collect();
-
-    if a_bigrams.is_empty() && b_bigrams.is_empty() {
-        return 1.0;
-    }
-    if a_bigrams.is_empty() || b_bigrams.is_empty() {
-        return 0.0;
-    }
-
-    let set_a: HashSet<&[u8]> = a_bigrams.iter().copied().collect();
-    let set_b: HashSet<&[u8]> = b_bigrams.iter().copied().collect();
-
-    let intersection = set_a.intersection(&set_b).count();
-    let union = set_a.union(&set_b).count();
-
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f64 / union as f64
-    }
-}
-
 /// Jaccard similarity with one side's bigram set precomputed.
 /// Only computes bigrams for `a`; reuses `b_bigrams` from cache.
 fn jaccard_with_precomputed(a: &str, b_bigrams: &HashSet<Vec<u8>>) -> f64 {
@@ -162,36 +135,59 @@ impl SemanticResponseCache {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
-        let guard = self.entries.read().expect("SemanticCache entries poisoned");
-        if let Some(bucket) = guard.get(&hash) {
-            // Find matching entry index — try exact match first, then similarity
-            // Expired entry removal is handled by the background cleanup task.
-            let match_idx = bucket
-                .iter()
-                .position(|entry| {
-                    entry.request_hash == hash && now.duration_since(entry.created_at) < entry.ttl
-                })
-                .or_else(|| {
-                    bucket.iter().position(|entry| {
-                        // Both exact and similarity lookups must respect TTL.
-                        now.duration_since(entry.created_at) < entry.ttl && {
-                            let similarity = match &entry.bigram_set {
-                                Some(pre) => jaccard_with_precomputed(request, pre),
-                                None => jaccard_similarity(request, &entry.request_text),
-                            };
-                            similarity >= self.config.similarity_threshold
-                        }
+        // Find the matching entry index under a read lock; the lock is dropped
+        // before the best-effort LRU touch below.
+        let match_idx = {
+            let guard = self.entries.read().expect("SemanticCache entries poisoned");
+            guard.get(&hash).and_then(|bucket| {
+                // Find matching entry index — try exact match first, then
+                // similarity. Expired entry removal is handled by the
+                // background cleanup task.
+                bucket
+                    .iter()
+                    .position(|entry| {
+                        entry.request_hash == hash
+                            && now.duration_since(entry.created_at) < entry.ttl
                     })
-                });
+                    .or_else(|| {
+                        bucket.iter().position(|entry| {
+                            // Similarity lookup must respect TTL. `bigram_set`
+                            // is always populated by `put_inner`, so the
+                            // precomputed path is the only reachable one.
+                            now.duration_since(entry.created_at) < entry.ttl
+                                && entry
+                                    .bigram_set
+                                    .as_ref()
+                                    .map(|pre| jaccard_with_precomputed(request, pre))
+                                    .map(|s| s >= self.config.similarity_threshold)
+                                    .unwrap_or(false)
+                        })
+                    })
+            })
+        };
 
-            if let Some(idx) = match_idx {
+        match match_idx {
+            Some(idx) => {
                 self.total_hits.fetch_add(1, Ordering::Relaxed);
-                return Some(bucket[idx].response.clone());
+                // Best-effort LRU touch: refresh `last_accessed` so eviction
+                // prefers entries that have actually been served (previously
+                // `last_accessed` was only set at insert — eviction was by
+                // insertion order, not recency).
+                if let Ok(mut guard) = self.entries.try_write() {
+                    if let Some(bucket) = guard.get_mut(&hash) {
+                        if let Some(entry) = bucket.get_mut(idx) {
+                            entry.last_accessed = Instant::now();
+                        }
+                    }
+                }
+                let guard = self.entries.read().expect("SemanticCache entries poisoned");
+                guard.get(&hash)?.get(idx).map(|e| e.response.clone())
+            }
+            None => {
+                self.total_misses.fetch_add(1, Ordering::Relaxed);
+                None
             }
         }
-
-        self.total_misses.fetch_add(1, Ordering::Relaxed);
-        None
     }
 
     /// Cache a response
@@ -245,7 +241,6 @@ impl SemanticResponseCache {
 
         let entry = CacheEntry {
             response,
-            request_text: request.to_string(),
             request_hash: hash,
             created_at: now,
             ttl: Duration::from_secs(ttl_seconds),

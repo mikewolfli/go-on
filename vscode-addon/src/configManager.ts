@@ -21,6 +21,9 @@ export interface CacheConfig {
   path: string;
   default_ttl_seconds: number;
   max_entries: number;
+  // Mirrors backend CacheConfig::persist_enabled — wire the durable cache as
+  // the token cache's L3 layer. Defaults to true.
+  persist_enabled: boolean;
 }
 
 export interface VectorConfig {
@@ -281,6 +284,8 @@ class ConfigManager {
         path: "acp_cache.sqlite3",
         default_ttl_seconds: 1800,
         max_entries: 2000,
+        // Mirrors backend CacheConfig::persist_enabled (config/config.toml).
+        persist_enabled: true,
       },
       vector: {
         enabled: true,

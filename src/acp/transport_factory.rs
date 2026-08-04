@@ -224,6 +224,8 @@ pub async fn dispatch_server(
     _client: reqwest::Client,
     skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
     app_config: Option<Arc<crate::config::AppConfig>>,
+    // Whether to wire the durable response cache as the token cache's L3 layer.
+    persist_cache: bool,
 ) -> Result<()> {
     let runtime_flow = flow_manager(config_path, app_config);
 
@@ -243,6 +245,7 @@ pub async fn dispatch_server(
         runtime_config,
         None,
         skill_registry,
+        persist_cache,
     )
     .await;
 
@@ -404,6 +407,7 @@ mod tests {
                     client,
                     None,
                     None, // app_config
+                    true, // persist_cache
                 )
                 .await;
 
@@ -436,6 +440,7 @@ mod tests {
             max_entries: 1000,
             connection_string: None,
             read_replica_connection_string: None,
+            persist_enabled: true,
         };
         let result = initialize_cache(config_path, Some(cfg))
             .await

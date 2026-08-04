@@ -16,14 +16,12 @@
 //! | `lifecycle` | Server lifecycle state |
 //! | `maintenance` | Maintenance tracker |
 //! | `rate_limiter` | Phase-level token bucket rate limiter |
-//! | `inflight` | In-flight request concurrency limiter |
 //! | `runtime_metrics` | Server performance metrics |
 //! | `re_exports` | Re-exports from other crate modules |
 
 pub mod circuit_breaker;
 pub mod constants;
 pub mod functions;
-pub mod inflight;
 pub mod lifecycle;
 pub mod lock_helpers;
 pub mod maintenance;
@@ -38,7 +36,6 @@ pub mod types;
 pub use circuit_breaker::*;
 pub use constants::*;
 pub use functions::*;
-pub use inflight::*;
 pub use lifecycle::*;
 pub use lock_helpers::*;
 pub use maintenance::*;

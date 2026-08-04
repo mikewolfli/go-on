@@ -17,7 +17,6 @@ pub mod continuous_learning;
 pub mod discovery;
 pub mod hot_failover;
 pub mod hub;
-pub mod matcher;
 pub mod metacognitive;
 pub mod quality_models;
 pub mod reputation;

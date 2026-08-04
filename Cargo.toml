@@ -237,9 +237,6 @@ game-input = []
 game-agent = []
 game-state = []
 game-modding = []
-# Execution intelligence (F-GAP-25): future autonomy loop pre/post checks
-# Not in any profile by default — enable explicitly for advanced autonomy mode.
-execution-intelligence = []
 
 # Chaos engineering fault injection (opt-in, not in any profile by default)
 chaos-testing = []

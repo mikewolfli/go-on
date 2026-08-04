@@ -4,8 +4,8 @@ use crate::observability::performance::PerformanceMetrics;
 ///
 /// Reads the current snapshot from the ACP runtime metrics system and converts
 /// it to the global performance metrics format. This enables bidirectional
-/// metric flow between the `RuntimeMetrics` (ACP) and `AppMetrics` / global
-/// performance monitor (observability) systems.
+/// metric flow between the `RuntimeMetrics` (ACP) and the observability-layer
+/// `PerformanceMetrics` systems.
 ///
 /// # Example
 ///

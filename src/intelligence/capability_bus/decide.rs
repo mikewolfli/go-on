@@ -393,15 +393,10 @@ impl CapabilityBus {
             }
         }
 
-        // Step B: consult ScenarioMatcher for pre-configured routing
-        let task_type_str = format!("{:?}", task.task_type);
-        let scenario_match =
-            self.matcher
-                .match_task(&task_type_str, &task_type_str, 0.5, task.risk_score, &[]);
-
         // ── P2-1: TokenCache check ────────────────────────────────────────
         // If a cached decision exists for this task type, return it directly
         // to skip full agent selection (hot path optimization).
+        let task_type_str = format!("{:?}", task.task_type);
         if let Some(ref cache) = self.token_cache {
             let context_class = ContextLengthClass::from_token_count(task_type_str.len());
             if let Some((_level, entry)) = cache.lookup(&task_type_str, context_class).await {
@@ -547,31 +542,17 @@ impl CapabilityBus {
             );
         }
 
-        // If ScenarioMatcher found a high-confidence match, prefer its routing
-        let scenario_preferred_agent = if scenario_match.matched {
-            scenario_match
-                .scenario
-                .as_ref()
-                .and_then(|s| s.routing.preferred_agent.clone())
-        } else {
-            None
-        };
-
-        // If Q-learning has a strong preference and no scenario override, prefer the learned action.
-        let q_learning_override = match (
-            scenario_preferred_agent.as_ref(),
-            q_preferred_action.as_ref(),
-        ) {
-            (Some(_), _) => None, // Scenario takes priority over Q-learning
-            (None, Some(q_agent)) => {
-                if candidate_agents.contains(q_agent) {
-                    Some(q_agent.clone())
-                } else {
-                    None
-                }
+        // If Q-learning has a strong preference, prefer the learned action.
+        // (The former ScenarioMatcher override was removed: its only production
+        // registration never set `preferred_agent`, so it never influenced the
+        // selected agent — the per-request full-table scan was dead work.)
+        let q_learning_override = q_preferred_action.as_ref().and_then(|q_agent| {
+            if candidate_agents.contains(q_agent) {
+                Some(q_agent.clone())
+            } else {
+                None
             }
-            (None, None) => None,
-        };
+        });
 
         // ── P2-3: AdaptiveModelSelector — re-rank candidates by performance context ──
         let model_selector_ranked: Option<Vec<String>> =
@@ -596,9 +577,7 @@ impl CapabilityBus {
             None => &candidate_agents,
         };
 
-        let effective_override = q_learning_override.or(scenario_preferred_agent);
-
-        let (selected_agent, score_breakdown) = if let Some(ref preferred) = effective_override {
+        let (selected_agent, score_breakdown) = if let Some(ref preferred) = q_learning_override {
             let breakdown = vec![CandidateScoreBreakdown {
                 agent: preferred.clone(),
                 reputation_score: 1.0,

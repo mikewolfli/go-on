@@ -19,6 +19,10 @@ path = "acp_cache.sqlite3"
 default_ttl_seconds = 1800
 # REDUCED: 5000 -> 2000 to lower memory usage (prevents OOM on 8 GB systems)
 max_entries = 2000
+# Wire the durable cache as the token cache's L3 layer (cross-restart reuse).
+# Set to false to keep the SQLite store healthcheck-only (saves one read/write
+# per cache miss). Defaults to true when the [cache] section is enabled.
+persist_enabled = true
 
 [vector]
 enabled = true

@@ -16,9 +16,6 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
-use crate::governance::hardening::SandboxLevel;
-use crate::orchestration::cache_layer::{CacheLayer, CacheStats};
-
 // ---------------------------------------------------------------------------
 // ShardedGovernanceCache — sharded per-session ACP permission cache
 // ---------------------------------------------------------------------------
@@ -78,7 +75,6 @@ impl GovernanceCache {
 /// simultaneously.
 pub struct ShardedGovernanceCache {
     shards: Vec<Mutex<GovernanceCache>>,
-    total_max_entries: usize,
     hits: AtomicU64,
     misses: AtomicU64,
 }
@@ -107,7 +103,6 @@ impl ShardedGovernanceCache {
             .collect();
         Self {
             shards,
-            total_max_entries,
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
         }
@@ -142,15 +137,6 @@ impl ShardedGovernanceCache {
         let mut guard = self.shards[idx].lock().unwrap_or_else(|e| e.into_inner());
         guard.insert(key, value);
     }
-
-    /// Return the number of live entries across all shards.
-    fn entry_count(&self) -> usize {
-        self.shards
-            .iter()
-            .filter_map(|m| m.lock().ok())
-            .map(|g| g.cache.len())
-            .sum()
-    }
 }
 
 /// Global governance cache, lazily initialized on first use.
@@ -159,41 +145,6 @@ static GOVERNANCE_CACHE: OnceLock<ShardedGovernanceCache> = OnceLock::new();
 /// Access the global governance cache singleton.
 pub fn governance_cache() -> &'static ShardedGovernanceCache {
     GOVERNANCE_CACHE.get_or_init(|| ShardedGovernanceCache::new(1000))
-}
-
-// ---------------------------------------------------------------------------
-// CacheLayer implementation for ShardedGovernanceCache
-// ---------------------------------------------------------------------------
-
-impl CacheLayer for ShardedGovernanceCache {
-    fn name(&self) -> &str {
-        "governance"
-    }
-
-    fn stats(&self) -> CacheStats {
-        let entry_count = self.entry_count();
-        // Rough estimate: each entry stores a String key plus a bool, plus
-        // VecDeque node overhead.  Assume ~48 bytes per entry on average.
-        let estimated_size_bytes = entry_count.saturating_mul(48);
-        CacheStats {
-            hits: self.hits.load(Ordering::Relaxed),
-            misses: self.misses.load(Ordering::Relaxed),
-            entries: entry_count,
-            max_entries: self.total_max_entries,
-            estimated_size_bytes,
-        }
-    }
-
-    fn clear(&mut self) {
-        for shard in &self.shards {
-            if let Ok(mut guard) = shard.lock() {
-                guard.cache.clear();
-                guard.order.clear();
-            }
-        }
-        self.hits.store(0, Ordering::Relaxed);
-        self.misses.store(0, Ordering::Relaxed);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -248,92 +199,5 @@ pub fn low_risk_audit_log(tool_name: &str, operation_mode: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline sandbox governance
+// Low-risk tool classification helpers
 // ---------------------------------------------------------------------------
-
-/// Map a tool name to a governance action for pipeline sandbox checks.
-///
-/// Delegates to the canonical [`ToolCapabilityRegistry::action()`] to eliminate
-/// the previously duplicated tool-name-to-action mapping. Unknown tools are
-/// logged and default to "read" (lowest risk).
-pub fn pipeline_tool_to_action(tool_name: &str) -> &'static str {
-    let action = crate::governance::tool_capability::ToolCapabilityRegistry::action(tool_name);
-    let label = action.as_str();
-    // Log a warning for tools that fall through to keyword matching,
-    // indicating they should be added to the explicit registry.
-    if matches!(tool_name, _ if ![
-        "read_file","inspect_git_diff","list_directory","date_time",
-        "skill_list","archive_inspect","jsonl_read","diagnostics","environment_info",
-        "echo_skill","builtin.echo","goon_skill_version_list",
-        "skill-finder","chat.execute",
-        "acp_trace_get","acp_debug_panel_get",
-        "goon_workflow_run_list","goon_workflow_run_get",
-        "goon_metrics_window_query","goon_metrics_errors_summary",
-        "goon_provider_capabilities","prompts_list","prompts_get",
-        "workflow_execute","workflow_ask","workflow_generate",
-        "import_skill","skill_reload",
-        "dxf_read","stl_read","obj_read","step_read","ply_read","iges_read",
-        "gltf_read","svg_read","obj_model_read","gcode_read","gpx_read","geo_util",
-        "image_analyze",
-        "read_docx","read_excel","read_pdf","read_ppt",
-        "email_parse","csv_read","csv_analyze","toml_read","yaml_read",
-        "web_scrape","invoice_parse","rss_read","sqlite_query",
-        "grep","search_files","find_path","find_files","code_index_search","semantic_search",
-        "write_file","apply_patch","create_directory","delete_path","move_path","copy_path",
-        "file_move","file_delete",
-        "compress","decompress","archive_extract",
-        "jsonl_write","csv_write","csv_transform","toml_write","yaml_write",
-        "game_mod_install","game_replay_recorder","game_save_manager","game_screen_capture",
-        "goon_skill_update","goon_skill_version_rollback",
-        "goon_workflow_run_cancel","goon_workflow_run_pause","goon_workflow_run_resume",
-        "image_generate","image_resize","image_convert",
-        "skill-creator","skill_create",
-        "stl_generate","svg_export","svg_generate","qrcode_generate",
-        "write_docx","write_excel","write_ppt",
-        "pdf_merge","pdf_split",
-        "cad_convert",
-        "game_auto_grind","game_keyboard_input","game_mouse_input","game_state_modify",
-        "spawn_agent",
-        "run_tests","execute_command","terminal","bash","cargo_test","shell_exec",
-        "cargo_check","game_launch","skill_execute",
-        "http_request","web_search","dns_lookup","ping","port_scan","git",
-        "github_search_skills","game_monitor","game_online_status",
-        "goon_provider_test_completion","goon_provider_test_connection"
-    ].contains(&tool_name))
-    {
-        tracing::warn!(
-            target: "tool_pipeline",
-            tool = %tool_name,
-            action = %label,
-            "pipeline_tool_to_action: tool '{}' not in explicit registry (matched by keyword), defaulting to '{}'",
-            tool_name, label,
-        );
-    }
-    label
-}
-
-/// Check if a tool is allowed at the given sandbox level.
-///
-/// This is the unified sandbox governance check used by the pipeline
-/// to gate tool execution before running a step.
-pub fn check_tool_in_pipeline(
-    tool_name: &str,
-    sandbox_level: Option<SandboxLevel>,
-) -> Result<(), String> {
-    let Some(level) = sandbox_level else {
-        return Ok(()); // No sandbox enforcement
-    };
-    let action = pipeline_tool_to_action(tool_name);
-    let result = crate::governance::hardening::SandboxPolicy::check_with_feedback(level, action);
-    if result.allowed {
-        Ok(())
-    } else {
-        let hint = result
-            .hint
-            .unwrap_or("Try a different tool or adjust sandbox level in config.");
-        Err(format!(
-            "tool '{}' denied by sandbox policy at level '{}' (action: '{}'). {}. Hint: {}",
-            tool_name, level, action, result.reason, hint
-        ))
-    }
-}

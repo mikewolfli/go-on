@@ -37,123 +37,6 @@ impl From<serde_json::Error> for AuditError {
     }
 }
 
-// ─── Unified AuditRecord ─────────────────────────────────────────────────────
-
-/// Unified audit record that spans both operational compliance and decision-path
-/// tracing concerns.  This type is a superset of every field in
-/// [`AuditLogEntry`]; use the `From` / `Into` impls to convert between types
-/// without changing existing call sites.
-///
-/// # Interop
-///
-/// | Direction | Conversion |
-/// |-----------|-----------|
-/// | `AuditLogEntry → AuditRecord` | `From` — all fields map directly |
-/// | `AuditRecord → AuditLogEntry` | `From` — default for missing optional fields |
-///
-/// # Related types
-/// - [`DecisionPoint`] — steps within `decision_path`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditRecord {
-    /// ISO-8601 timestamp of the event.
-    pub timestamp: String,
-    /// Task identifier this record belongs to.
-    pub task_id: String,
-    /// Agent that made the decision (if applicable).
-    pub agent_id: Option<String>,
-    /// Workflow phase at the time of recording.
-    pub phase: Option<String>,
-    /// Event type (e.g. "tool_call", "llm_completion", "agent_decision").
-    pub event_type: String,
-    /// Tool that was invoked (if applicable).
-    pub tool: Option<String>,
-    /// Decision outcome (e.g. "allow", "deny", "proceed").
-    pub decision: Option<String>,
-    /// Confidence score (0.0–1.0).
-    pub confidence: Option<f64>,
-    /// Snapshot of input state at decision time.
-    pub input_snapshot: Option<serde_json::Value>,
-    /// Snapshot of output state after the decision.
-    pub output_snapshot: Option<serde_json::Value>,
-    /// Data classification label (e.g. "pii", "internal").
-    pub data_classification: Option<String>,
-    /// Compliance tags for regulatory tracking.
-    #[serde(default)]
-    pub compliance_tags: Vec<String>,
-    /// Retention policy for this record.
-    pub retention_policy: Option<String>,
-    /// Correlation ID for linking related audit events.
-    pub correlation_id: Option<String>,
-    /// Ordered list of decision points that led to this outcome.
-    #[serde(default)]
-    pub decision_path: Vec<DecisionPoint>,
-    /// Error message if this record captures a failure.
-    pub error: Option<String>,
-}
-
-/// A single decision point, enriched with agent and outcome metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DecisionPoint {
-    /// Step index within the decision path.
-    pub step: usize,
-    /// Agent that made this decision.
-    pub agent: String,
-    /// Action taken at this step.
-    pub action: String,
-    /// Rationale or reasoning for this decision.
-    pub rationale: Option<String>,
-    /// Outcome of the action (e.g. "success", "retry", "abort").
-    pub outcome: String,
-    /// Confidence score (0.0–1.0) at this step.
-    pub confidence: Option<f64>,
-}
-
-// ── Conversions ────────────────────────────────────────────────────────────
-
-impl From<AuditLogEntry> for AuditRecord {
-    fn from(e: AuditLogEntry) -> Self {
-        AuditRecord {
-            timestamp: e.timestamp,
-            task_id: e.task_id,
-            agent_id: e.agent,
-            phase: Some(e.phase),
-            event_type: e.decision.clone(),
-            tool: e.tool,
-            decision: Some(e.decision),
-            confidence: e.confidence.map(|c| c as f64),
-            input_snapshot: Some(e.inputs),
-            output_snapshot: e.outputs,
-            data_classification: e.data_classification,
-            compliance_tags: e.compliance_tags,
-            retention_policy: e.retention_policy,
-            correlation_id: e.correlation_id,
-            decision_path: Vec::new(),
-            error: e.error,
-        }
-    }
-}
-
-impl From<AuditRecord> for AuditLogEntry {
-    fn from(r: AuditRecord) -> Self {
-        AuditLogEntry {
-            timestamp: r.timestamp,
-            task_id: r.task_id,
-            phase: r.phase.unwrap_or_default(),
-            agent: r.agent_id,
-            tool: r.tool,
-            decision: r.decision.unwrap_or_default(),
-            inputs: r.input_snapshot.unwrap_or(serde_json::Value::Null),
-            outputs: r.output_snapshot,
-            error: r.error,
-            confidence: r.confidence.map(|c| c as f32),
-            data_classification: r.data_classification,
-            compliance_tags: r.compliance_tags,
-            retention_policy: r.retention_policy,
-            correlation_id: r.correlation_id,
-        }
-    }
-}
-
 // ─── AuditLogEntry (unchanged) ──────────────────────────────────────────────
 
 /// Audit log entry for all agent/tool/phase decisions
@@ -207,9 +90,23 @@ struct AuditLogInner {
     entries: VecDeque<AuditLogEntry>,
     max_entries: usize,
     dropped_count: u64,
-    log_path: Option<PathBuf>,
-    /// Maximum number of compressed archive files to keep.
-    max_archives: usize,
+    /// Channel to the background NDJSON writer thread (set when `log_path` is
+    /// configured). The write is fire-and-forget so the request hot path never
+    /// performs synchronous disk I/O.
+    writer: Option<std::sync::mpsc::Sender<AuditWriterMsg>>,
+}
+
+/// Messages consumed by the background audit writer thread.
+// Clippy's large_enum_variant is intentionally allowed: `Entry` is the
+// request-hot-path message (sent on every audit record); boxing it would add
+// a heap allocation per record for no benefit, while `Flush` is a rare
+// control message.
+#[allow(clippy::large_enum_variant)]
+enum AuditWriterMsg {
+    /// Append one entry to the NDJSON file.
+    Entry(AuditLogEntry),
+    /// Acknowledge after all prior messages have been flushed to disk.
+    Flush(std::sync::mpsc::Sender<()>),
 }
 
 impl ThreadSafeAuditLog {
@@ -227,8 +124,7 @@ impl ThreadSafeAuditLog {
                 entries: VecDeque::new(),
                 max_entries,
                 dropped_count: 0,
-                log_path: None,
-                max_archives: 10,
+                writer: None,
             })),
         }
     }
@@ -240,14 +136,63 @@ impl ThreadSafeAuditLog {
         if let Some(parent) = log_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
+        // Spawn a dedicated writer thread that owns all NDJSON file I/O. The
+        // request hot path (`record`) only pushes to the in-memory buffer and
+        // sends the entry over an unbounded channel — no synchronous disk write.
+        let (tx, rx) = std::sync::mpsc::channel::<AuditWriterMsg>();
+        let writer_path = log_path.clone();
+        let max_archives = 10usize;
+        std::thread::Builder::new()
+            .name("goon-audit-writer".to_string())
+            .spawn(move || {
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        AuditWriterMsg::Entry(entry) => {
+                            match append_ndjson_entry(&writer_path, &entry) {
+                                Ok(true) => {
+                                    // The archive cleanup (directory scan) only
+                                    // runs when the file was rotated.
+                                    if let Some(parent) = writer_path.parent() {
+                                        cleanup_old_archives(parent, "audit.ndjson", max_archives);
+                                    }
+                                }
+                                Ok(false) => {}
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "audit: failed to persist entry to {}: {}",
+                                        writer_path.display(),
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        AuditWriterMsg::Flush(ack) => {
+                            let _ = ack.send(());
+                        }
+                    }
+                }
+            })
+            .expect("failed to spawn audit writer thread");
         Self {
             inner: Arc::new(Mutex::new(AuditLogInner {
                 entries: VecDeque::new(),
                 max_entries,
                 dropped_count: 0,
-                log_path: Some(log_path),
-                max_archives: 10,
+                writer: Some(tx),
             })),
+        }
+    }
+
+    /// Block until all previously recorded entries have been appended to the
+    /// NDJSON file. Used by tests and shutdown paths that need a durable
+    /// guarantee after a `record` call.
+    pub fn flush(&self) {
+        let tx = { self.audit_lock_guard().writer.clone() };
+        if let Some(tx) = tx {
+            let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+            if tx.send(AuditWriterMsg::Flush(ack_tx)).is_ok() {
+                let _ = ack_rx.recv();
+            }
         }
     }
 
@@ -274,25 +219,12 @@ impl ThreadSafeAuditLog {
 
         inner.entries.push_back(entry.clone());
 
-        // NDJSON persistence — append entry as a JSON line to the log file.
-        // The archive cleanup (directory scan) only runs when the file was
-        // rotated — running it after every append was a per-record read_dir.
-        if let Some(ref log_path) = inner.log_path {
-            let max_archives = inner.max_archives;
-            match append_ndjson_entry(log_path, &entry) {
-                Ok(true) => {
-                    if let Some(parent) = log_path.parent() {
-                        cleanup_old_archives(parent, "audit.ndjson", max_archives);
-                    }
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        "audit: failed to persist entry to {}: {}",
-                        log_path.display(),
-                        e
-                    );
-                }
+        // NDJSON persistence is offloaded to a dedicated writer thread; the
+        // channel send is non-blocking (unbounded), so the request hot path
+        // never performs open/append/close disk I/O.
+        if let Some(ref tx) = inner.writer {
+            if let Err(e) = tx.send(AuditWriterMsg::Entry(entry)) {
+                tracing::warn!("audit: writer channel closed: {}", e);
             }
         }
     }
@@ -687,6 +619,10 @@ mod tests {
         log.record(sample_entry("2026-05-26T10:00:00Z"));
         log.record(sample_entry("2026-05-26T10:00:01Z"));
         log.record(sample_entry("2026-05-26T10:00:02Z"));
+
+        // Persistence is asynchronous via the background writer thread; flush
+        // before reading the file back.
+        log.flush();
 
         // Read back the file and verify
         let content = fs::read_to_string(&log_path).expect("failed to read log file");

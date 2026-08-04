@@ -527,7 +527,7 @@ pub trait Agent: Send + Sync {
     ///
     /// Default implementation wraps `chat_once` with retry logic via
     /// `retry_chat_once`.  Agents that need custom retry or model-selection
-    /// behaviour (e.g. Copilot, OpenAI with SSE compression) override this.
+    /// behaviour (e.g. Copilot) override this.
     async fn chat(
         &self,
         messages: Vec<Message>,
@@ -792,13 +792,22 @@ impl AgentRegistry {
     /// # Returns
     /// * `Option<Arc<dyn Agent>>` - Returns Some(agent) if found, or None if not found
     pub fn get(&self, name: &str) -> Option<Arc<dyn Agent>> {
-        let agent = self.agents.get(name).cloned()?;
+        let agent = self.get_unwrapped(name)?;
         if let Ok(guard) = self.token_cache.read() {
             if let Some(ref cache) = *guard {
                 return Some(Arc::new(CachedAgentWrapper::new(agent, Arc::clone(cache))));
             }
         }
         Some(agent)
+    }
+
+    /// Get an agent by name **without** the token-cache wrapper.
+    ///
+    /// Cache-managed call paths (e.g. the ACP chat phases, where `act_phase`
+    /// runs the single canonical cache lookup/store) resolve raw agents here so
+    /// agent execution does not trigger a second lookup/store per call.
+    pub fn get_unwrapped(&self, name: &str) -> Option<Arc<dyn Agent>> {
+        self.agents.get(name).cloned()
     }
 
     /// Attach a multi-level token cache so that all agents returned by `get()`
@@ -847,13 +856,7 @@ impl AgentRegistry {
     /// acquires the token cache lock at most once (rather than per-agent)
     /// and avoids N individual `HashMap::get` lookups.
     pub fn all(&self) -> Vec<(String, Arc<dyn Agent>)> {
-        let mut agents: Vec<(String, Arc<dyn Agent>)> = self
-            .agents
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        agents.sort_by(|a, b| a.0.cmp(&b.0));
-
+        let agents = self.all_unwrapped();
         if let Ok(guard) = self.token_cache.read() {
             if let Some(ref cache) = *guard {
                 return agents
@@ -868,6 +871,20 @@ impl AgentRegistry {
                     .collect();
             }
         }
+        agents
+    }
+
+    /// Get all registered agents as a batch **without** the token-cache wrapper.
+    ///
+    /// Used by cache-managed call paths that run their own cache gate (see
+    /// [`Self::get_unwrapped`]).
+    pub fn all_unwrapped(&self) -> Vec<(String, Arc<dyn Agent>)> {
+        let mut agents: Vec<(String, Arc<dyn Agent>)> = self
+            .agents
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        agents.sort_by(|a, b| a.0.cmp(&b.0));
         agents
     }
 

@@ -17,6 +17,4 @@ pub struct ReputationRecord {
     pub total_tasks: u64,
     pub success_count: u64,
     pub failure_count: u64,
-    pub consecutive_failures: u32,
-    pub last_updated_ms: u64,
 }

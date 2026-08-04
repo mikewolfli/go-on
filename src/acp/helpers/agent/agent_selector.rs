@@ -92,10 +92,36 @@ impl AgentSelector {
         Self { config }
     }
 
+    #[cfg(test)]
     pub fn score_candidates(
         &self,
         agents: &[(String, Arc<dyn Agent>)],
         preferred_agent: Option<&str>,
+        online_scores: &[(String, f64)],
+        task_type: &str,
+    ) -> Vec<ScoredAgent> {
+        // Default reputation map — real scores are supplied via
+        // `score_candidates_with_reputation` on the reorder path.
+        let no_reputation = HashMap::new();
+        self.score_candidates_with_reputation(
+            agents,
+            preferred_agent,
+            &no_reputation,
+            online_scores,
+            task_type,
+        )
+    }
+
+    /// Single canonical scoring pipeline shared by `score_candidates` and
+    /// `reorder_agents_by_selection`. Every candidate is scored exactly once
+    /// with one formula (base × capability + reputation × weight +
+    /// task-affinity-adjusted history × weight + capability_boost × 0.1), so
+    /// the two entry points can never drift apart.
+    fn score_candidates_with_reputation(
+        &self,
+        agents: &[(String, Arc<dyn Agent>)],
+        preferred_agent: Option<&str>,
+        reputation_scores: &HashMap<String, f64>,
         online_scores: &[(String, f64)],
         task_type: &str,
     ) -> Vec<ScoredAgent> {
@@ -122,7 +148,7 @@ impl AgentSelector {
                 } else {
                     0.5
                 };
-                let rep_score = 0.5; // default reputation; overridden by real scores in reorder_agents_by_selection
+                let reputation_score = reputation_scores.get(name).copied().unwrap_or(0.5);
                 let mut hist_score = online_scores
                     .iter()
                     .find(|(n, _)| n == name)
@@ -172,13 +198,13 @@ impl AgentSelector {
 
                 hist_score += task_affinity;
                 let total = base * self.config.capability_weight
-                    + rep_score * self.config.reputation_weight
+                    + reputation_score * self.config.reputation_weight
                     + hist_score * self.config.history_weight
                     + capability_boost * 0.1;
                 ScoredAgent {
                     name: name.clone(),
                     base_score: base,
-                    reputation_score: rep_score,
+                    reputation_score,
                     task_match_score: hist_score,
                     total_score: total,
                 }
@@ -222,25 +248,22 @@ impl AgentSelector {
         online_scores: &[(String, f64)],
         task_type: &str,
     ) -> Option<AgentSelection> {
-        let scored = self
-            .score_candidates(agents, preferred_agent, online_scores, task_type)
-            .into_iter()
-            .map(|mut candidate| {
-                candidate.reputation_score = reputation_scores
-                    .get(&candidate.name)
-                    .copied()
-                    .unwrap_or(candidate.reputation_score);
-                candidate.total_score = candidate.base_score * self.config.capability_weight
-                    + candidate.reputation_score * self.config.reputation_weight
-                    + candidate.task_match_score * self.config.history_weight;
-                candidate
-            })
-            .collect::<Vec<_>>();
+        // Single pass through the canonical scoring formula (includes real
+        // reputation scores and the capability boost). The previous version
+        // recomputed `total_score` with a *different* formula that dropped the
+        // capability boost and then re-sorted — the two formulas could select
+        // different winners for the same candidate set.
+        let scored = self.score_candidates_with_reputation(
+            agents,
+            preferred_agent,
+            reputation_scores,
+            online_scores,
+            task_type,
+        );
 
-        let selection = self.select_winner(scored)?;
+        let selection = self.select_winner(scored.clone())?;
         sort_by_score(agents, |name| {
-            selection
-                .candidates
+            scored
                 .iter()
                 .find(|candidate| candidate.name == name)
                 .map(|candidate| candidate.total_score)

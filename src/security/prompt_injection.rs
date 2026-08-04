@@ -197,12 +197,7 @@ impl InjectionDetector {
         // 1. Static pattern matching (always runs)
         for pattern in &self.patterns {
             for cap in pattern.pattern.find_iter(text) {
-                let severity_score = match pattern.severity {
-                    InjectionSeverity::Low => 0.3,
-                    InjectionSeverity::Medium => 0.5,
-                    InjectionSeverity::High => 0.7,
-                    InjectionSeverity::Critical => 0.9,
-                };
+                let severity_score = pattern.severity.to_score();
 
                 if severity_score >= self.config.threshold {
                     violations.push(SafetyViolation {

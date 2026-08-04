@@ -519,6 +519,7 @@ mod adaptive {
                     max_entries: 5000,
                     connection_string: None,
                     read_replica_connection_string: None,
+                    persist_enabled: true,
                 })
             } else {
                 None

@@ -11,9 +11,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::TcpListener;
 use tokio::signal;
-use tokio::sync::{Mutex, Notify, Semaphore};
+use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, warn};
 
 use crate::acp::r#impl::cors::{
@@ -252,7 +251,6 @@ pub struct McpHttpServer {
     mcp_server: Arc<McpServer>,
     bind_addr: String,
     shutdown_notify: Arc<Notify>,
-    connection_semaphore: Arc<Semaphore>,
     acp_server: Option<Arc<AcpServer>>,
     /// Optional TLS acceptor. When `Some`, all accepted TCP streams are
     /// wrapped with TLS before handling HTTP requests. Defaults to `None`
@@ -289,7 +287,6 @@ impl McpHttpServer {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
             shutdown_notify: Arc::new(Notify::new()),
-            connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server: None,
             tls_acceptor: None,
             mtls_ca_cert_path: None,
@@ -321,7 +318,6 @@ impl McpHttpServer {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
             shutdown_notify: Arc::new(Notify::new()),
-            connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server,
             tls_acceptor: None,
             mtls_ca_cert_path: None,
@@ -359,7 +355,7 @@ impl McpHttpServer {
             "{}",
             tf("info.mcp_server_listening", &[("address", &self.bind_addr)])
         );
-        let listener = TcpListener::bind(&self.bind_addr).await?;
+        let listener = crate::shared::tcp_accept_loop::bind_tcp_listener(&self.bind_addr).await?;
 
         info!("{}", t("info.mcp_server_operational"));
         debug!(
@@ -370,78 +366,57 @@ impl McpHttpServer {
             )
         );
 
-        // Signal handling for graceful shutdown
-        let mut sigterm = std::pin::pin!(async {
-            #[cfg(unix)]
-            {
-                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                    Ok(mut stream) => {
-                        stream.recv().await;
-                    }
-                    Err(e) => {
-                        warn!("failed to register SIGTERM handler: {e}; graceful shutdown via SIGTERM disabled");
-                        std::future::pending::<()>().await;
-                    }
-                }
-            }
-            #[cfg(not(unix))]
-            std::future::pending::<()>().await;
-        });
-
-        loop {
-            tokio::select! {
-                _ = self.shutdown_notify.notified() => {
-                    info!("MCP HTTP server shutting down");
-                    break;
-                }
-                _ = signal::ctrl_c() => {
-                    info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
-                    break;
-                }
-                _ = sigterm.as_mut() => {
-                    info!("Received SIGTERM, initiating graceful shutdown...");
-                    break;
-                }
-                result = listener.accept() => {
-                    let permit = Arc::clone(&self.connection_semaphore)
-                        .acquire_owned()
-                        .await;
-                    let permit_guard = match permit {
-                        Ok(p) => p,
-                        Err(_) => break,
-                    };
-                    let (socket, peer_addr) = result?;
-                    let mcp_server = Arc::clone(&self.mcp_server);
-                    let acp_server = self.acp_server.clone();
-                    let tls_acceptor = effective_acceptor.clone();
-                    let rate_limiter = self.rate_limiter.clone();
-                    let sse_broadcaster = Arc::clone(&self.sse_broadcaster);
-
-                    tokio::spawn(async move {
-                        // Hold permit for the whole connection handler lifetime.
-                        let _permit = permit_guard;
+        // Shared accept loop: signal handling (SIGINT/SIGTERM/notify), accept
+        // dispatch, and per-connection spawn live in
+        // `shared::tcp_accept_loop`. Protocol-specific concerns (TLS wrapping,
+        // JSON-RPC dispatch) stay in the closure below.
+        let shutdown_notify = Arc::clone(&self.shutdown_notify);
+        let mcp_server = Arc::clone(&self.mcp_server);
+        let acp_server = self.acp_server.clone();
+        let tls_acceptor = effective_acceptor.clone();
+        let rate_limiter = self.rate_limiter.clone();
+        let sse_broadcaster = Arc::clone(&self.sse_broadcaster);
+        crate::shared::tcp_accept_loop::run_http_accept_loop(
+            listener,
+            shutdown_notify,
+            256,
+            || false,
+            std::sync::Arc::new(
+                move |socket: tokio::net::TcpStream, peer_addr: std::net::SocketAddr| {
+                    let mcp_server = Arc::clone(&mcp_server);
+                    let acp_server = acp_server.clone();
+                    let tls_acceptor = tls_acceptor.clone();
+                    let rate_limiter = rate_limiter.clone();
+                    let sse_broadcaster = Arc::clone(&sse_broadcaster);
+                    async move {
                         let mut stream = match tls_acceptor {
-                            Some(ref acceptor) => {
-                                match acceptor.accept(socket).await {
-                                    Ok(tls) => MaybeTlsStream::Tls(Box::new(tls)),
-                                    Err(e) => {
-                                        warn!(
-                                            "{}",
-                                            tf(
-                                                "error.tls_handshake",
-                                                &[
-                                                    ("address", &peer_addr.to_string()),
-                                                    ("error", &format!("{}", e))
-                                                ]
-                                            )
-                                        );
-                                        return;
-                                    }
+                            Some(ref acceptor) => match acceptor.accept(socket).await {
+                                Ok(tls) => MaybeTlsStream::Tls(Box::new(tls)),
+                                Err(e) => {
+                                    warn!(
+                                        "{}",
+                                        tf(
+                                            "error.tls_handshake",
+                                            &[
+                                                ("address", &peer_addr.to_string()),
+                                                ("error", &format!("{}", e))
+                                            ]
+                                        )
+                                    );
+                                    return;
                                 }
-                            }
+                            },
                             None => MaybeTlsStream::Plain(socket),
                         };
-                        if let Err(err) = handle_http_connection(&mut stream, mcp_server, acp_server, rate_limiter, sse_broadcaster).await {
+                        if let Err(err) = handle_http_connection(
+                            &mut stream,
+                            mcp_server,
+                            acp_server,
+                            rate_limiter,
+                            sse_broadcaster,
+                        )
+                        .await
+                        {
                             warn!(
                                 "{}",
                                 tf(
@@ -453,10 +428,11 @@ impl McpHttpServer {
                                 )
                             );
                         }
-                    });
-                }
-            }
-        }
+                    }
+                },
+            ),
+        )
+        .await?;
 
         // Drain active connections before full shutdown.
         let drain_seconds = self
@@ -847,20 +823,10 @@ async fn handle_http_connection(
         }
     }
 
-    let content_length =
-        crate::acp::r#impl::runtime::protocol::extract_content_length(header_part).unwrap_or(0);
+    // Read the remaining body (content_length was already parsed and bounded
+    // by MAX_BODY_SIZE at the top of this handler).
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
-        // Safety check: body size bounded by MAX_BODY_SIZE (10MB) to
-        // prevent OOM from malicious oversized Content-Length headers.
-        // The primary check is at line ~517; this is a redundant guard.
-        if content_length > MAX_BODY_SIZE {
-            anyhow::bail!(
-                "body content-length {} exceeds maximum allowed {} bytes",
-                content_length,
-                MAX_BODY_SIZE
-            );
-        }
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
         tokio::time::timeout(Duration::from_secs(30), socket.read_exact(&mut remaining))
             .await

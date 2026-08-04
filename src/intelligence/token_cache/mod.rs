@@ -32,6 +32,34 @@ use crate::core::error::Result as AppResult;
 // All types are defined inline in this module (not in sub-modules).
 // Re-exports are not needed since the types are already public in this module.
 
+// ─── Persistent cache backend (L3) ───────────────────────────────────────
+
+/// A cached response loaded from the persistent layer.
+#[derive(Debug, Clone)]
+pub struct PersistentCachedResponse {
+    /// The cached response text.
+    pub response_text: String,
+    /// Agent that generated the response, if recorded.
+    pub agent_name: Option<String>,
+}
+
+/// Trait implemented by durable cache backends (e.g. `ResponseCache` on
+/// SQLite/PostgreSQL). The token cache consults this layer on L1/L2 miss and
+/// writes back on store, giving cross-restart / cross-instance cache reuse.
+#[async_trait]
+pub trait PersistentCacheBackend: Send + Sync {
+    /// Fetch a cached response by its exact key.
+    async fn get_cached(&self, key: &str) -> anyhow::Result<Option<PersistentCachedResponse>>;
+
+    /// Store a response under the given exact key.
+    async fn put_cached(
+        &self,
+        key: &str,
+        response_text: &str,
+        agent_name: Option<&str>,
+    ) -> anyhow::Result<()>;
+}
+
 // ─── Shared types ─────────────────────────────────────────────────────────
 
 /// Context-length classification (mimics CPU cache hierarchy)
@@ -116,6 +144,10 @@ pub struct TokenMultiLevelCache {
     pub enabled: AtomicBool,
     /// TTL in milliseconds for cached entries (0 = no expiration, lock-free atomic).
     ttl_ms: AtomicU64,
+    /// Optional durable backend (L3). When set, `lookup` falls through to it
+    /// on L1/L2 miss and `store` writes back asynchronously. This gives
+    /// cross-restart and cross-instance (shared SQLite/PG) cache reuse.
+    persistent: Option<Arc<dyn PersistentCacheBackend>>,
 }
 
 impl TokenMultiLevelCache {
@@ -127,12 +159,22 @@ impl TokenMultiLevelCache {
             stats: RwLock::new(TokenCacheStats::default()),
             enabled: AtomicBool::new(true),
             ttl_ms: AtomicU64::new(0),
+            persistent: None,
         }
+    }
+
+    /// Attach a durable backend as the L3 layer (e.g. the SQLite/Postgres
+    /// `ResponseCache`). The returned handle is the same cache with the
+    /// backend attached; call sites typically build via
+    /// `TokenMultiLevelCache::new(a, b).with_persistent_backend(arc)`.
+    pub fn with_persistent_backend(mut self, backend: Arc<dyn PersistentCacheBackend>) -> Self {
+        self.persistent = Some(backend);
+        self
     }
 
     /// Look up a cache entry by input text.
     ///
-    /// Routes: L1 (exact) → L2 (semantic).
+    /// Routes: L1 (exact) → L2 (semantic) → L3 (persistent, optional).
     /// Uses **read** locks for the lookup path to avoid unnecessary contention.
     /// Returns the best matching entry and which level it was found at.
     pub async fn lookup(
@@ -150,14 +192,23 @@ impl TokenMultiLevelCache {
             .as_millis() as u64;
         let ttl = self.ttl_ms.load(Ordering::Acquire);
 
-        // L1: Exact match (fastest path) — read-only peek
+        // L1: Exact match (fastest path) — read-only peek, then best-effort
+        // LRU touch (moves the key to the back of the recency order) so the
+        // eviction policy is a real LRU instead of insertion-order FIFO.
         let l1_key = hash_input(input);
-        if let Some(entry) = self.l1.read().await.peek(&l1_key) {
+        let l1_hit = {
+            let guard = self.l1.read().await;
+            guard.peek(&l1_key)
+        };
+        if let Some(entry) = l1_hit {
             if entry.output.len() > 10 {
                 // Check TTL: skip expired entries
                 if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
                     // Entry expired, will be cleaned up lazily from L1 on next write
                 } else {
+                    if let Ok(mut l1) = self.l1.try_write() {
+                        l1.touch(&l1_key);
+                    }
                     self.stats
                         .write()
                         .await
@@ -167,20 +218,66 @@ impl TokenMultiLevelCache {
             }
         }
 
-        // L2: Semantic match (medium/long inputs) — read-only peek
+        // L2: Semantic match (medium/long inputs) — read-only peek, then
+        // best-effort hit-count touch so "least-hit" eviction is real.
         if context_class != ContextLengthClass::Short {
             let query_vec = simple_embedding(input);
-            if let Some(entry) = self.l2.read().await.peek_similar(&query_vec) {
+            let l2_hit = {
+                let guard = self.l2.read().await;
+                guard.peek_similar(&query_vec)
+            };
+            if let Some((idx, entry)) = l2_hit {
                 if entry.output.len() > 10 {
                     if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
                         // Skip expired entry
                     } else {
+                        if let Ok(mut l2) = self.l2.try_write() {
+                            l2.touch(idx);
+                        }
                         self.stats
                             .write()
                             .await
                             .record_hit(CacheLevel::L2, entry.token_count);
                         return Some((CacheLevel::L2, entry));
                     }
+                }
+            }
+        }
+
+        // L3: Persistent backend (optional) — exact key lookup on L1/L2 miss.
+        // The backend (SQLite/Postgres `ResponseCache`) performs its own
+        // `spawn_blocking` + TTL handling; a hit is promoted back into L1/L2
+        // so subsequent identical inputs skip the disk read.
+        if let Some(ref backend) = self.persistent {
+            if let Ok(Some(found)) = backend.get_cached(&l1_key).await {
+                if found.response_text.len() > 10 {
+                    let token_count = estimate_token_count(&found.response_text);
+                    let entry = CacheEntry {
+                        key: l1_key.clone(),
+                        input: input.to_string(),
+                        output: found.response_text.clone(),
+                        token_count,
+                        context_class: ContextLengthClass::from_token_count(token_count),
+                        hit_count: 1,
+                        created_at: (now_ms / 1000) as i64,
+                        last_access_at: (now_ms / 1000) as i64,
+                        agent_name: found.agent_name,
+                        model: None,
+                    };
+                    // Promote into L1 (and L2 for non-short inputs) so the
+                    // durable hit is served from memory on the next request.
+                    self.l1.write().await.put(l1_key.clone(), entry.clone());
+                    if context_class != ContextLengthClass::Short {
+                        self.l2
+                            .write()
+                            .await
+                            .add(simple_embedding(input), entry.clone());
+                    }
+                    self.stats
+                        .write()
+                        .await
+                        .record_hit(CacheLevel::L3, entry.token_count);
+                    return Some((CacheLevel::L3, entry));
                 }
             }
         }
@@ -209,7 +306,10 @@ impl TokenMultiLevelCache {
             output: output.to_string(),
             token_count,
             context_class: ContextLengthClass::from_token_count(token_count),
-            hit_count: 0,
+            // A freshly stored entry was just served (it was produced by a
+            // miss), so it starts with one hit — consistent with
+            // `CacheEntry::new` and the L3 promotion path.
+            hit_count: 1,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -232,6 +332,19 @@ impl TokenMultiLevelCache {
         }
 
         self.stats.write().await.total_entries += 1;
+
+        // L3: Asynchronously persist so the write never blocks the request
+        // hot path. Uses the exact L1 key so a later `lookup` on L1/L2 miss
+        // can recover the entry from the durable backend.
+        if let Some(ref backend) = self.persistent {
+            let backend = Arc::clone(backend);
+            let key = l1_key;
+            let out = entry.output.clone();
+            let agent = entry.agent_name.clone();
+            tokio::spawn(async move {
+                let _ = backend.put_cached(&key, &out, agent.as_deref()).await;
+            });
+        }
     }
 
     /// Generate a JSON report of cache performance.
@@ -257,6 +370,9 @@ impl TokenMultiLevelCache {
 pub enum CacheLevel {
     L1,
     L2,
+    /// Durable backend hit (SQLite/Postgres `ResponseCache`), promoted into
+    /// L1/L2 for subsequent in-memory hits.
+    L3,
 }
 
 impl std::fmt::Display for CacheLevel {
@@ -264,6 +380,7 @@ impl std::fmt::Display for CacheLevel {
         match self {
             CacheLevel::L1 => write!(f, "L1"),
             CacheLevel::L2 => write!(f, "L2"),
+            CacheLevel::L3 => write!(f, "L3"),
         }
     }
 }
@@ -299,6 +416,24 @@ pub fn messages_to_text(messages: &[crate::agent::Message]) -> String {
         result.push_str(m.content.as_str());
     }
     result
+}
+
+/// Detect when the last user message repeats the content of an *earlier* user
+/// message in the same conversation.
+///
+/// Cache gates call this to bypass the cache so the agent produces a fresh
+/// response instead of a stale cached answer when the user intentionally
+/// repeats a question.
+pub fn last_user_message_is_duplicate(messages: &[crate::agent::Message]) -> bool {
+    let user_contents: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .collect();
+    match user_contents.len() {
+        0 | 1 => false,
+        n => user_contents[..n - 1].contains(&user_contents[n - 1]),
+    }
 }
 
 // L1: Exact-Match Cache
@@ -346,6 +481,22 @@ impl L1ExactCache {
     /// Use this for read-locked lookup paths to avoid unnecessary write contention.
     pub fn peek(&self, key: &str) -> Option<CacheEntry> {
         self.map.get(key).cloned()
+    }
+
+    /// Best-effort LRU touch: moves the key to the back of the recency order
+    /// and bumps its hit count. Returns `false` when the key is absent.
+    /// Callers invoke this through `try_write` so a contended lock simply
+    /// skips the touch instead of blocking the lookup hot path.
+    pub fn touch(&mut self, key: &str) -> bool {
+        let Some(entry) = self.map.get_mut(key) else {
+            return false;
+        };
+        entry.hit_count = entry.hit_count.saturating_add(1);
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            let k = self.order.remove(pos).expect("pos was just found");
+            self.order.push_back(k);
+        }
+        true
     }
 
     /// Insert or update an entry. Evicts LRU if at capacity.
@@ -411,17 +562,9 @@ impl L1ExactCache {
 /// than the previous hash-based character approach, giving better semantic
 /// discrimination for short-to-medium texts.
 ///
-/// For production use, replace with a real embedding model (e.g., from the
-/// existing VectorStore infrastructure in `src/memory/vector.rs`).  The
-/// `real_embedding` cfg flag can be used as a feature gate: when enabled,
-/// callers that have access to a real model can bypass this fallback.
-//
-// Feature gate placeholder:
-//   #[cfg(feature = "real_embedding")]
-//   pub fn simple_embedding(text: &str) -> Vec<f32> {
-//       // Call through to the configured embedding model instead.
-//       real_embedding_model::embed(text)
-//   }
+/// The canonical embedding implementation lives in
+/// `crate::memory::embedding_provider` / `vector.rs` for persistent vectors;
+/// this inline fallback serves the in-memory L2 semantic cache.
 pub fn simple_embedding(text: &str) -> Vec<f32> {
     const DIM: usize = 256;
     let mut vec = vec![0.0f32; DIM];
@@ -499,8 +642,9 @@ impl L2SemanticCache {
     }
 
     /// Read-only peek for semantic similarity — finds similar entries without
-    /// updating hit counts. Use this for read-locked lookup paths.
-    pub fn peek_similar(&self, query_vec: &[f32]) -> Option<CacheEntry> {
+    /// updating hit counts. Returns the matched entry's index and a clone so
+    /// the caller can best-effort `touch` it under a write lock.
+    pub fn peek_similar(&self, query_vec: &[f32]) -> Option<(usize, CacheEntry)> {
         let mut best_score = 0.0f32;
         let mut best_entry = None;
 
@@ -508,11 +652,22 @@ impl L2SemanticCache {
             let score = crate::shared::math::cosine_similarity_f32(query_vec, vec);
             if score > best_score && score >= self.similarity_threshold {
                 best_score = score;
-                best_entry = Some(self.entries[i].clone());
+                best_entry = Some((i, self.entries[i].clone()));
             }
         }
 
         best_entry
+    }
+
+    /// Best-effort hit recording: bumps the hit count of the entry at `idx` so
+    /// eviction prefers entries that have actually been served.
+    pub fn touch(&mut self, idx: usize) -> bool {
+        if let Some(entry) = self.entries.get_mut(idx) {
+            entry.hit_count = entry.hit_count.saturating_add(1);
+            true
+        } else {
+            false
+        }
     }
 
     /// Add a new entry to the cache. Evicts oldest if at capacity.
@@ -564,6 +719,8 @@ pub struct TokenCacheStats {
     // L2 stats
     pub l2_hits: u64,
     pub l2_misses: u64,
+    // L3 (durable backend) stats
+    pub l3_hits: u64,
     // Total tracking
     pub total_entries: usize,
     pub total_tokens_saved: u64,
@@ -583,6 +740,7 @@ impl TokenCacheStats {
         match level {
             CacheLevel::L1 => self.l1_hits += 1,
             CacheLevel::L2 => self.l2_hits += 1,
+            CacheLevel::L3 => self.l3_hits += 1,
         }
         self.total_tokens_saved += tokens_saved as u64;
         self.total_tokens_served += tokens_saved as u64;
@@ -613,7 +771,7 @@ impl TokenCacheStats {
 
     /// Hit rate for a given level (0.0 - 1.0).
     pub fn hit_rate(&self) -> f64 {
-        let total_hits = self.l1_hits + self.l2_hits;
+        let total_hits = self.l1_hits + self.l2_hits + self.l3_hits;
         let total_misses = self.l1_misses + self.l2_misses;
         let total = total_hits + total_misses;
         if total == 0 {
@@ -625,7 +783,7 @@ impl TokenCacheStats {
 
     /// Convert to JSON for reporting.
     pub fn to_json(&self) -> serde_json::Value {
-        let total_hits = self.l1_hits + self.l2_hits;
+        let total_hits = self.l1_hits + self.l2_hits + self.l3_hits;
         let total_misses = self.l1_misses + self.l2_misses;
         let total = total_hits + total_misses;
         let overall_hit_rate = if total == 0 {
@@ -644,6 +802,10 @@ impl TokenCacheStats {
                 "hits": self.l2_hits,
                 "misses": self.l2_misses,
                 "hit_rate": if self.l2_hits + self.l2_misses == 0 { 0.0 } else { self.l2_hits as f64 / (self.l2_hits + self.l2_misses) as f64 },
+            },
+            "l3": {
+                "hits": self.l3_hits,
+                "hit_rate": if self.l3_hits == 0 { 0.0 } else { 1.0 },
             },
             "overall": {
                 "hit_rate": overall_hit_rate,
@@ -702,19 +864,7 @@ impl Agent for CachedAgentWrapper {
         // If the user is asking the same thing they already asked before,
         // bypass the cache so they get a *fresh* AI response instead of the
         // cached previous answer.
-        let is_duplicate_user = {
-            let user_contents: Vec<&str> = messages
-                .iter()
-                .filter(|m| m.role == "user")
-                .map(|m| m.content.as_str())
-                .collect();
-            if user_contents.len() >= 2 {
-                let last = user_contents.last().copied().unwrap_or("");
-                user_contents[..user_contents.len() - 1].contains(&last)
-            } else {
-                false
-            }
-        };
+        let is_duplicate_user = last_user_message_is_duplicate(&messages);
 
         if is_duplicate_user {
             tracing::debug!(
@@ -833,5 +983,104 @@ impl Agent for CachedAgentWrapper {
 
     fn supports_model_override(&self) -> bool {
         self.inner.supports_model_override()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// In-memory durable backend for exercising the L3 fall-through path
+    /// without a SQLite/Postgres dependency in unit tests.
+    #[derive(Default)]
+    struct MockPersistent {
+        store: Mutex<HashMap<String, PersistentCachedResponse>>,
+    }
+
+    #[async_trait]
+    impl PersistentCacheBackend for MockPersistent {
+        async fn get_cached(&self, key: &str) -> anyhow::Result<Option<PersistentCachedResponse>> {
+            Ok(self.store.lock().unwrap().get(key).cloned())
+        }
+
+        async fn put_cached(
+            &self,
+            key: &str,
+            response_text: &str,
+            agent_name: Option<&str>,
+        ) -> anyhow::Result<()> {
+            self.store.lock().unwrap().insert(
+                key.to_string(),
+                PersistentCachedResponse {
+                    response_text: response_text.to_string(),
+                    agent_name: agent_name.map(str::to_string),
+                },
+            );
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn store_writes_through_to_persistent_backend() {
+        let backend = Arc::new(MockPersistent::default());
+        let cache = TokenMultiLevelCache::new(10, 10)
+            .with_persistent_backend(Arc::clone(&backend) as Arc<dyn PersistentCacheBackend>);
+
+        cache
+            .store("hello world", "cached reply", 4, None, None)
+            .await;
+        // Give the fire-and-forget persist task a moment to run.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let key = hash_input("hello world");
+        let stored = backend.store.lock().unwrap().get(&key).cloned();
+        assert!(
+            stored.is_some(),
+            "L3 backend must receive the stored response"
+        );
+        assert_eq!(stored.unwrap().response_text, "cached reply");
+    }
+
+    #[tokio::test]
+    async fn lookup_falls_through_to_persistent_backend_on_l1_l2_miss() {
+        let backend = Arc::new(MockPersistent::default());
+        // Seed the durable layer directly (simulates a previous process's write).
+        let key = hash_input("question");
+        backend.store.lock().unwrap().insert(
+            key,
+            PersistentCachedResponse {
+                response_text: "durable answer".to_string(),
+                agent_name: Some("deepseek".to_string()),
+            },
+        );
+
+        let cache = TokenMultiLevelCache::new(10, 10)
+            .with_persistent_backend(Arc::clone(&backend) as Arc<dyn PersistentCacheBackend>);
+
+        let hit = cache
+            .lookup("question", ContextLengthClass::Short)
+            .await
+            .expect("durable hit must resolve");
+        assert_eq!(hit.0, CacheLevel::L3, "expected an L3 durable hit");
+        assert_eq!(hit.1.output, "durable answer");
+        assert_eq!(hit.1.agent_name.as_deref(), Some("deepseek"));
+
+        // A second lookup should now be served from L1 (promoted) without
+        // touching the durable layer again.
+        let second = cache
+            .lookup("question", ContextLengthClass::Short)
+            .await
+            .expect("promoted entry must resolve");
+        assert_eq!(second.0, CacheLevel::L1, "promoted hit should be L1");
+    }
+
+    #[tokio::test]
+    async fn without_backend_lookup_returns_none() {
+        let cache = TokenMultiLevelCache::new(10, 10);
+        let hit = cache.lookup("anything", ContextLengthClass::Short).await;
+        assert!(hit.is_none(), "no durable backend => no L3 hit");
     }
 }

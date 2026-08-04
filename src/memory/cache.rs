@@ -345,6 +345,34 @@ impl ResponseCache {
     }
 }
 
+/// L3 durable-backend bridge: lets the multi-level token cache fall through
+/// to the SQLite response cache on L1/L2 miss (see `TokenMultiLevelCache`).
+#[cfg(feature = "backend-sqlite")]
+#[async_trait::async_trait]
+impl crate::intelligence::token_cache::PersistentCacheBackend for ResponseCache {
+    async fn get_cached(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Option<crate::intelligence::token_cache::PersistentCachedResponse>> {
+        Ok(self.get(key).await?.map(|c| {
+            crate::intelligence::token_cache::PersistentCachedResponse {
+                response_text: c.response_text,
+                agent_name: c.agent_name,
+            }
+        }))
+    }
+
+    async fn put_cached(
+        &self,
+        key: &str,
+        response_text: &str,
+        agent_name: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.put(key, response_text, agent_name.unwrap_or(""), None)
+            .await
+    }
+}
+
 #[cfg(all(test, feature = "backend-sqlite"))]
 mod tests {
     use super::ResponseCache;
@@ -769,5 +797,33 @@ impl ResponseCache {
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
+    }
+}
+
+/// L3 durable-backend bridge for the PostgreSQL backend — see the SQLite
+/// variant above.
+#[cfg(feature = "backend-postgres")]
+#[async_trait::async_trait]
+impl crate::intelligence::token_cache::PersistentCacheBackend for ResponseCache {
+    async fn get_cached(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Option<crate::intelligence::token_cache::PersistentCachedResponse>> {
+        Ok(self.get(key).await?.map(|c| {
+            crate::intelligence::token_cache::PersistentCachedResponse {
+                response_text: c.response_text,
+                agent_name: c.agent_name,
+            }
+        }))
+    }
+
+    async fn put_cached(
+        &self,
+        key: &str,
+        response_text: &str,
+        agent_name: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.put(key, response_text, agent_name.unwrap_or(""), None)
+            .await
     }
 }

@@ -52,8 +52,6 @@ impl CapabilityBus {
                     total_tasks: r.total_tasks,
                     success_count: r.successful_tasks,
                     failure_count: r.total_tasks.saturating_sub(r.successful_tasks),
-                    consecutive_failures: 0,
-                    last_updated_ms: 0,
                 })
                 .collect::<Vec<_>>()
         };

@@ -216,14 +216,6 @@ pub async fn consensus_vote_with_reputation(
     reputations: &HashMap<String, f64>,
     config: &VoteConfig,
 ) -> (bool, f64) {
-    match config.mode {
-        VoteMode::DelphiDebate => {}
-        VoteMode::Legacy | VoteMode::Weighted => {
-            // Weighted / Legacy modes are reachable only through a custom
-            // `VoteConfig`; the runtime default is DelphiDebate.
-        }
-    }
-
     let proposal_confidence = proposal
         .get("confidence")
         .and_then(|v| v.as_f64())

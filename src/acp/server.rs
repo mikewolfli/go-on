@@ -35,7 +35,6 @@ use crate::observability::alert_manager::AlertManager;
 use crate::observability::telemetry_enhanced::TelemetryRuntime;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::skill::SkillRegistry;
-use crate::orchestration::task_graph_store::TaskGraphStore;
 use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
@@ -66,8 +65,8 @@ pub enum OutcomeEvent {
 }
 
 use super::prelude::{
-    with_acp_lock, CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState,
-    MaintenanceTracker, OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
+    with_acp_lock, CircuitBreakerRegistry, ConversationState, LifecycleState, MaintenanceTracker,
+    OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
 };
 
 /// DrainGuard — graceful shutdown state tracking.
@@ -358,10 +357,6 @@ pub struct ResilienceContext {
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
     // which acquires, reads/writes, and drops the guard within a single synchronous closure.
     pub maintenance_tracker: Arc<std::sync::RwLock<MaintenanceTracker>>,
-    /// Inflight request limiter
-    // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
-    // critical sections (check/adjust inflight count) with no `.await` inside.
-    pub inflight_limiter: Arc<std::sync::RwLock<InflightLimiter>>,
     /// Lifecycle state management
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
     // which acquires, reads/writes, and drops the guard within a single synchronous closure.
@@ -439,8 +434,6 @@ pub struct PersistenceContext {
     // SAFETY: StdMutex is never held across `.await` — artifact ledger operations are synchronous
     // that complete and drop the guard before any async yield.
     pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
-    /// Task graph store for checkpoints and recovery
-    pub task_graph_store: Option<Arc<TaskGraphStore>>,
 }
 
 /// Main ACP server structure
@@ -896,7 +889,6 @@ pub struct ServerBuilder {
     verbose: bool,
     harness_bus: Option<Arc<HarnessBus>>,
     capability_bus: Option<Arc<CapabilityBus>>,
-    task_graph_store: Option<Arc<TaskGraphStore>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
     /// Planner-executor configuration (reserved for future use, currently unit).
     planner_executor_config: (),
@@ -928,6 +920,9 @@ pub struct ServerBuilder {
     lazy_memory_persistence_params: Option<LazyMemoryPersistenceParams>,
     /// Runtime config for gating governance, tenant quotas, etc.
     runtime_config: Option<RuntimeConfig>,
+    /// Whether the durable response cache is wired as the L3 layer of the
+    /// multi-level token cache (default: true — see `CacheConfig::persist_enabled`).
+    persist_cache: bool,
 }
 
 impl ServerBuilder {
@@ -943,7 +938,6 @@ impl ServerBuilder {
             verbose: false,
             harness_bus: None,
             capability_bus: None,
-            task_graph_store: None,
             provenance_ledger: None,
             planner_executor_config: (),
             approval_engine: None,
@@ -959,6 +953,7 @@ impl ServerBuilder {
             multimodal_processor: None,
             lazy_memory_persistence_params: None,
             runtime_config: None,
+            persist_cache: true,
         }
     }
 
@@ -992,6 +987,13 @@ impl ServerBuilder {
     /// Set the response cache
     pub fn with_response_cache(mut self, response_cache: Arc<ResponseCache>) -> Self {
         self.response_cache = Some(response_cache);
+        self
+    }
+
+    /// Enable/disable wiring the durable response cache as the token cache's
+    /// L3 layer. Defaults to enabled.
+    pub fn with_persist_cache(mut self, persist_cache: bool) -> Self {
+        self.persist_cache = persist_cache;
         self
     }
 
@@ -1091,9 +1093,8 @@ impl ServerBuilder {
     /// Build the server
     pub fn build(self) -> AcpServer {
         use crate::acp::prelude::{
-            CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState,
-            MaintenanceTracker, OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
-            RuntimeMetrics,
+            CircuitBreakerRegistry, ConversationState, LifecycleState, MaintenanceTracker,
+            OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy, RuntimeMetrics,
         };
 
         let metrics = Arc::new(RuntimeMetrics::default());
@@ -1106,7 +1107,6 @@ impl ServerBuilder {
             ),
         );
         let maintenance_tracker = Arc::new(std::sync::RwLock::new(MaintenanceTracker::new()));
-        let inflight_limiter = Arc::new(std::sync::RwLock::new(InflightLimiter::default()));
         let lifecycle_state = Arc::new(std::sync::RwLock::new(LifecycleState::new()));
         let conversation_state = Arc::new(Mutex::new(ConversationState::default()));
         let phase_rate_limiter = Arc::new(StdMutex::new(PhaseRateLimiter::default()));
@@ -1256,12 +1256,29 @@ impl ServerBuilder {
 
         let prompt_manager = PromptManager::new(std::path::PathBuf::from("./prompts"));
 
+        // Wire the durable response cache as the token cache's L3 layer when
+        // persistence is enabled and a backend exists. The Arc is cloned so the
+        // same backend remains available to CacheLayer / health endpoints.
+        let mut token_cache = crate::intelligence::token_cache::TokenMultiLevelCache::new(500, 200);
+        if self.persist_cache {
+            if let Some(ref backend) = self.response_cache {
+                // Upcast `Arc<ResponseCache>` → `Arc<dyn PersistentCacheBackend>`
+                // via `as` (unsized coercion).
+                let backend: std::sync::Arc<
+                    dyn crate::intelligence::token_cache::PersistentCacheBackend,
+                > = std::sync::Arc::clone(backend)
+                    as std::sync::Arc<dyn crate::intelligence::token_cache::PersistentCacheBackend>;
+                token_cache = token_cache.with_persistent_backend(backend);
+                tracing::info!(
+                    "token_cache: durable L3 backend attached (cross-restart/cross-instance cache reuse enabled)"
+                );
+            }
+        }
+
         let cache_layer = CacheLayer {
             response_cache: self.response_cache,
             vector_store: self.vector_store,
-            token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
-                500, 200,
-            )),
+            token_cache: Arc::new(token_cache),
             semantic_cache: Arc::new(std::sync::RwLock::new(
                 crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
             )),
@@ -1401,7 +1418,6 @@ impl ServerBuilder {
                 circuit_breakers,
                 hyper_resilience,
                 maintenance_tracker,
-                inflight_limiter,
                 lifecycle_state,
                 review_timeout_policy,
                 failure_prevention,
@@ -1425,7 +1441,6 @@ impl ServerBuilder {
             persistence: PersistenceContext {
                 memory_store,
                 artifact_ledger,
-                task_graph_store: self.task_graph_store,
             },
             prompt_assembler: PromptAssembler,
             prompt_manager,

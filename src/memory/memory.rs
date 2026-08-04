@@ -258,32 +258,6 @@ impl MemoryStore {
         }
     }
 
-    /// Enforce capacity limits across all classes after bulk operations.
-    /// Evicts the oldest entries per class that exceed their max_size.
-    pub fn enforce_capacity(&mut self) {
-        let classes = [
-            MemoryClass::Transient,
-            MemoryClass::Episodic,
-            MemoryClass::Semantic,
-            MemoryClass::ProjectState,
-            MemoryClass::Observation,
-        ];
-        for class in classes {
-            let max_size = self.class_max_size(&class);
-            let class_count = self.class_counts.get(&class).copied().unwrap_or(0);
-            if class_count > max_size {
-                let excess = class_count - max_size;
-                if let Some(tree) = self.entries_by_class.get(&class) {
-                    let to_remove: Vec<String> =
-                        tree.iter().take(excess).map(|(_, id)| id.clone()).collect();
-                    for id in to_remove {
-                        self.remove_entry(&id);
-                    }
-                }
-            }
-        }
-    }
-
     /// Promote high-usefulness entries up one memory class level.
     ///
     /// Promotion thresholds:

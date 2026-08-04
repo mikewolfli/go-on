@@ -28,7 +28,7 @@ use crate::acp::helpers::context::{
 };
 
 use crate::acp::helpers::response_assembler::{
-    build_chat_response, build_role_routing, build_task_graph_checkpoint, ChatResponseContext,
+    build_chat_response, build_role_routing, ChatResponseContext,
 };
 use crate::acp::helpers::review_gate::run_enhanced_verification;
 use crate::acp::server::{AcpServer, OutcomeEvent};
@@ -1159,23 +1159,11 @@ pub(crate) async fn apply_review_gate_assemble(
         None
     };
 
-    // Task graph execution engine integration
-    let (task_graph_result, _saved_graph_id, _saved_checkpoint_id) = if is_full_auto {
-        build_task_graph_checkpoint(
-            server,
-            conversation_id,
-            &task_description,
-            &params.mode,
-            phase_name,
-            response_text,
-            tool_execution_results,
-            memory_promotion_result.as_ref(),
-            started.elapsed().as_millis() as u64,
-        )
-        .await
-    } else {
-        (None, None, None)
-    };
+    // Task graph checkpointing was removed: `TaskGraphStore` had no production
+    // wiring (ServerBuilder never set it), so `build_task_graph_checkpoint`
+    // always returned `(None, None, None)`. The chat response keeps
+    // `task_graph: null` exactly as before.
+    let task_graph_result = None;
 
     // Role-based agent routing integration
     let role_routing_result = if is_full_auto {

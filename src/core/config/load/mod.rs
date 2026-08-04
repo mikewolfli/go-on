@@ -758,6 +758,7 @@ mod tests {
             max_entries: 20_000,
             connection_string: None,
             read_replica_connection_string: None,
+            persist_enabled: true,
         });
         cfg.vector = Some(VectorConfig {
             enabled: false,

@@ -89,19 +89,11 @@ impl BaiduAuthClient {
         let token_response: BaiduTokenResponse = response.json().await?;
         let ttl_seconds = token_response.expires_in.unwrap_or(1800);
         let safety_margin = ttl_seconds.min(120);
-        let expires_at = unix_now_secs() + ttl_seconds - safety_margin;
+        let expires_at = crate::agents::unix_now_secs() + ttl_seconds - safety_margin;
 
         self.cache
             .store(token_response.access_token.clone(), expires_at);
 
         Ok(token_response.access_token)
     }
-}
-
-/// Current Unix time in seconds.
-fn unix_now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }

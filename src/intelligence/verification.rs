@@ -1,8 +1,8 @@
 //! Phase 4: Structured Verification and Review
 //!
-//! These structures are intentional framework definitions for Phase 0-9 architecture.
-//! Structured verification and deterministic checks will be integrated into the
-//! review gate once verification signal aggregation logic is implemented.
+//! Structured verification and review signals are wired into the review gate
+//! (`acp::helpers::governance::review_gate`) and the single-review path
+//! (`acp::impl::agent`) — see `run_enhanced_verification`.
 //!
 //! ## Relationship to `quality_models`
 //!

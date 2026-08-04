@@ -214,7 +214,7 @@ impl TokenCache {
 }
 
 /// Current Unix time in seconds.
-fn unix_now_secs() -> u64 {
+pub(crate) fn unix_now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -659,30 +659,40 @@ pub async fn stream_sse_to_sender(
     sender: crate::agent::StreamingSender,
     config: &StreamingConfig,
 ) -> anyhow::Result<()> {
+    let on_event = |data: &str| -> anyhow::Result<SseEventAction> {
+        if sse_event_to_sender(data, &sender) {
+            Ok(SseEventAction::Stop)
+        } else {
+            Ok(SseEventAction::Continue)
+        }
+    };
+    stream_sse_with_handler(response, config, on_event).await
+}
+
+/// Shared SSE streaming loop with a configurable per-event handler.
+///
+/// When `config.enable_compression` is set, the raw bytes are gzip-decompressed
+/// before parsing; otherwise events are parsed directly. The handler returns
+/// [`SseEventAction::Stop`] to end the stream early. This is the single
+/// implementation of the decompressing loop — it replaces the former inline
+/// copy inside `stream_sse_to_sender`.
+pub(crate) async fn stream_sse_with_handler<F>(
+    response: reqwest::Response,
+    config: &StreamingConfig,
+    mut on_event: F,
+) -> anyhow::Result<()>
+where
+    F: FnMut(&str) -> anyhow::Result<SseEventAction>,
+{
     if !config.enable_compression {
-        return stream_sse_events(response, move |data| {
-            if sse_event_to_sender(data, &sender) {
-                Ok(SseEventAction::Stop)
-            } else {
-                Ok(SseEventAction::Continue)
-            }
-        })
-        .await;
+        return stream_sse_events(response, on_event).await;
     }
 
-    let cfg = config.clone();
-    let mut decompressor = SseDecompressor::new(&cfg);
+    let mut decompressor = SseDecompressor::new(config);
 
     // Verify compression is active and track buffer state
     if !decompressor.is_enabled() {
-        return stream_sse_events(response, move |data| {
-            if sse_event_to_sender(data, &sender) {
-                Ok(SseEventAction::Stop)
-            } else {
-                Ok(SseEventAction::Continue)
-            }
-        })
-        .await;
+        return stream_sse_events(response, on_event).await;
     }
     debug!(
         "SSE compression active, buffer threshold={}, initial_size={}",
@@ -702,7 +712,7 @@ pub async fn stream_sse_to_sender(
         match parser.push_chunk_bytes(&decompressed) {
             Ok(events) => {
                 for event in events {
-                    if sse_event_to_sender(&event, &sender) {
+                    if matches!(on_event(&event)?, SseEventAction::Stop) {
                         return Ok(());
                     }
                 }
@@ -721,14 +731,14 @@ pub async fn stream_sse_to_sender(
         let mut tail_parser = SseEventParser::default();
         if let Ok(events) = tail_parser.push_chunk_bytes(&tail) {
             for event in events {
-                if sse_event_to_sender(&event, &sender) {
+                if matches!(on_event(&event)?, SseEventAction::Stop) {
                     break;
                 }
             }
         }
         // Finish any remaining partial data in the tail parser
         for event in tail_parser.finish() {
-            if sse_event_to_sender(&event, &sender) {
+            if matches!(on_event(&event)?, SseEventAction::Stop) {
                 break;
             }
         }
@@ -737,7 +747,7 @@ pub async fn stream_sse_to_sender(
     // Process any remaining events accumulated by the main parser
     // that weren't terminated by a newline before stream end.
     for event in parser.finish() {
-        if sse_event_to_sender(&event, &sender) {
+        if matches!(on_event(&event)?, SseEventAction::Stop) {
             break;
         }
     }

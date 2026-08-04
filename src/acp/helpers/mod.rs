@@ -42,9 +42,6 @@ pub mod autonomy_loop;
 pub mod autonomy_loop_adapter;
 #[path = "autonomy/autonomy_metrics.rs"]
 pub mod autonomy_metrics;
-#[path = "autonomy/execution_intelligence.rs"]
-#[cfg(any(feature = "execution-intelligence", test))]
-pub mod execution_intelligence;
 
 // ── Governance & policy ────────────────────────────────────────────────────
 #[path = "governance/policy.rs"]

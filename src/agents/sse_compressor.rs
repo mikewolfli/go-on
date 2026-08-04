@@ -1,13 +1,13 @@
-//! SSE streaming decompression using gzip/deflate, plus compression utilities.
+//! SSE streaming decompression for gzip/deflate-encoded event streams.
 //!
 //! Provides optional gzip decompression for SSE event streams to handle
-//! gzip-compressed streaming responses from LLM APIs, and gzip compression
-//! for outgoing SSE payloads.
+//! gzip-compressed streaming responses from LLM APIs.
 //!
-//! Uses `flate2` for gzip compression/decompression with a configurable
-//! buffer threshold for decompression. When the internal buffer exceeds the
-//! threshold, the accumulated data is decompressed and emitted. Any remaining
-//! data can be flushed at stream end.
+//! Uses `flate2` for gzip decompression with a configurable buffer threshold.
+//! When the internal buffer exceeds the threshold, the accumulated data is
+//! decompressed and emitted. Any remaining data can be flushed at stream end.
+//! (Despite the file name, this module is a **decompressor** — outgoing SSE
+//! payloads are not compressed here.)
 
 use flate2::read::MultiGzDecoder;
 use std::io::Read;
@@ -15,9 +15,10 @@ use std::io::Read;
 /// Configuration for SSE streaming behavior
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
-    /// Enable gzip compression on the SSE stream
+    /// Enable gzip **decompression** of the incoming SSE stream
+    /// (set when the provider may send gzip-encoded chunks).
     pub enable_compression: bool,
-    /// Minimum number of uncompressed bytes to buffer before compressing
+    /// Minimum number of uncompressed bytes to buffer before decompressing
     pub compression_threshold: usize,
 }
 

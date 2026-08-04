@@ -633,6 +633,19 @@ pub struct CacheConfig {
     /// When set, read queries use this pool instead of the primary connection.
     #[serde(default)]
     pub read_replica_connection_string: Option<String>,
+    /// Whether the durable response cache is wired as the L3 layer of the
+    /// multi-level token cache (cross-restart / cross-instance reuse).
+    /// Defaults to **true** so any deployment with `cache.enabled = true`
+    /// automatically gets persistent cache hits; set to `false` to keep the
+    /// SQLite/Postgres cache as a healthcheck-only store.
+    #[serde(default = "default_cache_persist_enabled")]
+    pub persist_enabled: bool,
+}
+
+/// Default for `CacheConfig::persist_enabled` — true so existing
+/// `[cache] enabled = true` deployments get the L3 layer without config churn.
+fn default_cache_persist_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]

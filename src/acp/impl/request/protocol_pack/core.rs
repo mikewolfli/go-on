@@ -109,7 +109,15 @@ pub async fn mcp_initialize_payload(_server: &AcpServer) -> Result<Value> {
             "sampling": {},
             "experimental": {
                 "agents": {}
-            }
+            },
+            // No change-notification event source exists for resources, tools,
+            // or prompts (lists are static), so `listChanged` is NOT
+            // advertised — a server must not declare listChanged when it never
+            // sends the corresponding notifications. The base capability keys
+            // are still declared so clients know the endpoints exist.
+            "resources": {},
+            "tools": {},
+            "prompts": {},
         }),
         ServerInfo {
             name: "go-on".to_string(),
@@ -187,31 +195,7 @@ pub async fn phase_payload(
             Value::Object(m)
         });
 
-    let inflight = server
-        .resilience
-        .inflight_limiter
-        .read()
-        .map(|guard| {
-            let (global, phase) = guard.snapshot();
-            let mut m = serde_json::Map::new();
-            m.insert("global".to_string(), Value::Number(global.into()));
-            m.insert(
-                "phase".to_string(),
-                serde_json::to_value(phase).unwrap_or_default(),
-            );
-            Value::Object(m)
-        })
-        .unwrap_or_else(|_| {
-            let mut m = serde_json::Map::new();
-            m.insert("global".to_string(), Value::Number(0.into()));
-            m.insert("phase".to_string(), Value::Object(serde_json::Map::new()));
-            Value::Object(m)
-        });
-
-    let response = PhaseResponse {
-        rate_limiter,
-        inflight,
-    };
+    let response = PhaseResponse { rate_limiter };
     Ok(serde_json::to_value(&response)?)
 }
 

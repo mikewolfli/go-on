@@ -9,6 +9,7 @@ pub mod provenance_helpers;
 pub mod role_types;
 pub mod secret_override;
 pub mod stdio;
+pub mod tcp_accept_loop;
 pub mod timestamps;
 pub mod token_bucket;
 pub mod token_estimator;

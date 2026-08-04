@@ -118,7 +118,6 @@ fn now_ts() -> i64 {
 
 // ── Re-exports ────────────────────────────────────────────────────────────
 
-pub use crate::orchestration::core_dag::TaskGraphCheckpointArtifact;
 pub use action_check::{
     run_action_check, ActionCheckItem, ActionCheckKind, ActionCheckReport, FinalSummaryArtifact,
 };
@@ -133,13 +132,12 @@ pub use learning::{
 };
 
 pub use task_plan::{
-    build_task_plan, build_workflow_generated_artifact, load_task_graph_checkpoint,
-    persist_clarification_session_artifact, persist_consultation_artifact,
-    persist_execution_decision, persist_governance_policy, persist_pipeline_unified_metrics,
-    persist_primary_secondary_failover_artifact, persist_primary_secondary_policy_artifact,
-    persist_requirement_contract, persist_task_execution_summary, persist_task_graph_checkpoint,
-    persist_task_plan, persist_workflow_generated, persist_workflow_optimization_policy,
-    persist_workflow_research, persist_workflow_work_grade,
+    build_task_plan, build_workflow_generated_artifact, persist_clarification_session_artifact,
+    persist_consultation_artifact, persist_execution_decision, persist_governance_policy,
+    persist_pipeline_unified_metrics, persist_primary_secondary_failover_artifact,
+    persist_primary_secondary_policy_artifact, persist_requirement_contract,
+    persist_task_execution_summary, persist_task_plan, persist_workflow_generated,
+    persist_workflow_optimization_policy, persist_workflow_research, persist_workflow_work_grade,
     recommend_agent_order_from_execution_history, recommend_failure_strategy_from_learning,
     recommend_parallelism_from_learning, recommend_predicted_success_rate_from_learning,
     recommend_reattach_modules_from_policy_history, recommend_work_grade_from_learning,

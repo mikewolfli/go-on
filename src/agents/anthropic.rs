@@ -270,10 +270,33 @@ impl AnthropicAgent {
         response: reqwest::Response,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
+        stream_sse_events(response, Self::sse_event_handler(sender)).await
+    }
+
+    /// Stream SSE events with gzip decompression, using the same native
+    /// Anthropic event parsing as [`Self::stream_sse`]. The shared
+    /// OpenAI-shaped token extractor cannot parse Anthropic's
+    /// `content_block_delta` / `input_json_delta` events, so the compressed
+    /// path must reuse this handler instead of `stream_sse_to_sender`.
+    async fn stream_sse_compressed(
+        &self,
+        response: reqwest::Response,
+        sender: crate::agent::StreamingSender,
+        config: &crate::agents::StreamingConfig,
+    ) -> anyhow::Result<()> {
+        crate::agents::stream_sse_with_handler(response, config, Self::sse_event_handler(sender))
+            .await
+    }
+
+    /// Build the Anthropic SSE event handler: accumulates native `tool_use`
+    /// input deltas and forwards `text_delta` chunks to the sender. Shared by
+    /// the plain and decompressed streaming paths.
+    fn sse_event_handler(
+        sender: crate::agent::StreamingSender,
+    ) -> impl FnMut(&str) -> anyhow::Result<SseEventAction> {
         let mut current_tool_name: Option<String> = None;
         let mut accumulated_args: String = String::new();
-
-        stream_sse_events(response, move |data| {
+        move |data: &str| {
             let value = match serde_json::from_str::<Value>(data) {
                 Ok(v) => v,
                 Err(e) => {
@@ -377,8 +400,7 @@ impl AnthropicAgent {
             }
 
             Ok(SseEventAction::Continue)
-        })
-        .await
+        }
     }
 }
 
@@ -424,9 +446,9 @@ impl Agent for AnthropicAgent {
     /// Build a single chat attempt (no retry).
     ///
     /// SSE compression is applied when `options["sse_compress"]` is set.
-    /// The non-compressed path uses the Anthropic-specific SSE parser (which
-    /// accumulates native tool_use input deltas); the compressed path uses the
-    /// shared `stream_sse_to_sender` decompressing stream helper.
+    /// Both paths use the Anthropic-specific SSE parser (which accumulates
+    /// native tool_use input deltas); the compressed path additionally
+    /// gzip-decompresses the stream first.
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -453,10 +475,12 @@ impl Agent for AnthropicAgent {
 
         // SSE compression is applied when `options["sse_compress"]` is set; the
         // non-compressed path uses the Anthropic-specific SSE parser (which
-        // accumulates native tool_use input deltas).
+        // accumulates native tool_use input deltas). The compressed path
+        // decompresses the stream and feeds it through the same native parser
+        // (the shared OpenAI-shaped extractor cannot parse Anthropic events).
         let cfg = crate::agents::streaming_config(options, false);
         if cfg.enable_compression {
-            crate::agents::stream_sse_to_sender(response, sender, &cfg).await
+            self.stream_sse_compressed(response, sender, &cfg).await
         } else {
             self.stream_sse(response, sender).await
         }
@@ -649,6 +673,50 @@ mod tests {
             parse_anthropic_event(r#"{"type":"message_stop"}"#).expect("message_stop should parse");
         assert!(matches!(stop_action, SseEventAction::Stop));
         assert!(stop_token.is_none());
+    }
+
+    /// The compressed streaming path must produce the same tokens as the plain
+    /// path. Regression test for the bug where `sse_compress: true` routed
+    /// Anthropic events through the shared OpenAI-shaped extractor, which
+    /// cannot parse `content_block_delta` and produced empty output.
+    #[tokio::test]
+    async fn sse_event_handler_extracts_text_and_tool_use_from_native_events() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let sender = crate::agent::StreamingSender::from(tx);
+        let mut handler = AnthropicAgent::sse_event_handler(sender);
+
+        // text delta (the event shape the shared extractor would miss)
+        let action = handler(
+            r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}"#,
+        )
+        .expect("handler should accept text delta");
+        assert!(matches!(action, SseEventAction::Continue));
+
+        // tool_use start + input_json_delta accumulation + stop
+        handler(r#"{"type":"content_block_start","content_block":{"type":"tool_use","id":"t1","name":"read_file","input":{}}}"#)
+            .expect("tool_use start should parse");
+        handler(r#"{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a\"}"}}"#)
+            .expect("input_json_delta should parse");
+        let action = handler(r#"{"type":"content_block_stop"}"#).expect("stop should parse");
+        assert!(matches!(action, SseEventAction::Continue));
+
+        let action = handler(r#"{"type":"message_stop"}"#).expect("message_stop should parse");
+        assert!(matches!(action, SseEventAction::Stop));
+
+        let mut tokens = Vec::new();
+        while let Ok(tok) = rx.try_recv() {
+            tokens.push(tok);
+        }
+        assert!(
+            tokens.iter().any(|t| t == "Hello"),
+            "text delta must reach the sender, got: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.contains("read_file") && t.contains("path")),
+            "accumulated tool_use input must reach the sender, got: {tokens:?}"
+        );
     }
 
     #[test]

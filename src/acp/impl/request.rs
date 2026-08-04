@@ -501,10 +501,17 @@ pub async fn handle_request(
     // still guaranteed by the auditor's mutex.
     if let Some(ref hca) = server.governance_deps.hash_chain_auditor {
         let hca = hca.clone();
+        // Serialize the params ONCE instead of deep-cloning the `Value` and
+        // letting `json!` re-serialize it — the hash chain treats the payload
+        // as opaque integrity content (`payload_hash` covers the full payload),
+        // so the compact JSON-string form preserves verifiability while
+        // halving the hot-path work on every request.
+        let params_json =
+            serde_json::to_string(&request.params).unwrap_or_else(|_| "null".to_string());
         let payload = serde_json::json!({
             "id": request.id.as_ref().map(|v| format!("{:?}", v)).unwrap_or_default(),
             "method": method.as_ref(),
-            "params": request.params.clone(),
+            "params": params_json,
             "timestamp_ms": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

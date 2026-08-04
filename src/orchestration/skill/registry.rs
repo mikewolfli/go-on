@@ -802,101 +802,13 @@ impl SkillRegistry {
             });
         }
 
+        // Shared scan (I/O + parse) used by both cold-start discovery and the
+        // background refresh task — the former inline loop was a verbatim copy.
+        let (parsed_files, mut errors, mut skipped) =
+            scan_skills_directory(&dir, &self.skill_file_mtimes);
+
         let mut registered = 0usize;
-        let mut skipped = 0usize;
-        let mut errors: Vec<String> = Vec::new();
-
-        let read_dir = match fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(e) => {
-                anyhow::bail!(
-                    "failed to read agent skills directory '{}': {}",
-                    dir.display(),
-                    e
-                );
-            }
-        };
-
-        // TODO(perf): this loop reads & parses every SKILL.md file sequentially.
-        // For directories with many entries (~50+), parallelizing with
-        // `std::thread::scope` or `tokio::task::spawn_blocking` would improve
-        // cold-start discovery time. Impact is minimal for typical usage so
-        // this is a low-priority optimization.
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let skill_md_path = path.join("SKILL.md");
-            let agent_md_path = path.join("agent.md");
-
-            let md_path = if skill_md_path.exists() {
-                skill_md_path
-            } else if agent_md_path.exists() {
-                agent_md_path
-            } else {
-                skipped += 1;
-                continue;
-            };
-
-            // ── Hot-reload: skip if the file hasn't been modified ──
-            let current_mtime = match fs::metadata(&md_path).and_then(|meta| meta.modified()) {
-                Ok(mtime) => mtime,
-                Err(e) => {
-                    warn!(
-                        "Failed to read metadata for {}: {} — will re-parse",
-                        md_path.display(),
-                        e
-                    );
-                    // Proceed with parsing anyway; don't skip on metadata error
-                    // Use UNIX_EPOCH so the file is always re-processed.
-                    SystemTime::UNIX_EPOCH
-                }
-            };
-
-            // If we already know this exact path and its mtime hasn't changed,
-            // skip the expensive re-parse and re-registration entirely.
-            if let Some(prev_mtime) = self.skill_file_mtimes.get(&md_path) {
-                if *prev_mtime == current_mtime {
-                    skipped += 1;
-                    continue;
-                }
-            }
-
-            let content = match fs::read(&md_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!("Failed to read {}: {}", md_path.display(), e);
-                    errors.push(format!("{}: read error: {}", md_path.display(), e));
-                    skipped += 1;
-                    continue;
-                }
-            };
-
-            let manifest = match parse_skill_md(&content) {
-                Ok(m) => m,
-                Err(e) => {
-                    let err_msg = format!(
-                        "{}: invalid SKILL.md frontmatter — {}. \
-                         Ensure the file starts with '---' followed by valid YAML \
-                         with 'name:' and 'description:' fields.",
-                        md_path.display(),
-                        e
-                    );
-                    warn!("{}", err_msg);
-                    errors.push(err_msg);
-                    skipped += 1;
-                    continue;
-                }
-            };
-
-            let pf = ParsedSkillFile {
-                md_path,
-                current_mtime,
-                manifest,
-            };
-
+        for pf in parsed_files {
             let skill_name = pf.manifest.name.clone();
             match self.register_parsed_skill(pf) {
                 Ok(()) => {
@@ -1076,76 +988,110 @@ fn scan_skills_directory(
         }
     };
 
-    for entry in read_dir.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let skill_md_path = path.join("SKILL.md");
-        let agent_md_path = path.join("agent.md");
-
-        let md_path = if skill_md_path.exists() {
-            skill_md_path
-        } else if agent_md_path.exists() {
-            agent_md_path
-        } else {
-            skipped += 1;
-            continue;
-        };
-
-        let current_mtime = match fs::metadata(&md_path).and_then(|meta| meta.modified()) {
-            Ok(mtime) => mtime,
-            Err(e) => {
-                warn!(
-                    "Failed to read metadata for {}: {} — will re-parse",
-                    md_path.display(),
-                    e
-                );
-                SystemTime::UNIX_EPOCH
-            }
-        };
-
-        if let Some(prev_mtime) = known_mtimes.get(&md_path) {
-            if *prev_mtime == current_mtime {
-                skipped += 1;
-                continue;
-            }
-        }
-
-        let content = match fs::read(&md_path) {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Failed to read {}: {}", md_path.display(), e);
-                errors.push(format!("{}: read error: {}", md_path.display(), e));
-                skipped += 1;
-                continue;
-            }
-        };
-
-        let manifest = match parse_skill_md(&content) {
-            Ok(m) => m,
-            Err(e) => {
-                let err_msg = format!(
-                    "{}: invalid SKILL.md frontmatter — {}. \
-                     Ensure the file starts with '---' followed by valid YAML \
-                     with 'name:' and 'description:' fields.",
-                    md_path.display(),
-                    e
-                );
-                warn!("{}", err_msg);
-                errors.push(err_msg);
-                skipped += 1;
-                continue;
-            }
-        };
-
-        parsed.push(ParsedSkillFile {
-            md_path,
-            current_mtime,
-            manifest,
-        });
+    let entries: Vec<PathBuf> = read_dir.flatten().map(|e| e.path()).collect();
+    if entries.is_empty() {
+        return (parsed, errors, skipped);
     }
+
+    // Parallel phase: file I/O + YAML parsing dominate discovery time for
+    // large directories. Use a bounded worker pool (at most 8, never more
+    // threads than entries) instead of one thread per entry to avoid spawn
+    // overhead on the typical small directory. Registration stays serial and
+    // happens in the caller (`register_parsed_skill` needs `&mut self`).
+    let worker_count = entries.len().min(8);
+    let chunk_size = entries.len().div_ceil(worker_count);
+
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for chunk in entries.chunks(chunk_size) {
+            handles.push(scope.spawn(move || {
+                let mut parsed_local: Vec<ParsedSkillFile> = Vec::new();
+                let mut errors_local: Vec<String> = Vec::new();
+                let mut skipped_local = 0usize;
+
+                for path in chunk {
+                    if !path.is_dir() {
+                        continue;
+                    }
+
+                    let skill_md_path = path.join("SKILL.md");
+                    let agent_md_path = path.join("agent.md");
+
+                    let md_path = if skill_md_path.exists() {
+                        skill_md_path
+                    } else if agent_md_path.exists() {
+                        agent_md_path
+                    } else {
+                        skipped_local += 1;
+                        continue;
+                    };
+
+                    let current_mtime =
+                        match fs::metadata(&md_path).and_then(|meta| meta.modified()) {
+                            Ok(mtime) => mtime,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to read metadata for {}: {} — will re-parse",
+                                    md_path.display(),
+                                    e
+                                );
+                                SystemTime::UNIX_EPOCH
+                            }
+                        };
+
+                    if let Some(prev_mtime) = known_mtimes.get(&md_path) {
+                        if *prev_mtime == current_mtime {
+                            skipped_local += 1;
+                            continue;
+                        }
+                    }
+
+                    let content = match fs::read(&md_path) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!("Failed to read {}: {}", md_path.display(), e);
+                            errors_local.push(format!("{}: read error: {}", md_path.display(), e));
+                            skipped_local += 1;
+                            continue;
+                        }
+                    };
+
+                    let manifest = match parse_skill_md(&content) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            let err_msg = format!(
+                                "{}: invalid SKILL.md frontmatter — {}. \
+                                 Ensure the file starts with '---' followed by valid YAML \
+                                 with 'name:' and 'description:' fields.",
+                                md_path.display(),
+                                e
+                            );
+                            warn!("{}", err_msg);
+                            errors_local.push(err_msg);
+                            skipped_local += 1;
+                            continue;
+                        }
+                    };
+
+                    parsed_local.push(ParsedSkillFile {
+                        md_path,
+                        current_mtime,
+                        manifest,
+                    });
+                }
+
+                (parsed_local, errors_local, skipped_local)
+            }));
+        }
+
+        for handle in handles {
+            let (parsed_local, errors_local, skipped_local) =
+                handle.join().expect("skill scan worker panicked");
+            parsed.extend(parsed_local);
+            errors.extend(errors_local);
+            skipped += skipped_local;
+        }
+    });
 
     (parsed, errors, skipped)
 }

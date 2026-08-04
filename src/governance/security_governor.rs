@@ -25,37 +25,13 @@
 const MAX_AUDIT_ENTRIES: usize = 10_000;
 
 use crate::i18n::{t, tf};
+use crate::security::severity::DetectionSeverity;
 use anyhow::Result;
 use indexmap::IndexMap;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-// ---------------------------------------------------------------------------
-// Policy severity levels
-// ---------------------------------------------------------------------------
-
-/// Severity of a security policy.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub enum PolicySeverity {
-    Low,
-    #[default]
-    Medium,
-    High,
-    Critical,
-}
-
-impl std::fmt::Display for PolicySeverity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Low => write!(f, "low"),
-            Self::Medium => write!(f, "medium"),
-            Self::High => write!(f, "high"),
-            Self::Critical => write!(f, "critical"),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Policy actions
@@ -201,8 +177,8 @@ pub struct SecurityPolicy {
     pub name: String,
     /// Description of what this policy enforces.
     pub description: String,
-    /// Severity level.
-    pub severity: PolicySeverity,
+    /// Severity level (shared [`DetectionSeverity`](crate::security::severity::DetectionSeverity)).
+    pub severity: DetectionSeverity,
     /// Action to take when this policy matches.
     pub action: PolicyAction,
     /// Conditions that trigger this policy.
@@ -528,7 +504,7 @@ impl SecurityGovernor {
             id: "deny-unknown-resource".into(),
             name: "Deny Unknown Resource".into(),
             description: "Denies access when no specific policy matches".into(),
-            severity: PolicySeverity::High,
+            severity: DetectionSeverity::High,
             action: PolicyAction::Deny,
             conditions: vec![],
             composition: PolicyComposition::And,
@@ -542,7 +518,7 @@ impl SecurityGovernor {
             description:
                 "Blocks access to resources containing secret, password, credential, or token"
                     .into(),
-            severity: PolicySeverity::High,
+            severity: DetectionSeverity::High,
             action: PolicyAction::Deny,
             conditions: vec![
                 PolicyCondition {
@@ -575,7 +551,7 @@ impl SecurityGovernor {
             id: "require-review-admin-actions".into(),
             name: "Require Review for Admin Actions".into(),
             description: "Requires review for actions containing admin or delete".into(),
-            severity: PolicySeverity::Medium,
+            severity: DetectionSeverity::Medium,
             action: PolicyAction::RequireReview,
             conditions: vec![
                 PolicyCondition {
@@ -898,7 +874,7 @@ mod tests {
             id: id.into(),
             name: format!("Allow {}", id),
             description: format!("Allow policy for {}={}", field, value),
-            severity: PolicySeverity::Low,
+            severity: DetectionSeverity::Low,
             action: PolicyAction::Allow,
             conditions: vec![PolicyCondition {
                 field: field.into(),
@@ -915,7 +891,7 @@ mod tests {
             id: id.into(),
             name: format!("Deny {}", id),
             description: format!("Deny policy for {}={}", field, value),
-            severity: PolicySeverity::High,
+            severity: DetectionSeverity::High,
             action: PolicyAction::Deny,
             conditions: vec![PolicyCondition {
                 field: field.into(),
@@ -932,7 +908,7 @@ mod tests {
             id: id.into(),
             name: format!("Review {}", id),
             description: format!("Review required for {}={}", field, value),
-            severity: PolicySeverity::Medium,
+            severity: DetectionSeverity::Medium,
             action: PolicyAction::RequireReview,
             conditions: vec![PolicyCondition {
                 field: field.into(),
@@ -949,7 +925,7 @@ mod tests {
             id: id.into(),
             name: format!("Escalate {}", id),
             description: format!("Escalate for {}={}", field, value),
-            severity: PolicySeverity::Critical,
+            severity: DetectionSeverity::Critical,
             action: PolicyAction::Escalate,
             conditions: vec![PolicyCondition {
                 field: field.into(),
@@ -1214,7 +1190,7 @@ mod tests {
             id: "contains-test".into(),
             name: "contains".into(),
             description: "test".into(),
-            severity: PolicySeverity::Low,
+            severity: DetectionSeverity::Low,
             action: PolicyAction::Deny,
             conditions: vec![PolicyCondition {
                 field: "resource".into(),
@@ -1253,7 +1229,7 @@ mod tests {
             id: "or-test".into(),
             name: "OR".into(),
             description: "matches if actor is admin OR resource is /danger".into(),
-            severity: PolicySeverity::High,
+            severity: DetectionSeverity::High,
             action: PolicyAction::RequireReview,
             conditions: vec![
                 PolicyCondition {

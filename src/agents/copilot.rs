@@ -8,7 +8,7 @@
 //!
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -210,7 +210,9 @@ impl CopilotAgent {
             }
         };
         let cached = guard.as_ref()?;
-        if Self::now_secs().saturating_sub(cached.fetched_at) <= COPILOT_MODELS_CACHE_TTL_SECS {
+        if crate::agents::unix_now_secs().saturating_sub(cached.fetched_at)
+            <= COPILOT_MODELS_CACHE_TTL_SECS
+        {
             return Some(cached.models.clone());
         }
         None
@@ -237,7 +239,7 @@ impl CopilotAgent {
         };
         *guard = Some(CachedModels {
             models,
-            fetched_at: Self::now_secs(),
+            fetched_at: crate::agents::unix_now_secs(),
         });
     }
 
@@ -299,13 +301,6 @@ impl CopilotAgent {
         }
     }
 
-    fn now_secs() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }
-
     /// Return a valid Copilot API token, refreshing if needed.
     async fn copilot_token(&self) -> Result<String> {
         // Fast path: check the shared cache without any async work (60s margin).
@@ -348,7 +343,7 @@ impl CopilotAgent {
 
         let expires_at = body["expires_at"].as_u64().unwrap_or_else(|| {
             // Default: treat token as valid for 25 minutes if field is absent.
-            Self::now_secs() + 1500
+            crate::agents::unix_now_secs() + 1500
         });
 
         self.cached.store(token.clone(), expires_at);
