@@ -454,7 +454,8 @@ pub(crate) async fn observe_phase(
 
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(10),
-                                reqwest::Client::new()
+                                crate::shared::http_client::http_client()
+                                    .expect("shared HTTP client must build")
                                     .post(&api_url)
                                     .header("Content-Type", "application/json")
                                     .json(&api_body)
@@ -1990,20 +1991,6 @@ async fn run_mode_runtime_and_multi_agent(
                         exec_out.selected_agent = name.to_string();
                     }
                 }
-            }
-            if let Some(ref cb) = server.governance_deps.capability_bus {
-                let _ = cb.continuous_learning.lock().map(|cl| {
-                    cl.schedule_review(&crate::intelligence::continuous_learning::ConsolidatedMemory {
-                        id: format!("chat-{}-{}", phase_name, trace.request_id),
-                        pattern_key: format!("chat:{}:{}", params.mode,
-                            extract_task_description(&params.messages).chars().take(50).collect::<String>()),
-                        data: json!({"task": extract_task_description(&params.messages), "agent": &exec_out.selected_agent,
-                            "response_length": exec_out.response_text.len(), "mode": &params.mode}).to_string(),
-                        importance: 0.5,
-                        consolidated_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
-                        last_accessed_ms: 0, access_count: 1,
-                    });
-                });
             }
         }
     }

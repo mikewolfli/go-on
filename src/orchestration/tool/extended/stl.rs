@@ -5,21 +5,21 @@
 //! Parsing is done natively without external dependencies.
 //! Only compiled when `feature = "cad-stl"` is enabled.
 
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 use crate::governance::pua::tool_execution_report;
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 use crate::orchestration::tool::{
     sanitize_path, sanitize_path_for_write, Tool, ToolInput, ToolOutput,
 };
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 use std::fs;
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 use tracing::info;
 
 /// A single 3D vertex.
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 #[derive(Debug, Clone, Copy, Default)]
 struct Vertex {
     x: f64,
@@ -28,7 +28,7 @@ struct Vertex {
 }
 
 /// A single triangular facet with its normal.
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 #[derive(Debug, Clone)]
 struct Facet {
     #[allow(dead_code, reason = "F-GAP reserved: face normal data")]
@@ -38,7 +38,7 @@ struct Facet {
     v2: Vertex,
 }
 
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 impl Vertex {
     fn from_f32_le(bytes: &[u8]) -> Self {
         let x = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64;
@@ -60,7 +60,7 @@ impl Vertex {
     }
 }
 
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 impl std::ops::Sub for Vertex {
     type Output = Vertex;
     fn sub(self, other: Vertex) -> Vertex {
@@ -73,7 +73,7 @@ impl std::ops::Sub for Vertex {
 }
 
 /// Parse an ASCII STL file from its text content.
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 fn parse_ascii_stl(content: &str) -> Result<(Vec<Facet>, Option<String>)> {
     let mut facets = Vec::new();
     let mut solid_name: Option<String> = None;
@@ -211,7 +211,7 @@ fn parse_ascii_stl(content: &str) -> Result<(Vec<Facet>, Option<String>)> {
 }
 
 /// Parse a binary STL file from its raw bytes.
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 fn parse_binary_stl(bytes: &[u8]) -> Result<(Vec<Facet>, Option<String>)> {
     if bytes.len() < 84 {
         return Err(anyhow::anyhow!(
@@ -277,7 +277,7 @@ fn parse_binary_stl(bytes: &[u8]) -> Result<(Vec<Facet>, Option<String>)> {
 
 /// Determine whether STL content is binary (starts with non-ASCII or has
 /// an 80-byte header followed by a reasonable triangle count) or ASCII.
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 fn is_binary_stl(bytes: &[u8]) -> bool {
     if bytes.len() < 84 {
         // Too short to be binary; try ASCII
@@ -295,7 +295,7 @@ fn is_binary_stl(bytes: &[u8]) -> bool {
 }
 
 /// Compute axis-aligned bounding box for a set of facets.
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 fn bounding_box(facets: &[Facet]) -> (Vertex, Vertex) {
     let mut min = Vertex {
         x: f64::INFINITY,
@@ -337,7 +337,7 @@ fn bounding_box(facets: &[Facet]) -> (Vertex, Vertex) {
 /// Estimate the volume of a closed STL mesh using the divergence theorem.
 /// Volume = sum over triangles of (v0 · (v1 × v2)) / 6
 /// Returns the absolute value (unsigned).
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 fn estimate_volume(facets: &[Facet]) -> f64 {
     let mut volume = 0.0_f64;
     for facet in facets {
@@ -349,7 +349,7 @@ fn estimate_volume(facets: &[Facet]) -> f64 {
 }
 
 /// Extract a count of unique vertices (deduplicated by floating-point position).
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 fn unique_vertex_count(facets: &[Facet]) -> usize {
     use std::collections::HashSet;
     // Use a tolerance for deduplication by rounding to 6 decimal places
@@ -367,10 +367,10 @@ fn unique_vertex_count(facets: &[Facet]) -> usize {
     seen.len()
 }
 
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 pub struct StlReadTool;
 
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 impl Tool for StlReadTool {
     fn name(&self) -> &'static str {
         "stl_read"
@@ -445,10 +445,10 @@ impl Tool for StlReadTool {
 ///
 /// Accepts `"vertices"`: array of [x, y, z] and `"faces"`: array of [i, j, k]
 /// (0-indexed vertex indices). Writes the ASCII STL to the specified `"path"`.
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 pub struct StlGenerateTool;
 
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 impl Tool for StlGenerateTool {
     fn name(&self) -> &'static str {
         "stl_generate"
@@ -617,7 +617,7 @@ impl Tool for StlGenerateTool {
 }
 
 #[cfg(test)]
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 mod tests {
     use super::*;
 

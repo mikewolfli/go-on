@@ -213,11 +213,15 @@ fn ean13_modules(digits: &[u8]) -> Vec<u8> {
 /// Black bars are at even indices (0, 2, 4...), white spaces at odd indices.
 fn render_svg_bars(modules: &[u8], height: u32) -> String {
     let bar_width = 2u32; // pixels per module
-    let total_width: u32 = modules
-        .iter()
-        .map(|&m| m as u32 * bar_width)
-        .max()
-        .unwrap_or(200);
+                          // Total width is the SUM of every module's width (black bars and white
+                          // spaces alternate along x). Using max() clipped the barcode to the widest
+                          // single module and overflowed the viewBox. The empty-module fallback
+                          // keeps a sane default (EAN-13 always has 59 modules, so this is defensive).
+    let total_width: u32 = if modules.is_empty() {
+        200
+    } else {
+        modules.iter().map(|&m| m as u32 * bar_width).sum()
+    };
 
     let mut svg = String::with_capacity(512 + modules.len() * 20);
     svg.push_str(&format!(
@@ -291,5 +295,27 @@ mod tests {
             "3 modules × 2px = 6px total width"
         );
         assert!(svg.contains("height=\"50\""));
+    }
+
+    #[test]
+    fn test_render_svg_width_is_module_sum_not_max() {
+        // Regression: total width must be the sum of all module widths so the
+        // barcode fits the viewBox. A single wide module (e.g. [3,1,1]) must
+        // produce width 10 (6+2+2), not 6 (the widest module).
+        let svg = render_svg_bars(&[3, 1, 1], 40);
+        assert!(
+            svg.contains("width=\"10\""),
+            "3+1+1 modules × 2px = 10px total width, got: {}",
+            svg.lines().next().unwrap_or("")
+        );
+    }
+
+    #[test]
+    fn test_render_svg_empty_modules_defaults_width() {
+        let svg = render_svg_bars(&[], 40);
+        assert!(
+            svg.contains("width=\"200\""),
+            "empty modules use default width"
+        );
     }
 }

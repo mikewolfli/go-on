@@ -6,22 +6,22 @@
 //! external dependencies.
 //! Only compiled when `feature = "cad-obj"` is enabled.
 
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use crate::governance::pua::tool_execution_report;
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use crate::orchestration::tool::{sanitize_path, Tool, ToolInput, ToolOutput};
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use anyhow::{Context, Result};
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use std::collections::BTreeSet;
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use std::fs;
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 use tracing::info;
 
 /// Parse a single OBJ vertex/line from a whitespace-split token list.
 /// Returns the parsed (x, y, z) if available.
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 fn parse_triple(tokens: &[&str], start: usize) -> Option<(f64, f64, f64)> {
     let x = tokens.get(start)?.parse::<f64>().ok()?;
     let y = tokens.get(start + 1)?.parse::<f64>().ok()?;
@@ -30,11 +30,11 @@ fn parse_triple(tokens: &[&str], start: usize) -> Option<(f64, f64, f64)> {
 }
 
 /// Axis-aligned bounding box: (min, max) as ((x, y, z), (x, y, z)).
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 type BoundingBox = ((f64, f64, f64), (f64, f64, f64));
 
 /// Parsed OBJ data summary.
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 struct ObjSummary {
     vertex_count: usize,
     texcoord_count: usize,
@@ -47,7 +47,7 @@ struct ObjSummary {
 }
 
 /// Parse an OBJ file from its text content and return a summary.
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 fn parse_obj(content: &str) -> ObjSummary {
     let mut vertex_count = 0usize;
     let mut texcoord_count = 0usize;
@@ -147,10 +147,10 @@ fn parse_obj(content: &str) -> ObjSummary {
     }
 }
 
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 pub struct ObjReadTool;
 
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 impl Tool for ObjReadTool {
     fn name(&self) -> &'static str {
         "obj_read"
@@ -211,7 +211,7 @@ impl Tool for ObjReadTool {
 }
 
 #[cfg(test)]
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 mod tests {
     use super::*;
 

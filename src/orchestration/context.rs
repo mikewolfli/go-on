@@ -5,21 +5,27 @@
 //! order-independent and enables isolated execution.
 
 use crate::observability::live_performance::LivePerformanceFeed;
+use std::sync::Arc;
 
 /// Holds the live-performance feed used by the orchestrator for model
 /// selection, cost/latency estimation.
 ///
 /// Create one early in your request lifecycle and pass it to orchestrator
 /// functions such as `select_model_for_task` and `select_model_semantic`.
+///
+/// The feed is shared process-wide via [`global_live_performance`] so that
+/// outcome recording in the chat pipeline and estimation here observe the
+/// same data (a per-context empty feed made the dynamic estimates dead).
 pub struct OrchestrationContext {
-    performance_feed: LivePerformanceFeed,
+    performance_feed: Arc<LivePerformanceFeed>,
 }
 
 impl OrchestrationContext {
-    /// Create a new context with default feed settings.
+    /// Create a new context backed by the process-global live-performance feed.
     pub fn new() -> Self {
         Self {
-            performance_feed: LivePerformanceFeed::default(),
+            performance_feed: crate::observability::live_performance::global_live_performance()
+                .clone(),
         }
     }
 

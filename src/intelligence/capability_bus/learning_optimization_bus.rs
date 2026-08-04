@@ -5,7 +5,7 @@
 //! without intermediate event passing.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 /// A single execution event for learning (migrated from WorkflowLearningBus).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,50 +19,23 @@ pub struct LearningEvent {
     pub timestamp_ms: u64,
 }
 
-/// A failure prevention rule (migrated from OptimizationBus).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreventionRule {
-    pub id: String,
-    pub pattern: String,
-    pub action: String,
-    pub confidence: f64,
-    pub created_ms: u64,
-}
-
-/// An optimization suggestion derived from learned patterns.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OptimizationSuggestion {
-    pub task_type: String,
-    pub recommended_agent: Option<String>,
-    pub expected_duration_ms: Option<u64>,
-    pub expected_token_cost: Option<u64>,
-    pub confidence: f64,
-    pub based_on_samples: usize,
-}
-
 const MAX_EVENTS: usize = 2000;
-const MAX_PREVENTION_RULES: usize = 100;
 
 /// Learning and optimization bus (BLUE70 §2.2.3).
 ///
-/// Design notes:
-/// - `record_and_optimize()` is a single atomic operation that both learns
-///   from an event and triggers optimization analysis.
-/// - Prevention rules are generated when failure patterns are detected
-///   (e.g., >60% failure rate for a task type).
-/// - Optimization suggestions are cached by task type for O(1) lookup.
+/// Keeps a bounded ring of execution events. The former per-event
+/// optimization/prevention analysis (full scans of `events` on every
+/// `record_and_optimize` call) was removed: its outputs — optimization
+/// suggestions and prevention rules — had zero production readers, so every
+/// feedback() was paying 2×O(2000) scans to populate data nothing consumed.
+/// The events ring itself remains: it feeds `event_count()` (profile) and
+/// `events_snapshot()` (sense recency/outcome scoring).
 #[derive(Debug)]
 pub struct LearningOptimizationBus {
     /// Historical execution events (was WorkflowLearningBus).
     events: VecDeque<LearningEvent>,
-    /// Failure prevention rules (was OptimizationBus).
-    prevention_rules: Vec<PreventionRule>,
-    /// Cached optimization suggestions.
-    optimization_cache: HashMap<String, OptimizationSuggestion>,
     /// Maximum number of events to retain.
     max_events: usize,
-    /// Rule ID counter.
-    next_rule_id: u64,
 }
 
 impl LearningOptimizationBus {
@@ -70,10 +43,7 @@ impl LearningOptimizationBus {
     pub fn new() -> Self {
         Self {
             events: VecDeque::with_capacity(MAX_EVENTS.min(256)),
-            prevention_rules: Vec::with_capacity(MAX_PREVENTION_RULES.min(32)),
-            optimization_cache: HashMap::new(),
             max_events: MAX_EVENTS,
-            next_rule_id: 0,
         }
     }
 
@@ -83,37 +53,17 @@ impl LearningOptimizationBus {
         self
     }
 
-    // ── Record & Optimize (unified operation) ─────────────────────
+    // ── Record ────────────────────────────────────────────────────────
 
-    /// Record an execution event and trigger optimization analysis atomically.
-    ///
-    /// This is the primary entry point — it both learns from the event
-    /// and generates any applicable optimization suggestions or prevention rules.
+    /// Record an execution event (bounded FIFO ring).
     pub fn record_and_optimize(&mut self, event: LearningEvent) {
-        // 1. Store the event
         if self.events.len() >= self.max_events {
             self.events.pop_front();
         }
-        self.events.push_back(event.clone());
-
-        // 2. Check for optimization opportunity
-        if let Some(suggestion) = self.analyze_for_optimization(&event) {
-            self.optimization_cache
-                .insert(event.task_type.clone(), suggestion);
-        }
-
-        // 3. Check for failure prevention rule
-        if let Some(rule) = self.analyze_for_prevention(&event) {
-            self.preventions_push(rule);
-        }
+        self.events.push_back(event);
     }
 
-    // ── Query ─────────────────────────────────────────────────────
-
-    /// Get optimization suggestion for a task type.
-    pub fn suggestion_for(&self, task_type: &str) -> Option<&OptimizationSuggestion> {
-        self.optimization_cache.get(task_type)
-    }
+    // ── Query ─────────────────────────────────────────────────────────
 
     /// Get agent success rate.
     pub fn agent_success_rate(&self, agent: &str) -> Option<f64> {
@@ -161,104 +111,14 @@ impl LearningOptimizationBus {
         Some(total / events.len() as u64)
     }
 
-    /// Get all prevention rules.
-    pub fn prevention_rules(&self) -> &[PreventionRule] {
-        &self.prevention_rules
-    }
-
-    /// Get all cached optimization suggestions.
-    pub fn all_suggestions(&self) -> Vec<&OptimizationSuggestion> {
-        self.optimization_cache.values().collect()
-    }
-
     /// Get event count.
     pub fn event_count(&self) -> usize {
         self.events.len()
     }
 
-    /// Get rule count.
-    pub fn rule_count(&self) -> usize {
-        self.prevention_rules.len()
-    }
-
     /// Get all events (for snapshot).
     pub fn events_snapshot(&self) -> Vec<LearningEvent> {
         self.events.iter().cloned().collect()
-    }
-
-    // ── Private helpers ───────────────────────────────────────────
-
-    fn preventions_push(&mut self, rule: PreventionRule) {
-        if self.prevention_rules.len() >= MAX_PREVENTION_RULES {
-            self.prevention_rules.remove(0);
-        }
-        self.prevention_rules.push(rule);
-    }
-
-    fn analyze_for_optimization(&self, event: &LearningEvent) -> Option<OptimizationSuggestion> {
-        // Check if we have enough samples for this task type
-        let samples: Vec<_> = self
-            .events
-            .iter()
-            .filter(|e| e.task_type == event.task_type)
-            .collect();
-
-        if samples.len() < 3 {
-            return None; // Not enough data
-        }
-
-        // Find the best agent for this task type
-        let mut agent_scores: HashMap<&str, (usize, usize, u64)> = HashMap::new();
-        for s in &samples {
-            let entry = agent_scores.entry(&s.agent).or_insert((0, 0, 0));
-            entry.0 += 1; // total
-            if s.success {
-                entry.1 += 1; // successes
-            }
-            entry.2 += s.duration_ms; // total duration
-        }
-
-        let best_agent = agent_scores
-            .iter()
-            .filter(|(_, (total, _, _))| *total >= 2)
-            .max_by(|a, b| {
-                let a_rate = a.1 .1 as f64 / a.1 .0 as f64;
-                let b_rate = b.1 .1 as f64 / b.1 .0 as f64;
-                a_rate
-                    .partial_cmp(&b_rate)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-        best_agent.map(|(agent, (total, successes, total_dur))| {
-            let rate = *successes as f64 / *total as f64;
-            OptimizationSuggestion {
-                task_type: event.task_type.clone(),
-                recommended_agent: Some(agent.to_string()),
-                expected_duration_ms: Some(*total_dur / *total as u64),
-                expected_token_cost: None,
-                confidence: rate,
-                based_on_samples: *total,
-            }
-        })
-    }
-
-    fn analyze_for_prevention(&mut self, event: &LearningEvent) -> Option<PreventionRule> {
-        // If this event is a failure, check if the task type has a high failure rate
-        if !event.success {
-            let rate = self.task_type_success_rate(&event.task_type).unwrap_or(1.0);
-            if rate < 0.4 {
-                // >60% failure rate → create prevention rule
-                self.next_rule_id += 1;
-                return Some(PreventionRule {
-                    id: format!("pr_{}", self.next_rule_id),
-                    pattern: format!("high_failure_rate:{}", event.task_type),
-                    action: format!("consider alternative agent for '{}'", event.task_type),
-                    confidence: 1.0 - rate,
-                    created_ms: event.timestamp_ms,
-                });
-            }
-        }
-        None
     }
 }
 
@@ -291,7 +151,6 @@ mod tests {
     fn test_new_bus() {
         let bus = LearningOptimizationBus::new();
         assert_eq!(bus.event_count(), 0);
-        assert_eq!(bus.rule_count(), 0);
     }
 
     #[test]
@@ -324,45 +183,16 @@ mod tests {
     }
 
     #[test]
-    fn test_optimization_suggestion_after_enough_samples() {
-        let mut bus = LearningOptimizationBus::new();
-        // Add 3 successful samples for agent_a on "research"
-        for _ in 0..3 {
-            bus.record_and_optimize(make_event("research", "agent_a", true, 500));
+    fn test_events_evict_oldest_when_over_limit() {
+        let mut bus = LearningOptimizationBus::with_max_events(LearningOptimizationBus::new(), 100);
+        for i in 0..150 {
+            bus.record_and_optimize(make_event("t", "a", true, i));
         }
-        // Add 1 failed sample for agent_b on "research"
-        bus.record_and_optimize(make_event("research", "agent_b", false, 1000));
-
-        let suggestion = bus.suggestion_for("research");
-        assert!(suggestion.is_some());
-        assert_eq!(
-            suggestion.unwrap().recommended_agent.as_deref(),
-            Some("agent_a")
-        );
-    }
-
-    #[test]
-    fn test_no_suggestion_with_few_samples() {
-        let mut bus = LearningOptimizationBus::new();
-        bus.record_and_optimize(make_event("rare_task", "agent_a", true, 100));
-        bus.record_and_optimize(make_event("rare_task", "agent_a", true, 100));
-
-        let suggestion = bus.suggestion_for("rare_task");
-        assert!(suggestion.is_none()); // Need at least 3 samples
-    }
-
-    #[test]
-    fn test_prevention_rule_on_high_failure() {
-        let mut bus = LearningOptimizationBus::new();
-        // Add 3 failures for "unstable_task"
-        for _ in 0..3 {
-            bus.record_and_optimize(make_event("unstable_task", "agent_x", false, 500));
-        }
-
-        // The failure rate should now be 100% → prevention rule should be created
-        assert!(bus.rule_count() >= 1);
-        let rule = &bus.prevention_rules()[0];
-        assert!(rule.pattern.contains("unstable_task"));
+        assert_eq!(bus.event_count(), 100);
+        // The oldest events were evicted; the newest remain.
+        let snapshot = bus.events_snapshot();
+        assert_eq!(snapshot.len(), 100);
+        assert_eq!(snapshot.first().map(|e| e.duration_ms), Some(50));
     }
 
     #[test]
@@ -373,20 +203,6 @@ mod tests {
 
         let avg = bus.avg_duration_ms("agent_a", "research");
         assert_eq!(avg, Some(1500));
-    }
-
-    #[test]
-    fn test_all_suggestions() {
-        let mut bus = LearningOptimizationBus::new();
-        for _ in 0..3 {
-            bus.record_and_optimize(make_event("task_a", "agent_a", true, 100));
-        }
-        for _ in 0..3 {
-            bus.record_and_optimize(make_event("task_b", "agent_b", true, 200));
-        }
-
-        let suggestions = bus.all_suggestions();
-        assert_eq!(suggestions.len(), 2);
     }
 
     #[test]

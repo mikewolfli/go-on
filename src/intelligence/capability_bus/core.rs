@@ -72,7 +72,6 @@ pub(crate) type EvolveSubsystem<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 use crate::intelligence::metacognitive::MetacognitiveController;
 
-use crate::intelligence::reinforcement::federated::FederatedLearning;
 use crate::intelligence::reinforcement::learning::RewardFunction;
 use crate::intelligence::self_model::SelfModelCore;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
@@ -397,9 +396,6 @@ pub struct CapabilityBus {
     /// Adaptive model selector for context-aware model routing (P2-3)
     pub model_selector: Option<Mutex<AdaptiveModelSelector>>,
 
-    /// Federated learning coordinator — cross-node policy aggregation (P2-4)
-    pub federated_learning: Option<Arc<Mutex<FederatedLearning>>>,
-
     /// Live performance feed — EMA-smoothed model cost estimates (P2-6)
     pub live_performance: Option<Arc<LivePerformanceFeed>>,
 
@@ -520,7 +516,6 @@ impl CapabilityBus {
             ))),
             token_cache: None,
             model_selector: None,
-            federated_learning: None,
             live_performance: None,
             config: CapabilityBusConfig::default(),
             evolve_timeout_count: std::sync::atomic::AtomicU64::new(0),
@@ -561,8 +556,8 @@ impl CapabilityBus {
     // with_federated_learning) had zero callers and were
     // removed. The buses are wired directly through their fields
     // (e.g. memory_bus.set_backends in server_builder) and the P2-* fields
-    // (token_cache/model_selector/federated_learning) remain
-    // designed extension points (always None unless set by an embedder).
+    // (token_cache/model_selector) remain designed extension points
+    // (always None unless set by an embedder).
 
     /// Inject an LLM agent into the MetacognitiveController (BLUE56-GAP-B02).
     ///

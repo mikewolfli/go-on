@@ -44,7 +44,7 @@ pub(crate) fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<Str
 /// Command-line interface arguments for the go-on application
 #[derive(Debug, Parser)]
 #[command(name = "go-on")]
-#[command(version = "1.2.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "ACP proxy with flow, phases and multi-agent routing")]
 pub struct Cli {
     #[command(subcommand)]

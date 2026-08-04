@@ -63,10 +63,8 @@ pub mod invoice;
 pub mod jsonl;
 pub mod lsp;
 pub mod network;
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 pub mod obj;
-#[cfg(feature = "model-3d-extra")]
-pub mod obj_tool;
 #[cfg(any(
     feature = "document-excel",
     feature = "document-docx",
@@ -88,10 +86,8 @@ pub mod spawn_agent;
 pub mod sqlite;
 #[cfg(feature = "cad-step")]
 pub mod step;
-#[cfg(feature = "cad-stl")]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 pub mod stl;
-#[cfg(feature = "model-3d")]
-pub mod stl_tool;
 #[cfg(feature = "drawing-svg")]
 pub mod svg;
 pub mod template;
@@ -170,10 +166,8 @@ pub use jsonl::{JsonlReadTool, JsonlWriteTool};
 pub use lsp::{ApplyCodeActionTool, FindReferencesTool, GoToDefinitionTool};
 pub use metrics::CodeMetricsTool;
 pub use network::{DnsLookupTool, PingTool, PortScanTool};
-#[cfg(feature = "cad-obj")]
+#[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
 pub use obj::ObjReadTool;
-#[cfg(feature = "model-3d-extra")]
-pub use obj_tool::ObjModelReadTool;
 #[cfg(feature = "document-excel")]
 pub use office::ReadExcelTool;
 #[cfg(feature = "document-docx")]
@@ -200,12 +194,8 @@ pub use spawn_agent::SpawnAgentTool;
 pub use sqlite::SqliteQueryTool;
 #[cfg(feature = "cad-step")]
 pub use step::StepReadTool;
-#[cfg(all(feature = "cad-stl", feature = "model-3d"))]
+#[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 pub use stl::{StlGenerateTool, StlReadTool};
-#[cfg(all(feature = "cad-stl", not(feature = "model-3d")))]
-pub use stl::{StlGenerateTool, StlReadTool};
-#[cfg(all(feature = "model-3d", not(feature = "cad-stl")))]
-pub use stl_tool::StlReadTool;
 #[cfg(feature = "drawing-svg")]
 pub use svg::{SvgExportTool, SvgGenerateTool, SvgReadTool};
 pub use template::TemplateRenderTool;

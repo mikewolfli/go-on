@@ -5,7 +5,6 @@
 //! once orchestration logic integrates them.
 
 // ── Sub-modules (moved from orchestration/ for cohesion) ───────────────────
-pub mod builder;
 pub mod builtin_tools;
 pub mod events;
 pub mod exec_common;
@@ -770,7 +769,7 @@ impl ToolRegistry {
         );
 
         // ── CAD/STL tools (feature-gated) ────────────────────
-        #[cfg(all(feature = "cad-stl", not(feature = "model-3d")))]
+        #[cfg(any(feature = "cad-stl", feature = "model-3d"))]
         registry.register_with_profile(
             crate::orchestration::tool_extended::StlReadTool,
             ToolCapabilityProfile {
@@ -786,7 +785,7 @@ impl ToolRegistry {
         );
 
         // ── CAD/OBJ tools (feature-gated) ────────────────────
-        #[cfg(feature = "cad-obj")]
+        #[cfg(any(feature = "cad-obj", feature = "model-3d-extra"))]
         registry.register_with_profile(
             crate::orchestration::tool_extended::ObjReadTool,
             ToolCapabilityProfile {
@@ -976,22 +975,6 @@ impl ToolRegistry {
             },
         );
 
-        // ── 3D model (STL) reader tool (feature-gated, not when cad-stl already provides it) ─
-        #[cfg(all(feature = "model-3d", not(feature = "cad-stl")))]
-        registry.register_with_profile(
-            crate::orchestration::tool_extended::StlCrateReadTool,
-            ToolCapabilityProfile {
-                capability: "stl_read".to_string(),
-                risk_level: ToolRiskLevel::Low,
-                timeout_budget_ms: 30_000,
-                retry_policy: RetryPolicy {
-                    max_retries: 1,
-                    retry_on_failure: true,
-                },
-                fallback_chain: Vec::new(),
-            },
-        );
-
         // ── CAM/G-code reader tool (feature-gated) ────────────────
         #[cfg(feature = "cam-gcode")]
         registry.register_with_profile(
@@ -1024,23 +1007,7 @@ impl ToolRegistry {
             },
         );
 
-        // ── 3D model (OBJ) reader tool (feature-gated) ────────────────
-        #[cfg(feature = "model-3d-extra")]
-        registry.register_with_profile(
-            crate::orchestration::tool_extended::ObjModelReadTool,
-            ToolCapabilityProfile {
-                capability: "obj_model_read".to_string(),
-                risk_level: ToolRiskLevel::Low,
-                timeout_budget_ms: 30_000,
-                retry_policy: RetryPolicy {
-                    max_retries: 1,
-                    retry_on_failure: true,
-                },
-                fallback_chain: Vec::new(),
-            },
-        );
-
-        // ── JSON Lines read tool (no feature gate) ────────────────────
+        // ── 3D model (OBJ) reader tool — unified with cad-obj's ObjReadTool ─
         registry.register_with_profile(
             crate::orchestration::tool_extended::JsonlReadTool,
             ToolCapabilityProfile {

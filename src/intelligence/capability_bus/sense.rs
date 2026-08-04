@@ -141,26 +141,6 @@ impl CapabilityBus {
         }
     }
 
-    /// BLUE70: Query consolidated buses for enhanced context.
-    /// Returns optimization suggestion from the LearningOptimizationBus.
-    pub fn blue70_sense_optimization(&self, task_type: &str) -> Option<String> {
-        let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
-        lob.suggestion_for(task_type)
-            .and_then(|s| s.recommended_agent.clone())
-    }
-
-    /// BLUE70: Get agent reputation from UnifiedKnowledgeBus.
-    pub fn blue70_agent_reputation(&self, agent: &str) -> Option<f64> {
-        let ukb = crate::read_or_recover!(&self.unified_knowledge_bus, "intelligence");
-        ukb.get_reputation(agent)
-    }
-
-    /// BLUE70: Get best agent for a task via ReinforcementBus Q-learning.
-    pub fn blue70_best_agent(&self, task_type: &str, agents: &[String]) -> Option<String> {
-        let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
-        rb.select_action(task_type, agents)
-    }
-
     /// Check if an agent is healthy via ObservabilityBus and OptimizationBus
     pub fn is_agent_healthy(&self, agent: &str) -> bool {
         // Check circuit breaker via OptimizationBus

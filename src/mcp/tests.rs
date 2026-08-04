@@ -15,7 +15,7 @@ fn build_server() -> McpServer {
         agent_registry,
         tool_registry,
         "go-on".to_string(),
-        "1.2.0".to_string(),
+        env!("CARGO_PKG_VERSION").to_string(),
     )
 }
 
@@ -65,7 +65,7 @@ fn build_server_with_tool<T: Tool + 'static>(tool: T) -> McpServer {
         agent_registry,
         Arc::new(tool_registry),
         "go-on".to_string(),
-        "1.2.0".to_string(),
+        env!("CARGO_PKG_VERSION").to_string(),
     )
 }
 

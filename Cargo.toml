@@ -120,10 +120,13 @@ cam-gcode = []
 gis-gpx = []
 drawing-svg = ["dep:svg"]
 # 3D model processing (optional, feature-gated)
-model-3d = ["dep:stl"]
+# model-3d / model-3d-extra share the native parsers in stl.rs / obj.rs
+# (cad-stl / cad-obj). The crate-based variants (stl_tool / obj_tool) were
+# removed — see docs/log/log-20260804-1.md.
+model-3d = []
 
 # Additional 3D formats
-model-3d-extra = ["dep:tobj"]
+model-3d-extra = []
 
 # Profile definitions (mutually exclusive via compile-time assertions)
 #
@@ -304,8 +307,6 @@ serde_yaml = { version = "0.9", optional = true }
 # ── CAD / Drawing / Document tools (optional) ──────────────────────────
 dxf = { version = "0.6", optional = true }
 svg = { version = "0.18", optional = true }
-stl = { version = "0.2", optional = true }
-tobj = { version = "4", optional = true }
 
 # ── Multimodal document parsing (optional) ──────────────────────────────────
 lopdf = { version = "0.41", optional = true }

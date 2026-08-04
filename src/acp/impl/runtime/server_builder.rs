@@ -12,7 +12,7 @@ use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
 use crate::flow::FlowManager;
-use crate::observability::live_performance::LivePerformanceFeed;
+
 use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
@@ -164,7 +164,9 @@ pub async fn new_acp_server(
 
     // Build capability bus and optionally inject an LLM agent
     // Wire LivePerformanceFeed so model observability is available to decide() (P2-6).
-    let perf_feed = Arc::new(LivePerformanceFeed::new(0.3));
+    // Uses the process-global feed so fallback outcome recording and model
+    // estimation share one instance.
+    let perf_feed = crate::observability::live_performance::global_live_performance().clone();
     let cb_builder = crate::intelligence::capability_bus::core::CapabilityBus::new_default(
         Arc::clone(&harness_bus),
         Some(workflow_registry),

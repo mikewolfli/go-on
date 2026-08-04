@@ -29,22 +29,10 @@ const STREAM_EVENT_TOOL_APPROVAL: &str = "tool_approval";
 // ── SseBufferPool (GAP-46-12 / BLUE48 Step 2) ────────────────────────
 // Global pool of pre-allocated byte buffers for SSE event serialization.
 // Avoids allocation churn during high-frequency streaming by reusing
-// buffers across requests.  Pre-initialized at server startup to avoid
-// first-request latency penalty.
+// buffers across requests.  Lazily initialized on first use via OnceLock
+// (an explicit pre-init hook was removed — it had no callers, and OnceLock
+// initialization is atomic so the first request pays one allocation).
 static SSE_BUFFER_POOL: OnceLock<SseBufferPool> = OnceLock::new();
-
-/// Pre-initialize the SSE buffer pool at server startup.
-/// Call once during server initialization to avoid first-request latency.
-/// Kept as public API for HTTP/SSE mode reactivation; currently unused
-/// in stdio mode to save startup time (deferred to first SSE use).
-#[allow(
-    dead_code,
-    reason = "Available for HTTP/SSE mode reactivation; not called in stdio mode (deferred to first use as startup optimization)"
-)]
-pub fn pre_init_sse_buffer_pool() {
-    SSE_BUFFER_POOL.get_or_init(|| SseBufferPool::new(4, 4096));
-    tracing::info!("SSE buffer pool pre-initialized (4 buffers x 4096 bytes)");
-}
 
 /// Acquire a buffer from the global SSE buffer pool.
 /// Returns a pre-allocated (empty) `Vec<u8>` suitable for building an SSE frame.

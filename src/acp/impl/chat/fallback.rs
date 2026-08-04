@@ -35,6 +35,19 @@ async fn record_agent_intelligence_outcome(
     duration_ms: u64,
 ) {
     use crate::intelligence::consciousness::AwarenessMetricType;
+    // BLUE56-GAP-B05/B06/B07: LivePerformanceFeed — record observed model
+    // latency/success so `select_model_for_task` / `decide` dynamic cost &
+    // latency estimates reflect real behavior instead of always falling back
+    // to the static table. This is the single production write point for the
+    // feed (previously it was written only by tests, so the dynamic path was
+    // dead: readers always hit `None`).
+    if success {
+        crate::observability::live_performance::global_live_performance()
+            .record_success(agent_name, duration_ms);
+    } else {
+        crate::observability::live_performance::global_live_performance()
+            .record_failure(agent_name, duration_ms);
+    }
     if let Some(ref cb) = server.governance_deps.capability_bus {
         let (awareness, confidence) = if success { (1.0, 0.9) } else { (0.0, 0.8) };
         let _ = cb.consciousness.record_metric(

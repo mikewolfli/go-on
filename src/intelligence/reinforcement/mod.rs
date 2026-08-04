@@ -5,18 +5,12 @@
 //! compatibility for paths like `crate::reinforcement::*`.
 
 pub mod action_check;
-pub mod federated;
-// Standalone P2P discovery module. Implements full peer discovery and heartbeat
-// logic but has zero CapabilityBus integration. To wire it in, add CapabilityBus
-// calls (e.g. registering discovered peers as capability route targets).
-//
-// NOTE: federated_transport is NOT gated here — it provides the foundational
-// transport abstraction (PeerInfo, FederatedTransport trait) used by federated.rs.
-#[cfg(feature = "sub-bus-distributed-memory")]
-pub mod federated_discovery;
-pub mod federated_privacy;
-pub mod federated_transport;
-pub mod federated_versioning;
+// The former federated learning family (federated.rs, federated_discovery.rs,
+// federated_privacy.rs, federated_transport.rs, federated_versioning.rs) was
+// removed: its only entry points were FederatedRLAdapter and
+// CapabilityBus.federated_learning, both of which had zero production callers
+// (the CapabilityBus field is always None). The standalone Q-learning
+// ReinforcementBus remains the single-node learning path.
 pub mod health;
 pub mod learning;
 pub mod task_plan;
@@ -128,14 +122,6 @@ pub use crate::orchestration::core_dag::TaskGraphCheckpointArtifact;
 pub use action_check::{
     run_action_check, ActionCheckItem, ActionCheckKind, ActionCheckReport, FinalSummaryArtifact,
 };
-pub use federated::{
-    AggregationMethod, ContributionWeight, DistillationRound, DistillationStatus,
-    FederatedClientState, FederatedConfig, FederatedError, FederatedLearning, FederatedProfile,
-    FederatedRL, FederatedRLConfig, FederatedRLProfile, FederatedResult, FederatedRound,
-    ModelWeights, PolicyEntry, SharedFederatedLearning,
-};
-pub use federated_privacy::{DifferentialPrivacyConfig, PrivacyBudget};
-pub use federated_versioning::{migrate_weights, ModelVersion, VERSION_INITIAL};
 pub use health::{
     aggregate_status, build_runtime_healthcheck_report, persist_runtime_healthcheck, CheckStatus,
     ComponentReport, RuntimeHealthcheckReport,
@@ -165,89 +151,3 @@ pub use task_plan::{
     TaskExecutionSummary, TaskPlanArtifact, WorkflowEdge, WorkflowGeneratedArtifact, WorkflowNode,
     WorkflowOptimizationPolicyArtifact, WorkflowResearchArtifact, WorkflowWorkGradeArtifact,
 };
-
-use std::sync::{Arc, Mutex};
-use tracing::info;
-
-// ── FederatedRLAdapter ────────────────────────────────────────────────────
-
-/// Bridge between the main ACP chain and the federated learning module.
-///
-/// `FederatedRLAdapter` wraps `FederatedLearning` and pre-configures it with
-/// differential privacy and model versioning. It serves as the initialization
-/// point for federated learning in the ACP runtime.
-#[derive(Debug, Clone)]
-pub struct FederatedRLAdapter {
-    inner: Arc<Mutex<FederatedLearning>>,
-    /// Whether differential privacy is active
-    pub privacy_enabled: bool,
-    /// Whether model versioning is active
-    pub versioning_enabled: bool,
-}
-
-impl FederatedRLAdapter {
-    /// Create a new adapter with default federated config, optionally
-    /// enabling privacy and versioning.
-    pub fn new(enable_privacy: bool, enable_versioning: bool) -> Self {
-        let mut fl = FederatedLearning::new(FederatedConfig::default());
-
-        // Enable differential privacy with sensible defaults.
-        if enable_privacy {
-            let dp_config =
-                DifferentialPrivacyConfig::new(4.0, 1e-5, 1.0).expect("valid default DP config");
-            let budget = PrivacyBudget::new(
-                4.0 * 100.0, // enough for ~100 rounds at ε=4.0/round
-                100,
-                dp_config,
-            );
-            fl = fl.with_privacy(dp_config, Some(budget));
-            info!("FederatedRLAdapter: differential privacy enabled");
-        }
-
-        // Enable model versioning with the initial version.
-        if enable_versioning {
-            fl = fl.with_versioning(VERSION_INITIAL);
-            info!("FederatedRLAdapter: model versioning enabled (v{VERSION_INITIAL})");
-        }
-
-        Self {
-            inner: Arc::new(Mutex::new(fl)),
-            privacy_enabled: enable_privacy,
-            versioning_enabled: enable_versioning,
-        }
-    }
-
-    /// Return a reference to the inner `FederatedLearning` handle.
-    pub fn inner(&self) -> Arc<Mutex<FederatedLearning>> {
-        Arc::clone(&self.inner)
-    }
-
-    /// Return a profile that includes privacy and versioning status.
-    pub fn profile(&self) -> FederatedProfile {
-        crate::lock_or_recover!(self.inner, "FederatedRLAdapter.profile").profile()
-    }
-
-    /// Register a client for federated learning.
-    pub fn register_client(&self, client_id: &str, weight: f64) -> anyhow::Result<()> {
-        crate::lock_or_recover!(self.inner, "FederatedRLAdapter.register_client")
-            .register_client(client_id, weight)
-    }
-
-    /// Submit local weights and trigger an aggregation round if enough
-    /// clients have contributed.
-    pub fn submit_and_aggregate(
-        &self,
-        client_id: &str,
-        weights: ModelWeights,
-        improvement: f64,
-    ) -> anyhow::Result<Option<FederatedRound>> {
-        let mut fl = crate::lock_or_recover!(self.inner, "FederatedRLAdapter.submit_and_aggregate");
-        fl.submit_local_weights(client_id, weights, improvement)?;
-        if fl.pending_weights_count() >= fl.min_clients_required() {
-            let round = fl.aggregate_round()?;
-            Ok(Some(round))
-        } else {
-            Ok(None)
-        }
-    }
-}

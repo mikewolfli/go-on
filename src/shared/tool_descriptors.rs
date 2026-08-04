@@ -1064,6 +1064,738 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["query"]
             })),
         },
+        // ── CAD / 3D / drawing tools ────────────────────────────────
+        "stl_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read an STL 3D model file and return facet count, bounding box, volume estimate, unique vertex count, and format (binary/ascii).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .stl file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "stl_generate" => McpTool {
+            name: name.to_string(),
+            description: Some("Generate an ASCII STL file from vertex and face data.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "vertices": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "List of [x,y,z] vertices"},
+                    "faces": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}, "description": "List of [i,j,k] face vertex indices (0-based)"},
+                    "path": {"type": "string", "description": "Output .stl path"}
+                },
+                "required": ["vertices", "faces", "path"]
+            })),
+        },
+        "obj_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a Wavefront OBJ 3D model file and return vertex/texture/normal/face counts, object names, materials, and bounding box.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .obj file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "dxf_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a DXF CAD file and extract entity metadata.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .dxf file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "step_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a STEP CAD file and extract model metadata.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .step file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "iges_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read an IGES CAD file and extract model metadata.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .iges file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "ply_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a PLY 3D mesh file and return vertex/face counts and bounding box.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .ply file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "gltf_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a glTF 3D model file and extract scene metadata.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .gltf/.glb file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "gcode_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a G-code file and return command statistics.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .gcode file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "gpx_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a GPX GPS track file and return waypoints, tracks, and routes.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .gpx file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "geo_util" => McpTool {
+            name: name.to_string(),
+            description: Some("Geospatial utilities: calculate distances, bearings, and operations on coordinate points.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string", "description": "Operation to perform"},
+                    "points": {"type": "array", "items": {"type": "object"}, "description": "Coordinate points"}
+                },
+                "required": ["operation", "points"]
+            })),
+        },
+        "cad_convert" => McpTool {
+            name: name.to_string(),
+            description: Some("Convert a numeric value between CAD unit systems (e.g. feet to meters).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "value": {"type": "number", "description": "Numeric value to convert"},
+                    "from": {"type": "string", "description": "Source unit (e.g. 'ft')"},
+                    "to": {"type": "string", "description": "Target unit (e.g. 'm')"},
+                    "operation": {"type": "string", "description": "Optional operation name"}
+                },
+                "required": ["value", "from", "to"]
+            })),
+        },
+        "svg_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read an SVG file and return shape/attribute information.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .svg file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "svg_generate" => McpTool {
+            name: name.to_string(),
+            description: Some("Generate an SVG file from shape definitions.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output .svg path"},
+                    "width": {"type": "integer", "description": "Canvas width"},
+                    "height": {"type": "integer", "description": "Canvas height"},
+                    "shapes": {"type": "array", "description": "Shape definitions"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "svg_export" => McpTool {
+            name: name.to_string(),
+            description: Some("Export entities to an SVG file.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "entities": {"type": "array", "description": "Entities to export"},
+                    "width": {"type": "integer", "description": "Canvas width"},
+                    "height": {"type": "integer", "description": "Canvas height"}
+                },
+                "required": ["entities"]
+            })),
+        },
+        "barcode_gen" => McpTool {
+            name: name.to_string(),
+            description: Some("Generate a barcode (EAN-13, Code-128, QR) as an SVG.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Data to encode"},
+                    "format": {"type": "string", "enum": ["ean13", "code128", "qr"], "description": "Barcode format"},
+                    "width": {"type": "integer", "description": "Image width"},
+                    "height": {"type": "integer", "description": "Image height"}
+                },
+                "required": ["data", "format"]
+            })),
+        },
+        // ── Document / office tools ────────────────────────────────
+        "read_docx" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a Word .docx file and extract its text content.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .docx file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "write_docx" => McpTool {
+            name: name.to_string(),
+            description: Some("Create a Word .docx file from paragraphs and a title.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output .docx path"},
+                    "title": {"type": "string", "description": "Document title"},
+                    "paragraphs": {"type": "array", "items": {"type": "string"}, "description": "Paragraph texts"}
+                },
+                "required": ["path", "paragraphs"]
+            })),
+        },
+        "read_pdf" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a PDF file and extract text from one or more pages.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .pdf file"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Multiple PDF paths to read"},
+                    "output_path": {"type": "string", "description": "Optional text output path"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "pdf_merge" => McpTool {
+            name: name.to_string(),
+            description: Some("Merge multiple PDF files into one.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Input PDF paths"},
+                    "output_path": {"type": "string", "description": "Output .pdf path"}
+                },
+                "required": ["paths", "output_path"]
+            })),
+        },
+        "pdf_split" => McpTool {
+            name: name.to_string(),
+            description: Some("Split a PDF file into a page range.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Input .pdf path"},
+                    "start_page": {"type": "integer", "description": "First page (1-based)"},
+                    "end_page": {"type": "integer", "description": "Last page (1-based)"},
+                    "output_path": {"type": "string", "description": "Output .pdf path"}
+                },
+                "required": ["path", "output_path"]
+            })),
+        },
+        "read_excel" => McpTool {
+            name: name.to_string(),
+            description: Some("Read an Excel .xlsx file and return sheet data.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .xlsx file"},
+                    "config": {"type": "object", "description": "Optional read configuration"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "write_excel" => McpTool {
+            name: name.to_string(),
+            description: Some("Create an Excel .xlsx workbook with sheets from row data.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output .xlsx path"},
+                    "config": {"type": "object", "description": "Workbook configuration"},
+                    "slides": {"type": "array", "description": "Sheet/row data"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "read_ppt" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a PowerPoint .pptx file and extract slide content.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .pptx file"},
+                    "config": {"type": "object", "description": "Optional read configuration"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "write_ppt" => McpTool {
+            name: name.to_string(),
+            description: Some("Create a PowerPoint .pptx file from slide definitions.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output .pptx path"},
+                    "slides": {"type": "array", "description": "Slide definitions"}
+                },
+                "required": ["path", "slides"]
+            })),
+        },
+        "email_parse" => McpTool {
+            name: name.to_string(),
+            description: Some("Parse an email message file (.eml) into structured fields.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the email file"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "invoice_parse" => McpTool {
+            name: name.to_string(),
+            description: Some("Parse an invoice from file or text into structured fields.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the invoice file"},
+                    "text": {"type": "string", "description": "Invoice text (alternative to path)"}
+                },
+                "required": []
+            })),
+        },
+        "web_scrape" => McpTool {
+            name: name.to_string(),
+            description: Some("Scrape structured content from a web page using a CSS selector.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Page URL to scrape"},
+                    "selector": {"type": "string", "description": "CSS selector for content extraction"},
+                    "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds"}
+                },
+                "required": ["url"]
+            })),
+        },
+        "sqlite_query" => McpTool {
+            name: name.to_string(),
+            description: Some("Run a SQL query against a SQLite database file.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .db file"},
+                    "sql": {"type": "string", "description": "SQL query to execute"},
+                    "max_rows": {"type": "integer", "description": "Maximum result rows"}
+                },
+                "required": ["path", "sql"]
+            })),
+        },
+        // ── Data serialization / CSV tools ───────────────────────────
+        "csv_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a CSV file into structured records.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .csv file"},
+                    "delimiter": {"type": "string", "description": "Field delimiter (default: ',')"},
+                    "has_headers": {"type": "boolean", "description": "Whether the first row is headers (default: true)"},
+                    "headers": {"type": "array", "items": {"type": "string"}, "description": "Explicit column headers"},
+                    "records": {"type": "array", "description": "When reading, records are output"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "csv_write" => McpTool {
+            name: name.to_string(),
+            description: Some("Write structured records to a CSV file.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output .csv path"},
+                    "headers": {"type": "array", "items": {"type": "string"}, "description": "Column headers"},
+                    "records": {"type": "array", "description": "Row records"},
+                    "delimiter": {"type": "string", "description": "Field delimiter (default: ',')"}
+                },
+                "required": ["path", "headers", "records"]
+            })),
+        },
+        "csv_analyze" => McpTool {
+            name: name.to_string(),
+            description: Some("Analyze a CSV file and return column stats, types, and shape.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .csv file"},
+                    "delimiter": {"type": "string", "description": "Field delimiter"},
+                    "has_headers": {"type": "boolean", "description": "Whether the first row is headers"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "csv_transform" => McpTool {
+            name: name.to_string(),
+            description: Some("Transform a CSV file: select, rename, and filter columns.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Input .csv path"},
+                    "output_path": {"type": "string", "description": "Output .csv path"},
+                    "select": {"type": "array", "items": {"type": "string"}, "description": "Columns to keep"},
+                    "rename": {"type": "object", "description": "Column rename map"},
+                    "filter_column": {"type": "string", "description": "Column to filter on"},
+                    "filter_value": {"type": "string", "description": "Filter value"},
+                    "filter_invert": {"type": "boolean", "description": "Invert the filter"},
+                    "delimiter": {"type": "string", "description": "Field delimiter"},
+                    "has_headers": {"type": "boolean", "description": "Whether the first row is headers"}
+                },
+                "required": ["path", "output_path"]
+            })),
+        },
+        "toml_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a TOML file or TOML string into structured data.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .toml file"},
+                    "data": {"type": "string", "description": "TOML string (alternative to path)"}
+                },
+                "required": []
+            })),
+        },
+        "toml_write" => McpTool {
+            name: name.to_string(),
+            description: Some("Serialize structured data into a TOML file.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output .toml path"},
+                    "data": {"type": "object", "description": "Data to serialize"}
+                },
+                "required": ["path", "data"]
+            })),
+        },
+        "yaml_read" => McpTool {
+            name: name.to_string(),
+            description: Some("Read a YAML file or YAML string into structured data.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the .yaml file"},
+                    "data": {"type": "string", "description": "YAML string (alternative to path)"}
+                },
+                "required": []
+            })),
+        },
+        "yaml_write" => McpTool {
+            name: name.to_string(),
+            description: Some("Serialize structured data into a YAML file.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output .yaml path"},
+                    "data": {"type": "object", "description": "Data to serialize"}
+                },
+                "required": ["path", "data"]
+            })),
+        },
+        // ── Image tools ──────────────────────────────────────────────
+        "image_analyze" => McpTool {
+            name: name.to_string(),
+            description: Some("Analyze an image: dimensions, color statistics, and kind detection.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the image file"},
+                    "output_path": {"type": "string", "description": "Optional analysis report output path"},
+                    "kind": {"type": "string", "description": "Analysis kind"},
+                    "color": {"type": "boolean", "description": "Include color statistics"},
+                    "width": {"type": "integer", "description": "Resize width before analysis"},
+                    "height": {"type": "integer", "description": "Resize height before analysis"}
+                },
+                "required": ["path"]
+            })),
+        },
+        "image_convert" => McpTool {
+            name: name.to_string(),
+            description: Some("Convert an image between formats (png/jpeg/gif/webp).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Input image path"},
+                    "output_path": {"type": "string", "description": "Output image path"},
+                    "format": {"type": "string", "enum": ["png", "jpeg", "gif", "webp"], "description": "Target format"}
+                },
+                "required": ["path", "output_path"]
+            })),
+        },
+        "image_resize" => McpTool {
+            name: name.to_string(),
+            description: Some("Resize or crop an image.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Input image path"},
+                    "output_path": {"type": "string", "description": "Output image path"},
+                    "width": {"type": "integer", "description": "Target width"},
+                    "height": {"type": "integer", "description": "Target height"},
+                    "maintain_aspect": {"type": "boolean", "description": "Maintain aspect ratio"},
+                    "crop": {"type": "boolean", "description": "Crop to exact dimensions"}
+                },
+                "required": ["path", "output_path", "width", "height"]
+            })),
+        },
+        "image_generate" => McpTool {
+            name: name.to_string(),
+            description: Some("Generate a synthetic image (grid, gradient, or pattern).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "Output image path"},
+                    "kind": {"type": "string", "description": "Generation kind (grid/gradient/...)"},
+                    "width": {"type": "integer", "description": "Image width"},
+                    "height": {"type": "integer", "description": "Image height"},
+                    "color": {"type": "string", "description": "Base color"},
+                    "cell_size": {"type": "integer", "description": "Grid cell size"},
+                    "direction": {"type": "string", "description": "Gradient direction"}
+                },
+                "required": ["output_path", "kind"]
+            })),
+        },
+        // ── Game tools ────────────────────────────────────────────────
+        "game_server_query" => McpTool {
+            name: name.to_string(),
+            description: Some("Query an online game server (A2S protocol) for status and player info.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game_name": {"type": "string", "description": "Game name"},
+                    "server_address": {"type": "string", "description": "Server address (host:port)"},
+                    "store": {"type": "string", "description": "Store identifier"},
+                    "timeout_secs": {"type": "integer", "description": "Query timeout in seconds"}
+                },
+                "required": ["server_address"]
+            })),
+        },
+        "game_price_tracker" => McpTool {
+            name: name.to_string(),
+            description: Some("Track game prices across stores.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game_name": {"type": "string", "description": "Game name"},
+                    "store": {"type": "string", "description": "Store identifier"}
+                },
+                "required": ["game_name"]
+            })),
+        },
+        "game_matchmaking" => McpTool {
+            name: name.to_string(),
+            description: Some("Launch a game for matchmaking with a working directory and arguments.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": "Game name"},
+                    "executable": {"type": "string", "description": "Executable path"},
+                    "working_directory": {"type": "string", "description": "Working directory"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Launch arguments"},
+                    "detached": {"type": "boolean", "description": "Run detached"}
+                },
+                "required": ["game"]
+            })),
+        },
+        "game_launch" => McpTool {
+            name: name.to_string(),
+            description: Some("Launch a game process.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "executable": {"type": "string", "description": "Executable path"},
+                    "working_directory": {"type": "string", "description": "Working directory"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Launch arguments"},
+                    "detached": {"type": "boolean", "description": "Run detached"}
+                },
+                "required": ["executable"]
+            })),
+        },
+        "game_monitor" => McpTool {
+            name: name.to_string(),
+            description: Some("Monitor a running game process by PID.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "pid": {"type": "integer", "description": "Process ID to monitor"}
+                },
+                "required": ["pid"]
+            })),
+        },
+        "game_screen_capture" => McpTool {
+            name: name.to_string(),
+            description: Some("Capture a screenshot of a game window or display.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "Screenshot output path"},
+                    "window_title": {"type": "string", "description": "Target window title"}
+                },
+                "required": ["output_path"]
+            })),
+        },
+        "game_replay_recorder" => McpTool {
+            name: name.to_string(),
+            description: Some("Record a game replay or screen recording.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string", "description": "Recording output path"},
+                    "duration_secs": {"type": "integer", "description": "Recording duration in seconds"},
+                    "fps": {"type": "integer", "description": "Frames per second"},
+                    "display": {"type": "string", "description": "Display identifier"},
+                    "window_title": {"type": "string", "description": "Window title"},
+                    "keys": {"type": "array", "items": {"type": "string"}, "description": "Key sequence"},
+                    "delay_ms": {"type": "integer", "description": "Delay before recording in ms"}
+                },
+                "required": ["output_path"]
+            })),
+        },
+        "game_keyboard_input" => McpTool {
+            name: name.to_string(),
+            description: Some("Simulate keyboard input (keys or button actions).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action to perform"},
+                    "button": {"type": "string", "description": "Button name"},
+                    "keys": {"type": "array", "items": {"type": "string"}, "description": "Keys to press"},
+                    "window_title": {"type": "string", "description": "Target window title"},
+                    "delay_ms": {"type": "integer", "description": "Delay in ms"},
+                    "x": {"type": "integer", "description": "X coordinate"},
+                    "y": {"type": "integer", "description": "Y coordinate"}
+                },
+                "required": ["action"]
+            })),
+        },
+        "game_mouse_input" => McpTool {
+            name: name.to_string(),
+            description: Some("Simulate mouse input (move, click, scroll).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action (move/click/scroll)"},
+                    "button": {"type": "string", "description": "Mouse button"},
+                    "amount": {"type": "integer", "description": "Scroll amount"},
+                    "window_title": {"type": "string", "description": "Target window title"},
+                    "x": {"type": "integer", "description": "X coordinate"},
+                    "y": {"type": "integer", "description": "Y coordinate"}
+                },
+                "required": ["action"]
+            })),
+        },
+        "game_coaching_assistant" => McpTool {
+            name: name.to_string(),
+            description: Some("AI coaching assistant for a game: answers strategy questions.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": "Game name"},
+                    "query": {"type": "string", "description": "Coaching question"}
+                },
+                "required": ["game", "query"]
+            })),
+        },
+        "game_auto_grind" => McpTool {
+            name: name.to_string(),
+            description: Some("Run an auto-grinding script for a game task.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": "Game name"},
+                    "task": {"type": "string", "description": "Grinding task description"},
+                    "max_iterations": {"type": "integer", "description": "Maximum iterations"},
+                    "interval_ms": {"type": "integer", "description": "Interval between iterations in ms"}
+                },
+                "required": ["game", "task"]
+            })),
+        },
+        "game_save_manager" => McpTool {
+            name: name.to_string(),
+            description: Some("Manage game save files (list, backup, restore).".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "backup", "restore"], "description": "Save action"},
+                    "game": {"type": "string", "description": "Game name"},
+                    "path": {"type": "string", "description": "Save path"}
+                },
+                "required": ["action", "game"]
+            })),
+        },
+        "game_achievements" => McpTool {
+            name: name.to_string(),
+            description: Some("List achievements for a game.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": "Game name"}
+                },
+                "required": ["game"]
+            })),
+        },
+        "game_mod_install" => McpTool {
+            name: name.to_string(),
+            description: Some("Install a mod for a game from a source archive.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": "Game name"},
+                    "mod_name": {"type": "string", "description": "Mod name"},
+                    "mod_source": {"type": "string", "description": "Mod source URL or path"},
+                    "path": {"type": "string", "description": "Mod archive path"},
+                    "target_directory": {"type": "string", "description": "Install target directory"}
+                },
+                "required": ["game", "mod_name"]
+            })),
+        },
+        "game_mod_list" => McpTool {
+            name: name.to_string(),
+            description: Some("List installed mods for a game.".to_string()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "game": {"type": "string", "description": "Game name"},
+                    "path": {"type": "string", "description": "Mod directory path"}
+                },
+                "required": ["game"]
+            })),
+        },
         other => McpTool {
             name: other.to_string(),
             description: Some("Registered MCP tool".to_string()),

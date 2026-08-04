@@ -15,7 +15,6 @@ use crate::i18n::{t, tf};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -1079,31 +1078,6 @@ Memories:
             .filter(|r| r.flagged_for_eviction)
             .map(|r| r.memory_id.clone())
             .collect()
-    }
-
-    /// Schedule a review for a memory entry, returning the `Instant` at which
-    /// the review should occur.
-    ///
-    /// The review interval is calculated from the retention score:
-    /// - Score < 0.1 → review immediately (now)
-    /// - Score < 0.3 → review within 1 hour
-    /// - Score < 0.5 → review within 6 hours
-    /// - Score >= 0.5 → review within 24 hours
-    ///
-    /// This uses an **Expanding Retrieval Practice** schedule similar to
-    /// SuperMemo / Anki spaced-repetition algorithms.
-    pub fn schedule_review(&self, entry: &ConsolidatedMemory) -> Instant {
-        let score = self.retention_score(entry, crate::shared::timestamps::now_ts_ms() as u64);
-        let delay_secs = if score < 0.1 {
-            0
-        } else if score < 0.3 {
-            3600 // 1 hour
-        } else if score < 0.5 {
-            21_600 // 6 hours
-        } else {
-            86_400 // 24 hours
-        };
-        Instant::now() + Duration::from_secs(delay_secs)
     }
 
     /// Perform a forgetting review cycle with full learning loop integration:

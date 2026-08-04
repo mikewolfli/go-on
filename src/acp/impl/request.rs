@@ -524,12 +524,9 @@ pub async fn handle_request(
         file_count: infer_file_count(&request.params),
         risk_score: infer_risk_score(method.as_ref(), &task_type),
     };
-    let dynamic_compass = DynamicQualityCompass::default();
-    let dynamic_checks = dynamic_compass.get_checks(&task_context);
-    let dynamic_check_descriptions = dynamic_checks
-        .iter()
-        .map(|check| check.description.clone())
-        .collect::<Vec<_>>();
+    // NOTE: DynamicQualityCompass is only needed on the PUA violation error
+    // paths below, so it is built lazily inside those branches instead of
+    // on every passing request.
 
     if let Err(violation) = pua_engine.check_red_lines(method.as_ref()) {
         return send_error(
@@ -545,7 +542,11 @@ pub async fn handle_request(
                 "kind": format!("{:?}", violation.kind),
                 "method": method.as_ref(),
                 "detail": violation.detail,
-                "quality_compass": dynamic_check_descriptions,
+                "quality_compass": DynamicQualityCompass::default()
+                    .get_checks(&task_context)
+                    .into_iter()
+                    .map(|check| check.description)
+                    .collect::<Vec<_>>(),
             })),
         )
         .await;
@@ -563,8 +564,18 @@ pub async fn handle_request(
         } else {
             pua_engine.generate_report(stage, &completed_actions)
         };
-        if let Err(err) = pua_feedback_collector().collect(&report) {
-            debug!("failed to persist PUA feedback report: {}", err);
+        // Persist the learning record off the request hot path: the write is
+        // synchronous open-append-close disk I/O, so run it on the blocking
+        // pool. The collector is a process-wide singleton, so the record is
+        // cloned and moved into the task.
+        {
+            let collector = pua_feedback_collector();
+            let record = report.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(err) = collector.collect(&record) {
+                    debug!("failed to persist PUA feedback report: {}", err);
+                }
+            });
         }
         if pua_report_enabled(server, &request.params) {
             if let Some(encoded) = encode_pua_report(&report) {
@@ -588,7 +599,11 @@ pub async fn handle_request(
                         "stage": stage,
                         "method": method.as_ref(),
                         "detail": violation.detail,
-                        "quality_compass": dynamic_check_descriptions,
+                        "quality_compass": DynamicQualityCompass::default()
+                            .get_checks(&task_context)
+                            .into_iter()
+                            .map(|check| check.description)
+                            .collect::<Vec<_>>(),
                     })),
                 )
                 .await;

@@ -75,18 +75,10 @@ pub(crate) fn infer_risk_score(method: &str, task_type: &TaskType) -> f64 {
     }
 }
 
-pub(crate) fn classify_request_error_kind(error: &anyhow::Error) -> &'static str {
-    let message = error.to_string().to_ascii_lowercase();
-    if message.contains("pua") {
-        return "PuaViolation";
-    }
-    if message.contains("budget denied") || message.contains("budget exceeded") {
-        return "BudgetExceeded";
-    }
-    if message.contains("hardening policy denied") || message.contains("sandbox") {
-        return "SandboxBlocked";
-    }
-    "GeneralError"
+pub(crate) fn classify_request_error_kind(error: &anyhow::Error) -> String {
+    // Delegate to the canonical error-kind classifier (keyword + code rules) so
+    // the PUA/budget/sandbox keyword matching lives in exactly one place.
+    infer_error_contract_kind(-32000, &error.to_string(), None)
 }
 
 pub(crate) fn infer_error_contract_kind(

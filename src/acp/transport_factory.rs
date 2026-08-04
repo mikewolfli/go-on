@@ -264,7 +264,7 @@ pub async fn dispatch_server(
                 mcp_registry,
                 Arc::clone(&acp_server.tool_registry),
                 "go-on".into(),
-                "1.2.0".into(),
+                env!("CARGO_PKG_VERSION").into(),
                 Some(Arc::new(acp_server)),
             );
             s.run().await
@@ -274,7 +274,7 @@ pub async fn dispatch_server(
                 mcp_registry,
                 Arc::clone(&acp_server.tool_registry),
                 "go-on".into(),
-                "1.2.0".into(),
+                env!("CARGO_PKG_VERSION").into(),
                 acp_http_bind.into(),
                 Some(Arc::new(acp_server)),
             )

@@ -5,10 +5,20 @@
 //! cost and latency estimates that adapt to observed behaviour.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::shared::execution_recorder::ExecutionRecorder;
 use tracing::debug;
+
+/// Process-global live-performance feed shared by the orchestrator and the
+/// capability bus. All readers (model cost/latency estimation in
+/// `select_model_for_task`, `decide`) and writers (`fallback.rs` outcome
+/// recording) observe the same instance, so dynamic estimates reflect real
+/// observed behavior.
+pub fn global_live_performance() -> &'static Arc<LivePerformanceFeed> {
+    static GLOBAL: OnceLock<Arc<LivePerformanceFeed>> = OnceLock::new();
+    GLOBAL.get_or_init(|| Arc::new(LivePerformanceFeed::new(0.3)))
+}
 
 /// Inner state wrapped in a single Mutex.
 struct LivePerformanceInner {
@@ -259,5 +269,18 @@ mod tests {
         // Latency after two: 0.1*100 + 0.9*(0.1*1000 + 0.9*1000) = 10 + 900 = 910
         let latency = feed.get_latency_estimate("model-c").unwrap();
         assert!(latency > 500.0, "latency={}", latency); // Still close to 1000
+    }
+
+    #[test]
+    fn global_feed_is_shared_singleton() {
+        // The global feed must be the same instance for every caller so that
+        // fallback outcome recording and model estimation observe one dataset.
+        let a = crate::observability::live_performance::global_live_performance();
+        let b = crate::observability::live_performance::global_live_performance();
+        assert!(std::ptr::eq(a.as_ref(), b.as_ref()));
+
+        // Writing through one handle is visible through the other.
+        a.record_success("global-model", 42);
+        assert_eq!(b.get_request_count("global-model"), 1);
     }
 }
