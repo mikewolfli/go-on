@@ -14,10 +14,22 @@ use std::collections::HashMap;
 /// Design notes:
 /// - Q-Learning runs as the default algorithm.
 /// - Single-node deployment has zero overhead from federation.
+///
+/// Maximum number of (state, action) entries kept in the Q-table before the
+/// least-recently-updated entry is evicted. Bounds memory for long-running
+/// processes where the key space (task_type × agent) grows without limit.
+const MAX_Q_TABLE_ENTRIES: usize = 10_000;
+
 #[derive(Debug)]
 pub struct ReinforcementBus {
     /// Q-table: (state, action) → value.
     q_table: HashMap<(String, String), f64>,
+    /// Per-state maximum Q-value, kept in sync with `q_table` so the
+    /// `max(Q(s', a'))` term is O(1) instead of a full-table scan per update.
+    state_max_q: HashMap<String, f64>,
+    /// Monotonic update sequence per entry, used for LRU eviction.
+    last_updated: HashMap<(String, String), u64>,
+    update_seq: u64,
     /// Learning rate (alpha).
     learning_rate: f64,
     /// Discount factor (gamma).
@@ -31,6 +43,9 @@ impl ReinforcementBus {
     pub fn new() -> Self {
         Self {
             q_table: HashMap::new(),
+            state_max_q: HashMap::new(),
+            last_updated: HashMap::new(),
+            update_seq: 0,
             learning_rate: 0.1,
             discount_factor: 0.9,
             exploration_rate: 0.1,
@@ -97,23 +112,35 @@ impl ReinforcementBus {
         let key = (state.to_string(), action.to_string());
         let old_q = self.q_table.get(&key).copied().unwrap_or(0.0);
 
-        // max over next state actions
-        let max_next_q = self
-            .q_table
-            .iter()
-            .filter(|((s, _), _)| s == next_state)
-            .map(|(_, v)| *v)
-            .fold(f64::NEG_INFINITY, f64::max);
-
-        let max_next_q = if max_next_q == f64::NEG_INFINITY {
-            0.0
-        } else {
-            max_next_q
-        };
+        // max over next state actions — O(1) via the per-state index.
+        let max_next_q = self.state_max_q.get(next_state).copied().unwrap_or(0.0);
 
         let new_q =
             old_q + self.learning_rate * (reward + self.discount_factor * max_next_q - old_q);
-        self.q_table.insert(key, new_q);
+
+        // Bound the table: evict the least-recently-updated entry when a new
+        // (state, action) pair would exceed the cap.
+        if !self.q_table.contains_key(&key) && self.q_table.len() >= MAX_Q_TABLE_ENTRIES {
+            self.evict_lru();
+        }
+        self.q_table.insert(key.clone(), new_q);
+        self.update_seq += 1;
+        self.last_updated.insert(key, self.update_seq);
+
+        // Maintain the per-state maximum (only the touched state may change).
+        let state_max = self.state_max_q.entry(state.to_string()).or_insert(0.0);
+        if new_q > *state_max {
+            *state_max = new_q;
+        }
+    }
+
+    /// Evict the least-recently-updated entry (called only at capacity).
+    fn evict_lru(&mut self) {
+        if let Some((key, _)) = self.last_updated.iter().min_by_key(|(_, seq)| **seq) {
+            let key = key.clone();
+            self.q_table.remove(&key);
+            self.last_updated.remove(&key);
+        }
     }
 
     // ── Query ─────────────────────────────────────────────────────

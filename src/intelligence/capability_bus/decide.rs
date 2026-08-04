@@ -29,6 +29,7 @@ pub(crate) struct CandidateScoreWeights {
     pub(crate) task_fit: f64,
     pub(crate) recent_outcome: f64,
     pub(crate) causal_insight: f64,
+    pub(crate) discovery: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,6 +40,7 @@ pub(crate) struct CandidateScoreBreakdown {
     pub(crate) task_fit_score: f64,
     pub(crate) recent_outcome_score: f64,
     pub(crate) causal_insight_score: f64,
+    pub(crate) discovery_score: f64,
     pub(crate) total_score: f64,
 }
 
@@ -81,24 +83,27 @@ pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
         }
 
         let weights = CandidateScoreWeights {
-            reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.40),
-            recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.12),
-            task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.23),
-            recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.15),
+            reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.38),
+            recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.11),
+            task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.22),
+            recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.14),
             causal_insight: read_weight("GO_ON_CAPABILITY_WEIGHT_CAUSAL_INSIGHT", 0.10),
+            discovery: read_weight("GO_ON_CAPABILITY_WEIGHT_DISCOVERY", 0.05),
         };
         let total = weights.reputation
             + weights.recency
             + weights.task_fit
             + weights.recent_outcome
-            + weights.causal_insight;
+            + weights.causal_insight
+            + weights.discovery;
         if total <= f64::EPSILON {
             CandidateScoreWeights {
-                reputation: 0.40,
-                recency: 0.12,
-                task_fit: 0.23,
-                recent_outcome: 0.15,
+                reputation: 0.38,
+                recency: 0.11,
+                task_fit: 0.22,
+                recent_outcome: 0.14,
                 causal_insight: 0.10,
+                discovery: 0.05,
             }
         } else {
             CandidateScoreWeights {
@@ -107,6 +112,7 @@ pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
                 task_fit: weights.task_fit / total,
                 recent_outcome: weights.recent_outcome / total,
                 causal_insight: weights.causal_insight / total,
+                discovery: weights.discovery / total,
             }
         }
     })
@@ -273,11 +279,31 @@ impl CapabilityBus {
                 // BLUE67-I1: Query causal Bayesian graph for agent-task effectiveness
                 let causal_insight_score =
                     self.world_model.causal_agent_insight(name, &task_type_str);
+                // Historical solution knowledge: DiscoveryCenter entries written by
+                // `evolve_discovery` use `problem_pattern = "state_{agent}"`, so a
+                // per-agent lookup surfaces that agent's past success rate for the
+                // same task type. High-rate agents get a real score boost instead of
+                // the knowledge being recorded-and-discarded.
+                let discovery_score = {
+                    let query = crate::intelligence::discovery::DiscoveryQuery {
+                        problem_pattern: Some(format!("state_{}", name)),
+                        tags: None,
+                        category: None,
+                        min_success_rate: Some(0.5),
+                        limit: Some(1),
+                    };
+                    self.discovery
+                        .search(&query)
+                        .best_match
+                        .map(|m| m.success_rate)
+                        .unwrap_or(0.0)
+                };
                 let total_score = (reputation_score * weights.reputation)
                     + (recency_score * weights.recency)
                     + (task_fit_score * weights.task_fit)
                     + (recent_outcome_score * weights.recent_outcome)
-                    + (causal_insight_score * weights.causal_insight);
+                    + (causal_insight_score * weights.causal_insight)
+                    + (discovery_score * weights.discovery);
                 CandidateScoreBreakdown {
                     agent: name.clone(),
                     reputation_score,
@@ -285,6 +311,7 @@ impl CapabilityBus {
                     task_fit_score,
                     recent_outcome_score,
                     causal_insight_score,
+                    discovery_score,
                     total_score,
                 }
             })
@@ -449,28 +476,11 @@ impl CapabilityBus {
             })
             .unwrap_or_default();
 
-        // Step D: Query DiscoveryCenter for prior solutions matching this task (I6).
-        //         If a matching solution exists, prefer its associated agent.
-        let discovery_query = crate::intelligence::discovery::DiscoveryQuery {
-            problem_pattern: Some(task_type_str.clone()),
-            tags: None,
-            category: None,
-            min_success_rate: Some(0.5),
-            limit: Some(5),
-        };
-        let discovery_result = self.discovery.search(&discovery_query);
-        if !discovery_result.entries.is_empty() {
-            self.record_event(
-                "decision",
-                None,
-                None,
-                "discovery_match",
-                serde_json::json!({
-                    "total_matches": discovery_result.total_matches,
-                    "best_match": discovery_result.best_match,
-                }),
-            );
-        }
+        // Step D: Historical solution knowledge is consumed inside
+        // `select_best_agent` — per-agent DiscoveryCenter lookups (problem_pattern
+        // `state_{agent}`) boost candidates with proven success. The former
+        // task-type query here matched nothing (entries are keyed by agent, not
+        // by TaskType) and its result was only recorded to an event.
 
         // In profiles with tool bus, merge runtime-created sub-agent templates from AgentFactory.
         #[cfg(any(
@@ -596,6 +606,7 @@ impl CapabilityBus {
                 task_fit_score: 1.0,
                 recent_outcome_score: 1.0,
                 causal_insight_score: 1.0,
+                discovery_score: 0.0,
                 total_score: 1.0,
             }];
             (Some(preferred.clone()), breakdown)

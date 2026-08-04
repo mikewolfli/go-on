@@ -13,7 +13,7 @@ use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::{
     check_api_response, option_f64, option_u64, principles_to_text, resolve_effective_model,
-    stream_sse_events, SseEventAction, StreamingConfig,
+    stream_sse_events, SseEventAction,
 };
 
 /// Anthropic Claude agent
@@ -426,8 +426,7 @@ impl Agent for AnthropicAgent {
     /// SSE compression is applied when `options["sse_compress"]` is set.
     /// The non-compressed path uses the Anthropic-specific SSE parser (which
     /// accumulates native tool_use input deltas); the compressed path uses the
-    /// shared decompressing stream helper (same as the former
-    /// `chat_once_compressed`).
+    /// shared `stream_sse_to_sender` decompressing stream helper.
     async fn chat_once(
         &self,
         messages: &[Message],
@@ -452,17 +451,12 @@ impl Agent for AnthropicAgent {
 
         let response = check_api_response(response, "claude").await?;
 
-        let use_compression = options
-            .as_ref()
-            .and_then(|o| o.get("sse_compress"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if use_compression {
-            let compress_cfg = StreamingConfig {
-                enable_compression: true,
-                ..Default::default()
-            };
-            crate::agents::stream_sse_to_sender(response, sender, &compress_cfg).await
+        // SSE compression is applied when `options["sse_compress"]` is set; the
+        // non-compressed path uses the Anthropic-specific SSE parser (which
+        // accumulates native tool_use input deltas).
+        let cfg = crate::agents::streaming_config(options, false);
+        if cfg.enable_compression {
+            crate::agents::stream_sse_to_sender(response, sender, &cfg).await
         } else {
             self.stream_sse(response, sender).await
         }

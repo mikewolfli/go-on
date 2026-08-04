@@ -177,7 +177,10 @@ impl MemoryBus {
 
         if let Some(ref mrc) = self.memory_response_cache {
             if let Ok(guard) = mrc.read() {
-                snapshot.total_cache_misses = guard.len() as u64;
+                let stats = guard.stats();
+                snapshot.total_cache_hits += stats.total_hits;
+                snapshot.total_cache_misses = stats.total_misses;
+                snapshot.cache_hit_rate = stats.hit_ratio;
             }
         }
 

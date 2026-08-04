@@ -7,14 +7,12 @@
 //! reusable client that fetches and caches that token, and automatically
 //! refreshes it on expiry.
 
-use std::time::{Duration, Instant};
-
 use anyhow::Result;
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
 use crate::agent::resolve_secret;
 use crate::agents::agent::token_request_failed_msg;
+use crate::agents::TokenCache;
 
 /// The raw response from Baidu's OAuth token endpoint.
 #[derive(Debug, Deserialize)]
@@ -22,11 +20,6 @@ pub struct BaiduTokenResponse {
     pub access_token: String,
     /// Time-to-live in seconds (typically 2592000 for 30 days).
     pub expires_in: Option<u64>,
-}
-
-struct CachedToken {
-    token: String,
-    expires_at: Instant,
 }
 
 /// A client that manages a cached Baidu access token obtained via the
@@ -38,7 +31,7 @@ pub struct BaiduAuthClient {
     api_key_env: String,
     secret_key_env: String,
     client: reqwest::Client,
-    cache: Mutex<Option<CachedToken>>,
+    cache: TokenCache,
 }
 
 impl BaiduAuthClient {
@@ -54,7 +47,7 @@ impl BaiduAuthClient {
             api_key_env,
             secret_key_env,
             client,
-            cache: Mutex::new(None),
+            cache: TokenCache::new(),
         }
     }
 
@@ -64,14 +57,9 @@ impl BaiduAuthClient {
     /// `service_name` is used in error messages and secret resolution contexts
     /// (e.g. `"wenxin"`, `"qianfan"`).
     pub async fn get_access_token(&self, service_name: &str) -> Result<String> {
-        // Fast path: cached token still valid.
-        {
-            let cache = self.cache.lock().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.expires_at > Instant::now() {
-                    return Ok(cached.token.clone());
-                }
-            }
+        // Fast path: cached token still valid (120s safety margin).
+        if let Some(token) = self.cache.fresh(120) {
+            return Ok(token);
         }
 
         let api_key = resolve_secret(&self.api_key_env, &format!("{service_name}.api_key_env"))?;
@@ -101,16 +89,19 @@ impl BaiduAuthClient {
         let token_response: BaiduTokenResponse = response.json().await?;
         let ttl_seconds = token_response.expires_in.unwrap_or(1800);
         let safety_margin = ttl_seconds.min(120);
-        let expires_at = Instant::now() + Duration::from_secs(ttl_seconds - safety_margin);
+        let expires_at = unix_now_secs() + ttl_seconds - safety_margin;
 
-        {
-            let mut cache = self.cache.lock().await;
-            *cache = Some(CachedToken {
-                token: token_response.access_token.clone(),
-                expires_at,
-            });
-        }
+        self.cache
+            .store(token_response.access_token.clone(), expires_at);
 
         Ok(token_response.access_token)
     }
+}
+
+/// Current Unix time in seconds.
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }

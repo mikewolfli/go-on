@@ -13,9 +13,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::chat_request_failed_msg;
 use crate::agents::baidu_auth::BaiduAuthClient;
-use crate::agents::{option_f64, option_string, principles_to_text, StreamingConfig};
+use crate::agents::{check_api_response, option_f64, option_string, principles_to_text};
 
 /// Strict-completeness instruction injected during review/strict phases.
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
@@ -193,24 +192,10 @@ impl Agent for BaiduErnieAgent {
             }
         };
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg(scope, &status.to_string(), &body)
-            );
-        }
+        let response = check_api_response(response, scope).await?;
 
-        let compress_cfg = StreamingConfig {
-            enable_compression: options
-                .as_ref()
-                .and_then(|o| o.get("sse_compress"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
-            ..Default::default()
-        };
-        crate::agents::stream_sse_to_sender(response, sender, &compress_cfg).await
+        let cfg = crate::agents::streaming_config(options, false);
+        crate::agents::stream_sse_to_sender(response, sender, &cfg).await
     }
 
     fn available_models(&self) -> Vec<ModelInfo> {

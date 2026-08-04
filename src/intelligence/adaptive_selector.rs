@@ -136,6 +136,10 @@ pub struct AdaptiveModelSelector {
     max_models: usize,
     /// Optional static strategy for fallback during cold start.
     static_strategy: Option<ModelSelectionStrategy>,
+    /// Incremental total of `total_requests` across all entries, kept in sync
+    /// with `metrics` so `total_observations()` is O(1) instead of a full-table
+    /// scan on every UCB score (which is computed per candidate).
+    total_observations_count: u64,
 }
 
 impl AdaptiveModelSelector {
@@ -145,6 +149,7 @@ impl AdaptiveModelSelector {
             exploration_bias: DEFAULT_EXPLORATION_BIAS,
             max_models: DEFAULT_MAX_MODELS,
             static_strategy: None,
+            total_observations_count: 0,
         }
     }
 
@@ -222,7 +227,11 @@ impl AdaptiveModelSelector {
                 .min_by_key(|(_, m)| m.last_updated_ms)
                 .map(|(k, _)| k.clone())
             {
-                self.metrics.remove(&oldest_key);
+                if let Some(evicted) = self.metrics.remove(&oldest_key) {
+                    self.total_observations_count = self
+                        .total_observations_count
+                        .saturating_sub(evicted.total_requests);
+                }
             }
         }
 
@@ -240,6 +249,7 @@ impl AdaptiveModelSelector {
         });
 
         entry.total_requests += 1;
+        self.total_observations_count += 1;
         if success {
             entry.successful_requests += 1;
         }
@@ -381,7 +391,7 @@ impl AdaptiveModelSelector {
     }
 
     fn total_observations(&self) -> u64 {
-        self.metrics.values().map(|item| item.total_requests).sum()
+        self.total_observations_count
     }
 
     /// UCB score for a model in a specific context.

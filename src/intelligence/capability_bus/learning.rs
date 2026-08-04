@@ -55,39 +55,6 @@ impl CapabilityBus {
         }
     }
 
-    /// Submit local policy to FederatedRL.
-    pub(crate) fn evolve_federated_rl(
-        &self,
-        state: &(String, String),
-        action: &str,
-        reward: f64,
-        quality_score: f64,
-        success: bool,
-    ) {
-        if success {
-            let now = crate::shared::timestamps::now_ts_ms() as u64;
-            let frl = self.federated_rl.submit_policy(
-                "local_agent".to_string(),
-                format!("evolve_{}", state.0),
-                serde_json::json!({
-                    "state": state,
-                    "action": action,
-                    "reward": reward,
-                    "timestamp": now,
-                })
-                .to_string(),
-                quality_score,
-                1,
-            );
-            if let Err(e) = self
-                .federated_rl
-                .contribute_to_round(&format!("round_{}", state.0), &frl)
-            {
-                warn!("evolve: federated_rl.contribute_to_round failed: {}", e);
-            }
-        }
-    }
-
     /// Consolidate experience into continuous learning center.
     ///
     /// Periodically triggers forgetting detection and experience replay

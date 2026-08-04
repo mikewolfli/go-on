@@ -113,6 +113,20 @@ impl AgentMemoryBus {
             staleness: 0,
             user_id: None, // will be set by store_memory below
         };
+
+        // Mirror the insight into the attached VectorStore under the
+        // `agent_memory` phase so vector retrieval (`retrieve_memories` fast
+        // path) can actually find it. Previously insights were only written to
+        // the in-memory store while the vector fast path searched a phase that
+        // nothing ever wrote — making `[AgentMemoryBus context]` always empty
+        // once a vector store was attached.
+        if let Some(ref vs) = self.vector_store {
+            let _ = vs
+                .clone()
+                .upsert("agent_memory", task_description, &entry.content)
+                .await;
+        }
+
         self.store_memory(entry, user_id).await;
     }
 
@@ -196,7 +210,7 @@ impl AgentMemoryBus {
                 .search("agent_memory", query, limit, 0.0, 512)
                 .await
             {
-                Ok((hits, _)) => {
+                Ok((hits, _)) if !hits.is_empty() => {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64)
@@ -219,6 +233,11 @@ impl AgentMemoryBus {
                             user_id: effective_user_id.map(|s| s.to_string()),
                         })
                         .collect();
+                }
+                Ok(_) => {
+                    // No vector hits — fall through to the in-memory linear
+                    // scan so memories stored before the vector store was
+                    // attached (or not yet mirrored) remain retrievable.
                 }
                 Err(e) => {
                     warn!("AgentMemoryBus: vector search failed, falling back to linear scan: {e}");

@@ -484,7 +484,10 @@ async fn run_single_review(
             duration_ms: elapsed_ms,
         });
 
-    let syntax_signal = DeterministicVerifier::run_syntax_check("");
+    // Run the syntax signal against the reviewer's actual response instead of
+    // an empty string (the empty string trivially passed every check and
+    // inflated `passed_signals_count`).
+    let syntax_signal = DeterministicVerifier::run_syntax_check(&response);
     let compass_signals = DeterministicVerifier::run_quality_compass_checks(&response);
     let all_signals_count = 1 + compass_signals.len();
     let passed_signals_count =

@@ -158,8 +158,12 @@ mod test_suite {
 
         let status = server.get_status();
 
-        // Verify status structure
-        assert_eq!(status.metrics.total_requests, 0);
+        // Verify status structure. NOTE: `total_requests` inside `get_status()`
+        // is merged with the process-wide performance monitor
+        // (`global_metrics_snapshot()`), which parallel tests may already have
+        // initialized — so assert on the per-server metric instead of the
+        // merged value.
+        assert_eq!(server.metrics().total_requests(), 0);
         assert!(status.metrics.avg_request_duration_ms >= 0.0);
         assert_eq!(status.lifecycle.current_phase, "running");
         assert!(status.lifecycle.is_healthy);

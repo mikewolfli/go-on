@@ -237,6 +237,9 @@ pub async fn consensus_vote_with_reputation(
     // Collect votes — prefer stored AgentVoter impls, fall back to hardcoded.
     // This is now truly async-safe: we directly await the voter futures
     // instead of blocking the current thread.
+    // The hub is now actively engaged in a consensus round.
+    INTEL_HUB_ACTIVATIONS.fetch_add(1, Ordering::Relaxed);
+
     let raw_votes = if let Some(voters) = GLOBAL_VOTERS.get() {
         // Build the voting context from the proposal
         let context = serde_json::to_string(&proposal).unwrap_or_default();
@@ -359,6 +362,7 @@ pub async fn consensus_vote_with_reputation(
                         result.converged,
                         result.final_result.approved
                     );
+                    CONSENSUS_ROUNDS.fetch_add(result.rounds as u64, Ordering::Relaxed);
                     result.final_result
                 } else {
                     // No voters — fall back to simple weighted vote.
@@ -423,21 +427,28 @@ pub async fn consensus_vote_with_reputation(
 ///
 /// Returns (is_justified, explanation) where explanation describes concerns.
 pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, String) {
+    // Multi-factor risk scoring — single keyword table used by both the
+    // Delphi-debate proposal and the rationalization threshold below (they
+    // previously maintained two separate keyword sets that disagreed).
+    let risk_keywords = [
+        "delete", "remove", "exec", "shell", "rm", "sudo", "admin", "override", "bypass", "secret",
+        "token", "password", "key", "cert", "database", "drop", "truncate", "alter", "grant",
+        "revoke",
+    ];
+    let task_lower = task.to_lowercase();
+    let risk_score = risk_keywords
+        .iter()
+        .filter(|kw| task_lower.contains(*kw))
+        .count() as f64
+        / risk_keywords.len() as f64;
+
     // ── Delphi debate integration ────────────────────────────────────────
     // When enabled, delegate to the weighted reputation + Delphi debate
     // voting path for higher-confidence decision verification.
     if USE_DELPHI_DEBATE.load(Ordering::Relaxed) {
         let proposal = serde_json::json!({
             "confidence": confidence,
-            "risk_level": if task.to_lowercase().contains("delete")
-                || task.to_lowercase().contains("remove")
-                || task.to_lowercase().contains("shell")
-                || task.to_lowercase().contains("sudo")
-            {
-                "high"
-            } else {
-                "low"
-            },
+            "risk_level": if risk_score > 0.0 { "high" } else { "low" },
         });
         let reputations = HashMap::new();
         let config = VoteConfig::default(); // defaults to DelphiDebate mode
@@ -462,19 +473,6 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
         }
         // Delphi approved — continue to standard rationalization checks
     }
-
-    // Multi-factor risk scoring
-    let risk_keywords = [
-        "delete", "remove", "exec", "shell", "rm", "sudo", "admin", "override", "bypass", "secret",
-        "token", "password", "key", "cert", "database", "drop", "truncate", "alter", "grant",
-        "revoke",
-    ];
-    let task_lower = task.to_lowercase();
-    let risk_score = risk_keywords
-        .iter()
-        .filter(|kw| task_lower.contains(*kw))
-        .count() as f64
-        / risk_keywords.len() as f64;
 
     // Task complexity: longer tasks with more structure are more complex
     let word_count = task.split_whitespace().count().max(1) as f64;

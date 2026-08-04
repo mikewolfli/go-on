@@ -18,9 +18,7 @@ use tracing::warn;
 
 use crate::agent::{resolve_secret, Agent, Message, ModelInfo};
 use crate::agents::agent::{is_non_retryable_4xx, request_failed_msg};
-use crate::agents::{
-    apply_openai_common_options, check_api_response, option_string, principles_to_text,
-};
+use crate::agents::{apply_openai_common_options, check_api_response, option_string};
 use crate::i18n::runtime::tf;
 use crate::orchestration::autonomy_runtime::build_model_used_token;
 
@@ -46,12 +44,6 @@ pub(crate) const COPILOT_FALLBACK_MODEL_PRIORITY: &[&str] = &[
     "gpt-4o-mini",
 ];
 
-/// Cached Copilot API token with its expiry (Unix timestamp seconds).
-struct CachedToken {
-    token: String,
-    expires_at: u64,
-}
-
 /// Cached ranked Copilot model IDs fetched from `/models`.
 struct CachedModels {
     models: Vec<String>,
@@ -62,8 +54,8 @@ pub struct CopilotAgent {
     /// Name of the environment variable holding the GitHub OAuth token.
     token_env: String,
     client: reqwest::Client,
-    /// Short-lived Copilot API token, auto-refreshed.
-    cached: Mutex<Option<CachedToken>>,
+    /// Short-lived Copilot API token, auto-refreshed (shared TokenCache).
+    cached: crate::agents::TokenCache,
     /// Ranked Copilot model IDs discovered from GitHub's `/models` endpoint.
     cached_models: Mutex<Option<CachedModels>>,
 }
@@ -76,7 +68,7 @@ impl CopilotAgent {
         Self {
             token_env,
             client,
-            cached: Mutex::new(None),
+            cached: crate::agents::TokenCache::new(),
             cached_models: Mutex::new(None),
         }
     }
@@ -316,21 +308,9 @@ impl CopilotAgent {
 
     /// Return a valid Copilot API token, refreshing if needed.
     async fn copilot_token(&self) -> Result<String> {
-        // Fast path: check cache without doing any async work.
-        {
-            let guard = match self.cached.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    warn!("copilot token cache lock poisoned during read; recovering cached token state");
-                    poisoned.into_inner()
-                }
-            };
-            if let Some(ref c) = *guard {
-                // Keep a 60-second safety margin before the stated expiry.
-                if Self::now_secs() + 60 < c.expires_at {
-                    return Ok(c.token.clone());
-                }
-            }
+        // Fast path: check the shared cache without any async work (60s margin).
+        if let Some(token) = self.cached.fresh(60) {
+            return Ok(token);
         }
 
         // Slow path: fetch a new token.
@@ -371,48 +351,9 @@ impl CopilotAgent {
             Self::now_secs() + 1500
         });
 
-        {
-            let mut guard = match self.cached.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    warn!("copilot token cache lock poisoned during write; recovering cached token state");
-                    poisoned.into_inner()
-                }
-            };
-            *guard = Some(CachedToken {
-                token: token.clone(),
-                expires_at,
-            });
-        }
+        self.cached.store(token.clone(), expires_at);
 
         Ok(token)
-    }
-
-    fn merge_principles_into_messages(
-        &self,
-        messages: &[Message],
-        principles: &Option<Vec<String>>,
-    ) -> Vec<Message> {
-        if let Some(items) = principles {
-            if !items.is_empty() {
-                let instruction = principles_to_text(items);
-                let mut owned = messages.to_vec();
-                if let Some(first_user) = owned.iter_mut().find(|m| m.role == "user") {
-                    first_user.content = format!("{}\n{}", instruction, first_user.content);
-                } else {
-                    owned.insert(
-                        0,
-                        Message {
-                            role: "user".to_string(),
-                            content: instruction,
-                        },
-                    );
-                }
-                return owned;
-            }
-        }
-
-        messages.to_vec()
     }
 
     fn build_payload(
@@ -456,7 +397,9 @@ impl Agent for CopilotAgent {
         options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
-        let merged = self.merge_principles_into_messages(messages, principles);
+        // Copilot has no system role; prepend principles to the first user
+        // message via the shared helper.
+        let merged = crate::agents::merge_principles_into_messages(messages, principles, false);
         let api_token = self.copilot_token().await?;
         let payload = self.build_payload(merged, options);
 
@@ -486,12 +429,8 @@ impl Agent for CopilotAgent {
         crate::agents::stream_sse_events(response, move |data| {
             use crate::agents::SseEventAction;
 
-            if data.trim() == "[DONE]" {
-                return Ok(SseEventAction::Stop);
-            }
-
+            // Capture the model name from the first event that carries it.
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                // Capture model name from the first event that has it.
                 let mut m = capture.lock().unwrap_or_else(|poisoned| {
                     tracing::warn!("lock poisoned, recovering");
                     poisoned.into_inner()
@@ -503,15 +442,15 @@ impl Agent for CopilotAgent {
                         }
                     }
                 }
-
-                for token in crate::agents::extract_all_tokens(&json) {
-                    if stream_sender.send(token).is_err() {
-                        return Ok(SseEventAction::Stop);
-                    }
-                }
             }
 
-            Ok(SseEventAction::Continue)
+            // Reuse the shared [DONE]/token-extraction handling instead of
+            // reimplementing it inline.
+            if crate::agents::sse_event_to_sender(data, &stream_sender) {
+                Ok(SseEventAction::Stop)
+            } else {
+                Ok(SseEventAction::Continue)
+            }
         })
         .await?;
 
@@ -844,7 +783,7 @@ mod tests {
 
     #[test]
     fn merge_principles_prefixes_first_user_message() {
-        let merged = agent().merge_principles_into_messages(
+        let merged = crate::agents::merge_principles_into_messages(
             &[
                 message("system", "existing"),
                 message("user", "implement feature"),
@@ -853,6 +792,7 @@ mod tests {
                 "Use tests".to_string(),
                 "Keep diffs small".to_string(),
             ]),
+            false,
         );
 
         assert_eq!(merged.len(), 2);
@@ -864,9 +804,10 @@ mod tests {
 
     #[test]
     fn merge_principles_inserts_user_message_when_missing() {
-        let merged = agent().merge_principles_into_messages(
+        let merged = crate::agents::merge_principles_into_messages(
             &[message("assistant", "prior output")],
             &Some(vec!["Use tests".to_string()]),
+            false,
         );
 
         assert_eq!(merged[0].role, "user");

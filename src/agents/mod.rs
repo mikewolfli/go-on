@@ -157,6 +157,165 @@ pub fn option_u64(options: &Option<HashMap<String, Value>>, key: &str) -> Option
         .and_then(|v| v.as_u64())
 }
 
+/// Shared cache for short-lived auth tokens with expiry-based auto-refresh.
+///
+/// Unified from `BaiduAuthClient` and `CopilotAgent`, which each maintained a
+/// private `CachedToken { token, expires_at }` with the same fast-path
+/// freshness check + slow-path refresh pattern (differing only in expiry
+/// representation, lock type, and where the safety margin is applied). Expiry
+/// is stored as Unix seconds; callers convert their provider-specific TTL.
+pub(crate) struct TokenCache {
+    inner: std::sync::Mutex<Option<CachedToken>>,
+}
+
+struct CachedToken {
+    token: String,
+    expires_at: u64,
+}
+
+impl TokenCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Return the cached token when it is still fresh — i.e. at least
+    /// `safety_margin_secs` before expiry — otherwise `None`.
+    pub(crate) fn fresh(&self, safety_margin_secs: u64) -> Option<String> {
+        let now = unix_now_secs();
+        let guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("token cache lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        guard
+            .as_ref()
+            .filter(|c| now + safety_margin_secs < c.expires_at)
+            .map(|c| c.token.clone())
+    }
+
+    /// Store a freshly fetched token with its absolute expiry (Unix seconds).
+    pub(crate) fn store(&self, token: String, expires_at_secs: u64) {
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("token cache lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        *guard = Some(CachedToken {
+            token,
+            expires_at: expires_at_secs,
+        });
+    }
+}
+
+/// Current Unix time in seconds.
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Build a streaming config from request options, honoring the
+/// `sse_compress` flag with a provider-specific default.
+///
+/// Previously each provider's `chat_once` inlined the same
+/// `options["sse_compress"]` unwrap (4 copies) — this is the single source.
+pub fn streaming_config(
+    options: &Option<HashMap<String, Value>>,
+    default_enable: bool,
+) -> StreamingConfig {
+    StreamingConfig {
+        enable_compression: options
+            .as_ref()
+            .and_then(|o| o.get("sse_compress"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default_enable),
+        ..Default::default()
+    }
+}
+
+/// Merge phase principles into the message list for providers that do not
+/// carry a separate system-role concept (or honor it inconsistently).
+///
+/// When `supports_system` is true the principles are prepended as a `system`
+/// message; otherwise they are prepended to the first user message so the
+/// constraints survive providers that ignore `system`.
+///
+/// Unified from `OpenAiCompatibleAgent` and `CopilotAgent` (which duplicated
+/// the user-prepend branch verbatim).
+pub fn merge_principles_into_messages(
+    messages: &[crate::agent::Message],
+    principles: &Option<Vec<String>>,
+    supports_system: bool,
+) -> Vec<crate::agent::Message> {
+    let Some(items) = principles else {
+        return messages.to_vec();
+    };
+
+    if items.is_empty() {
+        return messages.to_vec();
+    }
+
+    let instruction = principles_to_text(items);
+
+    if supports_system {
+        let mut merged = Vec::with_capacity(messages.len() + 1);
+        merged.push(crate::agent::Message {
+            role: "system".to_string(),
+            content: instruction,
+        });
+        merged.extend(messages.iter().cloned());
+        return merged;
+    }
+
+    // Providers that ignore `system`: prepend phase principles to the first
+    // user message to preserve constraints.
+    let mut owned = messages.to_vec();
+    if let Some(first_user) = owned.iter_mut().find(|m| m.role == "user") {
+        first_user.content = format!("{}\n{}", instruction, first_user.content);
+    } else {
+        owned.insert(
+            0,
+            crate::agent::Message {
+                role: "user".to_string(),
+                content: instruction,
+            },
+        );
+    }
+
+    owned
+}
+
+#[cfg(test)]
+mod token_cache_tests {
+    use super::TokenCache;
+
+    #[test]
+    fn fresh_returns_stored_token_within_margin() {
+        let cache = TokenCache::new();
+        assert_eq!(cache.fresh(60), None, "empty cache must not be fresh");
+
+        let now = super::unix_now_secs();
+        cache.store("tok-1".to_string(), now + 600);
+        // 600s to expiry with a 60s margin → still fresh.
+        assert_eq!(cache.fresh(60).as_deref(), Some("tok-1"));
+
+        // Within the safety margin (only 30s left) → treated as stale.
+        cache.store("tok-2".to_string(), now + 30);
+        assert_eq!(cache.fresh(60), None, "token inside safety margin is stale");
+
+        // Already expired → stale.
+        cache.store("tok-3".to_string(), now.saturating_sub(10));
+        assert_eq!(cache.fresh(60), None, "expired token is stale");
+    }
+}
+
 /// Check an LLM API response for success and valid content-type.
 /// Returns the response on success for further processing (e.g., streaming),
 /// or bails with a descriptive error including the response body on failure.
@@ -480,7 +639,7 @@ where
 ///   2. reasoning_content (DeepSeek)    → __thinking__ prefix
 ///   3. content (regular text)          → as-is
 ///   4. tool_calls (function calling)   → __tool_call__ prefix
-fn sse_event_to_sender(event: &str, sender: &crate::agent::StreamingSender) -> bool {
+pub(crate) fn sse_event_to_sender(event: &str, sender: &crate::agent::StreamingSender) -> bool {
     if event.trim() == "[DONE]" {
         return true;
     }

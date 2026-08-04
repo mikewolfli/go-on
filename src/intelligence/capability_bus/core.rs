@@ -66,10 +66,13 @@ use crate::intelligence::capability_bus::unified_knowledge_bus::UnifiedKnowledge
 
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::intelligence::matcher::ScenarioMatcher;
+
+/// A named evolve() subsystem future (stage-2 concurrent dispatch).
+pub(crate) type EvolveSubsystem<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 use crate::intelligence::metacognitive::MetacognitiveController;
 
 use crate::intelligence::reinforcement::federated::FederatedLearning;
-use crate::intelligence::reinforcement::federated::FederatedRL;
 use crate::intelligence::reinforcement::learning::RewardFunction;
 use crate::intelligence::self_model::SelfModelCore;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
@@ -365,7 +368,6 @@ pub struct CapabilityBus {
     pub metacognitive: MetacognitiveController,
     pub world_model: WorldModel,
     pub self_model: SelfModelCore,
-    pub federated_rl: FederatedRL,
     pub matcher: ScenarioMatcher,
     pub discovery: DiscoveryCenter,
 
@@ -492,7 +494,6 @@ impl CapabilityBus {
                         metacognitive: crate::intelligence::metacognitive::shared_metacognitive_controller(),
             world_model: WorldModel::new(Default::default()),
             self_model: SelfModelCore::new(Default::default()),
-            federated_rl: FederatedRL::new(Default::default()),
             matcher: ScenarioMatcher::default(),
             discovery: DiscoveryCenter::new(),
             #[cfg(any(
@@ -906,9 +907,10 @@ impl CapabilityBus {
     ///         Use `lock_guard` which is scoped; drop guards before
     ///         calling another subsystem method.
     ///
-    /// Each subsystem call is wrapped in `tokio::time::timeout(100ms, …)`
-    /// so a hung subsystem never stalls the pipeline.  Errors are logged
-    /// as warnings and the pipeline continues.
+    /// Each subsystem call is wrapped in `tokio::time::timeout(100ms, …)`, and
+    /// all independent subsystems run **concurrently** (stage 2) so a hung
+    /// subsystem never stalls the pipeline or the other subsystems. Errors are
+    /// logged as warnings and the pipeline continues.
     pub async fn evolve(
         &self,
         state: &(String, String),
@@ -918,7 +920,9 @@ impl CapabilityBus {
         success: bool,
         quality_score: f64,
     ) {
-        // ── Core RL update (reward, Q-table, experience) ────────────────
+        // ── Stage 1: Core RL update (reward, Q-table) ───────────────────
+        // The reward is consumed by several subsystems below, so Q-learning
+        // must complete before stage 2 can start.
         let timeout_dur = Duration::from_millis(self.config.subsystem_timeout_ms);
         let reward = match timeout(timeout_dur, async {
             self.evolve_q_learning(
@@ -941,279 +945,140 @@ impl CapabilityBus {
             }
         };
 
-        if timeout(timeout_dur, async {
-            self.evolve_experience(state, action, success, quality_score)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_experience timed out — skipping");
-        }
-
-        // ── ScenarioMatcher: record task pattern ────────────────────────
-        if timeout(timeout_dur, async {
-            use crate::intelligence::matcher::{MatchRules, ScenarioRouting};
-            let now = crate::shared::timestamps::now_ts_ms() as u64;
-            let scenario_id = format!("evolve_{}_{}", state.0, action);
-            self.matcher
-                .register_scenario(crate::intelligence::matcher::Scenario {
-                    id: scenario_id.clone(),
-                    name: format!("Evolved: {} via {}", state.0, action),
-                    description: format!(
-                        "Auto-generated scenario from evolution: state={:?} action={} success={}",
-                        state, action, success
-                    ),
-                    priority: if quality_score > 0.8 { 50 } else { 20 },
-                    match_rules: MatchRules {
-                        keywords: vec![state.0.clone(), action.to_string()],
-                        task_types: vec![state.1.clone()],
-                        agent_tags: vec![],
-                        complexity_range: None,
-                        risk_range: None,
-                    },
-                    routing: ScenarioRouting {
-                        preferred_agent: None,
-                        recommended_mode: if success { "auto".into() } else { "ask".into() },
-                        enabled_tools: vec![],
-                        add_tags: vec![state.0.clone(), action.to_string()],
-                    },
-                    created_ms: now,
-                    is_active: success && quality_score > 0.6,
-                });
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: scenario registration timed out — skipping");
-        }
-
-        // ── HarnessBus: drift / fault tolerance / audit ─────────────────
-        if timeout(timeout_dur, async {
-            self.evolve_drift_protection(quality_score, success)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_drift_protection timed out — skipping");
-        }
-
         let node_id = format!("evolve::{}_{}", state.0, action);
-        if timeout(timeout_dur, self.evolve_fault_tolerance(&node_id))
-            .await
-            .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_fault_tolerance timed out — skipping");
-        }
-
-        if timeout(timeout_dur, async {
-            self.evolve_harness_bus(state, action, reward, success, quality_score)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_harness_bus timed out — skipping");
-        }
-
-        // ── Cognitive modules ───────────────────────────────────────────
-        if timeout(timeout_dur, async {
-            self.evolve_federated_rl(state, action, reward, quality_score, success)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_federated_rl timed out — skipping");
-        }
-
-        if timeout(timeout_dur, async {
-            self.evolve_continuous_learning(state, action, reward, success, quality_score)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_continuous_learning timed out — skipping");
-        }
-
-        if timeout(timeout_dur, async {
-            self.evolve_metacognitive(state, action, reward, quality_score, success)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_metacognitive timed out — skipping");
-        }
-
         let now = crate::shared::timestamps::now_ts_ms() as u64;
-        if timeout(timeout_dur, async {
-            self.evolve_discovery(state, action, reward, quality_score, success, now)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_discovery timed out — skipping");
-        }
 
-        // ── Abstract knowledge (periodic, every 50th evolve) ────────────
-        if timeout(timeout_dur, async {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
-            let evolve_count = EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        // ── Stage 2: independent subsystems run concurrently ────────────
+        // Each has its own 100ms timeout; serializing up to 15 × 100ms of
+        // worst-case latency per evolve is unnecessary since the subsystems
+        // hold no locks across boundaries (scoped guards only).
+        use futures_util::future::join_all;
 
-            // Periodic world_model causal pattern discovery (every 100 cycles)
-            if evolve_count.is_multiple_of(100) {
-                let discoveries = self.world_model.discover_causal_patterns(60_000);
-                if !discoveries.is_empty() {
-                    tracing::info!(
-                        "evolve: world_model discovered {} causal pattern(s)",
-                        discoveries.len()
-                    );
-                    for d in &discoveries {
-                        tracing::debug!("evolve: causal discovery: {}", d);
+        let subsystems: Vec<(&'static str, EvolveSubsystem<'_>)> = vec![
+            (
+                "experience",
+                Box::pin(async move {
+                    self.evolve_experience(state, action, success, quality_score);
+                }),
+            ),
+            (
+                "scenario",
+                Box::pin(async move {
+                    use crate::intelligence::matcher::{MatchRules, ScenarioRouting};
+                    let scenario_id = format!("evolve_{}_{}", state.0, action);
+                    self.matcher
+                        .register_scenario(crate::intelligence::matcher::Scenario {
+                            id: scenario_id.clone(),
+                            name: format!("Evolved: {} via {}", state.0, action),
+                            description: format!(
+                                "Auto-generated scenario from evolution: state={:?} action={} success={}",
+                                state, action, success
+                            ),
+                            priority: if quality_score > 0.8 { 50 } else { 20 },
+                            match_rules: MatchRules {
+                                keywords: vec![state.0.clone(), action.to_string()],
+                                task_types: vec![state.1.clone()],
+                                agent_tags: vec![],
+                                complexity_range: None,
+                                risk_range: None,
+                            },
+                            routing: ScenarioRouting {
+                                preferred_agent: None,
+                                recommended_mode: if success {
+                                    "auto".into()
+                                } else {
+                                    "ask".into()
+                                },
+                                enabled_tools: vec![],
+                                add_tags: vec![state.0.clone(), action.to_string()],
+                            },
+                            created_ms: now,
+                            is_active: success && quality_score > 0.6,
+                        });
+                }),
+            ),
+            (
+                "drift_protection",
+                Box::pin(async move {
+                    self.evolve_drift_protection(quality_score, success);
+                }),
+            ),
+            (
+                "fault_tolerance",
+                Box::pin(async move {
+                    self.evolve_fault_tolerance(&node_id).await;
+                }),
+            ),
+            (
+                "harness_bus",
+                Box::pin(async move {
+                    self.evolve_harness_bus(state, action, reward, success, quality_score);
+                }),
+            ),
+            (
+                "continuous_learning",
+                Box::pin(async move {
+                    self.evolve_continuous_learning(state, action, reward, success, quality_score);
+                }),
+            ),
+            (
+                "metacognitive",
+                Box::pin(async move {
+                    self.evolve_metacognitive(state, action, reward, quality_score, success);
+                }),
+            ),
+            (
+                "discovery",
+                Box::pin(async move {
+                    self.evolve_discovery(state, action, reward, quality_score, success, now);
+                }),
+            ),
+            (
+                "evolution_graph",
+                Box::pin(async move {
+                    self.evolve_evolution_graph(state, action, success, quality_score);
+                }),
+            ),
+            (
+                "consciousness",
+                Box::pin(async move {
+                    self.evolve_consciousness(state, action, quality_score, success);
+                }),
+            ),
+            (
+                "world_model",
+                Box::pin(async move {
+                    self.evolve_world_model(action, state, reward);
+                }),
+            ),
+            (
+                "autoreflect",
+                Box::pin(async move {
+                    let report_ids = self.metacognitive.autoreflect();
+                    if !report_ids.is_empty() {
+                        tracing::info!(
+                            "evolve: metacognitive autoreflect generated {} report(s): {:?}",
+                            report_ids.len(),
+                            report_ids
+                        );
                     }
-                }
+                }),
+            ),
+        ];
+
+        let results = join_all(
+            subsystems
+                .into_iter()
+                .map(|(name, fut)| async move { (name, timeout(timeout_dur, fut).await) }),
+        )
+        .await;
+
+        for (name, res) in results {
+            if res.is_err() {
+                self.evolve_timeout_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!("evolve: {name} timed out — skipping");
             }
-
-            if evolve_count.is_multiple_of(50) && quality_score > 0.5 {
-                let insights = self.discovery.abstract_knowledge();
-                if !insights.is_empty() {
-                    tracing::info!(
-                        "evolve: discovery abstract_knowledge generated {} insights",
-                        insights.len()
-                    );
-                    for insight in &insights {
-                        if let Err(e) =
-                            crate::lock_or_recover!(&self.continuous_learning, "intelligence")
-                                .consolidate_experience(
-                                    &format!("abstract_knowledge_{}", now),
-                                    insight,
-                                    0.5,
-                                )
-                        {
-                            warn!("evolve: abstract_knowledge consolidate failed: {}", e);
-                        }
-                    }
-                    self.record_event(
-                        "evolve",
-                        None,
-                        None,
-                        "knowledge_abstraction",
-                        serde_json::json!({
-                            "insights_count": insights.len(),
-                            "insights": insights,
-                        }),
-                    );
-                }
-            }
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: abstract_knowledge phase timed out — skipping");
-        }
-
-        // ── Self-model & meta-cognitive evolution ───────────────────────
-        if timeout(timeout_dur, async {
-            self.evolve_evolution_graph(state, action, success, quality_score)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_evolution_graph timed out — skipping");
-        }
-
-        if timeout(timeout_dur, async { self.evolve_self_model(now, success) })
-            .await
-            .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_self_model timed out — skipping");
-        }
-
-        if timeout(timeout_dur, async {
-            self.evolve_consciousness(state, action, quality_score, success)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_consciousness timed out — skipping");
-        }
-
-        if timeout(timeout_dur, async {
-            self.evolve_world_model(action, state, reward)
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: evolve_world_model timed out — skipping");
-        }
-
-        // ── BLUE70: Read Q-value and exploration rate from ReinforcementBus ──
-        let (q_value, exploration_rate) = timeout(timeout_dur, async {
-            let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
-            let qv = rb.best_q_value(&state.0);
-            let er = 0.1; // default exploration rate; ReinforcementBus manages its own
-            drop(rb);
-            (qv, er)
-        })
-        .await
-        .unwrap_or_else(|_| {
-            warn!("evolve: reinforcement_bus lock timed out — using defaults");
-            (0.0, 0.0)
-        });
-
-        // Log evolution metrics — previously sent via MultiChannelTransport
-        // which was removed as dead code (~740 lines, only 1 usage).
-        if q_value > 0.0 || exploration_rate > 0.0 {
-            tracing::info!(
-                q_value = %format!("{:.4}", q_value),
-                exploration_rate = %format!("{:.4}", exploration_rate),
-                "evolve: metrics snapshot"
-            );
-        }
-
-        // ── P2-5: Metacognitive autoreflect ──────────────────────────────
-        if timeout(timeout_dur, async {
-            let report_ids = self.metacognitive.autoreflect();
-            if !report_ids.is_empty() {
-                tracing::info!(
-                    "evolve: metacognitive autoreflect generated {} report(s): {:?}",
-                    report_ids.len(),
-                    report_ids
-                );
-            }
-        })
-        .await
-        .is_err()
-        {
-            self.evolve_timeout_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!("evolve: metacognitive.autoreflect timed out — skipping");
         }
 
         self.record_event(
@@ -1300,7 +1165,8 @@ pub(crate) mod tests {
             + weights.recency
             + weights.task_fit
             + weights.recent_outcome
-            + weights.causal_insight;
+            + weights.causal_insight
+            + weights.discovery;
         assert!((total - 1.0).abs() < 0.0001);
     }
 
@@ -1339,7 +1205,8 @@ pub(crate) mod tests {
             + weights.recency
             + weights.task_fit
             + weights.recent_outcome
-            + weights.causal_insight;
+            + weights.causal_insight
+            + weights.discovery;
         assert!(
             (total - 1.0).abs() < 0.0001,
             "weights must sum to 1.0, got {}",
@@ -1496,6 +1363,82 @@ pub(crate) mod tests {
         assert!(
             (0.0..=1.0).contains(&coder_entry.recent_outcome_score),
             "recent_outcome_score should be normalized into [0,1]"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_knowledge_boosts_agent_selection() {
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        {
+            let mut graph = bus
+                .capability_graph
+                .lock()
+                .expect("capability_graph lock should not be poisoned");
+            register_test_agent(&mut graph, "discovery-star", vec!["general"]);
+            register_test_agent(&mut graph, "plain-agent", vec!["general"]);
+        }
+
+        // Only discovery-star has a proven historical solution, written exactly
+        // the way evolve_discovery writes it: problem_pattern = "state_{agent}".
+        let now = crate::shared::timestamps::now_ts_ms() as u64;
+        let _ = bus
+            .discovery
+            .record_solution(crate::intelligence::discovery::DiscoveryEntry {
+                id: String::new(),
+                problem_pattern: "state_discovery-star".to_string(),
+                solution_summary: "action_chat_complete".to_string(),
+                solution_detail: serde_json::json!({ "reward": 1.0, "quality": 0.9 }),
+                applicability_tags: vec!["discovery-star".to_string(), "chat_complete".to_string()],
+                success_rate: 0.9,
+                total_attempts: 3,
+                successful_attempts: 3,
+                discovered_by: "capability_bus_evolve".to_string(),
+                created_ms: now,
+                last_used_ms: now,
+            });
+
+        let candidates = vec!["discovery-star".to_string(), "plain-agent".to_string()];
+        // TaskType::Other gives both agents an identical task-fit score, so the
+        // only difference is the discovery knowledge.
+        let task = TaskContext {
+            task_type: TaskType::Other,
+            file_count: 1,
+            risk_score: 0.2,
+        };
+        let sensing = make_sensing(&bus, Vec::new());
+
+        let (selected, breakdown) = bus.select_best_agent(&task, &candidates, &sensing);
+
+        let star = breakdown
+            .iter()
+            .find(|b| b.agent == "discovery-star")
+            .expect("discovery-star should be scored");
+        let plain = breakdown
+            .iter()
+            .find(|b| b.agent == "plain-agent")
+            .expect("plain-agent should be scored");
+        assert!(
+            star.discovery_score > 0.0,
+            "discovery-star must receive a discovery boost; got {}",
+            star.discovery_score
+        );
+        assert_eq!(
+            plain.discovery_score, 0.0,
+            "plain-agent has no discovery entries"
+        );
+        assert_eq!(
+            selected.as_deref(),
+            Some("discovery-star"),
+            "proven historical success must win selection; got {:?}",
+            selected
+        );
+        assert!(
+            star.total_score > plain.total_score,
+            "discovery boost must raise total score: {} vs {}",
+            star.total_score,
+            plain.total_score
         );
     }
 

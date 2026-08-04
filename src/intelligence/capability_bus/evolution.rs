@@ -10,8 +10,6 @@
 use super::core::CapabilityBus;
 use crate::intelligence::consciousness::AwarenessMetricType;
 use crate::intelligence::evolution_graph::{EvolutionStage, TrendDirection};
-
-use crate::intelligence::self_model::SelfPerformanceSnapshot;
 use crate::intelligence::world_model::EntityType;
 use tracing::warn;
 
@@ -55,22 +53,6 @@ impl CapabilityBus {
                 }
             }
         }
-    }
-
-    /// Record performance snapshot in SelfModel.
-    pub(crate) fn evolve_self_model(&self, now: u64, success: bool) {
-        let snapshot = SelfPerformanceSnapshot {
-            timestamp_ms: now,
-            avg_latency_ms: 0.0,
-            p50_latency_ms: 0.0,
-            p95_latency_ms: 0.0,
-            p99_latency_ms: 0.0,
-            error_rate: if success { 0.0 } else { 1.0 },
-            throughput: 1.0,
-            agent_count: 1,
-            tasks_processed: 1,
-        };
-        self.self_model.record_performance(snapshot);
     }
 
     /// Record awareness metrics in Consciousness.

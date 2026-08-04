@@ -10,7 +10,6 @@ use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::{
     apply_openai_common_options, check_api_response, principles_to_text, resolve_effective_model,
-    StreamingConfig,
 };
 
 pub struct DeepSeekAgent {
@@ -151,15 +150,8 @@ impl Agent for DeepSeekAgent {
 
         let response = check_api_response(response, "deepseek").await?;
 
-        let compress_cfg = StreamingConfig {
-            enable_compression: options
-                .as_ref()
-                .and_then(|o| o.get("sse_compress"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
-            ..Default::default()
-        };
-        crate::agents::stream_sse_to_sender(response, sender, &compress_cfg).await
+        let cfg = crate::agents::streaming_config(options, false);
+        crate::agents::stream_sse_to_sender(response, sender, &cfg).await
     }
 
     /// Returns the currently available DeepSeek models per their official API docs:

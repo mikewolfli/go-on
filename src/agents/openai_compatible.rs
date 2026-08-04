@@ -8,9 +8,8 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::chat_request_failed_msg;
 use crate::agents::{
-    apply_openai_common_options, option_string, principles_to_text, StreamingConfig,
+    apply_openai_common_options, check_api_response, option_string, streaming_config,
 };
 
 pub struct OpenAiCompatibleAgent {
@@ -72,42 +71,7 @@ impl OpenAiCompatibleAgent {
         messages: &[Message],
         principles: &Option<Vec<String>>,
     ) -> Vec<Message> {
-        let Some(items) = principles else {
-            return messages.to_vec();
-        };
-
-        if items.is_empty() {
-            return messages.to_vec();
-        }
-
-        let instruction = principles_to_text(items);
-
-        if self.supports_system {
-            let mut merged = Vec::with_capacity(messages.len() + 1);
-            merged.push(Message {
-                role: "system".to_string(),
-                content: instruction,
-            });
-            merged.extend(messages.iter().cloned());
-            return merged;
-        }
-
-        // Some OpenAI-compatible providers ignore `system`, so we prepend
-        // phase principles to the first user message to preserve constraints.
-        let mut owned = messages.to_vec();
-        if let Some(first_user) = owned.iter_mut().find(|m| m.role == "user") {
-            first_user.content = format!("{}\n{}", instruction, first_user.content);
-        } else {
-            owned.insert(
-                0,
-                Message {
-                    role: "user".to_string(),
-                    content: instruction,
-                },
-            );
-        }
-
-        owned
+        crate::agents::merge_principles_into_messages(messages, principles, self.supports_system)
     }
 
     fn chat_endpoint(&self) -> String {
@@ -164,25 +128,10 @@ impl Agent for OpenAiCompatibleAgent {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "{}",
-                chat_request_failed_msg("openai_compatible", &status.to_string(), &body)
-            );
-        }
+        let response = check_api_response(response, "openai_compatible").await?;
 
-        let use_compression = options
-            .as_ref()
-            .and_then(|o| o.get("sse_compress"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(self.enable_compression);
-        let compress_cfg = StreamingConfig {
-            enable_compression: use_compression,
-            ..Default::default()
-        };
-        crate::agents::stream_sse_to_sender(response, sender, &compress_cfg).await
+        let cfg = streaming_config(options, self.enable_compression);
+        crate::agents::stream_sse_to_sender(response, sender, &cfg).await
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
