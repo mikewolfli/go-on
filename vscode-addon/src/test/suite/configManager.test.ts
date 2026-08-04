@@ -164,7 +164,7 @@ suite("configManager", () => {
     test("getConfigValue returns number for numeric fields", () => {
       const val = configManager.getConfigValue("vector.dimensions");
       assert.strictEqual(typeof val, "number");
-      assert.strictEqual(val, 192);
+      assert.strictEqual(val, 128);
     });
 
     test("getConfigValue returns string for string fields", () => {
@@ -191,7 +191,9 @@ suite("configManager", () => {
   suite("path resolution", () => {
     test("getConfigValue returns agent.url for copilot", () => {
       const url = configManager.getConfigValue("agents.copilot.url");
-      assert.strictEqual(url, "http://127.0.0.1:8080");
+      // Aligns with the backend authority `built_in_provider_specs()`
+      // (CopilotAgent hardcodes https://api.githubcopilot.com endpoints).
+      assert.strictEqual(url, "https://api.githubcopilot.com");
     });
 
     test("getConfigValue returns agent.api_key_env", () => {

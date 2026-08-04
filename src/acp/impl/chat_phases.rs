@@ -2232,3 +2232,46 @@ async fn store_agent_memory_bus_completion(
         .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::multimodal::MultimodalProcessor;
+
+    /// `process_image` needs no sub-processor, so a bare `MultimodalProcessor::new()`
+    /// is enough to verify inline `data:` URI extraction (F-GAP-66).
+    #[tokio::test]
+    async fn extract_data_uris_handles_multiple_uris_in_one_message() {
+        let mp = MultimodalProcessor::new();
+        let mut contexts = Vec::new();
+        let content = "see data:image/png;base64,QUJD and data:image/png;base64,REVG";
+
+        extract_data_uris(&mp, content, &mut contexts).await;
+
+        assert_eq!(contexts.len(), 2, "both inline data URIs must be processed");
+        assert!(contexts[0].contains("QUJD"));
+        assert!(contexts[1].contains("REVG"));
+    }
+
+    #[tokio::test]
+    async fn extract_data_uris_stops_at_markdown_bracket() {
+        let mp = MultimodalProcessor::new();
+        let mut contexts = Vec::new();
+        let content = "![x](data:image/png;base64,QUJDREVG)";
+
+        extract_data_uris(&mp, content, &mut contexts).await;
+
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].contains("QUJDREVG"));
+    }
+
+    #[tokio::test]
+    async fn extract_data_uris_ignores_empty_payload() {
+        let mp = MultimodalProcessor::new();
+        let mut contexts = Vec::new();
+
+        extract_data_uris(&mp, "data:image/png;base64,", &mut contexts).await;
+
+        assert!(contexts.is_empty());
+    }
+}

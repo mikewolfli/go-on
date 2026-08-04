@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
-"""Generate the GUI's static provider catalog from the backend authority.
+"""Generate the GUI + VS Code provider catalogs from the backend authority.
 
 The backend's `built_in_provider_specs()` in `src/core/providers.rs` is the
 single source of truth for provider names / defaults. The GUI previously kept
 two hand-maintained copies (`PROVIDER_NAMES` + `built_in_provider_specs()`),
-which drifted from the backend. This script generates
-`gui/src/views/providers/generated_catalog.rs` so the offline fallback and the
-backend can never diverge (same pattern as `gen-state-sync-types.py`).
+and the VS Code addon kept a third hand-maintained copy
+(`vscode-addon/src/settings/providerCatalog.ts`), all of which drifted from
+the backend. This script generates:
+
+- `gui/src/views/providers/generated_catalog.rs`           — GUI offline fallback
+- `vscode-addon/src/settings/providerCatalog.generated.ts` — VS Code catalog
+
+so neither offline fallback can diverge from the backend (same pattern as
+`gen-state-sync-types.py`).
+
+VS Code-specific mappings (documented, UI-only):
+- `api_key_env` / `secret_key_env` keyring URIs (`keyring://go-on/<name>_api_key`)
+  are mapped to conventional env var names (`<NAME>_API_KEY`).
+- `group` ("openai" | "chinese" | "other") is a VS Code settings-UI grouping,
+  derived from the backend `region` ("China" → "chinese") with an explicit
+  override set for the OpenAI-compatible core group.
 
 Usage:
     python3 scripts/gen-provider-catalog.py            # regenerate
@@ -19,13 +32,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "src" / "core" / "providers.rs"
-OUTPUT = ROOT / "gui" / "src" / "views" / "providers" / "generated_catalog.rs"
+GUI_OUTPUT = ROOT / "gui" / "src" / "views" / "providers" / "generated_catalog.rs"
+VSCODE_OUTPUT = (
+    ROOT / "vscode-addon" / "src" / "settings" / "providerCatalog.generated.ts"
+)
 
 BLOCK_RE = re.compile(r"ProviderSpec \{(?P<body>.*?)\n\s*\},", re.DOTALL)
 FIELD_PLAIN = re.compile(r'^\s*(\w+): "((?:[^"\\]|\\.)*)"\.to_string\(\),?\s*$')
 FIELD_STR = re.compile(r'^\s*(\w+): Some\("((?:[^"\\]|\\.)*)"\.to_string\(\)\),?\s*$')
 FIELD_NONE = re.compile(r"^\s*(\w+): None,?\s*$")
 FIELD_BOOL = re.compile(r"^\s*(\w+): Some\((true|false)\),?\s*$")
+FIELD_INT = re.compile(r"^\s*(\w+): Some\((\d+)\),?\s*$")
+
+# VS Code settings-UI grouping. The OpenAI-compatible core group is an explicit
+# override; everything else follows the backend `region` field.
+OPENAI_GROUP = {"openai", "openai_compatible", "anthropic", "cohere"}
+# Chinese vendor despite a Global `region` flag — preserved from the original
+# hand-maintained grouping so the settings UI keeps its intent.
+CHINESE_GROUP_OVERRIDES = {"deepseek"}
 
 
 def parse_specs(src: str) -> list[dict]:
@@ -46,6 +70,10 @@ def parse_specs(src: str) -> list[dict]:
             if m:
                 spec[m.group(1)] = m.group(2) == "true"
                 continue
+            m = FIELD_INT.match(line)
+            if m:
+                spec[m.group(1)] = int(m.group(2))
+                continue
             m = FIELD_NONE.match(line)
             if m:
                 spec[m.group(1)] = None
@@ -56,10 +84,30 @@ def parse_specs(src: str) -> list[dict]:
 
 
 def rust_str(value: str) -> str:
-    return '"' + value.replace('\\', "\\\\").replace('"', '\\"') + '"'
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def render(specs: list[dict]) -> str:
+def ts_str(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def env_var_from_keyring(uri: str) -> str:
+    """Map a backend keyring URI to a conventional env var name.
+
+    `keyring://go-on/openai_api_key` -> `OPENAI_API_KEY`.
+    """
+    return uri.rsplit("/", 1)[-1].upper()
+
+
+def group_for(spec: dict) -> str:
+    if spec.get("name") in OPENAI_GROUP:
+        return "openai"
+    if spec.get("name") in CHINESE_GROUP_OVERRIDES or spec.get("region") == "China":
+        return "chinese"
+    return "other"
+
+
+def render_gui(specs: list[dict]) -> str:
     lines = [
         "// Generated provider catalog — DO NOT EDIT.",
         "//",
@@ -111,6 +159,48 @@ def render(specs: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def render_vscode(specs: list[dict]) -> str:
+    lines = [
+        "// Generated provider catalog — DO NOT EDIT.",
+        "//",
+        "// Regenerate with: python3 scripts/gen-provider-catalog.py",
+        "//",
+        "// Mirrors the backend's `built_in_provider_specs()` in",
+        "// `src/core/providers.rs` (the single source of truth) so the",
+        "// VS Code addon catalog can never diverge from the backend.",
+        "",
+        'import type { ProviderCatalogSpec } from "./providerCatalog";',
+        "",
+        "export const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [",
+    ]
+    for s in specs:
+        parts = [
+            "  {",
+            f"    name: {ts_str(s['name'])}, type: {ts_str(s['agent_type'])}, group: {ts_str(group_for(s))},",
+        ]
+        if s.get("url"):
+            parts.append(f"    url: {ts_str(s['url'])},")
+        if s.get("chat_path"):
+            parts.append(f"    chat_path: {ts_str(s['chat_path'])},")
+        if s.get("model"):
+            parts.append(f"    model: {ts_str(s['model'])},")
+        if s.get("api_key_env"):
+            parts.append(f"    api_key_env: {ts_str(env_var_from_keyring(s['api_key_env']))},")
+        if s.get("secret_key_env"):
+            parts.append(f"    secret_key_env: {ts_str(env_var_from_keyring(s['secret_key_env']))},")
+        if s.get("anthropic_version"):
+            parts.append(f"    anthropic_version: {ts_str(s['anthropic_version'])},")
+        if s.get("max_tokens") is not None:
+            parts.append(f"    max_tokens: {int(s['max_tokens'])},")
+        if s.get("supports_system") is not None:
+            parts.append(f"    supports_system: {str(s['supports_system']).lower()},")
+        parts.append("  },")
+        lines.append("\n".join(parts))
+    lines.append("];")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> int:
     if not BACKEND.exists():
         print(f"error: backend providers.rs not found at {BACKEND}")
@@ -123,21 +213,35 @@ def main() -> int:
     if not specs:
         print("error: no ProviderSpec blocks parsed from backend")
         return 1
-    generated = render(specs)
+    gui_generated = render_gui(specs)
+    vscode_generated = render_vscode(specs)
 
     if "--check" in sys.argv:
-        if OUTPUT.exists() and OUTPUT.read_text(encoding="utf-8") == generated:
-            print(f"OK: {OUTPUT} is up to date ({len(specs)} providers)")
-            return 0
-        print(
-            f"STALE: {OUTPUT} differs from backend authority "
-            f"({len(specs)} providers). Run scripts/gen-provider-catalog.py"
-        )
-        return 1
+        ok = True
+        if GUI_OUTPUT.exists() and GUI_OUTPUT.read_text(encoding="utf-8") == gui_generated:
+            print(f"OK: {GUI_OUTPUT} is up to date ({len(specs)} providers)")
+        else:
+            print(
+                f"STALE: {GUI_OUTPUT} differs from backend authority "
+                f"({len(specs)} providers). Run scripts/gen-provider-catalog.py"
+            )
+            ok = False
+        if VSCODE_OUTPUT.exists() and VSCODE_OUTPUT.read_text(encoding="utf-8") == vscode_generated:
+            print(f"OK: {VSCODE_OUTPUT} is up to date ({len(specs)} providers)")
+        else:
+            print(
+                f"STALE: {VSCODE_OUTPUT} differs from backend authority "
+                f"({len(specs)} providers). Run scripts/gen-provider-catalog.py"
+            )
+            ok = False
+        return 0 if ok else 1
 
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(generated, encoding="utf-8")
-    print(f"Wrote {OUTPUT} ({len(specs)} providers)")
+    GUI_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    GUI_OUTPUT.write_text(gui_generated, encoding="utf-8")
+    VSCODE_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    VSCODE_OUTPUT.write_text(vscode_generated, encoding="utf-8")
+    print(f"Wrote {GUI_OUTPUT} ({len(specs)} providers)")
+    print(f"Wrote {VSCODE_OUTPUT} ({len(specs)} providers)")
     return 0
 
 

@@ -195,7 +195,7 @@ pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
         },
         "copilot" => ProviderSpec {
             agent_type: "copilot",
-            default_url: Some("http://127.0.0.1:8080"),
+            default_url: Some("https://api.githubcopilot.com"),
             default_model: "auto",
             supports_system: false,
         },

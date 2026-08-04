@@ -644,7 +644,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "copilot".to_string(),
             agent_type: "copilot".to_string(),
-            url: Some("http://127.0.0.1:8080".to_string()),
+            url: Some("https://api.githubcopilot.com".to_string()),
             chat_path: None,
             model: None,
             api_key_env: Some("keyring://go-on/copilot_api_key".to_string()),

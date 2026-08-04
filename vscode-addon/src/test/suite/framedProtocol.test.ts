@@ -338,17 +338,25 @@ suite("framedProtocol", () => {
     });
 
     test("compatibility mode detects non-framed 4-byte prefix", (done) => {
-      // Prefix that looks like a valid but huge length should fall back
+      // A prefix that decodes as an absurd length is not a valid frame: in
+      // compatibility mode it triggers the line-based fallback (graceful),
+      // NOT the oversized-frame onError path (which is for framed mode —
+      // covered by "handles oversized frame via error callback").
       const data = new Uint8Array(10);
       new DataView(data.buffer).setUint32(0, 999999999, false); // > MAX_FRAME_SIZE
       data.set(new TextEncoder().encode("test"), 4);
 
       let errored = false;
-      const { stream } = makeStream(data);
+      let fallbackMsgReceived = false;
+      const { stream, feed } = makeStream(data);
       const reader = new FramedReader(
         stream,
         {
-          onMessage: () => {},
+          onMessage: (msg) => {
+            if (msg.type === "fallback" && msg.value === 2) {
+              fallbackMsgReceived = true;
+            }
+          },
           onError: () => {
             errored = true;
           },
@@ -356,13 +364,24 @@ suite("framedProtocol", () => {
         true, // compatibility mode
       );
 
+      // A JSON line delivered after the junk proves the fallback parser is
+      // active (the junk prefix stays in the line buffer without a newline).
+      feed(new TextEncoder().encode('\n{"type":"fallback","value":2}\n'));
+
       setTimeout(() => {
-        // With compatibility mode, huge prefix means fallback
-        // Verify the onError callback was triggered
-        assert.ok(errored, "onError should have been called");
+        assert.strictEqual(
+          fallbackMsgReceived,
+          true,
+          "fallback parser should receive the JSON line",
+        );
+        assert.strictEqual(
+          errored,
+          false,
+          "compatibility fallback must not raise onError",
+        );
         reader.abort();
         done();
-      }, 50);
+      }, 100);
     });
 
     test("feed method processes data manually", () => {

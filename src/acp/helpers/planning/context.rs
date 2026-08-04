@@ -94,8 +94,10 @@ pub async fn probe_agent_runtime_readiness(
         return AgentRuntimeReadiness::Ready;
     };
 
-    // Skip endpoint probe for copilot: its local url is only a placeholder;
-    // the actual API calls go to api.githubcopilot.com (remote).
+    // Skip endpoint probe for copilot: readiness is gated by the OAuth
+    // device-flow token (checked above), not by endpoint reachability. The
+    // agent hardcodes api.githubcopilot.com endpoints; the catalog url is
+    // metadata only (aligned in round 24).
     if agent_name.eq_ignore_ascii_case("copilot") {
         return AgentRuntimeReadiness::Ready;
     }
