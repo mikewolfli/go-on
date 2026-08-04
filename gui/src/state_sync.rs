@@ -104,7 +104,10 @@ async fn listen_sse_once(
             let frame = buffer[..frame_end].to_string();
             buffer = buffer[frame_end + 2..].to_string();
 
-            if let Some(data_str) = extract_sse_data(&frame) {
+            let (_, data_str) = crate::backend::state::parse_sse_frame_lines(
+                &frame.split('\n').collect::<Vec<_>>(),
+            );
+            if let Some(data_str) = data_str {
                 if data_str == "[DONE]" {
                     continue;
                 }
@@ -116,14 +119,4 @@ async fn listen_sse_once(
     }
 
     Ok(())
-}
-
-/// Extract the `data:` field value from a single SSE frame.
-fn extract_sse_data(frame: &str) -> Option<String> {
-    for line in frame.lines() {
-        if let Some(value) = line.strip_prefix("data: ") {
-            return Some(value.trim().to_string());
-        }
-    }
-    None
 }

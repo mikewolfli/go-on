@@ -99,26 +99,14 @@ pub async fn initialize_payload(_server: &AcpServer, params: &Option<Value>) -> 
 
 /// Handle `mcp.initialize` — MCP protocol initialization.
 ///
-/// Mirrors the native MCP handler's capability declaration so the ACP bridge
-/// entry advertises the same capabilities as the standalone MCP transport.
+/// Advertises the same capabilities as the standalone MCP transport via the
+/// shared `crate::mcp::schema::mcp_initialize_capabilities` single source of
+/// truth.
 pub async fn mcp_initialize_payload(_server: &AcpServer) -> Result<Value> {
     use crate::mcp::{McpInitializeResult, ServerInfo};
     let result = McpInitializeResult::new(
         MCP_VERSION,
-        serde_json::json!({
-            "sampling": {},
-            "experimental": {
-                "agents": {}
-            },
-            // No change-notification event source exists for resources, tools,
-            // or prompts (lists are static), so `listChanged` is NOT
-            // advertised — a server must not declare listChanged when it never
-            // sends the corresponding notifications. The base capability keys
-            // are still declared so clients know the endpoints exist.
-            "resources": {},
-            "tools": {},
-            "prompts": {},
-        }),
+        crate::mcp::mcp_initialize_capabilities(),
         ServerInfo {
             name: "go-on".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),

@@ -1,13 +1,16 @@
 //! Providers view — listing, editing, catalog, and Copilot OAuth.
 //!
 //! Sub-modules (see F-GAP-65 for rendering migration):
-//! - `list` — provider name constants and model suggestions
-//! - `editor` — provider editing form helpers
-//! - `catalog` — provider catalog fetched from backend RPC
+//! - `catalog` — provider catalog fetched from backend RPC (offline fallback
+//!   lives in `generated_catalog`, which is generated from the backend's
+//!   `built_in_provider_specs()` — see scripts/gen-provider-catalog.py)
 //! - `render` — monolithic `show()` method, to be split into sub-modules
 
 pub mod catalog;
+mod generated_catalog;
 mod render;
+
+pub use generated_catalog::PROVIDER_NAMES;
 
 use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
@@ -78,52 +81,9 @@ pub struct ProvidersView {
     copilot_poll_repaint_requested: bool,
 }
 
-/// Provider names for the dropdown (36 total, matching built_in_provider_specs())
-/// This is the CANONICAL source of provider names used throughout the codebase.
-/// Keep in sync with `src/core/config.rs` built_in_provider_specs().
-// F-GAP-49: This hardcoded list should be fetched from the backend's provider.catalog
-//        endpoint instead, so it stays in sync automatically.
-pub const PROVIDER_NAMES: &[&str] = &[
-    // OpenAI Family (4)
-    "openai",
-    "openai_compatible",
-    "anthropic",
-    "cohere",
-    // Chinese Vendors (16)
-    "deepseek",
-    "wenxin",
-    "qianfan",
-    "qwen",
-    "glm",
-    "yi",
-    "hunyuan",
-    "doubao",
-    "facewall",
-    "langboat",
-    "skywork",
-    "stepfun",
-    "xihu",
-    "moonshot",
-    "minimax",
-    "siliconflow",
-    // Other Vendors (16)
-    "ai21",
-    "aleph",
-    "copilot",
-    "deepquest",
-    "fireworks",
-    "gemini",
-    "groq",
-    "llama",
-    "loopai",
-    "mistral",
-    "nim",
-    "perplexity",
-    "replicate",
-    "titan",
-    "together",
-    "xai",
-];
+// Provider names (offline fallback) live in `generated_catalog` — generated
+// from the backend's `built_in_provider_specs()` by
+// `scripts/gen-provider-catalog.py`. Re-exported above as PROVIDER_NAMES.
 
 fn provider_label(i18n: &I18n, provider: &str) -> String {
     let key = format!("provider.{}", provider.to_lowercase());

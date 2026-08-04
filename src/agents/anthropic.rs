@@ -12,7 +12,7 @@ use tracing::warn;
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
 use crate::agents::{
-    check_api_response, option_f64, option_u64, principles_to_text, resolve_effective_model,
+    check_api_response, option_f64, option_u64, principles_to_system_text, resolve_effective_model,
     stream_sse_events, SseEventAction,
 };
 
@@ -150,10 +150,8 @@ impl AnthropicAgent {
         tools: Option<Vec<Value>>,
     ) -> Value {
         let mut system_parts: Vec<String> = Vec::new();
-        if let Some(items) = principles {
-            if !items.is_empty() {
-                system_parts.push(principles_to_text(items));
-            }
+        if let Some(text) = principles_to_system_text(principles) {
+            system_parts.push(text);
         }
 
         let mut out_messages: Vec<Value> = Vec::new();

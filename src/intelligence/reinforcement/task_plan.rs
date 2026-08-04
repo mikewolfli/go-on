@@ -14,7 +14,18 @@ use crate::task_decomposer::{TaskDecomposer, TaskDecomposition};
 use crate::task_router::{RoutingDecision, TaskCharacteristics, TaskRouter};
 
 use super::health::now_ts;
+use super::learning::WorkflowLearningBusArtifact;
 use super::ArtifactLedger;
+
+/// Load and parse the persisted learning bus artifact (`latest-learning.json`)
+/// once per request. Callers that need several recommendations should load a
+/// single `WorkflowLearningBusArtifact` and pass it to the `*_from_learning_bus`
+/// variants instead of re-reading the file per recommendation.
+pub fn load_learning_bus(ledger: &ArtifactLedger) -> Option<WorkflowLearningBusArtifact> {
+    let latest_path = ledger.latest_path("spec", "latest-learning.json");
+    let payload = std::fs::read_to_string(&latest_path).ok()?;
+    serde_json::from_str::<WorkflowLearningBusArtifact>(&payload).ok()
+}
 
 // ── Subtask tracking ──────────────────────────────────────────────────────
 
@@ -691,19 +702,22 @@ pub fn recommend_parallelism_from_learning(
     min_parallelism: usize,
     max_parallelism: usize,
 ) -> usize {
+    let Some(bus) = load_learning_bus(ledger) else {
+        return current;
+    };
+    recommend_parallelism_from_learning_bus(&bus, current, min_parallelism, max_parallelism)
+}
+
+/// Parallelism recommendation from an already-loaded learning bus (no I/O).
+pub fn recommend_parallelism_from_learning_bus(
+    bus: &WorkflowLearningBusArtifact,
+    current: usize,
+    min_parallelism: usize,
+    max_parallelism: usize,
+) -> usize {
     let min_p = min_parallelism.max(1);
     let max_p = max_parallelism.max(min_p);
     let current = current.clamp(min_p, max_p);
-
-    let latest_path = ledger.latest_path("spec", "latest-learning.json");
-    let payload = match std::fs::read_to_string(&latest_path) {
-        Ok(raw) => raw,
-        Err(_) => return current,
-    };
-    let bus = match serde_json::from_str::<super::learning::WorkflowLearningBusArtifact>(&payload) {
-        Ok(value) => value,
-        Err(_) => return current,
-    };
 
     if bus.events.len() < 8 {
         return current;
@@ -740,16 +754,17 @@ pub fn recommend_parallelism_from_learning(
 /// Recommend failure strategy from persisted learning events.
 /// Returns "fail_fast" or "tolerant".
 pub fn recommend_failure_strategy_from_learning(ledger: &ArtifactLedger, current: &str) -> String {
-    let latest_path = ledger.latest_path("spec", "latest-learning.json");
-    let payload = match std::fs::read_to_string(&latest_path) {
-        Ok(raw) => raw,
-        Err(_) => return current.to_string(),
+    let Some(bus) = load_learning_bus(ledger) else {
+        return current.to_string();
     };
-    let bus = match serde_json::from_str::<super::learning::WorkflowLearningBusArtifact>(&payload) {
-        Ok(value) => value,
-        Err(_) => return current.to_string(),
-    };
+    recommend_failure_strategy_from_learning_bus(&bus, current)
+}
 
+/// Failure-strategy recommendation from an already-loaded learning bus (no I/O).
+pub fn recommend_failure_strategy_from_learning_bus(
+    bus: &WorkflowLearningBusArtifact,
+    current: &str,
+) -> String {
     if bus.events.len() < 8 {
         return current.to_string();
     }
@@ -778,16 +793,17 @@ pub fn recommend_failure_strategy_from_learning(ledger: &ArtifactLedger, current
 
 /// Recommend work grade from persisted learning events.
 pub fn recommend_work_grade_from_learning(ledger: &ArtifactLedger, current: &str) -> String {
-    let latest_path = ledger.latest_path("spec", "latest-learning.json");
-    let payload = match std::fs::read_to_string(&latest_path) {
-        Ok(raw) => raw,
-        Err(_) => return current.to_string(),
+    let Some(bus) = load_learning_bus(ledger) else {
+        return current.to_string();
     };
-    let bus = match serde_json::from_str::<super::learning::WorkflowLearningBusArtifact>(&payload) {
-        Ok(value) => value,
-        Err(_) => return current.to_string(),
-    };
+    recommend_work_grade_from_learning_bus(&bus, current)
+}
 
+/// Work-grade recommendation from an already-loaded learning bus (no I/O).
+pub fn recommend_work_grade_from_learning_bus(
+    bus: &WorkflowLearningBusArtifact,
+    current: &str,
+) -> String {
     if bus.events.len() < 8 {
         return current.to_string();
     }
@@ -837,16 +853,18 @@ pub fn recommend_predicted_success_rate_from_learning(
     current: f32,
     target_complexity: u8,
 ) -> f32 {
-    let latest_path = ledger.latest_path("spec", "latest-learning.json");
-    let payload = match std::fs::read_to_string(&latest_path) {
-        Ok(raw) => raw,
-        Err(_) => return current,
+    let Some(bus) = load_learning_bus(ledger) else {
+        return current;
     };
-    let bus = match serde_json::from_str::<super::learning::WorkflowLearningBusArtifact>(&payload) {
-        Ok(value) => value,
-        Err(_) => return current,
-    };
+    recommend_predicted_success_rate_from_learning_bus(&bus, current, target_complexity)
+}
 
+/// Predicted-success-rate recommendation from an already-loaded learning bus (no I/O).
+pub fn recommend_predicted_success_rate_from_learning_bus(
+    bus: &WorkflowLearningBusArtifact,
+    current: f32,
+    target_complexity: u8,
+) -> f32 {
     if bus.events.len() < 8 {
         return current;
     }

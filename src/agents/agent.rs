@@ -922,19 +922,6 @@ impl Default for AgentRegistry {
     }
 }
 
-impl AgentRegistry {
-    /// Return a JSON-serializable snapshot of token cache statistics.
-    /// Returns `null` when no token cache is configured.
-    pub fn cache_stats_json(&self) -> serde_json::Value {
-        if let Ok(guard) = self.token_cache.read() {
-            if let Some(ref cache) = *guard {
-                return cache.stats_snapshot();
-            }
-        }
-        serde_json::Value::Null
-    }
-}
-
 /// Build an agent based on configuration
 ///
 /// # Arguments

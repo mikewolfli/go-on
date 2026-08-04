@@ -31,12 +31,6 @@
 //! here in `core.rs`, alongside the struct definition, constructors, and
 //! profile helpers.
 
-#[cfg(any(
-    feature = "sub-bus-tool",
-    feature = "simple-server",
-    feature = "multi-users-server"
-))]
-use crate::agents::factory::{AgentFactory, AgentFactoryConfig};
 use crate::governance::hardening::TenantBudgetEnforcer;
 use crate::governance::harness_bus::HarnessBus;
 #[cfg(feature = "sub-bus-distributed-memory")]
@@ -196,10 +190,6 @@ pub struct CapabilityBusProfile {
     pub distributed_memory_shared: u32,
     /// Number of skill evolution records
     pub skill_evolution_count: u32,
-    /// Phase-gated sub-agent factory active instances (simple/multi profiles)
-    pub agent_factory_active_instances: u32,
-    /// Phase-gated sub-agent factory templates (simple/multi profiles)
-    pub agent_factory_templates: u32,
     /// Phase-gated orchestration council active members (simple/multi profiles)
     pub council_active_members: u32,
     /// Cumulative evolve() timeout count — non-zero indicates silent degradation
@@ -254,8 +244,6 @@ impl Default for CapabilityBusProfile {
             #[cfg(feature = "sub-bus-distributed-memory")]
             distributed_memory_shared: 0,
             skill_evolution_count: 0,
-            agent_factory_active_instances: 0,
-            agent_factory_templates: 0,
             council_active_members: 0,
             evolve_timeout_count: 0,
             council_pending_proposals: 0,
@@ -368,13 +356,6 @@ pub struct CapabilityBus {
     pub self_model: SelfModelCore,
     pub discovery: DiscoveryCenter,
 
-    /// Agent factory — dynamic sub-agent creation (F-GAP-13)
-    #[cfg(any(
-        feature = "sub-bus-tool",
-        feature = "simple-server",
-        feature = "multi-users-server"
-    ))]
-    pub agent_factory: Arc<Mutex<AgentFactory>>,
     /// Orchestration council — multi-agent voting governance (F-GAP-15)
     #[cfg(any(
         feature = "sub-bus-tool",
@@ -489,12 +470,6 @@ impl CapabilityBus {
             world_model: WorldModel::new(Default::default()),
             self_model: SelfModelCore::new(Default::default()),
             discovery: DiscoveryCenter::new(),
-            #[cfg(any(
-                feature = "sub-bus-tool",
-                feature = "simple-server",
-                feature = "multi-users-server"
-            ))]
-            agent_factory: Arc::new(Mutex::new(AgentFactory::new(AgentFactoryConfig::default()))),
             #[cfg(any(
                 feature = "sub-bus-tool",
                 feature = "simple-server",
@@ -784,10 +759,6 @@ impl CapabilityBus {
             feature = "multi-users-server"
         ))]
         {
-            let fp = crate::lock_or_recover!(&self.agent_factory, "intelligence").profile();
-            p.agent_factory_active_instances = fp.active_instances as u32;
-            p.agent_factory_templates = fp.total_templates as u32;
-
             let cp = crate::lock_or_recover!(&self.council, "intelligence").profile();
             p.council_active_members = cp.active_members;
             p.council_pending_proposals = cp.pending_count;
@@ -1121,7 +1092,6 @@ pub(crate) mod tests {
             + weights.recency
             + weights.task_fit
             + weights.recent_outcome
-            + weights.causal_insight
             + weights.discovery;
         assert!((total - 1.0).abs() < 0.0001);
     }
@@ -1161,7 +1131,6 @@ pub(crate) mod tests {
             + weights.recency
             + weights.task_fit
             + weights.recent_outcome
-            + weights.causal_insight
             + weights.discovery;
         assert!(
             (total - 1.0).abs() < 0.0001,

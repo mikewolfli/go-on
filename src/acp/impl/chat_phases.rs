@@ -611,10 +611,10 @@ async fn detect_and_process_multimodal(server: &AcpServer, params: &ChatParams) 
             }
             continue;
         }
-        if content.starts_with("data:") {
-            process_data_uri(mp, content, &mut contexts).await;
-            continue;
-        }
+        // Extract every inline `data:` URI — the GUI appends one URI per
+        // attachment (F-GAP-66). The scanner also preserves the original
+        // single-URI semantics (a message that is exactly one data URI).
+        extract_data_uris(mp, content, &mut contexts).await;
         if content.starts_with("file://") {
             if let Some(c) = process_file_uri(mp, content).await {
                 contexts.push(c);
@@ -629,47 +629,65 @@ async fn detect_and_process_multimodal(server: &AcpServer, params: &ChatParams) 
     }
 }
 
-async fn process_data_uri(
+/// Extract and process every inline `data:<mime>;base64,<payload>` URI in a
+/// user message. A base64 payload runs until the first character outside the
+/// base64 alphabet (whitespace, `)`, newline, etc.), so multiple URIs in one
+/// message are handled independently.
+async fn extract_data_uris(
     mp: &crate::multimodal::MultimodalProcessor,
     content: &str,
     contexts: &mut Vec<String>,
 ) {
     use crate::multimodal::MultimodalInput;
-    if let Some(rest) = content.strip_prefix("data:") {
-        if let Some((mime, b64)) = rest.split_once(";base64,") {
-            if let Ok(bytes) = crate::multimodal::base64_decode(b64) {
-                let ml = mime.to_lowercase();
-                let input = if ml.contains("image") {
-                    MultimodalInput::Image(bytes)
-                } else if ml.contains("audio") {
-                    MultimodalInput::Audio(bytes)
-                } else if ml.contains("video") {
-                    MultimodalInput::Video(bytes)
-                } else {
-                    MultimodalInput::Document(bytes, crate::multimodal::mime_to_extension(&ml))
-                };
-                let processed = mp.process_input(&input).await;
-                if !processed.is_empty() {
-                    let mut e = String::from("[Processed content]:");
-                    if !processed.text.is_empty() {
-                        e.push('\n');
-                        e.push_str(&processed.text);
-                    }
-                    for (i, img) in processed.images.iter().enumerate() {
-                        e.push_str(&format!(
-                            "\n![extracted-image-{}](data:image/unknown;base64,{})",
-                            i, img
-                        ));
-                    }
-                    if !processed.audio_transcriptions.is_empty() {
-                        e.push_str(&format!(
-                            "\n[Audio transcription]:\\n{}",
-                            processed.joined_audio()
-                        ));
-                    }
-                    contexts.push(e);
-                }
+    let mut rest = content;
+    while let Some(start) = rest.find("data:") {
+        let after = &rest[start + 5..];
+        let Some((mime, payload_tail)) = after.split_once(";base64,") else {
+            break;
+        };
+        let payload_end = payload_tail
+            .find(|c: char| !matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '/' | '='))
+            .unwrap_or(payload_tail.len());
+        let b64 = &payload_tail[..payload_end];
+        // Advance past this URI before processing (process_input may await).
+        rest = &payload_tail[payload_end..];
+        let Ok(bytes) = crate::multimodal::base64_decode(b64) else {
+            tracing::debug!(len = b64.len(), "skipping undecodable inline data URI");
+            continue;
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        let ml = mime.to_lowercase();
+        let input = if ml.contains("image") {
+            MultimodalInput::Image(bytes)
+        } else if ml.contains("audio") {
+            MultimodalInput::Audio(bytes)
+        } else if ml.contains("video") {
+            MultimodalInput::Video(bytes)
+        } else {
+            MultimodalInput::Document(bytes, crate::multimodal::mime_to_extension(&ml))
+        };
+        let processed = mp.process_input(&input).await;
+        if !processed.is_empty() {
+            let mut e = String::from("[Processed content]:");
+            if !processed.text.is_empty() {
+                e.push('\n');
+                e.push_str(&processed.text);
             }
+            for (i, img) in processed.images.iter().enumerate() {
+                e.push_str(&format!(
+                    "\n![extracted-image-{}](data:image/unknown;base64,{})",
+                    i, img
+                ));
+            }
+            if !processed.audio_transcriptions.is_empty() {
+                e.push_str(&format!(
+                    "\n[Audio transcription]:\\n{}",
+                    processed.joined_audio()
+                ));
+            }
+            contexts.push(e);
         }
     }
 }

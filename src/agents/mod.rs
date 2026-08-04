@@ -12,12 +12,6 @@ pub mod communication;
 pub mod copilot;
 pub mod deepseek;
 pub mod ernie;
-#[cfg(any(
-    feature = "sub-bus-tool",
-    feature = "simple-server",
-    feature = "multi-users-server"
-))]
-pub mod factory;
 pub mod gemini;
 // OpenAI agent removed — fully superseded by `OpenAiCompatibleAgent`. File deleted.
 pub mod openai_compatible;
@@ -108,6 +102,30 @@ pub fn principles_to_text(principles: &[String]) -> String {
         text.push_str(line);
         text.push('\n');
     }
+    text
+}
+
+/// Normalize an optional principles list into a system prompt text.
+/// Returns `None` when there are no principles (or the list is empty), so
+/// providers can skip system injection entirely in that case.
+pub fn principles_to_system_text(principles: &Option<Vec<String>>) -> Option<String> {
+    let items = principles.as_ref()?;
+    if items.is_empty() {
+        return None;
+    }
+    Some(principles_to_text(items))
+}
+
+/// Build a system prompt from principles plus an extra fragment (e.g. a
+/// provider-specific stage note). Providers that always push a system message
+/// (even when both inputs are empty) use this variant.
+pub fn system_text_with_extra(principles: &Option<Vec<String>>, extra: &str) -> String {
+    let mut text = String::new();
+    if let Some(p) = principles_to_system_text(principles) {
+        text.push_str(&p);
+        text.push('\n');
+    }
+    text.push_str(extra);
     text
 }
 
@@ -669,6 +687,21 @@ pub async fn stream_sse_to_sender(
     stream_sse_with_handler(response, config, on_event).await
 }
 
+/// Unified chat_once tail for OpenAI-shaped providers: send → validate →
+/// stream to sender. Providers whose payloads/headers differ only in the
+/// `reqwest::RequestBuilder` construction reuse this instead of re-implementing
+/// the send/check/stream boilerplate (deepseek, openai_compatible, ernie).
+pub(crate) async fn execute_chat_stream_openai(
+    request: reqwest::RequestBuilder,
+    provider_name: &str,
+    config: &StreamingConfig,
+    sender: crate::agent::StreamingSender,
+) -> anyhow::Result<()> {
+    let response = request.send().await?;
+    let response = check_api_response(response, provider_name).await?;
+    stream_sse_to_sender(response, sender, config).await
+}
+
 /// Shared SSE streaming loop with a configurable per-event handler.
 ///
 /// When `config.enable_compression` is set, the raw bytes are gzip-decompressed
@@ -907,6 +940,30 @@ pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn principles_to_system_text_normalizes_empty_and_none() {
+        assert_eq!(principles_to_system_text(&None), None);
+        assert_eq!(principles_to_system_text(&Some(vec![])), None);
+        let text = principles_to_system_text(&Some(vec!["p1".to_string()]));
+        assert!(text.is_some());
+        let inner = text.unwrap();
+        assert!(inner.contains("- p1"));
+        assert!(inner.starts_with("Please follow"));
+    }
+
+    #[test]
+    fn system_text_with_extra_keeps_principles_newline_and_extra() {
+        let text = system_text_with_extra(&Some(vec!["p1".to_string()]), "NOTE");
+        assert!(
+            text.ends_with("\nNOTE"),
+            "expected trailing extra after newline: {text:?}"
+        );
+        let only_extra = system_text_with_extra(&None, "NOTE");
+        assert_eq!(only_extra, "NOTE");
+        let empty = system_text_with_extra(&None, "");
+        assert_eq!(empty, "");
+    }
 
     #[test]
     fn sse_parser_joins_multiline_data_and_ignores_comments() {

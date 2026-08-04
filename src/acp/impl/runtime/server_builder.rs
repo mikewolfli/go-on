@@ -362,8 +362,17 @@ pub async fn new_acp_server(
         advisor
     };
 
-    // Multimodal processor wiring removed — with_multimodal_processor was dead code.
-    // (F-GAP-49 reserved). multimodal_processor defaults to None.
+    // ── Multimodal processor (F-GAP-66: attachment multimodal support) ────
+    // Wire the default processor set so `detect_and_process_multimodal` can
+    // process `data:` URIs, `file://` refs and `repo:` queries embedded in
+    // user messages (the GUI sends attachments as inline `data:` / `file://`
+    // refs). Construction is cheap and every sub-processor degrades to a
+    // logged warning on failure — never a fatal error (see multimodal/mod.rs).
+    // Document backends activate under the `sub-bus-multimodal` feature.
+    {
+        use crate::multimodal::MultimodalProcessor;
+        builder = builder.with_multimodal_processor(MultimodalProcessor::new_with_all_processors());
+    }
 
     // Wire policy reloader for hot-reloading governance policies (GAP-B58-D04)
     {

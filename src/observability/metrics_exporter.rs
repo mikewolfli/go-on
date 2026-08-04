@@ -130,16 +130,18 @@ static P95_SLIDING_WINDOW: LazyLock<MetricsSlidingWindow> =
 
 /// Compute approximate P95 latency from histogram bucket counts.
 ///
+/// Canonical implementation shared by the Prometheus exporter, the
+/// governance/status payloads and the release-readiness gate. Previously
+/// three near-identical copies existed (metrics_exporter, runtime_pack,
+/// status_pack) with subtly different overflow handling — the exporter's
+/// old copy could return astronomically large values when samples fell in
+/// the overflow bucket.
+///
 /// Bucket boundaries match `METRIC_LATENCY_BUCKETS_MS` in `acp/prelude.rs`:
 /// [1, 5, 10, 50, 100, 500, 1000, 5000, 10000] ms (9 boundaries → 10 buckets,
 /// the 10th covering everything > 10000 ms).
-fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
-    let total: u64 = buckets.iter().sum();
-    if total == 0 {
-        return 0.0;
-    }
-    let p95_target = (total as f64 * 0.95) as u64;
-    let bucket_edges = [
+pub(crate) fn estimate_p95_from_buckets(bucket_counts: &[u64; 10]) -> f64 {
+    const P95_BUCKET_BOUNDARIES_MS: [f64; 10] = [
         1.0,
         5.0,
         10.0,
@@ -151,25 +153,40 @@ fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
         10000.0,
         f64::MAX,
     ];
-    let mut cumulative = 0u64;
-    for (i, count) in buckets.iter().enumerate() {
+    let total: u64 = bucket_counts.iter().sum();
+    if total == 0 {
+        return 0.0;
+    }
+    let target = (total as f64 * 0.95).ceil();
+    let mut cumulative: u64 = 0;
+    for (i, &count) in bucket_counts.iter().enumerate() {
         cumulative += count;
-        if cumulative >= p95_target {
-            let prev_edge = if i == 0 { 0.0 } else { bucket_edges[i - 1] };
-            let edge = bucket_edges[i];
-            // Linear interpolation within the bucket
-            let prev_cumulative = cumulative.saturating_sub(*count);
-            let frac = if *count > 0 {
-                (p95_target - prev_cumulative) as f64 / *count as f64
+        if cumulative as f64 >= target {
+            // Found the bucket containing p95
+            let bucket_lower = if i == 0 {
+                0.0
             } else {
-                0.5
+                P95_BUCKET_BOUNDARIES_MS[i - 1]
             };
-            return prev_edge + frac * (edge - prev_edge);
+            let bucket_upper = P95_BUCKET_BOUNDARIES_MS[i.min(9)];
+            if bucket_upper == f64::MAX || bucket_upper - bucket_lower <= 0.0 || count == 0 {
+                // Overflow bucket or degenerate case — use twice the lower
+                // bound as a conservative estimate instead of interpolating
+                // against f64::MAX.
+                return if i == 9 {
+                    bucket_lower * 2.0
+                } else {
+                    bucket_lower
+                };
+            }
+            let prev_cumulative = cumulative.saturating_sub(count);
+            let fraction = (target - prev_cumulative as f64) / count as f64;
+            let estimated = bucket_lower + fraction * (bucket_upper - bucket_lower);
+            return (estimated * 100.0).round() / 100.0;
         }
     }
-    // Fallback: P95 is in the overflow bucket — interpolate between the
-    // last finite edge (10000 ms) and a reasonable cap.
-    bucket_edges[8] + (bucket_edges[9] - bucket_edges[8]) * 0.5
+    // All samples fall within buckets — use the upper bound of the last bucket.
+    P95_BUCKET_BOUNDARIES_MS[8]
 }
 
 /// Build a Prometheus-formatted metrics string from the server status.
@@ -211,9 +228,9 @@ pub async fn build_prometheus_metrics(server: &AcpServer) -> String {
     let window_sum = P95_SLIDING_WINDOW.window_sum();
     // Use windowed delta if window has data, otherwise fall back to cumulative
     let p95 = if window_sum.iter().any(|&c| c > 0) {
-        estimate_p95_latency(&window_sum)
+        estimate_p95_from_buckets(&window_sum)
     } else {
-        estimate_p95_latency(&m.request_latency_bucket_counts)
+        estimate_p95_from_buckets(&m.request_latency_bucket_counts)
     };
 
     let mut lines = Vec::new();

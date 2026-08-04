@@ -484,14 +484,6 @@
     "healthInterval": {
       "description": "Health check interval in seconds"
     },
-    "uiTheme": {
-      "description": "UI theme for the extension",
-      "enumDescriptions": {
-        "auto": "Follow VS Code theme",
-        "light": "Light theme",
-        "dark": "Dark theme"
-      }
-    },
     "uiFontSize": {
       "description": "Font size for chat interface"
     },

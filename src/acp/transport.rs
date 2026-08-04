@@ -61,14 +61,26 @@ impl Transport for StdioTransport {
 
 /// Transport that captures JSON-RPC lines into a buffer for HTTP response.
 ///
-/// Used by the ACP HTTP RPC mode (`/rpc` endpoint).
+/// Used by the ACP HTTP RPC mode (`/rpc` endpoint). Also tracks the most
+/// recent response (value carrying an `id`), so the HTTP handler can emit it
+/// directly without re-parsing the serialized buffer (the old bytes → String →
+/// Value round trip existed only to pick the last `id`-bearing response).
 pub(crate) struct RpcBufferTransport {
     buffer: Arc<Mutex<Vec<u8>>>,
+    last_response: Arc<Mutex<Option<Value>>>,
 }
 
 impl RpcBufferTransport {
     pub(crate) fn new(buffer: Arc<Mutex<Vec<u8>>>) -> Self {
-        Self { buffer }
+        Self {
+            buffer,
+            last_response: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Most recent response written through this transport (value with an `id`).
+    pub(crate) async fn last_response(&self) -> Option<Value> {
+        self.last_response.lock().await.clone()
     }
 }
 
@@ -79,6 +91,9 @@ impl Transport for RpcBufferTransport {
         let mut encoded = serde_json::to_vec(value)?;
         encoded.push(b'\n');
         buf.extend_from_slice(&encoded);
+        if value.get("id").is_some() {
+            *self.last_response.lock().await = Some(value.clone());
+        }
         Ok(())
     }
 }

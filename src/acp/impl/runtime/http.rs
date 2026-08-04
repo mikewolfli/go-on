@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tracing::{debug, info};
 
 use crate::acp::r#impl::cors::{
@@ -39,6 +38,62 @@ pub(crate) fn clone_tcp_stream(
     tokio::net::TcpStream::from_std(cloned)
 }
 
+/// A connection stream that is either plaintext TCP or TLS-wrapped TCP.
+///
+/// Both the ACP plaintext path and the ACP TLS path previously had separate
+/// HTTP handlers; this enum lets them share one routing implementation (the
+/// TLS arm now enforces the same auth/health/chat/OpenAI behavior as plaintext).
+pub(crate) enum HttpStream {
+    Plain(tokio::net::TcpStream),
+    Tls(Box<tokio_rustls::TlsStream<tokio::net::TcpStream>>),
+}
+
+impl tokio::io::AsyncRead for HttpStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match &mut *self {
+            HttpStream::Plain(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            HttpStream::Tls(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for HttpStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        match &mut *self {
+            HttpStream::Plain(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            HttpStream::Tls(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match &mut *self {
+            HttpStream::Plain(s) => std::pin::Pin::new(s).poll_flush(cx),
+            HttpStream::Tls(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match &mut *self {
+            HttpStream::Plain(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            HttpStream::Tls(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
 use super::openai_compat::{
     build_openai_models_response, extract_response_id_from_path, handle_openai_chat_completions,
     handle_response_get, handle_responses_api, list_responses_api_payloads,
@@ -51,7 +106,7 @@ use super::tcp_write_timeout;
 use super::tls::build_root_capabilities_response;
 /// Main HTTP connection handler — parses, guards, routes, and times the request.
 pub(crate) async fn handle_http_connection(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: Arc<AcpServer>,
     peer_addr: SocketAddr,
 ) -> Result<()> {
@@ -151,7 +206,7 @@ pub(crate) async fn handle_http_connection(
 
 /// Route an HTTP GET request based on the path and write the response back to the socket.
 async fn route_http_get(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: &AcpServer,
     path: &str,
     cors_headers: &str,
@@ -290,7 +345,7 @@ async fn route_http_get(
 /// Writes SSE headers, then enters a loop subscribing to the `StateSyncBroadcaster`.
 /// On each event, serializes and sends the event as an SSE frame. On disconnect,
 /// the socket write will fail and the loop exits gracefully.
-async fn handle_state_events_sse(socket: &mut TcpStream, cors_headers: &str) -> Result<()> {
+async fn handle_state_events_sse(socket: &mut HttpStream, cors_headers: &str) -> Result<()> {
     write_sse_headers(socket, cors_headers).await?;
 
     let mut rx = crate::protocol::state_sync::subscribe();
@@ -347,7 +402,7 @@ async fn handle_state_events_sse(socket: &mut TcpStream, cors_headers: &str) -> 
 // where we write an error response to the socket before returning Ok(path).
 // Using `?` would propagate the error upward without writing the response.
 async fn route_http_post(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: Arc<AcpServer>,
     path: &str,
     header_part: &str,
@@ -534,7 +589,14 @@ async fn route_http_post(
                         };
                     use super::sse::{flush_sse, write_sse_event, write_sse_headers};
                     write_sse_headers(socket, cors_headers).await?;
-                    set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
+                    // Out-of-band SSE transport requires an fd-cloneable plain TCP
+                    // stream; on the TLS arm this global transport is not set
+                    // (matches the pre-merge TLS behavior).
+                    if let HttpStream::Plain(plain) = socket {
+                        set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(
+                            plain,
+                        )?)));
+                    }
 
                     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
                     let trace = http_trace_context("chat.stream");
@@ -647,13 +709,15 @@ async fn route_http_post(
 
                     // Per-request output buffer via Transport trait.
                     // RpcBufferTransport captures JSON-RPC output into this buffer;
-                    // after handle_request completes, the buffer contains the response body.
+                    // it also records the last id-bearing response value directly,
+                    // so no re-parse of the serialized buffer is needed.
                     let buffer = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
                     let transport_buffer = buffer.clone();
                     let headers_owned = header_part.to_string();
                     let server_ref = Arc::clone(&server);
 
-                    set_current_transport(Arc::new(RpcBufferTransport::new(transport_buffer)));
+                    let rpc_transport = Arc::new(RpcBufferTransport::new(transport_buffer));
+                    set_current_transport(rpc_transport.clone() as Arc<dyn crate::acp::transport::Transport>);
                     let rpc_result = handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await;
 
                     if let Err(err) = &rpc_result {
@@ -668,24 +732,10 @@ async fn route_http_post(
                         return Ok(());
                     }
 
-                    let response_bytes = buffer.lock().await.clone();
-                    let response_str = String::from_utf8_lossy(&response_bytes);
-                    let response_value: serde_json::Value = {
-                        let mut last_response =
-                            serde_json::json!({"raw": response_str.to_string()});
-                        for line in response_str.lines() {
-                            let trimmed = line.trim();
-                            if trimmed.is_empty() {
-                                continue;
-                            }
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                                if val.get("id").is_some() {
-                                    last_response = val;
-                                }
-                            }
-                        }
-                        last_response
-                    };
+                    let response_value = rpc_transport
+                        .last_response()
+                        .await
+                        .unwrap_or_else(|| serde_json::json!({}));
 
                     // Check for __text_plain__ sentinel key — serve as text/plain
                     if let Some(text) = response_value
@@ -760,7 +810,7 @@ pub(crate) fn compute_cors_response_headers(headers: &str, server: &AcpServer) -
 
 /// Handle an OPTIONS (CORS preflight) request.
 async fn handle_cors_preflight(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     headers: &str,
     server: &AcpServer,
 ) -> Result<()> {
@@ -809,7 +859,7 @@ async fn handle_cors_preflight(
 
 /// Write an HTTP JSON response with platform profiles injected.
 pub(crate) async fn write_http_json_response_with_context(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     status: u16,
     body: serde_json::Value,
     method: &str,
@@ -819,24 +869,39 @@ pub(crate) async fn write_http_json_response_with_context(
     write_http_json_response(socket, status, body, extra_headers).await
 }
 
-/// Write a raw HTTP JSON response to a TcpStream.
-pub(crate) async fn write_http_json_response(
-    socket: &mut TcpStream,
-    status: u16,
-    mut value: serde_json::Value,
-    extra_headers: &str,
-) -> Result<()> {
-    let status_text = match status {
+/// Map an HTTP status code to its reason phrase. Single source of truth for
+/// the JSON/text writers — the union of the three former copies (ACP HTTP,
+/// ACP TLS, MCP HTTP), which had drifted (e.g. 403/500 previously fell back
+/// to `"OK"`, producing `HTTP/1.1 403 OK`).
+pub(crate) fn status_text(status: u16) -> &'static str {
+    match status {
         200 => "OK",
-        401 => "Unauthorized",
-        429 => "Too Many Requests",
+        202 => "Accepted",
+        204 => "No Content",
         400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        413 => "Payload Too Large",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
         _ => "OK",
-    };
+    }
+}
+
+/// Shared body of the JSON response writers. `keep_alive` selects the
+/// `Connection` header and the write tail (flush vs shutdown).
+async fn write_http_json_inner<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    status: u16,
+    mut value: serde_json::Value,
+    extra_headers: &str,
+    keep_alive: bool,
+) -> Result<()> {
     // Inject machine-readable error code into error responses
     if status >= 400 {
         if let Some(obj) = value.as_object_mut() {
@@ -848,17 +913,59 @@ pub(crate) async fn write_http_json_response(
         }
     }
     let body = serde_json::to_vec(&value)?;
+    // Normalize extra_headers to end with a single CRLF; the format string's
+    // trailing CRLF then provides the mandatory blank line before the body.
+    // Accepts callers that pass headers with or without the trailing CRLF.
+    let extra = if extra_headers.is_empty() {
+        String::new()
+    } else if extra_headers.ends_with("\r\n") {
+        extra_headers.to_string()
+    } else {
+        format!("{}\r\n", extra_headers)
+    };
+    let connection = if keep_alive { "keep-alive" } else { "close" };
+    // 204 No Content carries no body per HTTP/1.1 §6.4.1.
+    let body_len = if status == 204 { 0 } else { body.len() };
     let headers = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: {}\r\n{}\r\n",
         status,
-        status_text,
-        body.len(),
-        extra_headers
+        status_text(status),
+        body_len,
+        connection,
+        extra
     );
-    tcp_write_timeout(socket, headers.as_bytes()).await?;
-    tcp_write_timeout(socket, &body).await?;
-    let _ = socket.shutdown().await;
+    tcp_write_timeout(writer, headers.as_bytes()).await?;
+    if body_len > 0 {
+        tcp_write_timeout(writer, &body).await?;
+    }
+    if keep_alive {
+        let _ = writer.flush().await;
+    } else {
+        let _ = writer.shutdown().await;
+    }
     Ok(())
+}
+
+/// Write a raw HTTP JSON response to any async writer (TcpStream / TLS stream).
+/// Uses `Connection: close` and shuts the writer down after the body.
+pub(crate) async fn write_http_json_response<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    status: u16,
+    value: serde_json::Value,
+    extra_headers: &str,
+) -> Result<()> {
+    write_http_json_inner(writer, status, value, extra_headers, false).await
+}
+
+/// Write a raw HTTP JSON response with `Connection: keep-alive` and no
+/// shutdown (used by the MCP HTTP arm, which keeps its existing semantics).
+pub(crate) async fn write_http_json_response_keep_alive<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    status: u16,
+    value: serde_json::Value,
+    extra_headers: &str,
+) -> Result<()> {
+    write_http_json_inner(writer, status, value, extra_headers, true).await
 }
 
 /// Write HTTP text/plain response.
@@ -866,34 +973,30 @@ pub(crate) async fn write_http_json_response(
 /// Used when the JSON-RPC result contains a `__text_plain__` sentinel key,
 /// instructing the HTTP transport to serve the value as text/plain instead of
 /// the default application/json.
-pub(crate) async fn write_http_text_response(
-    socket: &mut TcpStream,
+pub(crate) async fn write_http_text_response<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
     status: u16,
     text: &str,
     extra_headers: &str,
 ) -> Result<()> {
-    let status_text = match status {
-        200 => "OK",
-        401 => "Unauthorized",
-        429 => "Too Many Requests",
-        400 => "Bad Request",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        502 => "Bad Gateway",
-        503 => "Service Unavailable",
-        _ => "OK",
-    };
     let body = text.as_bytes();
+    let extra = if extra_headers.is_empty() {
+        String::new()
+    } else if extra_headers.ends_with("\r\n") {
+        extra_headers.to_string()
+    } else {
+        format!("{}\r\n", extra_headers)
+    };
     let headers = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
         status,
-        status_text,
+        status_text(status),
         body.len(),
-        extra_headers
+        extra
     );
-    tcp_write_timeout(socket, headers.as_bytes()).await?;
-    tcp_write_timeout(socket, body).await?;
-    let _ = socket.shutdown().await;
+    tcp_write_timeout(writer, headers.as_bytes()).await?;
+    tcp_write_timeout(writer, body).await?;
+    let _ = writer.shutdown().await;
     Ok(())
 }
 
@@ -911,4 +1014,103 @@ pub(crate) fn http_trace_context(method: &str) -> RequestTraceContext {
 /// Delegates to `protocol::extract_header_value` for consistency.
 fn extract_header_value(headers: &str, header_name: &str) -> Option<String> {
     super::protocol::extract_header_value(headers, header_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    async fn read_all(mut r: tokio::io::DuplexStream) -> String {
+        let mut buf = Vec::new();
+        r.read_to_end(&mut buf).await.unwrap();
+        String::from_utf8_lossy(&buf).to_string()
+    }
+
+    #[tokio::test]
+    async fn json_writer_emits_full_status_code_table() {
+        // Every status code in the unified table must map to its reason phrase
+        // (regression for the old `403 OK` / `500 OK` / `405 OK` drift).
+        let cases = [
+            (200u16, "OK"),
+            (202, "Accepted"),
+            (204, "No Content"),
+            (400, "Bad Request"),
+            (401, "Unauthorized"),
+            (403, "Forbidden"),
+            (404, "Not Found"),
+            (405, "Method Not Allowed"),
+            (413, "Payload Too Large"),
+            (429, "Too Many Requests"),
+            (500, "Internal Server Error"),
+            (501, "Not Implemented"),
+            (502, "Bad Gateway"),
+            (503, "Service Unavailable"),
+        ];
+        for (status, phrase) in cases {
+            let (mut client, server) = tokio::io::duplex(8192);
+            write_http_json_response(&mut client, status, json!({}), "")
+                .await
+                .unwrap();
+            let raw = read_all(server).await;
+            assert!(
+                raw.starts_with(&format!("HTTP/1.1 {} {}\r\n", status, phrase)),
+                "status {} produced wrong reason phrase: {raw:?}",
+                status
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn json_writer_injects_error_code_and_respects_existing() {
+        let (mut client, server) = tokio::io::duplex(8192);
+        write_http_json_response(&mut client, 400, json!({"error": "bad"}), "")
+            .await
+            .unwrap();
+        let raw = read_all(server).await;
+        assert!(raw.contains("\"code\":\"INVALID_REQUEST\"") || raw.contains("\"code\":"));
+
+        let (mut client2, server2) = tokio::io::duplex(8192);
+        write_http_json_response(
+            &mut client2,
+            400,
+            json!({"error": "bad", "code": "KEEP"}),
+            "",
+        )
+        .await
+        .unwrap();
+        let raw2 = read_all(server2).await;
+        assert!(raw2.contains("\"code\":\"KEEP\""));
+        assert!(!raw2.contains("INVALID_REQUEST"));
+    }
+
+    #[tokio::test]
+    async fn json_writer_204_has_no_body_keep_alive_variant_flushes() {
+        let (mut client, server) = tokio::io::duplex(8192);
+        write_http_json_response_keep_alive(&mut client, 204, json!(null), "")
+            .await
+            .unwrap();
+        // The keep-alive writer does not shut the socket down; dropping the
+        // client end closes the duplex pair so the reader sees EOF.
+        drop(client);
+        let raw = read_all(server).await;
+        assert!(raw.starts_with("HTTP/1.1 204 No Content\r\n"));
+        assert!(raw.contains("Content-Length: 0"));
+        assert!(raw.contains("Connection: keep-alive"));
+        // No body after the terminating empty line.
+        let body_start = raw.find("\r\n\r\n").map(|i| i + 4).unwrap_or(raw.len());
+        assert_eq!(&raw[body_start..], "");
+    }
+
+    #[tokio::test]
+    async fn json_writer_normalizes_extra_headers_trailing_crlf() {
+        let (mut client, server) = tokio::io::duplex(8192);
+        write_http_json_response(&mut client, 200, json!({}), "X-Test: 1\r\n")
+            .await
+            .unwrap();
+        let raw = read_all(server).await;
+        assert!(raw.contains("X-Test: 1\r\n"));
+        // Exactly one blank separator line between headers and body.
+        assert_eq!(raw.matches("\r\n\r\n").count(), 1, "raw: {raw:?}");
+    }
 }

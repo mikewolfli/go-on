@@ -59,14 +59,13 @@ use crate::reinforcement::{
     persist_execution_decision, persist_primary_secondary_failover_artifact,
     persist_primary_secondary_policy_artifact, persist_requirement_contract, persist_task_plan,
     persist_workflow_generated, persist_workflow_learning_event, persist_workflow_research,
-    recommend_agent_order_from_execution_history, recommend_failure_strategy_from_learning,
-    recommend_parallelism_from_learning, recommend_predicted_success_rate_from_learning,
-    recommend_work_grade_from_learning, run_action_check, ActionCheckKind, ArtifactLedger,
-    CheckStatus, ClarificationSessionArtifact, ConsultationArtifact, ExecutionAssignmentRecord,
-    ExecutionDecisionArtifact, ExecutionDecisionCandidate, KnowledgeBusArtifact,
-    ParallelPhaseDecisionRecord, PrimaryFailoverReportItem, PrimarySecondaryFailoverArtifact,
-    PrimarySecondaryPolicyArtifact, RequirementContractArtifact, WorkflowGeneratedArtifact,
-    WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
+    recommend_agent_order_from_execution_history, run_action_check, ActionCheckKind,
+    ArtifactLedger, CheckStatus, ClarificationSessionArtifact, ConsultationArtifact,
+    ExecutionAssignmentRecord, ExecutionDecisionArtifact, ExecutionDecisionCandidate,
+    KnowledgeBusArtifact, ParallelPhaseDecisionRecord, PrimaryFailoverReportItem,
+    PrimarySecondaryFailoverArtifact, PrimarySecondaryPolicyArtifact, RequirementContractArtifact,
+    WorkflowGeneratedArtifact, WorkflowLearningBusArtifact, WorkflowLearningEvent,
+    WorkflowResearchArtifact,
 };
 use crate::tool::{ToolInput, ToolRegistry};
 
@@ -92,6 +91,7 @@ mod ops_pack;
 pub mod prompts_pack;
 mod protocol;
 mod protocol_pack;
+pub(crate) use self::trace_pack::tool_budget_trackers;
 mod pua_pack;
 mod repro_handlers;
 pub(crate) use dispatch::{dispatch_to_client, DispatchOutput};

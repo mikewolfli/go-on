@@ -10,7 +10,6 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use uuid::Uuid;
 
 use crate::orchestration::planner_execution_graph::PlannerExecutionBridge;
 
@@ -404,40 +403,6 @@ impl TaskContext {
             open_questions: Vec::new(),
             assumptions: Vec::new(),
             parent_context_id: None,
-        }
-    }
-
-    /// Merge multiple parent contexts into a single child context.
-    /// Generates a new UUID for the merged context's id.
-    pub fn merge(parents: &[TaskContext]) -> Self {
-        let mut reasoning_trace = Vec::new();
-        let mut intermediate_findings = HashMap::new();
-        let mut confidences_sum = 0.0;
-        let mut open_questions = Vec::new();
-        let mut assumptions = Vec::new();
-
-        for parent in parents {
-            reasoning_trace.extend(parent.reasoning_trace.clone());
-            intermediate_findings.extend(parent.intermediate_findings.clone());
-            confidences_sum += parent.confidence;
-            open_questions.extend(parent.open_questions.clone());
-            assumptions.extend(parent.assumptions.clone());
-        }
-
-        let parent_context_id = parents.first().map(|p| p.id.clone());
-
-        Self {
-            id: Uuid::new_v4().to_string(),
-            reasoning_trace,
-            intermediate_findings,
-            confidence: if parents.is_empty() {
-                1.0
-            } else {
-                confidences_sum / parents.len() as f64
-            },
-            open_questions,
-            assumptions,
-            parent_context_id,
         }
     }
 }

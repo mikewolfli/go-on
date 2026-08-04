@@ -23,7 +23,7 @@ pub(super) fn pua_response_reports() -> &'static StdMutex<HashMap<String, String
     PUA_RESPONSE_REPORTS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-pub(super) fn tool_budget_trackers() -> &'static tokio::sync::Mutex<HashMap<String, BudgetTracker>>
+pub(crate) fn tool_budget_trackers() -> &'static tokio::sync::Mutex<HashMap<String, BudgetTracker>>
 {
     TOOL_BUDGET_TRACKERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }

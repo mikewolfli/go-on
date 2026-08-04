@@ -22,8 +22,6 @@
 //! ```
 
 /// Maximum number of audit entries retained in memory to prevent unbounded growth.
-const MAX_AUDIT_ENTRIES: usize = 10_000;
-
 use crate::i18n::{t, tf};
 use crate::security::severity::DetectionSeverity;
 use anyhow::Result;
@@ -429,8 +427,6 @@ pub struct GovernorProfile {
 struct Inner {
     config: SecurityGovernorConfig,
     policies: IndexMap<String, SecurityPolicy>,
-    // Audit log.
-    audit_log: Vec<AuditEntry>,
     // Metrics counters.
     total_evaluations: u64,
     total_denials: u64,
@@ -455,7 +451,6 @@ impl SecurityGovernor {
     pub fn new(config: SecurityGovernorConfig) -> Self {
         let inner = Inner {
             policies: IndexMap::new(),
-            audit_log: Vec::new(),
             total_evaluations: 0,
             total_denials: 0,
             total_reviews: 0,
@@ -797,33 +792,8 @@ impl SecurityGovernor {
         if !entry.verdict.escalation_level.is_empty() {
             inner.active_escalations += 1;
         }
-        // Mirror into the single process-wide audit sink (From conversion).
-        crate::governance::audit::global_audit_log().record(entry.clone().into());
-        inner.audit_log.push(entry);
-        if inner.audit_log.len() > MAX_AUDIT_ENTRIES {
-            inner.audit_log.remove(0);
-        }
-    }
-
-    /// Return all recorded audit log entries.
-    pub fn audit_log(&self) -> Vec<AuditEntry> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("SecurityGovernor lock poisoned in audit_log, recovering");
-                poisoned.into_inner()
-            })
-            .audit_log
-            .clone()
-    }
-
-    /// Clear the internal audit log.
-    pub fn clear_audit(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("SecurityGovernor lock poisoned in clear_audit, recovering");
-            poisoned.into_inner()
-        });
-        inner.audit_log.clear();
+        // Single process-wide audit sink (From conversion).
+        crate::governance::audit::global_audit_log().record(entry.into());
     }
 
     /// Return the policy mode configured for this governor.
@@ -1057,34 +1027,13 @@ mod tests {
         );
         governor.record_audit(entry);
 
-        let log = governor.audit_log();
-        assert_eq!(log.len(), 1, "audit entry should be stored");
-        assert_eq!(log[0].policy_id, "p-audit");
-    }
-
-    /// 8. Audit log cap.
-    #[test]
-    fn test_audit_log_capped() {
-        let config = SecurityGovernorConfig {
-            enabled: true,
-            default_action: PolicyAction::Allow,
-            ..Default::default()
-        };
-        let governor = SecurityGovernor::new(config);
-
-        for i in 0..10 {
-            let entry = AuditEntry::new(
-                format!("p-{}", i),
-                PolicyVerdict::allow(),
-                "r".into(),
-                "a".into(),
-                format!("entry {}", i),
-            );
-            governor.record_audit(entry);
-        }
-
-        let log = governor.audit_log();
-        assert_eq!(log.len(), 10, "audit entries should be stored");
+        // The entry must reach the canonical process-wide audit sink with the
+        // policy id preserved as `task_id` (see the From conversion).
+        let entries = crate::governance::audit::global_audit_log().entries();
+        assert!(
+            entries.iter().any(|e| e.task_id == "p-audit"),
+            "audit entry should be mirrored into the global sink"
+        );
     }
 
     /// 9. Removing a policy.
@@ -1267,22 +1216,5 @@ mod tests {
             .evaluate("/safe", "guest", &HashMap::new())
             .expect("evaluate");
         assert!(!v3.required_review);
-    }
-
-    /// 15. Clear audit log.
-    #[test]
-    fn test_clear_audit() {
-        let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
-        governor.record_audit(AuditEntry::new(
-            "p".into(),
-            PolicyVerdict::allow(),
-            "r".into(),
-            "a".into(),
-            "d".into(),
-        ));
-        assert_eq!(governor.audit_log().len(), 1);
-
-        governor.clear_audit();
-        assert_eq!(governor.audit_log().len(), 0);
     }
 }

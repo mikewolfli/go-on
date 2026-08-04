@@ -135,7 +135,7 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         "k8s_manifests_present": k8s_manifests_present,
         "health_endpoint_ready": true,
         "health_path": "/health",
-        "mtls_enabled": false,
+        "mtls_enabled": server.runtime_config.mtls_enabled,
     });
     let developer_sdk_profile = json!({
         "rust_sdk_present": std::path::Path::new("sdk/rust/Cargo.toml").exists(),

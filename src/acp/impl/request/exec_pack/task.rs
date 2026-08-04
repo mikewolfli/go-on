@@ -172,7 +172,15 @@ pub(crate) async fn build_execution_context(
     let base_options = HashMap::new();
 
     let ledger = clone_artifact_ledger(server);
-    let default_failure_strategy = recommend_failure_strategy_from_learning(&ledger, "tolerant");
+    // Read the persisted learning bus once and reuse it for all per-request
+    // recommendations (previously each recommend_* call re-read the file).
+    let learning_bus = crate::reinforcement::load_learning_bus(&ledger);
+    let default_failure_strategy = match learning_bus.as_ref() {
+        Some(bus) => {
+            crate::reinforcement::recommend_failure_strategy_from_learning_bus(bus, "tolerant")
+        }
+        None => "tolerant".to_string(),
+    };
     let pinned_failure_strategy = params.get("failure_strategy").and_then(Value::as_str);
     let failure_strategy = params
         .get("failure_strategy")
@@ -197,7 +205,10 @@ pub(crate) async fn build_execution_context(
         .and_then(Value::as_u64)
         .map(|value| value as u8)
         .unwrap_or_else(|| hardness_to_complexity(hardness.normalized));
-    let default_mode = recommend_work_grade_from_learning(&ledger, "agent");
+    let default_mode = match learning_bus.as_ref() {
+        Some(bus) => crate::reinforcement::recommend_work_grade_from_learning_bus(bus, "agent"),
+        None => "agent".to_string(),
+    };
     let pinned_mode = params.get("mode").and_then(Value::as_str);
     let blended_default_mode = stricter_execution_mode(
         default_mode.as_str(),
@@ -354,14 +365,27 @@ pub(crate) fn apply_learning_plan_feedback(
     workflow: &mut WorkflowGeneratedArtifact,
 ) -> AdaptivePlanningReport {
     let predicted_success_before = plan.routing.predicted_success_rate;
-    plan.routing.predicted_success_rate = recommend_predicted_success_rate_from_learning(
-        ledger,
-        plan.routing.predicted_success_rate,
-        plan.characteristics.complexity,
-    );
+    // Load the learning bus once for the two recommendations below instead of
+    // letting each recommend_* function re-read latest-learning.json.
+    let learning_bus = crate::reinforcement::load_learning_bus(ledger);
+    plan.routing.predicted_success_rate = match learning_bus.as_ref() {
+        Some(bus) => crate::reinforcement::recommend_predicted_success_rate_from_learning_bus(
+            bus,
+            plan.routing.predicted_success_rate,
+            plan.characteristics.complexity,
+        ),
+        None => plan.routing.predicted_success_rate,
+    };
     let parallelism_before = infer_workflow_parallelism(workflow);
-    let recommended_parallelism =
-        recommend_parallelism_from_learning(ledger, parallelism_before, 1, 4);
+    let recommended_parallelism = match learning_bus.as_ref() {
+        Some(bus) => crate::reinforcement::recommend_parallelism_from_learning_bus(
+            bus,
+            parallelism_before,
+            1,
+            4,
+        ),
+        None => parallelism_before,
+    };
     workflow.execution_order =
         rebalance_execution_order(&workflow.execution_order, recommended_parallelism);
     let parallelism_after = infer_workflow_parallelism(workflow);

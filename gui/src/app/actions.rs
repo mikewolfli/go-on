@@ -820,15 +820,9 @@ top_k = 2
 
     /// Spawn the new backend process after the restart cooldown has elapsed.
     /// Called from update() when restart_cooldown_until is set and expired.
-    /// Also triggers async protocol version discovery to determine the chat endpoint.
     pub(crate) fn finish_restart_backend(&mut self) {
         let (backend, child, reused_external) =
             Self::spawn_backend(self.config_store.shared().as_ref());
-        // Kick off async protocol version discovery
-        let discovery_backend = backend.clone();
-        tokio::spawn(async move {
-            discovery_backend.discover_protocol_version().await;
-        });
         self.connection.backend = backend;
         self.connection.backend_child = child;
         self.connection.backend_reused_external = reused_external;
@@ -857,8 +851,7 @@ top_k = 2
     /// 2. Spawns or reuses an external backend process
     /// 3. Loads persisted UI state
     /// 4. Starts the cross-client SSE state sync listener
-    /// 5. Kicks off async protocol version discovery
-    /// 6. Pre-loads prompts data for chat command expansion
+    /// 5. Pre-loads prompts data for chat command expansion
     pub fn new(config: AppConfig) -> Self {
         // Auto-detect: if user hasn't explicitly set a language, try system locale
         let lang = if config.language.is_empty() || config.language == "en" {
@@ -912,15 +905,6 @@ top_k = 2
             state_sync_cancel,
             frame_count: 0,
         };
-
-        // Kick off async protocol version discovery to determine the chat endpoint.
-        // This runs in the background and updates the shared chat_endpoint.
-        {
-            let discovery_backend = app.connection.backend.clone();
-            tokio::spawn(async move {
-                discovery_backend.discover_protocol_version().await;
-            });
-        }
 
         // Pre-load prompts for chat `/` command expansion and category browser,
         // regardless of whether the Prompts tab itself is visible.

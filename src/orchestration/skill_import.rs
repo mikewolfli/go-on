@@ -40,6 +40,25 @@ impl SkillImportPolicy {
     }
 }
 
+impl Default for SkillImportPolicy {
+    /// Permissive policy used by the marketplace / CLI management path, where
+    /// the registry index is the trust boundary (no user-supplied allowlist or
+    /// sha256 hashes exist in the marketplace index format).
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_sources: vec![
+                "local:*".to_string(),
+                "github.com/*".to_string(),
+                "url:*".to_string(),
+            ],
+            require_sha256: false,
+            allow_floating_ref: true,
+            cache_dir: "./skills-cache".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillImportManifest {
     pub name: String,
@@ -93,6 +112,11 @@ pub struct ImportedSkillRecord {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SkillImportRequest {
     pub source: SkillImportSource,
+    /// Whether the imported skill is enabled for model discovery. Defaults to
+    /// false (imported skills stay disabled until explicitly enabled), matching
+    /// historical import behavior. Marketplace installs set this to true.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -255,7 +279,7 @@ impl SkillImportStore {
             source_ref: fetched.source_ref,
             sha256: computed_sha,
             manifest_path: manifest_path.display().to_string(),
-            enabled: false,
+            enabled: request.enabled,
             imported_at: now_ts(),
         };
 
@@ -422,7 +446,15 @@ async fn fetch_source(
         }
         SkillImportSource::Url { url, .. } => {
             enforce_allowlist(policy, url)?;
-            let payload = download_bytes(url).await?;
+            let raw_payload = download_bytes(url).await?;
+            let payload = if url.ends_with(".md") || url.ends_with(".mdc") {
+                let manifest =
+                    parse_skill_md(&raw_payload).context("failed to parse SKILL.md / skill.mdc")?;
+                serde_json::to_vec(&manifest)
+                    .context("failed to serialize converted SKILL.md manifest")?
+            } else {
+                raw_payload
+            };
             Ok(FetchedSource {
                 payload,
                 source: url.clone(),
@@ -433,8 +465,20 @@ async fn fetch_source(
             let resolved_path = resolve_local_manifest_path(path)?;
             let local_source = format!("local:{}", resolved_path.display());
             enforce_allowlist(policy, &local_source)?;
-            let payload = fs::read(&resolved_path)
+            let raw_payload = fs::read(&resolved_path)
                 .with_context(|| format!("failed to read {}", resolved_path.display()))?;
+            let payload = if resolved_path
+                .extension()
+                .map(|ext| ext == "md" || ext == "mdc")
+                .unwrap_or(false)
+            {
+                let manifest =
+                    parse_skill_md(&raw_payload).context("failed to parse SKILL.md / skill.mdc")?;
+                serde_json::to_vec(&manifest)
+                    .context("failed to serialize converted SKILL.md manifest")?
+            } else {
+                raw_payload
+            };
             Ok(FetchedSource {
                 payload,
                 source: local_source,
@@ -475,7 +519,13 @@ fn is_floating_ref(reference: &str) -> bool {
 fn resolve_local_manifest_path(path: &str) -> Result<PathBuf> {
     let path_buf = PathBuf::from(path);
     let candidate = if path_buf.is_dir() {
-        path_buf.join("manifest.json")
+        // Prefer manifest.json, then a SKILL.md / skill.mdc file in the dir.
+        let manifest = path_buf.join("manifest.json");
+        if manifest.exists() {
+            manifest
+        } else {
+            path_buf.join("SKILL.md")
+        }
     } else {
         path_buf
     };
@@ -958,6 +1008,7 @@ mod tests {
                     path: manifest_path.display().to_string(),
                     sha256: None,
                 },
+                enabled: false,
             })
             .await
             .unwrap_err();
@@ -998,6 +1049,7 @@ mod tests {
                     path: manifest_path.display().to_string(),
                     sha256: Some(sha),
                 },
+                enabled: false,
             })
             .await
             .unwrap();

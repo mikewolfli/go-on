@@ -8,9 +8,7 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::{
-    apply_openai_common_options, check_api_response, option_string, streaming_config,
-};
+use crate::agents::{apply_openai_common_options, option_string, streaming_config};
 
 pub struct OpenAiCompatibleAgent {
     base_url: String,
@@ -117,21 +115,14 @@ impl Agent for OpenAiCompatibleAgent {
         let api_key = resolve_secret(&self.api_key_env, "openai_compatible.api_key_env")?;
 
         let merged = self.merge_principles_into_messages(messages, principles);
-        let endpoint = self.chat_endpoint();
         let payload = self.build_payload(merged, options);
-
-        let response = self
-            .client
-            .post(endpoint)
-            .bearer_auth(api_key)
-            .json(&payload)
-            .send()
-            .await?;
-
-        let response = check_api_response(response, "openai_compatible").await?;
-
         let cfg = streaming_config(options, self.enable_compression);
-        crate::agents::stream_sse_to_sender(response, sender, &cfg).await
+        let req = self
+            .client
+            .post(self.chat_endpoint())
+            .bearer_auth(api_key)
+            .json(&payload);
+        crate::agents::execute_chat_stream_openai(req, "openai_compatible", &cfg, sender).await
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {

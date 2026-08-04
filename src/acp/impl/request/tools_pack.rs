@@ -894,7 +894,7 @@ pub(super) fn load_imported_skill_manifest(
     serde_json::from_str::<SkillImportManifest>(&raw).ok()
 }
 
-pub(super) fn budget_scope_key(name: &str, arguments: &Value) -> String {
+pub(crate) fn budget_scope_key(name: &str, arguments: &Value) -> String {
     if let Some(task_id) = arguments.get("task_id").and_then(Value::as_str) {
         return format!("task:{task_id}");
     }
@@ -904,7 +904,7 @@ pub(super) fn budget_scope_key(name: &str, arguments: &Value) -> String {
     format!("tool:{name}")
 }
 
-pub(super) fn estimate_argument_tokens(arguments: &Value) -> usize {
+pub(crate) fn estimate_argument_tokens(arguments: &Value) -> usize {
     // Lightweight approximation keeps budget enforcement deterministic without model calls.
     serde_json::to_string(arguments)
         .map(|payload| (payload.len() / 4).max(1))

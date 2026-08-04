@@ -14,6 +14,7 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use schema::mcp_initialize_capabilities;
 pub use schema::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
     McpListResourcesResult, McpListToolsResult, McpResource, McpTool, ServerInfo, JSONRPC_VERSION,

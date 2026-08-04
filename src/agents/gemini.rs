@@ -9,9 +9,7 @@ use serde_json::{json, Value};
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::{
-    check_api_response, option_f64, principles_to_text, stream_sse_events, SseEventAction,
-};
+use crate::agents::{check_api_response, option_f64, stream_sse_events, SseEventAction};
 
 pub struct GeminiAgent {
     api_key_env: String,
@@ -44,11 +42,8 @@ impl GeminiAgent {
         let mut contents: Vec<Value> = Vec::new();
         let mut system_instruction: Option<String> = None;
 
-        if let Some(items) = principles {
-            if !items.is_empty() {
-                let system_text = principles_to_text(items);
-                system_instruction = Some(system_text);
-            }
+        if let Some(text) = crate::agents::principles_to_system_text(principles) {
+            system_instruction = Some(text);
         }
 
         for message in messages.iter() {

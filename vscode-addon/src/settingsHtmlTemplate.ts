@@ -305,14 +305,6 @@ export function getSettingsHtml(
                     <div class="setting-group">
                         <h3>🎨 UI Settings</h3>
                         <div class="setting-item">
-                            <label for="uiTheme">Theme:</label>
-                            <select id="uiTheme" data-setting="go-on.ui.theme">
-                                <option value="auto">Auto (Follow VS Code)</option>
-                                <option value="light">Light</option>
-                                <option value="dark">Dark</option>
-                            </select>
-                        </div>
-                        <div class="setting-item">
                             <label for="fontSize">Font Size:</label>
                             <input type="number" id="fontSize" min="8" max="24" data-setting="go-on.ui.fontSize">
                         </div>

@@ -12,7 +12,6 @@ use crate::acp::background::start_background_tasks;
 use crate::acp::server::AcpServer;
 
 use super::http::handle_http_connection;
-use super::tls::{handle_mtls_http_connection, handle_tls_http_connection};
 
 /// Start the ACP HTTP server.
 ///
@@ -209,35 +208,33 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                 let mtls = mtls_acceptor.clone();
                 let tls = tls_acceptor.clone();
                 async move {
-                    if let Some(ref acceptor) = mtls {
-                        // mTLS path: perform TLS handshake, then handle through
-                        // the dedicated mTLS HTTP handler.
-                        if let Err(err) = handle_mtls_http_connection(
-                            acceptor.as_ref(),
-                            socket,
-                            server,
-                            peer_addr,
-                        )
-                        .await
-                        {
-                            warn!("ACP mTLS connection {} failed: {}", peer_addr, err);
+                    use crate::acp::r#impl::runtime::http::HttpStream;
+                    let mut stream = if let Some(ref acceptor) = mtls {
+                        // mTLS path: TLS handshake with client-cert verification,
+                        // then the same HTTP routing as plaintext.
+                        match acceptor.accept(socket).await {
+                            Ok((tls, _cn)) => HttpStream::Tls(Box::new(tls)),
+                            Err(e) => {
+                                warn!("ACP mTLS handshake failed for {}: {}", peer_addr, e);
+                                return;
+                            }
                         }
                     } else if let Some(ref acceptor) = tls {
-                        // Plain TLS path: perform TLS handshake, then handle
-                        // through the same HTTP handler (no client cert).
-                        if let Err(err) =
-                            handle_tls_http_connection(acceptor, socket, server, peer_addr).await
-                        {
-                            warn!("ACP TLS connection {} failed: {}", peer_addr, err);
+                        // Plain TLS path: handshake without client cert.
+                        match acceptor.accept(socket).await {
+                            Ok(tls) => {
+                                HttpStream::Tls(Box::new(tokio_rustls::TlsStream::Server(tls)))
+                            }
+                            Err(e) => {
+                                warn!("ACP TLS handshake failed for {}: {}", peer_addr, e);
+                                return;
+                            }
                         }
                     } else {
-                        // Plain TCP path
-                        let mut socket = socket;
-                        if let Err(err) =
-                            handle_http_connection(&mut socket, server, peer_addr).await
-                        {
-                            warn!("ACP HTTP connection {} failed: {}", peer_addr, err);
-                        }
+                        HttpStream::Plain(socket)
+                    };
+                    if let Err(err) = handle_http_connection(&mut stream, server, peer_addr).await {
+                        warn!("ACP HTTP connection {} failed: {}", peer_addr, err);
                     }
                 }
             },

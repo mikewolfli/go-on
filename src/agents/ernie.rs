@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::baidu_auth::BaiduAuthClient;
-use crate::agents::{check_api_response, option_f64, option_string, principles_to_text};
+use crate::agents::{option_f64, option_string};
 
 /// Strict-completeness instruction injected during review/strict phases.
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
@@ -120,21 +120,12 @@ impl BaiduErnieAgent {
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
-        let mut system_text = String::new();
 
         let has_principles = principles.as_ref().is_some_and(|p| !p.is_empty());
-
-        if let Some(ref items) = principles {
-            if !items.is_empty() {
-                system_text.push_str(&principles_to_text(items));
-                system_text.push('\n');
-            }
-        }
-
         let stage_note = Self::stage_instruction(has_principles, options);
-        if !stage_note.is_empty() {
-            system_text.push_str(stage_note);
-        }
+        // Always push a system message (even when empty) — ERNIE requires the
+        // field; principles + stage note are merged by the shared helper.
+        let system_text = crate::agents::system_text_with_extra(principles, stage_note);
 
         final_messages.push(Message {
             role: "system".to_string(),
@@ -173,29 +164,24 @@ impl Agent for BaiduErnieAgent {
         let token = self.auth_client.get_access_token(scope).await?;
         let payload = self.build_payload(messages, principles, options);
 
-        let response = match self.api {
+        let request = match self.api {
             ErnieApi::Wenxin => {
                 let target_model = self.resolve_target_model(options);
                 let endpoint_path = Self::endpoint_for_model(&target_model);
                 let endpoint = format!(
                     "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/{endpoint_path}?access_token={token}"
                 );
-                self.client.post(endpoint).json(&payload).send().await?
+                self.client.post(endpoint).json(&payload)
             }
-            ErnieApi::Qianfan => {
-                self.client
-                    .post("https://qianfan.baidubce.com/v2/chat/completions")
-                    .header("Authorization", format!("Bearer {token}"))
-                    .json(&payload)
-                    .send()
-                    .await?
-            }
+            ErnieApi::Qianfan => self
+                .client
+                .post("https://qianfan.baidubce.com/v2/chat/completions")
+                .header("Authorization", format!("Bearer {token}"))
+                .json(&payload),
         };
 
-        let response = check_api_response(response, scope).await?;
-
         let cfg = crate::agents::streaming_config(options, false);
-        crate::agents::stream_sse_to_sender(response, sender, &cfg).await
+        crate::agents::execute_chat_stream_openai(request, scope, &cfg, sender).await
     }
 
     fn available_models(&self) -> Vec<ModelInfo> {

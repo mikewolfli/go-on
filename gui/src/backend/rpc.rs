@@ -240,35 +240,6 @@ impl BackendClient {
             .await
     }
 
-    /// Supported protocol versions for this GUI client (ascending).
-    /// Used in negotiation with the backend — the highest common version wins.
-    pub(crate) const GUI_SUPPORTED_VERSIONS: &'static [u16] = &[1, 2, 3];
-
-    /// Select the highest protocol version supported by both the GUI client and
-    /// the backend.  Iterates `client_versions` in descending order and returns
-    /// the first version present in `server_versions`.
-    pub(crate) fn select_highest_common(
-        client_versions: &[u16],
-        server_versions: &[u16],
-    ) -> Option<u16> {
-        client_versions
-            .iter()
-            .rev()
-            .find(|cv| server_versions.contains(cv))
-            .copied()
-    }
-
-    /// Map a negotiated protocol version number to the appropriate HTTP endpoint.
-    pub(crate) fn endpoint_for_version(version: u16) -> &'static str {
-        if version >= 2 {
-            // V2+ (modern): use the OpenAI-compatible chat completions endpoint.
-            "/v1/chat/completions"
-        } else {
-            // V1 (legacy): use the older /chat/stream endpoint.
-            "/chat/stream"
-        }
-    }
-
     pub(crate) fn decode_workflow_runs(
         value: Value,
     ) -> Result<Vec<super::WorkflowRunRecord>, String> {

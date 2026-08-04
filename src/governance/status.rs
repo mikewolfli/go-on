@@ -259,54 +259,13 @@ fn path_has_sensitive_extension(path: &str) -> bool {
 
 // ── Shell command safety ──────────────────────────────────────────────────
 
-/// Dangerous command prefixes / patterns that are blocked outright in
-/// terminal chat mode. These are fuzzy string checks, not a sandbox.
-const BLOCKED_COMMAND_PATTERNS: &[&str] = &[
-    "rm -rf /",
-    "rm -rf --no-preserve-root",
-    ":(){ :|:& };:", // fork bomb
-    "mkfs.",
-    "dd if=",
-    "> /dev/sd",
-    "> /dev/disk",
-    "shutdown",
-    "reboot",
-    "halt",
-    "poweroff",
-    "chmod 777 /",
-    "chown -R",
-    "curl | sh",
-    "curl | bash",
-    "wget -O - | sh",
-    "wget -O - | bash",
-    "eval ",
-    "sudo rm -rf",
-    "sudo dd",
-    "sudo mkfs",
-    "sudo shutdown",
-    "sudo reboot",
-];
-
 /// Check a shell command string against blocked patterns.
+///
+/// Single canonical block-list lives in `orchestration::tool::exec_common`;
+/// this gate delegates to it so terminal-chat and the shell tool agree on
+/// what is blocked (previously two independent lists had drifted).
 fn command_is_blocked(cmd: &str) -> Option<&'static str> {
-    let lower = cmd.to_lowercase();
-    for pattern in BLOCKED_COMMAND_PATTERNS {
-        if lower.contains(pattern) {
-            return Some(pattern);
-        }
-    }
-
-    // Also block commands that pipe into a shell (blind execution of remote content)
-    if lower.contains("| sh") || lower.contains("| bash") || lower.contains("| zsh") {
-        return Some("pipe-to-shell");
-    }
-
-    // Block destructive redirects to block devices
-    if lower.contains("> /dev/") && !lower.contains("/dev/null") {
-        return Some("redirect to block device");
-    }
-
-    None
+    crate::orchestration::tool::exec_common::is_blocked_command(cmd)
 }
 
 // ── Public API ────────────────────────────────────────────────────────────

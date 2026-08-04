@@ -13,6 +13,14 @@ use super::*;
 /// Returns shutdown confirmation payload (pure, no send_result).
 pub(super) fn shutdown_payload(server: &AcpServer) -> Result<Value> {
     info!("{}", t("info.shutdown_requested"));
+    // Notify connected clients (GUI / VSCode addon) that the backend is going
+    // down so they can surface a reconnect banner instead of a hard error.
+    crate::protocol::state_sync::publish_event(
+        crate::protocol::state_sync::StateSyncEvent::BackendRestarting {
+            reason: "shutdown_requested".to_string(),
+            restart_in_ms: 0,
+        },
+    );
     server.begin_shutdown();
     server.shutdown_notify.notify_waiters();
 
@@ -41,10 +49,7 @@ pub(super) async fn health_payload(server: &AcpServer) -> Result<Value> {
             "enabled": true,
             "governance": hb.governance_profile(),
             "drift": hb.drift_profile(),
-            "brain_loop": hb.brain_profile().await,
             "artifact": hb.artifact_profile(),
-            "omnipotent": hb.omnipotent_profile(),
-            "brain_runner": hb.brain_runner_profile().await,
             "resilience": hb.resilience_profile().await,
             "fault_tolerance": hb.fault_tolerance_profile().await,
         })

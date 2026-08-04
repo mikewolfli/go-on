@@ -129,14 +129,6 @@ pub enum CodeExecutionPolicy {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
-pub enum ReviewRequirement {
-    None,
-    #[default]
-    Auto,
-    Manual,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum AuditLevel {
     Minimal,
     #[default]
@@ -182,7 +174,7 @@ pub struct ExecutionPolicy {
     pub tool_usage: ToolUsagePolicy,
     pub file_write: FileWritePolicy,
     pub code_execution: CodeExecutionPolicy,
-    pub review_requirement: ReviewRequirement,
+    pub review_requirement: ReviewLevel,
     pub budget: TaskBudget,
     pub audit_level: AuditLevel,
 }
@@ -194,7 +186,7 @@ impl Default for ExecutionPolicy {
             tool_usage: ToolUsagePolicy::default(),
             file_write: FileWritePolicy::default(),
             code_execution: CodeExecutionPolicy::default(),
-            review_requirement: ReviewRequirement::default(),
+            review_requirement: ReviewLevel::default(),
             budget: TaskBudget {
                 max_tokens: 120_000,
                 max_wall_clock_seconds: 3600,

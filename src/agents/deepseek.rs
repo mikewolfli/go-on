@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::{
-    apply_openai_common_options, check_api_response, principles_to_text, resolve_effective_model,
+    apply_openai_common_options, principles_to_system_text, resolve_effective_model,
 };
 
 pub struct DeepSeekAgent {
@@ -64,13 +64,11 @@ impl DeepSeekAgent {
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
 
-        if let Some(items) = principles {
-            if !items.is_empty() {
-                final_messages.push(Message {
-                    role: "system".to_string(),
-                    content: principles_to_text(items),
-                });
-            }
+        if let Some(text) = principles_to_system_text(principles) {
+            final_messages.push(Message {
+                role: "system".to_string(),
+                content: text,
+            });
         }
         final_messages.extend(messages.iter().cloned());
 
@@ -138,20 +136,13 @@ impl Agent for DeepSeekAgent {
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "deepseek.api_key_env")?;
         let payload = self.build_payload(messages, principles, options);
-
-        let url = self.completion_endpoint();
-        let response = self
-            .client
-            .post(url)
-            .bearer_auth(api_key)
-            .json(&payload)
-            .send()
-            .await?;
-
-        let response = check_api_response(response, "deepseek").await?;
-
         let cfg = crate::agents::streaming_config(options, false);
-        crate::agents::stream_sse_to_sender(response, sender, &cfg).await
+        let req = self
+            .client
+            .post(self.completion_endpoint())
+            .bearer_auth(api_key)
+            .json(&payload);
+        crate::agents::execute_chat_stream_openai(req, "deepseek", &cfg, sender).await
     }
 
     /// Returns the currently available DeepSeek models per their official API docs:

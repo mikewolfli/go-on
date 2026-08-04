@@ -414,6 +414,7 @@ impl McpHttpServer {
                             acp_server,
                             rate_limiter,
                             sse_broadcaster,
+                            peer_addr,
                         )
                         .await
                         {
@@ -449,36 +450,7 @@ impl McpHttpServer {
         Ok(())
     }
 
-    /// Configure this server with a TLS acceptor, enabling TLS on all
-    /// accepted connections.
-    ///
-    /// This is a builder-style method that consumes `self` and returns
-    /// the updated server. Call it after construction:
-    /// ```text
-    /// let server = McpHttpServer::new(...).with_tls_acceptor(acceptor);
-    /// ```
-    pub fn with_tls_acceptor(mut self, acceptor: tokio_rustls::TlsAcceptor) -> Self {
-        self.tls_acceptor = Some(acceptor);
-        self
-    }
-
-    /// Configure the server with mTLS certificate paths. If `tls_acceptor` has not
-    /// been set directly, the `TlsAcceptor` will be built from these paths
-    /// when `run()` is called (lazy initialisation of the TLS acceptor with
-    /// client CA certificate verification).
-    pub fn with_tls_config(
-        mut self,
-        ca_cert_path: impl Into<String>,
-        server_cert_path: impl Into<String>,
-        server_key_path: impl Into<String>,
-    ) -> Self {
-        self.mtls_ca_cert_path = Some(ca_cert_path.into());
-        self.mtls_server_cert_path = Some(server_cert_path.into());
-        self.mtls_server_key_path = Some(server_key_path.into());
-        self
-    }
-
-    /// Configure the server with a rate limit middleware.
+    /// Configure this server with a rate limit middleware.
     /// Every request processed by `handle_http_connection` will be checked
     /// against this rate limiter before processing.
     pub fn with_rate_limiter(
@@ -493,12 +465,6 @@ impl McpHttpServer {
     pub fn shutdown(&self) {
         self.shutdown_notify.notify_waiters();
     }
-
-    /// Get a reference to the SSE broadcaster for pushing resource-change
-    /// and other subscription-based notifications to connected SSE clients.
-    pub fn sse_broadcaster(&self) -> Arc<SseBroadcaster> {
-        Arc::clone(&self.sse_broadcaster)
-    }
 }
 
 async fn handle_http_connection(
@@ -507,6 +473,7 @@ async fn handle_http_connection(
     acp_server: Option<Arc<AcpServer>>,
     rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
     sse_broadcaster: Arc<SseBroadcaster>,
+    peer_addr: std::net::SocketAddr,
 ) -> Result<()> {
     // ── Connection: keep-alive — compliance only, no multiplexing ──────
     // Responses include `Connection: keep-alive` (set in
@@ -597,6 +564,8 @@ async fn handle_http_connection(
     const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
     let content_length =
         crate::acp::r#impl::runtime::protocol::extract_content_length(header_part).unwrap_or(0);
+    // ── CORS headers (computed once, reused by every error/response path) ──
+    let cors_headers = compute_mcp_cors_headers(header_part, &acp_server);
     if content_length > MAX_BODY_SIZE {
         let error_body = inject_platform_profiles_if_absent(
             serde_json::json!({
@@ -608,13 +577,9 @@ async fn handle_http_connection(
             }),
             "mcp.payload_too_large",
         );
-        let cors = compute_mcp_cors_headers(header_part, &acp_server);
-        write_http_json_response(socket, 413, error_body, &cors).await?;
+        write_http_json_response(socket, 413, error_body, &cors_headers).await?;
         return Ok(());
     }
-
-    // ── CORS headers ─────────────────────────────────────────────────────
-    let cors_headers = compute_mcp_cors_headers(header_part, &acp_server);
 
     // ── SSE endpoint (GET /sse or /mcp-sse) — must be checked before the
     //     POST-only guard below so SSE connections bypass the POST requirement.
@@ -685,40 +650,47 @@ async fn handle_http_connection(
         return Ok(());
     }
 
-    // ── Entry auth (same pattern as ACP HTTP server) ─────────────────────
+    // ── Entry auth (shared evaluator with the ACP HTTP arm) ───────────────
     if let Some(ref server) = acp_server {
-        if server.runtime_config.entry_auth_enabled {
-            let env_name = server.runtime_config.entry_auth_api_key_env.trim();
-            let expected_key = crate::shared::secret_override::get_secret(env_name)
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
-
-            if let Some(ref expected) = expected_key {
-                let provided =
-                    crate::acp::r#impl::runtime::security::extract_entry_token(header_part)
-                        .map(|value| value.trim().to_string())
-                        .filter(|value| !value.is_empty());
-
-                if !provided.is_some_and(|ref p| constant_time_eq(p, expected)) {
-                    write_http_json_response(
-                        socket,
-                        401,
-                        serde_json::json!({
-                            "error": t("error.entry_auth_required"),
-                            "code": "ENTRY_AUTH_REQUIRED"
-                        }),
-                        &cors_headers,
-                    )
-                    .await?;
-                    return Ok(());
-                }
-            } else {
+        match crate::acp::r#impl::runtime::security::evaluate_entry_auth(server, header_part) {
+            crate::acp::r#impl::runtime::security::EntryAuthOutcome::Pass => {}
+            crate::acp::r#impl::runtime::security::EntryAuthOutcome::Reject {
+                status,
+                code,
+                message,
+            } => {
                 write_http_json_response(
                     socket,
-                    503,
+                    status,
+                    serde_json::json!({ "error": message, "code": code }),
+                    &cors_headers,
+                )
+                .await?;
+                return Ok(());
+            }
+        }
+
+        // Entry rate limiting (per-IP), matching the ACP HTTP arm. Applied only
+        // when entry auth is enabled so it complements rather than doubles the
+        // transport-level TenantRateLimit middleware.
+        if server.runtime_config.entry_auth_enabled {
+            let source = peer_addr.ip().to_string();
+            let key = format!("entry:{}", source);
+            let rpm_limit = server.runtime_config.entry_rate_limit_rpm.max(1);
+            let burst = server.runtime_config.entry_rate_limit_burst.max(1);
+            let allowed = server
+                .resilience
+                .phase_rate_limiter
+                .lock()
+                .map(|guard| guard.allow(&key, rpm_limit, Some(burst)))
+                .unwrap_or(true);
+            if !allowed {
+                write_http_json_response(
+                    socket,
+                    429,
                     serde_json::json!({
-                        "error": t("error.entry_auth_misconfigured"),
-                        "code": "ENTRY_AUTH_MISCONFIGURED"
+                        "error": t("error.chat.rate_limited"),
+                        "code": "ENTRY_RATE_LIMITED"
                     }),
                     &cors_headers,
                 )
@@ -729,12 +701,14 @@ async fn handle_http_connection(
     }
 
     // ── User auth and RBAC ───────────────────────────────────────────────
+    // Extract the user session once; the auth block and the rate-limit tenant
+    // derivation below both consume it.
+    let extracted_user = acp_server
+        .as_ref()
+        .and_then(|s| s.session.session_manager.as_ref())
+        .and_then(|sm| sm.extract_user_from_request(header_part));
     if let Some(ref server) = acp_server {
-        let user_session = server
-            .session
-            .session_manager
-            .as_ref()
-            .and_then(|sm| sm.extract_user_from_request(header_part));
+        let user_session = extracted_user.as_ref();
 
         if server.runtime_config.user_auth_enabled {
             let session = match user_session {
@@ -796,11 +770,9 @@ async fn handle_http_connection(
     if let Some(ref limiter) = rate_limiter {
         // Derive tenant identifier from the session (if auth is enabled) or
         // fall back to a default tenant for unauthenticated requests.
-        let tenant_id = acp_server
+        let tenant_id = extracted_user
             .as_ref()
-            .and_then(|s| s.session.session_manager.as_ref())
-            .and_then(|sm| sm.extract_user_from_request(header_part))
-            .and_then(|u| u.tenant_id)
+            .and_then(|u| u.tenant_id.clone())
             .unwrap_or_else(|| "default".to_string());
 
         if let Err(retry_after) = limiter.check(&tenant_id) {
@@ -817,8 +789,7 @@ async fn handle_http_connection(
                 }),
                 "mcp.rate_limited",
             );
-            let cors = compute_mcp_cors_headers(header_part, &acp_server);
-            write_http_json_response(socket, 429, error_body, &cors).await?;
+            write_http_json_response(socket, 429, error_body, &cors_headers).await?;
             return Ok(());
         }
     }
@@ -1067,69 +1038,23 @@ async fn handle_mcp_sse_connection(
 // Helper functions for MCP HTTP security hardening
 // ---------------------------------------------------------------------------
 
-/// Constant-time string comparison to prevent timing side-channel attacks.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    use subtle::ConstantTimeEq;
-    a.as_bytes().ct_eq(b.as_bytes()).into()
-}
-
+/// MCP HTTP JSON response writer — delegates to the shared generic writer in
+/// the ACP HTTP runtime (status-code table, extra-header handling and
+/// `Connection: keep-alive` semantics are the single implementation). The old
+/// per-file copy (with a drifted status table and a local 204 branch) is gone.
 async fn write_http_json_response(
     socket: &mut MaybeTlsStream,
     status: u16,
     body: serde_json::Value,
     extra_headers: &str,
 ) -> Result<()> {
-    let status_text = match status {
-        200 => "OK",
-        202 => "Accepted",
-        204 => "No Content",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        413 => "Payload Too Large",
-        405 => "Method Not Allowed",
-        500 => "Internal Server Error",
-        503 => "Service Unavailable",
-        other => return Err(anyhow::anyhow!("unsupported HTTP status code: {}", other)),
-    };
-
-    // 204 No Content MUST NOT include a message body per HTTP/1.1 §6.4.1
-    if status == 204 {
-        let mut response = format!(
-            "HTTP/1.1 {} {}\r\nConnection: keep-alive\r\n",
-            status, status_text,
-        );
-        if !extra_headers.is_empty() {
-            response.push_str(extra_headers);
-            if !extra_headers.ends_with("\r\n") {
-                response.push_str("\r\n");
-            }
-        }
-        response.push_str("\r\n");
-        socket.write_all(response.as_bytes()).await?;
-        socket.flush().await?;
-        return Ok(());
-    }
-
-    let body_text = serde_json::to_string(&body)?;
-    let mut response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n",
+    crate::acp::r#impl::runtime::http::write_http_json_response_keep_alive(
+        socket,
         status,
-        status_text,
-        body_text.len(),
-    );
-    if !extra_headers.is_empty() {
-        response.push_str(extra_headers);
-        if !extra_headers.ends_with("\r\n") {
-            response.push_str("\r\n");
-        }
-    }
-    response.push_str("\r\n");
-    response.push_str(&body_text);
-
-    socket.write_all(response.as_bytes()).await?;
-    socket.flush().await?;
-    Ok(())
+        body,
+        extra_headers,
+    )
+    .await
 }
 
 /// Compute CORS response headers for the MCP HTTP server.

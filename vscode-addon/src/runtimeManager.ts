@@ -909,7 +909,12 @@ export class GoOnManager {
 
         // Use parseSseChunk to extract structured SSE frames
         const frames = parseSseChunk(buffer);
-        buffer = ""; // Reset buffer as parseSseChunk consumed the text
+        // Keep only the trailing partial frame (text after the last \n\n frame
+        // separator). Frames split across chunk boundaries must not be dropped:
+        // parseSseChunk splits on \n\n, so any data without a trailing separator
+        // is an incomplete frame that the next read completes.
+        const lastBoundary = buffer.lastIndexOf("\n\n");
+        buffer = lastBoundary >= 0 ? buffer.slice(lastBoundary + 2) : "";
 
         for (const frame of frames) {
           const eventData = frame.data;
@@ -1000,7 +1005,7 @@ export class GoOnManager {
     const cancelRequest: JsonRpcRequest = {
       jsonrpc: "2.0",
       id,
-      method: "chat.cancel",
+      method: "$/cancel_request",
       params: {},
     };
 

@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde::Deserialize;
-use tokio::net::TcpStream;
 
 use crate::acp::r#impl::chat::{ChatParams, ChatRequestContext, StreamFrame, StreamObserver};
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
@@ -22,7 +21,7 @@ use crate::rpc_protocol::RequestTraceContext;
 
 use super::http::{
     clone_tcp_stream, http_trace_context, write_http_json_response,
-    write_http_json_response_with_context,
+    write_http_json_response_with_context, HttpStream,
 };
 use super::sse::{
     write_openai_sse_data, write_openai_sse_done, write_sse_event, write_sse_headers,
@@ -365,7 +364,7 @@ fn openai_to_chat_params(req: &OpenAiChatRequest) -> ChatParams {
 }
 
 pub(crate) async fn handle_openai_chat_completions(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: Arc<AcpServer>,
     body: serde_json::Value,
     user_session: Option<UserSession>,
@@ -493,7 +492,11 @@ pub(crate) async fn handle_openai_chat_completions(
     }
 
     write_sse_headers(socket, cors_headers).await?;
-    set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
+    // Out-of-band SSE transport requires a plain TCP stream (fd clone); on the
+    // TLS arm the global transport is not set.
+    if let HttpStream::Plain(plain) = socket {
+        set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(plain)?)));
+    }
 
     // Periodic flush interval for SSE streaming — flushes every 4 events
     // to batch syscalls while keeping latency low (same pattern as http.rs).
@@ -1148,7 +1151,7 @@ fn classify_responses_upstream_error_code(err: &anyhow::Error) -> &'static str {
 // ---------------------------------------------------------------------------
 
 async fn write_responses_api_error(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     payload: serde_json::Value,
     extra_headers: &str,
 ) -> Result<()> {
@@ -1167,7 +1170,7 @@ async fn write_responses_api_error(
 /// Validate and deserialize a Responses API POST request.
 /// On error, writes the error to the socket and returns `Err(())` so the caller can bail.
 async fn validate_responses_post_request(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     body: &serde_json::Value,
     extra_headers: &str,
 ) -> Result<ResponsesApiRequest, ()> {
@@ -1360,7 +1363,7 @@ async fn validate_responses_post_request(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_responses_api(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: Arc<AcpServer>,
     body: serde_json::Value,
     user_session: Option<UserSession>,
@@ -1534,7 +1537,7 @@ pub(crate) async fn handle_responses_api(
 }
 
 async fn handle_response_tool_result(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: &Arc<AcpServer>,
     request_id: &str,
     model: &str,
@@ -1586,7 +1589,7 @@ async fn handle_response_tool_result(
 }
 
 async fn handle_response_required_tool_call(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: &Arc<AcpServer>,
     request_id: &str,
     model: &str,
@@ -1609,7 +1612,7 @@ async fn handle_response_required_tool_call(
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_response_create(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: Arc<AcpServer>,
     request_id: &str,
     model: &str,
@@ -1751,7 +1754,7 @@ async fn handle_response_create(
 
 /// Handle GET /v1/responses/{id} — retrieve a single response by its ID.
 pub(crate) async fn handle_response_get(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: &AcpServer,
     response_id: &str,
     cors_headers: &str,
@@ -1779,7 +1782,7 @@ pub(crate) async fn handle_response_get(
 /// Streaming (SSE) path for POST /v1/responses when stream=true.
 #[allow(clippy::too_many_arguments)]
 async fn handle_response_stream(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: Arc<AcpServer>,
     request_id: &str,
     model: &str,
@@ -1802,7 +1805,11 @@ async fn handle_response_stream(
     });
 
     write_sse_headers(socket, cors_headers).await?;
-    set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(socket)?)));
+    // Out-of-band SSE transport requires a plain TCP stream (fd clone); on the
+    // TLS arm the global transport is not set.
+    if let HttpStream::Plain(plain) = socket {
+        set_current_transport(Arc::new(SseTransport::new(clone_tcp_stream(plain)?)));
+    }
     write_sse_event(
         socket,
         "response.created",

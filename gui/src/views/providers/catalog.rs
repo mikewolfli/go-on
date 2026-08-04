@@ -1,22 +1,12 @@
 //! Provider catalog sub-module.
 //!
 //! Handles fetching provider catalog from the backend's `provider.catalog` RPC endpoint
-//! vs. the hardcoded built-in provider list.
+//! vs. the offline fallback in `generated_catalog`.
 //!
 //! The backend's `/provider/catalog` endpoint is the authoritative source for provider
-//! definitions. The GUI uses `built_in_provider_specs()` as a sync fallback when the
-//! backend is unreachable (e.g., first-run setup before any backend is running).
-//!
-//! FUTURE: After startup, the GUI can call `fetch_catalog()` to get the authoritative
-//! catalog and overlay it on top of the built-in fallback.
-//!
-//! F-GAP-59: The backend `/v1/providers/catalog` endpoint is defined but not yet wired
-//! into the GUI startup flow. Once wired:
-//!   1. Check backend availability via `health()`
-//!   2. Call `fetch_catalog()` to get the authoritative catalog
-//!   3. Merge or overlay the backend catalog on top of `built_in_provider_specs()`
-//!   4. Cache the result so subsequent lookups use the backend data
-//!      See F-GAP-59 for tracking.
+//! definitions. The GUI uses the generated offline fallback (`generated_catalog`, kept in
+//! sync with the backend by `scripts/gen-provider-catalog.py`) when the backend is
+//! unreachable (e.g., first-run setup before any backend is running).
 
 /// Provider metadata: agent type, default URL, default model, supports system prompt.
 pub struct ProviderSpec {
@@ -26,51 +16,7 @@ pub struct ProviderSpec {
     pub supports_system: bool,
 }
 
-/// Hardcoded catalog fallback used when backend is unreachable.
-/// Keep in sync with backend's `built_in_provider_specs()`.
-pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
-    match name {
-        "openai" => ProviderSpec {
-            agent_type: "openai",
-            default_url: Some("https://api.openai.com/v1"),
-            default_model: "gpt-4o-mini",
-            supports_system: true,
-        },
-        "openai_compatible" => ProviderSpec {
-            agent_type: "openai_compatible",
-            default_url: Some("http://127.0.0.1:8080/v1"),
-            default_model: "compatible-model",
-            supports_system: true,
-        },
-        "anthropic" => ProviderSpec {
-            agent_type: "claude",
-            default_url: Some("https://api.anthropic.com"),
-            default_model: "claude-sonnet-4-20250514",
-            supports_system: true,
-        },
-        "deepseek" => ProviderSpec {
-            agent_type: "deepseek",
-            default_url: Some("https://api.deepseek.com"),
-            default_model: "deepseek-v4-flash",
-            supports_system: true,
-        },
-        "gemini" => ProviderSpec {
-            agent_type: "gemini",
-            default_url: Some("https://generativelanguage.googleapis.com/v1beta"),
-            default_model: "gemini-2.5-flash",
-            supports_system: false,
-        },
-        "copilot" => ProviderSpec {
-            agent_type: "copilot",
-            default_url: Some("https://api.githubcopilot.com"),
-            default_model: "auto",
-            supports_system: false,
-        },
-        _ => ProviderSpec {
-            agent_type: "openai_compatible",
-            default_url: None,
-            default_model: "auto",
-            supports_system: false,
-        },
-    }
-}
+/// Offline provider spec lookup — delegates to the generated catalog which is
+/// kept in sync with the backend's `built_in_provider_specs()` (single source
+/// of truth). Unknown names fall back to the generic openai_compatible shape.
+pub use super::generated_catalog::built_in_provider_specs;

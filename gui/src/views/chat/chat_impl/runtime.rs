@@ -65,6 +65,11 @@ async fn send_pending(tx: &mpsc::SyncSender<PendingResponse>, msg: PendingRespon
 }
 
 const MAX_INLINE_ATTACHMENT_B64_CHARS: usize = 8_192;
+/// Cap for inline multimodal `data:` URIs appended to the outbound message
+/// (F-GAP-66). Larger payloads stay as metadata summary only — the backend
+/// bounds are higher (multimodal::MAX_IMAGE_SIZE = 10 MB), but an unbounded
+/// message would bloat the request and conversation history.
+const MAX_MULTIMODAL_INLINE_B64_CHARS: usize = 4 * 1024 * 1024;
 const MAX_BUFFERED_TOKENS_BYTES: usize = 256 * 1024; // 256 KB accumulated token buffer
 
 /// RAII guard to decrement active_generations counter on drop.
@@ -866,6 +871,35 @@ impl ChatView {
         format!("\n\n[Attachments]\n{details}")
     }
 
+    /// Build inline multimodal URIs for the outbound message (F-GAP-66).
+    ///
+    /// The backend's `detect_and_process_multimodal` processes `data:` URIs
+    /// (paste/drop attachments carry base64 payloads) and `file://` refs
+    /// (file-picker attachments carry a local path) through the multimodal
+    /// pipeline. Returns an empty string when nothing is inlineable.
+    fn build_attachment_multimodal(attachments: &[Attachment]) -> String {
+        if attachments.is_empty() {
+            return String::new();
+        }
+        let mut uris: Vec<String> = Vec::new();
+        for a in attachments {
+            if std::path::Path::new(&a.data).exists() {
+                // File-picker attachment: the backend reads the file itself.
+                uris.push(format!("file://{}", a.data));
+            } else if a.data.len() <= MAX_MULTIMODAL_INLINE_B64_CHARS {
+                // Paste/drop attachment: inline base64 payload.
+                uris.push(format!("data:{};base64,{}", a.mime, a.data));
+            }
+            // Oversized base64 payloads are skipped — the metadata summary
+            // above still reports name/mime/size to the model.
+        }
+        if uris.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{}", uris.join("\n"))
+        }
+    }
+
     fn merge_options_with_tracking(
         options_extra: Option<Value>,
         conversation_id: Option<&str>,
@@ -966,15 +1000,17 @@ impl ChatView {
         let now = crate::fs_util::epoch_secs();
         let atts = std::mem::take(&mut self.attachments);
 
-        // F-GAP-66: Integrate MultimodalProcessor for attachment processing.
-        // Currently attachments are only included as text summary in the outbound message.
-        // When backend supports multimodal content parts (OpenAI-style format with
-        // content array containing {type, text|image_url|image_data} parts), the
-        // attachment data should be injected as image_url parts:
-        //   "content": [{ "type": "text", "text": "..." },
-        //                { "type": "image_url", "image_url": { "url": "data:{mime};base64,{data}" }}]
+        // F-GAP-66: Attachments go through the backend multimodal pipeline.
+        // Metadata summary stays inline for model readability; the payload is
+        // appended as `data:<mime>;base64,<payload>` URIs (paste/drop) or
+        // `file://<path>` refs (file picker) so the backend's
+        // `detect_and_process_multimodal` can extract text, transcribe audio,
+        // and pull images. OpenAI-style structured content parts
+        // ({type: text|image_url, ...}) remain future work — see the backend
+        // `observe_phase` multimodal context injection for the current shape.
         let attachment_summary = Self::build_attachment_summary(&atts);
-        let outbound_msg = format!("{expanded_msg}{attachment_summary}");
+        let attachment_multimodal = Self::build_attachment_multimodal(&atts);
+        let outbound_msg = format!("{expanded_msg}{attachment_summary}{attachment_multimodal}");
 
         // Sync the current UI mode into the session before saving
         if let Some(session) = self
@@ -1980,6 +2016,54 @@ mod tests {
         assert!(summary.contains("image.png"));
         assert!(summary.contains("base64:"));
         assert!(!summary.contains("abcdabcdabcd"));
+    }
+
+    #[test]
+    fn build_attachment_multimodal_empty_is_empty() {
+        assert_eq!(ChatView::build_attachment_multimodal(&[]), "");
+    }
+
+    #[test]
+    fn build_attachment_multimodal_inlines_base64_payload() {
+        let attachments = vec![Attachment {
+            name: "shot.png".to_string(),
+            mime: "image/png".to_string(),
+            data: "QUJDREVG".to_string(), // base64 payload, not a path
+        }];
+
+        let out = ChatView::build_attachment_multimodal(&attachments);
+
+        assert!(out.contains("data:image/png;base64,QUJDREVG"));
+    }
+
+    #[test]
+    fn build_attachment_multimodal_uses_file_uri_for_existing_path() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("goon_attach_test_{}.txt", std::process::id()));
+        std::fs::write(&path, "hello").expect("write temp file");
+        let path_str = path.display().to_string();
+        let attachments = vec![Attachment {
+            name: "note.txt".to_string(),
+            mime: "text/plain".to_string(),
+            data: path_str.clone(),
+        }];
+
+        let out = ChatView::build_attachment_multimodal(&attachments);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(out.contains(&format!("file://{path_str}")));
+    }
+
+    #[test]
+    fn build_attachment_multimodal_skips_oversized_payload() {
+        let oversized = "A".repeat(MAX_MULTIMODAL_INLINE_B64_CHARS + 1);
+        let attachments = vec![Attachment {
+            name: "big.bin".to_string(),
+            mime: "application/octet-stream".to_string(),
+            data: oversized,
+        }];
+
+        assert_eq!(ChatView::build_attachment_multimodal(&attachments), "");
     }
 
     #[test]

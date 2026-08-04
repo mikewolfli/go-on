@@ -28,7 +28,6 @@ pub(crate) struct CandidateScoreWeights {
     pub(crate) recency: f64,
     pub(crate) task_fit: f64,
     pub(crate) recent_outcome: f64,
-    pub(crate) causal_insight: f64,
     pub(crate) discovery: f64,
 }
 
@@ -39,7 +38,6 @@ pub(crate) struct CandidateScoreBreakdown {
     pub(crate) recency_score: f64,
     pub(crate) task_fit_score: f64,
     pub(crate) recent_outcome_score: f64,
-    pub(crate) causal_insight_score: f64,
     pub(crate) discovery_score: f64,
     pub(crate) total_score: f64,
 }
@@ -60,9 +58,6 @@ pub struct DecisionOutput {
     /// Phase 4: tools available for the selected agent
     #[cfg(feature = "sub-bus-tool")]
     pub available_tools: Vec<String>,
-    /// BLUE67-I2: Counterfactual score — probability that NOT selecting this
-    /// agent would lead to a worse outcome, computed from the Bayesian causal graph.
-    pub counterfactual_score: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -87,14 +82,12 @@ pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
             recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.11),
             task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.22),
             recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.14),
-            causal_insight: read_weight("GO_ON_CAPABILITY_WEIGHT_CAUSAL_INSIGHT", 0.10),
             discovery: read_weight("GO_ON_CAPABILITY_WEIGHT_DISCOVERY", 0.05),
         };
         let total = weights.reputation
             + weights.recency
             + weights.task_fit
             + weights.recent_outcome
-            + weights.causal_insight
             + weights.discovery;
         if total <= f64::EPSILON {
             CandidateScoreWeights {
@@ -102,7 +95,6 @@ pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
                 recency: 0.11,
                 task_fit: 0.22,
                 recent_outcome: 0.14,
-                causal_insight: 0.10,
                 discovery: 0.05,
             }
         } else {
@@ -111,7 +103,6 @@ pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
                 recency: weights.recency / total,
                 task_fit: weights.task_fit / total,
                 recent_outcome: weights.recent_outcome / total,
-                causal_insight: weights.causal_insight / total,
                 discovery: weights.discovery / total,
             }
         }
@@ -262,7 +253,6 @@ impl CapabilityBus {
             return (None, Vec::new());
         }
         let weights = configured_candidate_score_weights();
-        let task_type_str = format!("{:?}", task.task_type);
         let mut scored: Vec<CandidateScoreBreakdown> = candidates
             .iter()
             .map(|name| {
@@ -276,9 +266,6 @@ impl CapabilityBus {
                 let task_fit_score = task_fit_score(task, name);
                 let recent_outcome_score =
                     recent_outcome_score(&sensing.learning_snapshot, task, name);
-                // BLUE67-I1: Query causal Bayesian graph for agent-task effectiveness
-                let causal_insight_score =
-                    self.world_model.causal_agent_insight(name, &task_type_str);
                 // Historical solution knowledge: DiscoveryCenter entries written by
                 // `evolve_discovery` use `problem_pattern = "state_{agent}"`, so a
                 // per-agent lookup surfaces that agent's past success rate for the
@@ -302,7 +289,6 @@ impl CapabilityBus {
                     + (recency_score * weights.recency)
                     + (task_fit_score * weights.task_fit)
                     + (recent_outcome_score * weights.recent_outcome)
-                    + (causal_insight_score * weights.causal_insight)
                     + (discovery_score * weights.discovery);
                 CandidateScoreBreakdown {
                     agent: name.clone(),
@@ -310,7 +296,6 @@ impl CapabilityBus {
                     recency_score,
                     task_fit_score,
                     recent_outcome_score,
-                    causal_insight_score,
                     discovery_score,
                     total_score,
                 }
@@ -358,7 +343,6 @@ impl CapabilityBus {
                         "diagnostics".to_string(),
                         "audit".to_string(),
                     ],
-                    counterfactual_score: 0.0,
                 };
             }
             PolicyVerdict::Escalate(r) => {
@@ -383,7 +367,6 @@ impl CapabilityBus {
                         "diagnostics".to_string(),
                         "audit".to_string(),
                     ],
-                    counterfactual_score: 0.0,
                 };
             }
             PolicyVerdict::Allow
@@ -428,7 +411,6 @@ impl CapabilityBus {
                     recommended_mode: "auto".to_string(),
                     #[cfg(feature = "sub-bus-tool")]
                     available_tools: vec![],
-                    counterfactual_score: 0.5,
                 };
             }
         }
@@ -476,26 +458,6 @@ impl CapabilityBus {
         // `state_{agent}`) boost candidates with proven success. The former
         // task-type query here matched nothing (entries are keyed by agent, not
         // by TaskType) and its result was only recorded to an event.
-
-        // In profiles with tool bus, merge runtime-created sub-agent templates from AgentFactory.
-        #[cfg(any(
-            feature = "sub-bus-tool",
-            feature = "simple-server",
-            feature = "multi-users-server"
-        ))]
-        let candidate_agents = {
-            let mut agents = candidate_agents;
-            let factory = self.agent_factory.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            for inst in factory.find_agents_by_capability("general") {
-                if !agents.iter().any(|name| name == &inst.template_name) {
-                    agents.push(inst.template_name);
-                }
-            }
-            agents
-        };
 
         // Step C2: BLUE70: Query ReinforcementBus for learned routing preferences.
         let q_preferred_action = {
@@ -584,7 +546,6 @@ impl CapabilityBus {
                 recency_score: 1.0,
                 task_fit_score: 1.0,
                 recent_outcome_score: 1.0,
-                causal_insight_score: 1.0,
                 discovery_score: 0.0,
                 total_score: 1.0,
             }];
@@ -696,18 +657,6 @@ impl CapabilityBus {
         #[cfg(not(feature = "sub-bus-orchestration"))]
         let recommended_mode = "auto".to_string();
 
-        // BLUE67-I2: Compute counterfactual score for the selected agent
-        // Answers: "How much worse would the outcome be if we had NOT selected this agent?"
-        let counterfactual_score = selected_agent.as_ref().map_or(0.5, |agent| {
-            // Evaluate P(success | ¬agent) — the probability of success WITHOUT this agent
-            let p_without = self
-                .world_model
-                .counterfactual_probability(agent, &task_type_str);
-            // Counterfactual score: 1.0 - P(success | ¬agent)
-            // Higher means the agent is more critical (harder to replace)
-            (1.0 - p_without).clamp(0.0, 1.0)
-        });
-
         // Phase 4: Get available tools for the selected agent via ToolBus
         #[cfg(feature = "sub-bus-tool")]
         let available_tools = selected_agent
@@ -724,7 +673,6 @@ impl CapabilityBus {
             "success",
             serde_json::json!({
                 "confidence": confidence,
-                "counterfactual_score": counterfactual_score,
                 "recommended_mode": recommended_mode,
                 "available_tools": available_tools.len(),
                 "candidate_agents": candidate_agents.len(),
@@ -733,7 +681,6 @@ impl CapabilityBus {
                             "recency": configured_candidate_score_weights().recency,
                             "task_fit": configured_candidate_score_weights().task_fit,
                             "recent_outcome": configured_candidate_score_weights().recent_outcome,
-                            "causal_insight": configured_candidate_score_weights().causal_insight,
                 },
                 "candidate_scores": score_breakdown,
             }),
@@ -766,7 +713,6 @@ impl CapabilityBus {
             recommended_mode,
             #[cfg(feature = "sub-bus-tool")]
             available_tools,
-            counterfactual_score,
         }
     }
 }

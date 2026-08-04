@@ -373,14 +373,32 @@ pub async fn start_background_tasks(
                 );
 
                 let workdir = std::path::PathBuf::from(".goon/evolution");
-                let mut evolution_loop =
-                    crate::orchestration::self_evolution::evolution_loop::EvolutionLoop::new(workdir)
-                        .with_default_trigger_sources()
-                        .with_alert_manager(alert_manager)
-                        .with_agent(evolution_agent)
-                        .with_approval_mode(
-                            crate::orchestration::self_evolution::evolution_loop::ApprovalMode::AutoApproval,
-                        );
+                // Wire sandbox + history so the verify/apply/record phases of
+                // the evolution cycle are real (previously `sandbox: None` made
+                // verify/apply fail and `history: None` silently skipped recording).
+                let evolution_loop = crate::orchestration::self_evolution::evolution_loop::EvolutionLoop::new(
+                    workdir.clone(),
+                )
+                .with_default_trigger_sources()
+                .with_alert_manager(alert_manager)
+                .with_agent(evolution_agent)
+                .with_sandbox(
+                    crate::orchestration::self_evolution::sandbox::SandboxExecutor::new(
+                        workdir.clone(),
+                        3,
+                    ),
+                )
+                .with_history(
+                    crate::orchestration::self_evolution::evolution_history::EvolutionHistory::new(
+                        workdir.clone(),
+                    )
+                    .await,
+                )
+                .with_approval_mode(
+                    crate::orchestration::self_evolution::evolution_loop::ApprovalMode::AutoApproval,
+                );
+
+                let mut evolution_loop = evolution_loop;
 
                 tracing::info!(
                     target: "intelligence",

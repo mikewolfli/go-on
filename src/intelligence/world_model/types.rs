@@ -7,38 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
-// Causal inference
-// ---------------------------------------------------------------------------
-
-/// A causal link between two entities: action_entity causes effect_entity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CausalLink {
-    /// The entity representing the cause/action
-    pub cause_entity_id: String,
-    /// The entity representing the effect/outcome
-    pub effect_entity_id: String,
-    /// Confidence in this causal relationship (0.0 – 1.0)
-    pub confidence: f64,
-    /// Number of times this causation has been observed
-    pub observation_count: u64,
-    /// Average time delay between cause and effect (ms)
-    pub avg_delay_ms: f64,
-    /// Context tags under which this causal link is valid
-    pub context_tags: Vec<String>,
-}
-
-/// A snapshot of an entity's properties at a point in time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntityStateSnapshot {
-    /// The entity whose state was captured.
-    pub entity_id: String,
-    /// The entity's properties at this point.
-    pub properties: HashMap<String, String>,
-    /// Epoch millisecond when the snapshot was taken.
-    pub timestamp_ms: u64,
-}
-
-// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 

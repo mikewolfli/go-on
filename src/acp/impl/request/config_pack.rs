@@ -354,6 +354,14 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
         }
     }
 
+    // Notify connected clients that configuration was reloaded so they can
+    // refresh their settings views without polling.
+    crate::protocol::state_sync::publish_event(
+        crate::protocol::state_sync::StateSyncEvent::ConfigReloaded {
+            changed_keys: vec!["runtime".to_string()],
+        },
+    );
+
     let report = validate_runtime_readiness(&config_path, &config)?;
     let warnings = report.warning_messages();
     Ok(json!({

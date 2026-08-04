@@ -54,6 +54,57 @@ fn default_branch() -> String {
     "main".to_string()
 }
 
+impl From<SkillSource> for crate::orchestration::skill_import::SkillImportSource {
+    /// Map a marketplace skill source onto the import pipeline's source shape.
+    ///
+    /// - GitHub: owner/repo are merged and the market `path` (a directory
+    ///   prefix) becomes an exact file path ending in `/SKILL.md`; `""` /
+    ///   `".."` (index defaults) mean "probe candidate filenames".
+    /// - Registry (builtin): maps to the local `skills/<name>/SKILL.md` file
+    ///   using the same name→directory mapping the old template resolver used.
+    fn from(source: SkillSource) -> Self {
+        use crate::orchestration::skill_import::SkillImportSource;
+        match source {
+            SkillSource::GitHub {
+                owner,
+                repo,
+                path,
+                branch,
+            } => SkillImportSource::Github {
+                repo: format!("{}/{}", owner, repo),
+                reference: branch,
+                path: {
+                    let trimmed = path.trim_end_matches('/');
+                    if trimmed.is_empty() || trimmed == ".." {
+                        None
+                    } else {
+                        Some(format!("{}/SKILL.md", trimmed))
+                    }
+                },
+                sha256: None,
+            },
+            SkillSource::Url { url, sha256 } => SkillImportSource::Url { url, sha256 },
+            SkillSource::Local { path } => SkillImportSource::Local { path, sha256: None },
+            SkillSource::Registry { name, .. } => {
+                // Registry skills live in the project's skills/<name>/SKILL.md.
+                // Historical name→directory aliases from the marketplace index.
+                let dir = match name.as_str() {
+                    "code-reviewer" | "review-pr" => "code-review",
+                    "embed-text" => "classify-text",
+                    "commit-message-generator" => "changelog-generator",
+                    "decision-logger" => "note-taking",
+                    "dependency-analyzer" => "data-pipeline-optimizer",
+                    other => other,
+                };
+                SkillImportSource::Local {
+                    path: format!("skills/{}/SKILL.md", dir),
+                    sha256: None,
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SkillMarketItem
 // ---------------------------------------------------------------------------
@@ -390,15 +441,33 @@ impl SkillMarketRegistry {
         // Uses a boxed helper to avoid the Rust async recursion error (E0733).
         self.install_dependencies(&item, name).await?;
 
-        // Create installation record
-        let install_dir = self.cache_dir.join(&item.name);
-        tokio::fs::create_dir_all(&install_dir)
+        // Delegate the actual fetch/verify/parse/register to the unified
+        // import pipeline (previously the market had its own parallel
+        // resolve_market_skill_template + create_skill_from_prompt path).
+        // Market installs are enabled immediately (`enabled: true`).
+        let import_policy = self.import_policy();
+        let mut import_store = crate::orchestration::skill_import::SkillImportStore::load(
+            import_policy,
+            Arc::clone(&self.skill_registry),
+        )
+        .context("failed to open skill import store")?;
+        let record = import_store
+            .import_skill(crate::orchestration::skill_import::SkillImportRequest {
+                source: item.source.clone().into(),
+                enabled: true,
+            })
             .await
-            .context("failed to create install directory")?;
+            .with_context(|| format!("failed to install '{}'", item.name))?;
+
+        // Create installation record
+        let install_dir = PathBuf::from(&record.manifest_path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| self.cache_dir.join(&item.name));
 
         let installation = SkillInstallation {
             name: item.name.clone(),
-            version: item.version.clone(),
+            version: record.version,
             source: item.source.clone(),
             installed_path: install_dir,
             installed_at_ms: crate::shared::timestamps::now_ts_ms() as u64,
@@ -407,142 +476,28 @@ impl SkillMarketRegistry {
 
         self.installations.write().await.push(installation.clone());
 
-        // Register into the local skill registry using the real SKILL.md
-        // content when available (builtin skills map to skills/<name>/SKILL.md).
-        // A placeholder prompt_template is never registered: a skill that
-        // cannot be resolved to real instructions is rejected instead.
-        {
-            let prompt_template = Self::resolve_market_skill_template(&item).await?;
-            let manifest =
-                crate::orchestration::skill_import::parse_skill_md(prompt_template.as_bytes())
-                    .with_context(|| format!("failed to parse SKILL.md for '{}'", item.name))?;
-            let input_schema = match &manifest.input_schema {
-                serde_json::Value::Object(map) => map
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.to_string()))
-                    .collect::<HashMap<String, String>>(),
-                _ => HashMap::new(),
-            };
-            let mut registry = self
-                .skill_registry
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Err(e) = registry.create_skill_from_prompt(
-                &item.name,
-                &item.description,
-                &prompt_template,
-                input_schema,
-            ) {
-                info!(
-                    "Failed to register '{}' into skill registry: {}",
-                    item.name, e
-                );
-            }
-        }
-
         // Persist installation records to disk so they survive restarts.
         if let Err(e) = self.save_installations().await {
             tracing::warn!(error = %e, "failed to persist marketplace installations");
         }
 
         info!(
-            "Skill '{}' v{} installed successfully",
+            "Skill '{}' v{} installed successfully (via unified import pipeline)",
             item.name, item.version
         );
 
         Ok(installation)
     }
 
-    /// Resolve the real SKILL.md template content for a marketplace item.
-    ///
-    /// - `SkillSource::Registry` (builtin): reads `skills/<name>/SKILL.md` from the
-    ///   project directory.
-    /// - `SkillSource::Local`: reads the file directly.
-    /// - `SkillSource::Url` / `SkillSource::GitHub`: fetched over HTTP (raw URL).
-    ///
-    /// Returns an error when the content cannot be resolved, so installs never
-    /// register a placeholder template.
-    async fn resolve_market_skill_template(item: &SkillMarketItem) -> Result<String> {
-        match &item.source {
-            SkillSource::Registry { name, .. } => {
-                // Builtin listing names may differ from the on-disk directory
-                // (e.g. "code-reviewer" maps to skills/code-review/).
-                let dir = match name.as_str() {
-                    "code-reviewer" => "code-review",
-                    "review-pr" => "code-review",
-                    "embed-text" => "classify-text",
-                    "commit-message-generator" => "changelog-generator",
-                    "decision-logger" => "note-taking",
-                    "dependency-analyzer" => "data-pipeline-optimizer",
-                    other => other,
-                };
-                let path = std::path::Path::new("skills").join(dir).join("SKILL.md");
-                tokio::fs::read_to_string(&path)
-                    .await
-                    .with_context(|| format!("builtin skill file {} not found", path.display()))
-            }
-            SkillSource::Local { path } => tokio::fs::read_to_string(path)
-                .await
-                .with_context(|| format!("local skill file {} not found", path)),
-            SkillSource::Url { url, .. } => {
-                static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-                let client = HTTP_CLIENT.get_or_init(|| {
-                    reqwest::Client::builder()
-                        .timeout(Duration::from_secs(15))
-                        .user_agent("go-on-skill-market/1.0")
-                        .build()
-                        .expect("failed to create HTTP client for skill fetch")
-                });
-                let response = client
-                    .get(url)
-                    .send()
-                    .await
-                    .context("failed to fetch skill template")?;
-                if !response.status().is_success() {
-                    anyhow::bail!("skill fetch returned status {}", response.status());
-                }
-                response
-                    .text()
-                    .await
-                    .context("failed to read skill template body")
-            }
-            SkillSource::GitHub {
-                owner,
-                repo,
-                path,
-                branch,
-            } => {
-                let skill_path = if path.is_empty() {
-                    "SKILL.md".to_string()
-                } else if path.ends_with('/') {
-                    format!("{path}SKILL.md")
-                } else {
-                    format!("{path}/SKILL.md")
-                };
-                let raw_url = format!(
-                    "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{skill_path}"
-                );
-                static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-                let client = HTTP_CLIENT.get_or_init(|| {
-                    reqwest::Client::builder()
-                        .timeout(Duration::from_secs(15))
-                        .user_agent("go-on-skill-market/1.0")
-                        .build()
-                        .expect("failed to create HTTP client for skill fetch")
-                });
-                let response = client
-                    .get(&raw_url)
-                    .send()
-                    .await
-                    .context("failed to fetch skill template from GitHub")?;
-                if !response.status().is_success() {
-                    anyhow::bail!("skill fetch returned status {}", response.status());
-                }
-                response
-                    .text()
-                    .await
-                    .context("failed to read skill template body")
-            }
+    /// The import policy used for marketplace installs (permissive default).
+    fn import_policy(&self) -> crate::orchestration::skill_import::SkillImportPolicy {
+        crate::orchestration::skill_import::SkillImportPolicy {
+            cache_dir: self
+                .cache_dir
+                .to_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "./skills-cache".to_string()),
+            ..Default::default()
         }
     }
 
@@ -1428,6 +1383,69 @@ impl SkillMarketRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skill_source_maps_onto_import_source() {
+        use crate::orchestration::skill_import::SkillImportSource;
+        // GitHub: owner/repo merged, branch → reference, path → exact file.
+        let gh: SkillImportSource = SkillSource::GitHub {
+            owner: "owner".into(),
+            repo: "repo".into(),
+            path: "tools".into(),
+            branch: "main".into(),
+        }
+        .into();
+        match gh {
+            SkillImportSource::Github {
+                repo,
+                reference,
+                path,
+                ..
+            } => {
+                assert_eq!(repo, "owner/repo");
+                assert_eq!(reference, "main");
+                assert_eq!(path.as_deref(), Some("tools/SKILL.md"));
+            }
+            other => panic!("expected Github, got {:?}", other),
+        }
+        // Empty/".." path → probe candidate filenames (None).
+        let gh2: SkillImportSource = SkillSource::GitHub {
+            owner: "o".into(),
+            repo: "r".into(),
+            path: "..".into(),
+            branch: "main".into(),
+        }
+        .into();
+        match gh2 {
+            SkillImportSource::Github { path, .. } => assert_eq!(path, None),
+            other => panic!("expected Github, got {:?}", other),
+        }
+        // Registry → local skills/<mapped>/SKILL.md.
+        let reg: SkillImportSource = SkillSource::Registry {
+            name: "code-reviewer".into(),
+            version: "1.0.0".into(),
+        }
+        .into();
+        match reg {
+            SkillImportSource::Local { path, .. } => {
+                assert_eq!(path, "skills/code-review/SKILL.md")
+            }
+            other => panic!("expected Local, got {:?}", other),
+        }
+        // Url passes through with sha256.
+        let url: SkillImportSource = SkillSource::Url {
+            url: "https://x.dev/skill.json".into(),
+            sha256: Some("abc".into()),
+        }
+        .into();
+        match url {
+            SkillImportSource::Url { url, sha256 } => {
+                assert_eq!(url, "https://x.dev/skill.json");
+                assert_eq!(sha256.as_deref(), Some("abc"));
+            }
+            other => panic!("expected Url, got {:?}", other),
+        }
+    }
 
     fn test_registry() -> SkillMarketRegistry {
         let cache_dir = tempfile::tempdir()

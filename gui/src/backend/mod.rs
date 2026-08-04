@@ -3,7 +3,7 @@ pub mod state;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,12 +44,6 @@ pub struct BackendClient {
     /// Client for long-lived requests (chat - 180s timeout)
     long_client: reqwest::Client,
     base_url: String,
-    /// Discovered chat endpoint (set by discover_protocol_version, falls back to /v1/chat/completions).
-    /// Wrapped in Arc<tokio::sync::RwLock<>> because BackendClient is Clone and shared across async tasks.
-    chat_endpoint: Arc<tokio::sync::RwLock<String>>,
-    /// Negotiated ACP protocol version (set by discover_protocol_version).
-    /// 0 means discovery has not completed yet.
-    protocol_version: Arc<AtomicU16>,
     /// Monotonically increasing JSON-RPC request id (per JSON-RPC 2.0 spec)
     next_id: Arc<AtomicU64>,
     /// Model list cache with timestamp
@@ -92,8 +86,6 @@ impl BackendClient {
             quick_client,
             long_client,
             base_url: base_url.trim_end_matches('/').to_string(),
-            chat_endpoint: Arc::new(tokio::sync::RwLock::new("/v1/chat/completions".to_string())),
-            protocol_version: Arc::new(AtomicU16::new(0)),
             next_id: Arc::new(AtomicU64::new(1)),
             models_cache: Arc::new(std::sync::Mutex::new((None, std::time::Instant::now()))),
             stale_models_flag: Arc::new(AtomicBool::new(false)),
@@ -431,80 +423,6 @@ impl BackendClient {
     }
 }
 
-// ── Protocol Discovery ───────────────────────────────────────────────────────
-
-impl BackendClient {
-    /// Probe the backend's protocol version discovery endpoint to negotiate
-    /// a mutually-supported protocol version.
-    ///
-    /// Parses the `/protocol/version` JSON response, finds the highest common
-    /// version between the GUI's supported set and the backend's advertised set,
-    /// and selects the corresponding HTTP endpoint.
-    ///
-    /// Falls back to `/v1/chat/completions` (with protocol version 3 / LATEST)
-    /// when discovery fails entirely.
-    pub async fn discover_protocol_version(&self) -> String {
-        let discovery_url = format!("{}/protocol/version", self.base_url);
-        let (endpoint, negotiated_version) =
-            match self.quick_client.get(&discovery_url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    // Parse the JSON response body.
-                    let body = resp.text().await.unwrap_or_default();
-                    match serde_json::from_str::<serde_json::Value>(&body) {
-                        Ok(json) => {
-                            let server_versions: Vec<u16> = json
-                                .get("supported_versions")
-                                .and_then(|v| v.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|e| e.as_u64())
-                                        .map(|n| n as u16)
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-
-                            let version = Self::select_highest_common(
-                                Self::GUI_SUPPORTED_VERSIONS,
-                                &server_versions,
-                            )
-                            .unwrap_or(3); // fall back to LATEST
-
-                            let ep = Self::endpoint_for_version(version);
-                            #[cfg(debug_assertions)]
-                            eprintln!("protocol negotiation: version={}, endpoint={}", version, ep);
-                            (ep.to_string(), version)
-                        }
-                        Err(parse_err) => {
-                            tracing::warn!(
-                            "protocol version parse failed: {}, defaulting to /v1/chat/completions",
-                            parse_err
-                        );
-                            ("/v1/chat/completions".to_string(), 3)
-                        }
-                    }
-                }
-                Ok(resp) => {
-                    tracing::warn!(
-                    "protocol version discovery returned: {}, defaulting to /v1/chat/completions",
-                    resp.status()
-                );
-                    ("/v1/chat/completions".to_string(), 3)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "protocol version discovery failed: {}, defaulting to /v1/chat/completions",
-                        e
-                    );
-                    ("/v1/chat/completions".to_string(), 3)
-                }
-            };
-        *self.chat_endpoint.write().await = endpoint.clone();
-        self.protocol_version
-            .store(negotiated_version, Ordering::Relaxed);
-        endpoint
-    }
-}
-
 // ── Chat ────────────────────────────────────────────────────────────────────
 
 impl BackendClient {
@@ -635,7 +553,7 @@ impl BackendClient {
                     let cancel_url = format!("{}/rpc", self.base_url);
                     let cancel_body = serde_json::json!({
                         "jsonrpc": "2.0",
-                        "method": "request.cancel",
+                        "method": "$/cancel_request",
                         "params": {},
                     });
                     let cancel_client = self.long_client.clone();

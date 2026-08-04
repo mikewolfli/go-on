@@ -42,8 +42,8 @@ pub use types::{
     Decision, DegradationStrategy, DispatchPolicy, EscalationPolicy, EscalationReason,
     ExecutionMode, ExecutionPolicy, FailureStrategy, FallbackStrategy, FileWritePolicy,
     GovernancePolicy, IdempotencyPolicy, OutputVerdict, PolicyVerdict, PolicyViolation,
-    QualityCompassConfig, ReviewLevel, ReviewReason, ReviewRequirement, RoutingStrategy,
-    TimeoutPolicy, ToolUsagePolicy, ToolVerdict, VersionCompatPolicy,
+    QualityCompassConfig, ReviewLevel, ReviewReason, RoutingStrategy, TimeoutPolicy,
+    ToolUsagePolicy, ToolVerdict, VersionCompatPolicy,
 };
 
 use crate::fault_tolerance::{FaultToleranceConfig, FaultToleranceEngine, FaultToleranceProfile};
@@ -61,8 +61,6 @@ use crate::governance::reloadable_policy::PolicyReloader;
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::i18n::runtime::tf;
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
-use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
-use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
 use crate::resilience::hyper_resilience::{
     HyperResilienceEngine, ResilienceConfig, ResilienceProfile,
 };
@@ -84,9 +82,7 @@ pub struct HarnessBus {
     pub feedback_collector: Option<PuaFeedbackCollector>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
     pub drift_engine: Arc<DriftProtectionEngine>,
-    pub brain_loop: Arc<BrainLoop>,
     pub artifact_layer: Arc<ArtifactLayer>,
-    pub omnipotent_mode: Arc<OmnipotentMode>,
     /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
@@ -126,9 +122,7 @@ impl HarnessBus {
             feedback_collector,
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
             drift_engine: Arc::new(DriftProtectionEngine::new(DriftProtectionConfig::default())),
-            brain_loop: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             artifact_layer: Arc::new(ArtifactLayer::new()),
-            omnipotent_mode: Arc::new(OmnipotentMode::new()),
 
             resilience_engine: external_resilience_engine.unwrap_or_else(|| {
                 Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
@@ -580,25 +574,20 @@ impl HarnessBus {
         self.drift_engine.profile()
     }
 
-    /// Brain loop orchestration profile snapshot.
-    pub async fn brain_profile(&self) -> BrainLoopProfile {
-        self.brain_loop.profile().await
-    }
+    // Brain loop profile snapshot removed — the BrainLoop orchestration
+    // state machine had zero production callers besides `profile()` (all-zero
+    // state); deleted in round 23. The live `plan_construction::Planner` is
+    // wired through `OrchestrationServerDeps` and unaffected.
 
     /// Artifact layer profile snapshot.
     pub fn artifact_profile(&self) -> ArtifactProfile {
         self.artifact_layer.profile()
     }
 
-    /// Omnipotent mode profile snapshot.
-    pub fn omnipotent_profile(&self) -> OmnipotentProfile {
-        self.omnipotent_mode.profile()
-    }
-
-    /// Brain loop runner profile snapshot (consolidated flat version).
-    pub async fn brain_runner_profile(&self) -> BrainLoopProfile {
-        self.brain_loop.profile().await
-    }
+    // Omnipotent mode profile snapshot removed — the OmnipotentMode module
+    // had zero production callers besides `profile()` (all-zero data); deleted
+    // in round 23. The `omnipotent_mode_readiness` release gate in
+    // governance.status is an independent readiness profile and unchanged.
 
     /// Hyper-resilience profile snapshot (F-GAP-27)
     pub async fn resilience_profile(&self) -> ResilienceProfile {

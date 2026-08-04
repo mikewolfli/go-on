@@ -4,7 +4,6 @@
 
 pub mod autotune;
 pub mod defaults;
-pub mod hot_reload;
 pub mod load;
 pub mod schema_version;
 pub mod types;

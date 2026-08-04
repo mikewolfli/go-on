@@ -89,19 +89,7 @@ impl StreamProcessor {
                 vec![&segment]
             };
 
-            let mut current_event_type: Option<String> = None;
-            let mut current_data: Option<String> = None;
-
-            for line in &sub_lines {
-                if let Some(event) = line.strip_prefix("event: ") {
-                    current_event_type = Some(event.trim().to_string());
-                } else if let Some(data) = line.strip_prefix("data: ") {
-                    current_data = Some(data.trim().to_string());
-                } else if let Some(data) = line.strip_prefix("data:") {
-                    // Handle "data: {json}" without space after colon
-                    current_data = Some(data.trim().to_string());
-                }
-            }
+            let (current_event_type, current_data) = parse_sse_frame_lines(&sub_lines);
 
             // Emit a single event per frame, combining event type + data
             if let Some(data_str) = current_data {
@@ -151,6 +139,27 @@ impl Default for StreamProcessor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Parse SSE `event:`/`data:` lines from a single frame into
+/// `(event_type, data)`. Shared by the chat `StreamProcessor` and the
+/// state-sync SSE listener so both endpoints use one frame parser.
+pub(crate) fn parse_sse_frame_lines(lines: &[&str]) -> (Option<String>, Option<String>) {
+    let mut current_event_type: Option<String> = None;
+    let mut current_data: Option<String> = None;
+
+    for line in lines {
+        if let Some(event) = line.strip_prefix("event: ") {
+            current_event_type = Some(event.trim().to_string());
+        } else if let Some(data) = line.strip_prefix("data: ") {
+            current_data = Some(data.trim().to_string());
+        } else if let Some(data) = line.strip_prefix("data:") {
+            // Handle "data: {json}" without space after colon
+            current_data = Some(data.trim().to_string());
+        }
+    }
+
+    (current_event_type, current_data)
 }
 
 // ── AbortController ────────────────────────────────────────────────────────

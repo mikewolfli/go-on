@@ -12,7 +12,6 @@
 //! - **Consciousness Metrics**: BLUE38 F-GAP-25 Agency Consciousness Metrics (M10)
 
 pub mod adaptive_selector;
-pub mod causal_bayesian_graph;
 pub mod continuous_learning;
 pub mod discovery;
 pub mod hot_failover;

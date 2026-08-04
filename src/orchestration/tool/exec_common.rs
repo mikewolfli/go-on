@@ -144,31 +144,66 @@ pub fn build_blocked_tool_output(pattern: &str, command: &str, tool_name: &str) 
 /// Patterns that are blocked in shell execution tools.
 ///
 /// These prevent dangerous operations (rm -rf /, fork bombs, format, etc.)
-/// regardless of the tool that invokes them.
+/// regardless of the tool that invokes them. This is the single canonical
+/// block-list: the governance terminal-chat gate (`governance::status`)
+/// delegates here so both entry points agree on what is blocked.
 pub fn is_blocked_command(command: &str) -> Option<&'static str> {
     let command_lower = command.to_lowercase();
     let blocked_patterns: &[&str] = &[
         "rm -rf /",
         "rm -rf /*",
+        "rm -rf --no-preserve-root",
+        "sudo rm -rf",
         "mkfs.",
+        "sudo mkfs",
         "dd if=",
+        "sudo dd",
         "format ",
-        ":(){",
+        ":(){ :|:& };:", // fork bomb (full form)
+        ":(){ ",         /* fork bomb (abbreviated) */
         "fork bomb",
         "chmod -R 000",
+        "chmod 777 /",
+        "chown -R",
         "> /dev/sda",
         "> /dev/hda",
+        "> /dev/sd",
+        "> /dev/disk",
         "| shutdown",
         "| reboot",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "sudo shutdown",
+        "sudo reboot",
         "wget http://",
+        "wget -O - |",
         "curl http://",
+        "curl | sh",
+        "curl | bash",
         "nmap ",
         "hydra ",
+        "eval ",
     ];
-    blocked_patterns
+    if let Some(pattern) = blocked_patterns
         .iter()
-        .find(|pattern| command_lower.contains(*pattern))
-        .copied()
+        .find(|pattern| command_lower.contains(**pattern))
+    {
+        return Some(*pattern);
+    }
+    // Also block commands that pipe into a shell (blind execution of remote content).
+    if command_lower.contains("| sh")
+        || command_lower.contains("| bash")
+        || command_lower.contains("| zsh")
+    {
+        return Some("pipe-to-shell");
+    }
+    // Block destructive redirects to block devices (allow /dev/null).
+    if command_lower.contains("> /dev/") && !command_lower.contains("/dev/null") {
+        return Some("redirect to block device");
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------

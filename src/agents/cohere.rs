@@ -13,8 +13,7 @@ use serde_json::{json, Value};
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::{
-    apply_openai_common_options, check_api_response, principles_to_text, stream_sse_events,
-    SseEventAction,
+    apply_openai_common_options, check_api_response, stream_sse_events, SseEventAction,
 };
 use tracing::warn;
 
@@ -55,10 +54,8 @@ impl CohereAgent {
     ) -> Value {
         // ── System preamble ──────────────────────────────────────────
         let mut preamble = String::new();
-        if let Some(items) = principles {
-            if !items.is_empty() {
-                preamble.push_str(&principles_to_text(items));
-            }
+        if let Some(text) = crate::agents::principles_to_system_text(principles) {
+            preamble.push_str(&text);
         }
 
         // ── Split messages into chat_history + latest message ─────────

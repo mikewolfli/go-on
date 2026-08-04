@@ -13,12 +13,10 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG
     feature = "multi-users-server"
 ))]
 pub mod council; // F-GAP-15
-pub mod diagnostic_feedback;
 pub mod flow;
 
 pub mod mode;
 pub mod multi_agent_pipeline;
-pub mod omnipotent;
 pub mod orchestrator;
 pub mod planner_embedding; // BLUE47 Step 7: Embedding-based task classification
 pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG

@@ -352,32 +352,7 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
     let sla_p95_latency_ms = if metrics.total_requests > 0
         && metrics.request_latency_bucket_counts.iter().any(|&c| c > 0)
     {
-        let total: u64 = metrics.request_latency_bucket_counts.iter().sum();
-        if total > 0 {
-            let target = (total as f64 * 0.95).ceil();
-            let mut cumulative: u64 = 0;
-            let buckets = [1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0];
-            let mut result = buckets[8];
-            for (i, &count) in metrics.request_latency_bucket_counts.iter().enumerate() {
-                cumulative += count;
-                if cumulative as f64 >= target {
-                    let bucket_lower = if i == 0 { 0.0 } else { buckets[i - 1] };
-                    let bucket_upper = if i < 9 { buckets[i] } else { buckets[8] * 2.0 };
-                    if bucket_upper - bucket_lower <= 0.0 || count == 0 {
-                        result = bucket_lower;
-                    } else {
-                        let prev = cumulative.saturating_sub(count);
-                        let fraction = (target - prev as f64) / count as f64;
-                        let estimated = bucket_lower + fraction * (bucket_upper - bucket_lower);
-                        result = (estimated * 100.0).round() / 100.0;
-                    }
-                    break;
-                }
-            }
-            result
-        } else {
-            metrics.avg_request_duration_ms
-        }
+        super::runtime_pack::estimate_p95_from_buckets(&metrics.request_latency_bucket_counts)
     } else {
         0.0
     };

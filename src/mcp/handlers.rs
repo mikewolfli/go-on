@@ -11,6 +11,7 @@ use crate::acp::r#impl::request::{
     tools_pack::build_mcp_tool_descriptors,
 };
 use crate::acp::server::AcpServer;
+use crate::governance::pua::PuaRuleEngine;
 
 use crate::protocol::rpc_protocol::RequestTraceContext;
 use crate::tool::ToolInput;
@@ -594,22 +595,7 @@ impl McpServer {
 
         serde_json::to_value(McpInitializeResult::new(
             negotiated_version,
-            json!({
-                // No change-notification event source exists for resources,
-                // tools, or prompts (resource list is static), so listChanged
-                // capabilities are NOT advertised — a server must not declare
-                // listChanged when it never sends the corresponding
-                // notifications. SSE heartbeats still keep connections alive.
-                // The base capability keys are still declared so clients know
-                // the endpoints exist.
-                "sampling": {},
-                "experimental": {
-                    "agents": {}
-                },
-                "resources": {},
-                "tools": {},
-                "prompts": {},
-            }),
+            crate::mcp::mcp_initialize_capabilities(),
             self.server_info.clone(),
         ))
         .unwrap_or_else(|e| {
@@ -794,7 +780,9 @@ impl McpServer {
         }
 
         // Step 1: Try tool_registry first (existing behavior)
-        if let Some(tool) = self.tool_registry.get(&tool_name) {
+        // Use `get_arc` so the owned `Arc<dyn Tool>` can be moved into
+        // `spawn_blocking` (a plain `get` borrow cannot outlive the method).
+        if let Some(tool) = self.tool_registry.get_arc(&tool_name) {
             // ── Governance check ─────────────────────────────────────
             // Previously, tool.run() was called directly without any
             // HarnessBus sandbox/budget/RBAC check. This meant tools
@@ -852,7 +840,55 @@ impl McpServer {
 
             validate_required_arguments(&tool_name, &tool_input)
                 .map_err(|e| invalid_params(e.to_string()))?;
-            let result = tool.run(&ToolInput {
+
+            // ── Budget accounting (matches the ACP tool path) ────────────
+            // Wall-clock, tool-call-count and PUA token consumption are tracked
+            // per budget scope so MCP tool calls cannot bypass the same limits
+            // enforced on the ACP route.
+            let budget_scope =
+                crate::acp::r#impl::request::tools_pack::budget_scope_key(&tool_name, &tool_input);
+            let estimated_tokens =
+                crate::acp::r#impl::request::tools_pack::estimate_argument_tokens(&tool_input);
+            let pua_engine = PuaRuleEngine::new(
+                self.acp_server
+                    .as_ref()
+                    .map(|a| a.governance_deps.pua_enforcement_plan.clone())
+                    .unwrap_or_default(),
+            );
+            let remaining_tokens = {
+                let mut trackers = crate::acp::r#impl::request::tool_budget_trackers()
+                    .lock()
+                    .await;
+                let tracker = trackers.entry(budget_scope.clone()).or_insert_with(|| {
+                    crate::governance::hardening::BudgetTracker::new(
+                        crate::governance::hardening::task_budget_for_target(
+                            self.acp_server
+                                .as_ref()
+                                .and_then(|a| a.runtime_config.deployment_target.as_deref()),
+                        ),
+                    )
+                });
+                tracker.check_wall_clock().map_err(|err| {
+                    anyhow::anyhow!(
+                        "tool '{tool_name}' denied by budget in scope '{budget_scope}': {err}"
+                    )
+                })?;
+                tracker.record_tool_call().map_err(|err| {
+                    anyhow::anyhow!(
+                        "tool '{tool_name}' denied by budget in scope '{budget_scope}': {err}"
+                    )
+                })?;
+                tracker
+                    .consume_with_pua(estimated_tokens, &pua_engine)
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "tool '{tool_name}' denied by budget in scope '{budget_scope}': {err}"
+                        )
+                    })?;
+                tracker.remaining_tokens()
+            };
+
+            let input = ToolInput {
                 task_id: request
                     .id
                     .as_ref()
@@ -865,9 +901,17 @@ impl McpServer {
                 evidence: None,
                 payload: tool_input.clone(),
                 allowed_base_dir: None,
-            })?;
+            };
+            // Run synchronous tools on a blocking thread so long-running tools
+            // (e.g. shell_exec) cannot stall the tokio worker.
+            let result = tokio::task::spawn_blocking(move || tool.run(&input))
+                .await
+                .map_err(|e| anyhow::anyhow!("tool execution panicked: {e}"))??;
 
-            info!("MCP: Tool '{}' returned: {:?}", tool_name, result);
+            info!(
+                "MCP: Tool '{}' returned: {:?} (budget_scope={} remaining_tokens={})",
+                tool_name, result, budget_scope, remaining_tokens
+            );
             record_tool_call_audit_with_protocol(
                 &tool_name,
                 &tool_input,

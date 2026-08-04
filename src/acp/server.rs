@@ -1073,6 +1073,17 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the multimodal processor for document/audio/video/repo analysis
+    /// (F-GAP-66: attachment multimodal support). When `None`, the chat
+    /// pipeline falls back to text-only processing.
+    pub fn with_multimodal_processor(
+        mut self,
+        processor: crate::multimodal::MultimodalProcessor,
+    ) -> Self {
+        self.multimodal_processor = Some(processor);
+        self
+    }
+
     /// Set the lazy memory persistence parameters (S1 startup optimization).
     /// Instead of eagerly creating MemoryPersistence instances, the paths are
     /// stored and the SQLite connections are deferred to first actual access.

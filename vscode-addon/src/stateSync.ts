@@ -12,6 +12,7 @@
  */
 
 import * as vscode from "vscode";
+import { parseSseChunk } from "./runtime/sseStream";
 import { StateSyncEvent } from "./generated/stateSyncTypes";
 
 export { StateSyncEvent };
@@ -19,8 +20,8 @@ export { StateSyncEvent };
 /** Default SSE connection timeout (in ms). */
 const DEFAULT_SSE_TIMEOUT_MS = 15_000;
 
-/** Maximum delay cap for exponential backoff (60 seconds). */
-const MAX_BACKOFF_MS = 60_000;
+/** Maximum delay cap for exponential backoff (30 seconds, matches reconnect.ts / cross-client-sync.md). */
+const MAX_BACKOFF_MS = 30_000;
 
 /** Base delay for exponential backoff (1 second). */
 const BASE_DELAY_MS = 1_000;
@@ -60,19 +61,22 @@ function stateSyncEventSummary(event: StateSyncEvent): string {
 }
 
 /**
- * Compute exponential backoff delay with full jitter.
+ * Compute exponential backoff delay with 30% jitter.
  *
- * Implements AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
- * This prevents thundering herd when multiple clients reconnect simultaneously.
+ * Unified formula from contracts/cross-client-sync.md:
+ * delay = min(1000 * 2^attempt, 30000) * (0.7 + random * 0.3)
+ * Matches runtime/reconnect.ts. This prevents thundering herd when
+ * multiple clients reconnect simultaneously.
  *
  * @param attempt - zero-based retry attempt number
  * @returns delay in milliseconds
  */
 function backoffDelay(attempt: number): number {
-  const exponential = BASE_DELAY_MS * Math.pow(2, Math.min(attempt, 6)); // cap exponent at 6 (64s)
+  const exponential = BASE_DELAY_MS * Math.pow(2, attempt);
   const capped = Math.min(exponential, MAX_BACKOFF_MS);
-  // Full jitter: random between 0 and capped
-  return Math.floor(Math.random() * capped);
+  // 30% jitter: keep at least 70% of the base delay
+  const jitter = 0.7 + Math.random() * 0.3;
+  return Math.round(capped * jitter);
 }
 
 /**
@@ -174,39 +178,31 @@ function processFrame(
   callbacks: StateSyncCallbacks,
   log: (msg: string) => void,
 ): void {
-  let dataStr = "";
+  // Reuse the canonical SSE frame parser (runtime/sseStream.ts) instead of a
+  // second hand-rolled data:-line extractor. The backend always emits
+  // `event: state_sync\ndata: {json}`; parseSseChunk handles both lines and
+  // injects `_event_type`.
+  const frames = parseSseChunk(frame + "\n\n");
+  if (frames.length === 0) return;
+  const event = frames[0].data as unknown as StateSyncEvent;
+  log(`received: ${stateSyncEventSummary(event)}`);
 
-  for (const line of frame.split("\n")) {
-    if (line.startsWith("data: ")) {
-      dataStr = line.slice(6).trim();
-    }
-  }
-
-  if (!dataStr || dataStr === "[DONE]") return;
-
-  try {
-    const event = JSON.parse(dataStr) as StateSyncEvent;
-    log(`received: ${stateSyncEventSummary(event)}`);
-
-    switch (event.type) {
-      case "models_changed":
-        callbacks.onModelsChanged?.(event.models);
-        break;
-      case "config_reloaded":
-        callbacks.onConfigReloaded?.(event.changed_keys);
-        break;
-      case "agents_changed":
-        callbacks.onAgentsChanged?.(event.added, event.removed);
-        break;
-      case "backend_restarting":
-        callbacks.onBackendRestarting?.(event.reason, event.restart_in_ms);
-        break;
-      case "heartbeat":
-        callbacks.onHeartbeat?.(event.timestamp);
-        break;
-    }
-  } catch (err) {
-    log(`parse error: ${err}`);
+  switch (event.type) {
+    case "models_changed":
+      callbacks.onModelsChanged?.(event.models);
+      break;
+    case "config_reloaded":
+      callbacks.onConfigReloaded?.(event.changed_keys);
+      break;
+    case "agents_changed":
+      callbacks.onAgentsChanged?.(event.added, event.removed);
+      break;
+    case "backend_restarting":
+      callbacks.onBackendRestarting?.(event.reason, event.restart_in_ms);
+      break;
+    case "heartbeat":
+      callbacks.onHeartbeat?.(event.timestamp);
+      break;
   }
 }
 

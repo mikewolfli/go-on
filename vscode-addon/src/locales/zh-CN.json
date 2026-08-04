@@ -484,14 +484,6 @@
     "healthInterval": {
       "description": "健康检查间隔（秒）"
     },
-    "uiTheme": {
-      "description": "扩展的 UI 主题",
-      "enumDescriptions": {
-        "auto": "跟随 VS Code 主题",
-        "light": "浅色主题",
-        "dark": "深色主题"
-      }
-    },
     "uiFontSize": {
       "description": "聊天界面的字体大小"
     },

@@ -8,7 +8,7 @@ pub(super) async fn debug_panel_payload(server: &AcpServer) -> Result<Value> {
     Ok(build_debug_panel_payload_impl(server).await)
 }
 
-async fn build_debug_panel_payload_impl(server: &AcpServer) -> Value {
+pub(super) async fn build_debug_panel_payload_impl(server: &AcpServer) -> Value {
     let state = server.session.conversation_state.lock().await;
     let conversation_count = state
         .checkpoints

@@ -7,7 +7,6 @@
 use std::net::SocketAddr;
 
 use anyhow::Result;
-use tokio::net::TcpStream;
 use tracing::warn;
 
 use crate::acp::r#impl::session::UserSession;
@@ -15,13 +14,13 @@ use crate::acp::server::AcpServer;
 use crate::core::error::ErrorCode;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 
-use super::http::write_http_json_response;
+use super::http::{write_http_json_response, HttpStream};
 use super::protocol::extract_header_value;
 use crate::i18n::runtime::t;
 
 /// Apply entry guards and return `true` if the request was rejected (response already written).
 pub(crate) async fn http_entry_guard(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: &AcpServer,
     header_part: &str,
     method: &str,
@@ -45,7 +44,7 @@ pub(crate) async fn http_entry_guard(
 /// Returns `true` if the request was rejected (response already written).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn check_http_authorization(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: &AcpServer,
     user_session: Option<&UserSession>,
     method: &str,
@@ -156,7 +155,7 @@ fn entry_guard_exempt_path(path: &str) -> bool {
 /// Uses i18n-aware messages for user-facing strings.
 #[allow(clippy::too_many_arguments)]
 async fn write_entry_rejection(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     status: u16,
     code: &str,
     kind: &str,
@@ -205,9 +204,67 @@ pub(crate) fn extract_entry_token(headers: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Outcome of evaluating the entry-auth guard for a request.
+pub(crate) enum EntryAuthOutcome {
+    /// Entry auth is disabled or the token verified — request may proceed.
+    Pass,
+    /// Reject the request with the given HTTP status / error code / message.
+    Reject {
+        status: u16,
+        code: &'static str,
+        message: String,
+    },
+}
+
+/// Evaluate entry authentication for a request. Pure decision logic shared by
+/// the ACP and MCP HTTP arms (the MCP server previously re-implemented this
+/// with a local `constant_time_eq` and no rate limiting).
+pub(crate) fn evaluate_entry_auth(server: &AcpServer, headers: &str) -> EntryAuthOutcome {
+    if !server.runtime_config.entry_auth_enabled {
+        return EntryAuthOutcome::Pass;
+    }
+    let env_name = server.runtime_config.entry_auth_api_key_env.trim();
+    let expected_key = crate::shared::secret_override::get_secret(env_name)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let Some(expected) = expected_key else {
+        return EntryAuthOutcome::Reject {
+            status: 503,
+            code: "ENTRY_AUTH_MISCONFIGURED",
+            message: format!(
+                "entry auth is enabled but env '{}' is missing or empty",
+                env_name
+            ),
+        };
+    };
+
+    let provided = extract_entry_token(headers)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    // Constant-time comparison so token verification does not leak timing
+    // information about the key.
+    let matches = match provided.as_deref() {
+        Some(p) => {
+            use subtle::ConstantTimeEq;
+            p.as_bytes().ct_eq(expected.as_bytes()).into()
+        }
+        None => false,
+    };
+    if matches {
+        EntryAuthOutcome::Pass
+    } else {
+        EntryAuthOutcome::Reject {
+            status: 401,
+            code: "ENTRY_AUTH_REQUIRED",
+            message: t("error.entry_auth_required"),
+        }
+    }
+}
+
 /// Apply entry guards — token auth and rate limiting.
 async fn apply_entry_guards(
-    socket: &mut TcpStream,
+    socket: &mut HttpStream,
     server: &AcpServer,
     headers: &str,
     method: &str,
@@ -221,58 +278,27 @@ async fn apply_entry_guards(
 
     let source = peer_addr.ip().to_string();
 
-    if server.runtime_config.entry_auth_enabled {
-        let env_name = server.runtime_config.entry_auth_api_key_env.trim();
-        let expected_key = crate::shared::secret_override::get_secret(env_name)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-
-        if expected_key.is_none() {
+    match evaluate_entry_auth(server, headers) {
+        EntryAuthOutcome::Pass => {}
+        EntryAuthOutcome::Reject {
+            status,
+            code,
+            message,
+        } => {
             warn!(
-                "entry auth enabled but env is missing/empty; denying {} {} from {}",
-                method, path, source
+                "entry auth rejected {} {} from {} ({})",
+                method, path, source, message
             );
             write_entry_rejection(
                 socket,
-                503,
-                "ENTRY_AUTH_MISCONFIGURED",
-                "service_unavailable",
-                format!(
-                    "entry auth is enabled but env '{}' is missing or empty",
-                    env_name
-                ),
-                &source,
-                path,
-                "entry_auth",
-                cors_headers,
-            )
-            .await?;
-            return Ok(true);
-        }
-
-        let provided = extract_entry_token(headers)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        // Constant-time comparison (matches the MCP entry-auth check) so token
-        // verification does not leak timing information about the key.
-        let matches = match (provided.as_deref(), expected_key.as_deref()) {
-            (Some(p), Some(k)) => {
-                use subtle::ConstantTimeEq;
-                p.as_bytes().ct_eq(k.as_bytes()).into()
-            }
-            _ => false,
-        };
-        if !matches {
-            warn!(
-                "entry auth rejected {} {} from {} (missing or invalid key)",
-                method, path, source
-            );
-            write_entry_rejection(
-                socket,
-                401,
-                "ENTRY_AUTH_REQUIRED",
-                "unauthorized",
-                t("error.entry_auth_required"),
+                status,
+                code,
+                if status == 503 {
+                    "service_unavailable"
+                } else {
+                    "unauthorized"
+                },
+                message,
                 &source,
                 path,
                 "entry_auth",

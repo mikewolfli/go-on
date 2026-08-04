@@ -85,6 +85,33 @@ impl McpInitializeResult {
     }
 }
 
+/// The capabilities advertised by `mcp.initialize`. Single source of truth
+/// shared by the native MCP handler and the ACP bridge (`mcp_initialize_payload`)
+/// so the two entry points cannot drift.
+///
+/// Each advertised capability must have a live handler behind it in BOTH
+/// entry points:
+/// - `tools` / `resources` / `prompts`: list+read endpoints exist in the
+///   native handler and the ACP bridge (round-22 parity closure).
+/// - `sampling` is deliberately NOT advertised: the bridge rejects
+///   `mcp.sampling.createMessage` with "not supported" — declaring it would
+///   be a declaration-vs-implementation drift (round-23 record, fixed).
+/// - No change-notification event source exists for resources, tools, or
+///   prompts (lists are static), so `listChanged` is NOT advertised — a server
+///   must not declare listChanged when it never sends the corresponding
+///   notifications. The base capability keys are still declared so clients
+///   know the endpoints exist.
+pub(crate) fn mcp_initialize_capabilities() -> Value {
+    serde_json::json!({
+        "experimental": {
+            "agents": {}
+        },
+        "resources": {},
+        "tools": {},
+        "prompts": {},
+    })
+}
+
 /// Response type for `mcp.resources.list`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

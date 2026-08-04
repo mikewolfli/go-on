@@ -11,10 +11,155 @@ use crate::pua::mode_execution_report;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+
+// ── Mode tool-set catalogs (single source of truth) ─────────────────────────
+// These lists are referenced by `GenericModeRuntime::allowed_tools` for every
+// mode kind. They were previously inlined twice (Edit/FullAuto and the
+// SafeGuard non-readonly branch), which allowed the two copies to drift.
+
+/// Read/plan-only tool set (Plan mode).
+fn plan_tools() -> Vec<&'static str> {
+    vec![
+        "read_file",
+        "read_file_lines",
+        "search_files",
+        "grep",
+        "list_directory",
+        "inspect_git_diff",
+        "code_index_search",
+        "go_to_definition",
+        "find_references",
+        "date_time",
+        "environment_info",
+        "json_query",
+        "diff",
+        "archive_inspect",
+        "code_metrics",
+        "dns_lookup",
+        "ping",
+        "docker_ps",
+        "docker_logs",
+        "http_request",
+        "skill_list",
+        "rss_read",
+        "jsonl_read",
+    ]
+}
+
+/// Full execution tool set (Edit / FullAuto / SafeGuard non-readonly).
+fn all_exec_tools() -> Vec<&'static str> {
+    vec![
+        // ── File tools ──
+        "read_file",
+        "read_file_lines",
+        "write_file",
+        "apply_patch",
+        "file_move",
+        "file_delete",
+        "copy_path",
+        "create_directory",
+        "format_code",
+        "hash_file",
+        "file_watch",
+        // ── Search tools ──
+        "search_files",
+        "grep",
+        "code_index_search",
+        "go_to_definition",
+        "find_references",
+        // ── Git / Diff ──
+        "inspect_git_diff",
+        "diff",
+        "git",
+        // ── Build / Test / Lint ──
+        "cargo_check",
+        "cargo_test",
+        "run_tests",
+        "run_build",
+        "lint_code",
+        "diagnostics",
+        // ── Shell / Execution ──
+        "shell_exec",
+        // ── Directory ──
+        "list_directory",
+        // ── Archive ──
+        "archive_inspect",
+        "archive_extract",
+        "compress",
+        "decompress",
+        // ── Network ──
+        "http_request",
+        "web_search",
+        "dns_lookup",
+        "ping",
+        "port_scan",
+        // ── Data ──
+        "jsonl_read",
+        "jsonl_write",
+        "json_query",
+        "rss_read",
+        // ── Docker ──
+        "docker_ps",
+        "docker_logs",
+        "docker_exec",
+        "docker_build",
+        "docker_push",
+        "docker_compose",
+        // ── Utility ──
+        "date_time",
+        "environment_info",
+        "uuid_gen",
+        "random_token",
+        "encode_decode",
+        "template_render",
+        "code_metrics",
+        "security_scan",
+        "search_packages",
+        "add_dependency",
+        // ── Agent tools ──
+        "spawn_agent",
+        "apply_code_action",
+        // ── Skill tools (always available) ──
+        "skill_list",
+        "skill_execute",
+        "skill_create",
+        "skill_reload",
+    ]
+}
+
+/// Read-only degraded tool set (SafeGuard ReadOnly).
+fn read_only_tools() -> Vec<&'static str> {
+    vec![
+        "read_file",
+        "read_file_lines",
+        "search_files",
+        "grep",
+        "list_directory",
+        "inspect_git_diff",
+        "code_index_search",
+        "go_to_definition",
+        "find_references",
+        "diff",
+        "date_time",
+        "environment_info",
+        "json_query",
+        "archive_inspect",
+        "dns_lookup",
+        "ping",
+        "docker_ps",
+        "docker_logs",
+        "rss_read",
+        "jsonl_read",
+        "code_metrics",
+        "security_scan",
+        "skill_list",
+        "web_search",
+    ]
+}
 
 /// Supported chat/agent modes
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -921,228 +1066,15 @@ impl ModeRuntime for GenericModeRuntime {
     }
 
     fn allowed_tools(&self) -> Vec<String> {
-        static PLAN_TOOLS: OnceLock<Vec<&'static str>> = OnceLock::new();
-        static ALL_EXEC_TOOLS: OnceLock<Vec<&'static str>> = OnceLock::new();
-        static READ_ONLY_TOOLS: OnceLock<Vec<&'static str>> = OnceLock::new();
-
-        let tools = match self.kind {
+        let tools: Vec<&'static str> = match self.kind {
             ModeKind::Ask => return vec![],
-            ModeKind::Plan => PLAN_TOOLS.get_or_init(|| {
-                vec![
-                    "read_file",
-                    "read_file_lines",
-                    "search_files",
-                    "grep",
-                    "list_directory",
-                    "inspect_git_diff",
-                    "code_index_search",
-                    "go_to_definition",
-                    "find_references",
-                    "date_time",
-                    "environment_info",
-                    "json_query",
-                    "diff",
-                    "archive_inspect",
-                    "code_metrics",
-                    "dns_lookup",
-                    "ping",
-                    "docker_ps",
-                    "docker_logs",
-                    "http_request",
-                    "skill_list",
-                    "rss_read",
-                    "jsonl_read",
-                ]
-            }),
-            ModeKind::Edit | ModeKind::FullAuto => ALL_EXEC_TOOLS.get_or_init(|| {
-                vec![
-                    // ── File tools ──
-                    "read_file",
-                    "read_file_lines",
-                    "write_file",
-                    "apply_patch",
-                    "file_move",
-                    "file_delete",
-                    "copy_path",
-                    "create_directory",
-                    "format_code",
-                    "hash_file",
-                    "file_watch",
-                    // ── Search tools ──
-                    "search_files",
-                    "grep",
-                    "code_index_search",
-                    "go_to_definition",
-                    "find_references",
-                    // ── Git / Diff ──
-                    "inspect_git_diff",
-                    "diff",
-                    "git",
-                    // ── Build / Test / Lint ──
-                    "cargo_check",
-                    "cargo_test",
-                    "run_tests",
-                    "run_build",
-                    "lint_code",
-                    "diagnostics",
-                    // ── Shell / Execution ──
-                    "shell_exec",
-                    // ── Directory ──
-                    "list_directory",
-                    // ── Archive ──
-                    "archive_inspect",
-                    "archive_extract",
-                    "compress",
-                    "decompress",
-                    // ── Network ──
-                    "http_request",
-                    "web_search",
-                    "dns_lookup",
-                    "ping",
-                    "port_scan",
-                    // ── Data ──
-                    "jsonl_read",
-                    "jsonl_write",
-                    "json_query",
-                    "rss_read",
-                    // ── Docker ──
-                    "docker_ps",
-                    "docker_logs",
-                    "docker_exec",
-                    "docker_build",
-                    "docker_push",
-                    "docker_compose",
-                    // ── Utility ──
-                    "date_time",
-                    "environment_info",
-                    "uuid_gen",
-                    "random_token",
-                    "encode_decode",
-                    "template_render",
-                    "code_metrics",
-                    "security_scan",
-                    "search_packages",
-                    "add_dependency",
-                    // ── Agent tools ──
-                    "spawn_agent",
-                    "apply_code_action",
-                    // ── Skill tools (always available) ──
-                    "skill_list",
-                    "skill_execute",
-                    "skill_create",
-                    "skill_reload",
-                ]
-            }),
+            ModeKind::Plan => plan_tools(),
+            ModeKind::Edit | ModeKind::FullAuto => all_exec_tools(),
             ModeKind::SafeGuard => {
                 if matches!(self.degrade_policy, AutoDegradePolicy::ReadOnly) {
-                    READ_ONLY_TOOLS.get_or_init(|| {
-                        vec![
-                            "read_file",
-                            "read_file_lines",
-                            "search_files",
-                            "grep",
-                            "list_directory",
-                            "inspect_git_diff",
-                            "code_index_search",
-                            "go_to_definition",
-                            "find_references",
-                            "diff",
-                            "date_time",
-                            "environment_info",
-                            "json_query",
-                            "archive_inspect",
-                            "dns_lookup",
-                            "ping",
-                            "docker_ps",
-                            "docker_logs",
-                            "rss_read",
-                            "jsonl_read",
-                            "code_metrics",
-                            "security_scan",
-                            "skill_list",
-                            "web_search",
-                        ]
-                    })
+                    read_only_tools()
                 } else {
-                    ALL_EXEC_TOOLS.get_or_init(|| {
-                        vec![
-                            // ── File tools ──
-                            "read_file",
-                            "read_file_lines",
-                            "write_file",
-                            "apply_patch",
-                            "file_move",
-                            "file_delete",
-                            "copy_path",
-                            "create_directory",
-                            "format_code",
-                            "hash_file",
-                            "file_watch",
-                            // ── Search tools ──
-                            "search_files",
-                            "grep",
-                            "code_index_search",
-                            "go_to_definition",
-                            "find_references",
-                            // ── Git / Diff ──
-                            "inspect_git_diff",
-                            "diff",
-                            "git",
-                            // ── Build / Test / Lint ──
-                            "cargo_check",
-                            "cargo_test",
-                            "run_tests",
-                            "run_build",
-                            "lint_code",
-                            "diagnostics",
-                            // ── Shell / Execution ──
-                            "shell_exec",
-                            // ── Directory ──
-                            "list_directory",
-                            // ── Archive ──
-                            "archive_inspect",
-                            "archive_extract",
-                            "compress",
-                            "decompress",
-                            // ── Network ──
-                            "http_request",
-                            "web_search",
-                            "dns_lookup",
-                            "ping",
-                            "port_scan",
-                            // ── Data ──
-                            "jsonl_read",
-                            "jsonl_write",
-                            "json_query",
-                            "rss_read",
-                            // ── Docker ──
-                            "docker_ps",
-                            "docker_logs",
-                            "docker_exec",
-                            "docker_build",
-                            "docker_push",
-                            "docker_compose",
-                            // ── Utility ──
-                            "date_time",
-                            "environment_info",
-                            "uuid_gen",
-                            "random_token",
-                            "encode_decode",
-                            "template_render",
-                            "code_metrics",
-                            "security_scan",
-                            "search_packages",
-                            "add_dependency",
-                            // ── Agent tools ──
-                            "spawn_agent",
-                            "apply_code_action",
-                            // ── Skill tools (always available) ──
-                            "skill_list",
-                            "skill_execute",
-                            "skill_create",
-                            "skill_reload",
-                        ]
-                    })
+                    all_exec_tools()
                 }
             }
         };

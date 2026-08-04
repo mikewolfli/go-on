@@ -829,27 +829,6 @@
           "maximum": 3600,
           "description": "Health check interval in seconds"
         },
-        "go-on.ui.theme": {
-          "type": "string",
-          "default": "auto",
-          "enum": [
-            "auto",
-            "light",
-            "dark",
-            "dracula",
-            "nord",
-            "solarized"
-          ],
-          "enumDescriptions": [
-            "Follow VS Code theme",
-            "Light theme",
-            "Dark theme",
-            "Dracula theme",
-            "Nord theme",
-            "Solarized theme"
-          ],
-          "description": "UI theme for the extension"
-        },
         "go-on.ui.fontSize": {
           "type": "number",
           "default": 13,

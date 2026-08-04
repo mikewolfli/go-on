@@ -286,53 +286,11 @@ fn percentile_value(mut values: Vec<f64>, percentile: f64) -> f64 {
 }
 
 /// Estimate p95 latency from histogram bucket counts.
-/// Uses linear interpolation within the bucket that contains the 95th percentile.
-const P95_BUCKET_BOUNDARIES_MS: [f64; 10] = [
-    1.0,
-    5.0,
-    10.0,
-    50.0,
-    100.0,
-    500.0,
-    1000.0,
-    5000.0,
-    10000.0,
-    f64::MAX,
-];
-
+///
+/// Canonical implementation lives in `observability::metrics_exporter`;
+/// this is a thin alias so the request-pack call sites stay unchanged.
 pub(super) fn estimate_p95_from_buckets(bucket_counts: &[u64; 10]) -> f64 {
-    let total: u64 = bucket_counts.iter().sum();
-    if total == 0 {
-        return 0.0;
-    }
-    let target = (total as f64 * 0.95).ceil();
-    let mut cumulative: u64 = 0;
-    for (i, &count) in bucket_counts.iter().enumerate() {
-        cumulative += count;
-        if cumulative as f64 >= target {
-            // Found the bucket containing p95
-            let bucket_lower = if i == 0 {
-                0.0
-            } else {
-                P95_BUCKET_BOUNDARIES_MS[i - 1]
-            };
-            let bucket_upper = P95_BUCKET_BOUNDARIES_MS[i.min(9)];
-            if bucket_upper == f64::MAX || bucket_upper - bucket_lower <= 0.0 || count == 0 {
-                // For the last bucket (overflow) or degenerate case, use midpoint of bucket
-                return if i == 9 {
-                    bucket_lower * 2.0
-                } else {
-                    bucket_lower
-                };
-            }
-            let prev_cumulative = cumulative.saturating_sub(count);
-            let fraction = (target - prev_cumulative as f64) / count as f64;
-            let estimated = bucket_lower + fraction * (bucket_upper - bucket_lower);
-            return (estimated * 100.0).round() / 100.0;
-        }
-    }
-    // All samples fall within buckets, use upper bound of last bucket as estimate
-    P95_BUCKET_BOUNDARIES_MS[8]
+    crate::observability::metrics_exporter::estimate_p95_from_buckets(bucket_counts)
 }
 
 fn classify_error_group(event: &TraceEvent) -> String {
@@ -498,98 +456,11 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
     })
 }
 
+/// Build the debug panel payload — single implementation owned by
+/// `config_handlers`; this is a thin alias so the ACP tool and the
+/// `debug.panel.get` RPC method share one code path.
 pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
-    let state = server.session.conversation_state.lock().await;
-    let conversation_count = state
-        .checkpoints
-        .iter()
-        .map(|cp| cp.conversation_id.as_str())
-        .collect::<std::collections::HashSet<_>>()
-        .len();
-    let checkpoint_count = state.checkpoints.len();
-    let autonomy_runtime_metrics =
-        crate::acp::helpers::autonomy_metrics::autonomy_metrics_snapshot();
-    let autonomy_loop_completion_ratio = autonomy_runtime_metrics
-        .get("autonomy_loop_completion_ratio")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let repair_cycle_effective_ratio = autonomy_runtime_metrics
-        .get("repair_cycle_effective_ratio")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let repair_replan_required_ratio = autonomy_runtime_metrics
-        .get("repair_replan_required_ratio")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let repair_replan_required_total = autonomy_runtime_metrics
-        .get("repair_replan_required_total")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let idempotency_pending_continuation_ratio = autonomy_runtime_metrics
-        .get("idempotency_pending_continuation_ratio")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let idempotency_pending_continuation_hit_total = autonomy_runtime_metrics
-        .get("idempotency_pending_continuation_hit_total")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let orchestration_node_mapping_ratio = autonomy_runtime_metrics
-        .get("orchestration_node_mapping_ratio")
-        .and_then(Value::as_f64)
-        .unwrap_or(1.0);
-    let orchestration_node_mapped_total = autonomy_runtime_metrics
-        .get("orchestration_node_mapped_total")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let orchestration_node_unmapped_total = autonomy_runtime_metrics
-        .get("orchestration_node_unmapped_total")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let behavior_backed = autonomy_loop_completion_ratio > 0.0
-        || repair_cycle_effective_ratio > 0.0
-        || autonomy_runtime_metrics
-            .get("idempotency_hit_total")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            > 0;
-
-    json!({
-        "ok": true,
-        "panel": {
-            "trace": {"stage_transitions": []},
-            "selected_agents": [],
-            "review_outcomes": [],
-            "runtime_health": {"ok": true},
-            "review_gate": {
-                "total": server.observability.metrics.snapshot().review_gate_total,
-            },
-            "autonomy_behavior_validation": {
-                "ready": behavior_backed,
-                "behavior_backed": true,
-                "tool_followup_enabled": true,
-                "clarification_resume_enabled": true,
-                "execution_cache_bypass_enabled": true,
-                "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
-                "tool_governance_default_policy": {
-                    "active_when_harness_bus_absent": server.governance_deps.harness_bus.is_none(),
-                    "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
-                },
-                "repair_cycle_effective_ratio": repair_cycle_effective_ratio,
-                "repair_replan_required_ratio": repair_replan_required_ratio,
-                "repair_replan_required_total": repair_replan_required_total,
-                "idempotency_pending_continuation_ratio": idempotency_pending_continuation_ratio,
-                "idempotency_pending_continuation_hit_total": idempotency_pending_continuation_hit_total,
-                "orchestration_node_mapping_ratio": orchestration_node_mapping_ratio,
-                "orchestration_node_mapped_total": orchestration_node_mapped_total,
-                "orchestration_node_unmapped_total": orchestration_node_unmapped_total,
-                "autonomy_runtime_metrics": autonomy_runtime_metrics,
-            },
-            "conversations": {
-                "count": conversation_count,
-                "checkpoints": checkpoint_count,
-            }
-        }
-    })
+    super::config_handlers::build_debug_panel_payload_impl(server).await
 }
 
 pub(super) fn action_check_payload(server: &AcpServer, params: Value) -> Result<Value> {
