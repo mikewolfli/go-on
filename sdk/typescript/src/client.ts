@@ -180,16 +180,17 @@ export class GoOnClient {
 
   /**
    * Compute and await a retry delay.
-   * Uses full-jitter exponential backoff when `useExponentialBackoff` is enabled,
+   * Uses the unified backoff contract when `useExponentialBackoff` is enabled,
    * otherwise a fixed delay.
    */
   private async delay(attempt: number): Promise<void> {
     let ms: number;
     if (this.useExponentialBackoff) {
-      // Exponential backoff with full jitter (AWS strategy)
-      // delay = random(0, min(30000, base * 2^attempt))
-      const cap = Math.min(30000, this.retryDelayMs * 2 ** attempt);
-      ms = Math.floor(Math.random() * cap);
+      // Unified contract (contracts/cross-client-sync.md):
+      // delay = min(base * 2^attempt, 30s) * (0.7 + random() * 0.3)
+      const capped = Math.min(30_000, this.retryDelayMs * 2 ** attempt);
+      const jitter = 0.7 + Math.random() * 0.3;
+      ms = Math.floor(capped * jitter);
     } else {
       ms = this.retryDelayMs;
     }
@@ -333,6 +334,23 @@ export class GoOnClient {
   /** governance.audit.recent — view recent audit entries. */
   async governanceAuditRecent(limit: number): Promise<Record<string, unknown>> {
     return this.jsonRpc("governance.audit.recent", { limit });
+  }
+
+  /**
+   * governance.audit.verify — verify the tamper-evident audit hash chain.
+   * Optional: fromMs/toMs export a time-window report; publicKeyHex enables
+   * Ed25519 signature verification of signed chains.
+   */
+  async governanceAuditVerify(params: {
+    fromMs?: number;
+    toMs?: number;
+    publicKeyHex?: string;
+  } = {}): Promise<Record<string, unknown>> {
+    return this.jsonRpc("governance.audit.verify", {
+      from_ms: params.fromMs,
+      to_ms: params.toMs,
+      public_key_hex: params.publicKeyHex,
+    });
   }
 
   // ── Observability ──────────────────────────────────────────────────

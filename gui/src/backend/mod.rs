@@ -659,59 +659,39 @@ impl BackendClient {
                         .unwrap_or("");
                     match event_type {
                         "chunk" | "" => {
-                            if let Some(text) = val
-                                .get("token")
-                                .or_else(|| val.get("text"))
-                                .and_then(|v| v.as_str())
-                            {
-                                response_text.push_str(text);
+                            // Shared chunk field extraction (token/text fallback +
+                            // reasoning) — single source of truth with the rich
+                            // stream path in views/chat/chat_impl/runtime.rs.
+                            let (text, reasoning) = crate::backend::state::extract_chunk_text(&val);
+                            response_text.push_str(&text);
+                            thinking_text.push_str(&reasoning);
+                            // agent/model may appear on the first event or the done event
+                            let (agent, model) = crate::backend::state::extract_agent_model(&val);
+                            if let Some(agent) = agent {
+                                agent_text = agent;
                             }
-                            if let Some(r) = val.get("reasoning").and_then(|v| v.as_str()) {
-                                thinking_text.push_str(r);
-                            }
-                            // agent field may appear on the first event or the done event
-                            if let Some(agent) = val
-                                .get("agent")
-                                .or_else(|| val.get("selected_agent"))
-                                .and_then(|v| v.as_str())
-                            {
-                                if !agent.is_empty() {
-                                    agent_text = agent.to_string();
-                                }
-                            }
-                            if let Some(model) = val.get("selected_model").and_then(|v| v.as_str())
-                            {
-                                if !model.is_empty() {
-                                    selected_model = Some(model.to_string());
-                                }
+                            if let Some(model) = model {
+                                selected_model = Some(model);
                             }
                         }
                         "result" | "done" => {
                             // Final result event — extract response content.
                             // This is used by non-streaming responses from /chat/stream.
-                            if let Some(text) = val
-                                .get("response")
-                                .or_else(|| val.get("content"))
-                                .and_then(|v| v.as_str())
-                            {
-                                response_text = text.to_string();
+                            let meta = crate::backend::state::extract_result_meta(&val);
+                            if let Some(text) = meta.response {
+                                response_text = text;
                             }
-                            if let Some(r) = val.get("thinking").and_then(|v| v.as_str()) {
-                                thinking_text = r.to_string();
+                            if let Some(r) = meta.thinking {
+                                thinking_text = r;
                             }
-                            if let Some(agent) = val
-                                .get("agent")
-                                .or_else(|| val.get("selected_agent"))
-                                .and_then(|v| v.as_str())
-                            {
+                            if let Some(agent) = meta.agent {
                                 if !agent.is_empty() {
-                                    agent_text = agent.to_string();
+                                    agent_text = agent;
                                 }
                             }
-                            if let Some(model) = val.get("selected_model").and_then(|v| v.as_str())
-                            {
+                            if let Some(model) = meta.model {
                                 if !model.is_empty() {
-                                    selected_model = Some(model.to_string());
+                                    selected_model = Some(model);
                                 }
                             }
                         }

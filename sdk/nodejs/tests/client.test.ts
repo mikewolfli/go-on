@@ -51,28 +51,29 @@ describe("GoOnClient", () => {
     client.close();
   });
 
-  it("computes retry delay with exponential backoff + full jitter", () => {
+  it("computes retry delay with the unified backoff contract", () => {
     const client = new GoOnClient({ baseUrl: "http://localhost:8090" });
     // Access private method via bracket notation for testing
     const delay0 = (client as any)._retryDelayForAttempt(0);
     const delay1 = (client as any)._retryDelayForAttempt(1);
     const delay2 = (client as any)._retryDelayForAttempt(2);
-    const delay3 = (client as any)._retryDelayForAttempt(3);
+    const delay5 = (client as any)._retryDelayForAttempt(5);
+    const delay10 = (client as any)._retryDelayForAttempt(10);
 
-    // Base is 1000ms, full jitter (AWS strategy: random(0, base * 2^attempt)):
-    // attempt 0: random(0, 1000)
-    // attempt 1: random(0, 2000)
-    // attempt 2: random(0, 4000)
-    // attempt 3: random(0, 8000)
-    // attempt 6: capped at random(0, 64000)
-    expect(delay0).toBeGreaterThanOrEqual(0);
-    expect(delay0).toBeLessThan(1000);
-    expect(delay1).toBeGreaterThanOrEqual(0);
-    expect(delay1).toBeLessThan(2000);
-    expect(delay2).toBeGreaterThanOrEqual(0);
-    expect(delay2).toBeLessThan(4000);
-    expect(delay3).toBeGreaterThanOrEqual(0);
-    expect(delay3).toBeLessThan(8000);
+    // Unified contract (contracts/cross-client-sync.md):
+    // delay = min(base * 2^attempt, 30s) * (0.7 + random * 0.3)
+    // attempt 0: [700, 1000)  1: [1400, 2000)  2: [2800, 4000)
+    // attempt 5+: capped at 30s → [21000, 30000)
+    expect(delay0).toBeGreaterThanOrEqual(700);
+    expect(delay0).toBeLessThanOrEqual(1000);
+    expect(delay1).toBeGreaterThanOrEqual(1400);
+    expect(delay1).toBeLessThanOrEqual(2000);
+    expect(delay2).toBeGreaterThanOrEqual(2800);
+    expect(delay2).toBeLessThanOrEqual(4000);
+    expect(delay5).toBeGreaterThanOrEqual(21000);
+    expect(delay5).toBeLessThanOrEqual(30000);
+    expect(delay10).toBeGreaterThanOrEqual(21000);
+    expect(delay10).toBeLessThanOrEqual(30000);
 
     client.close();
   });

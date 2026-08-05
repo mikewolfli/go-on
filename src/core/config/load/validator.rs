@@ -514,6 +514,8 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
             "cost_optimizer",
             "speed_optimizer",
             "reliability_optimizer",
+            "hyper_resilience",
+            // Legacy alias: failure_prevention was merged into hyper_resilience.
             "failure_prevention",
         ],
     )?;

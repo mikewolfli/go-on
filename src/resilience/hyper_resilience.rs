@@ -59,11 +59,95 @@ pub enum FailureMode {
     TimeoutStorm,
 }
 
-pub use crate::optimization::failure_prevention::CircuitBreakerState as CircuitState;
+/// Circuit breaker state (single source of truth — previously defined in
+/// `optimization::failure_prevention`, moved here so the hyper-resilience
+/// engine owns the unified breaker state machine).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CircuitBreakerState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+/// Short alias used throughout the engine.
+pub use self::CircuitBreakerState as CircuitState;
+
+/// Health status of a monitored service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HealthStatus {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
+/// Per-service health snapshot (success/error rates, latency, status).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceHealth {
+    pub service_name: String,
+    pub status: HealthStatus,
+    pub success_rate: f64,
+    pub error_rate: f64,
+    pub avg_latency_ms: f64,
+    pub last_check_timestamp: u64,
+}
+
+/// Per-service outcome counters driving the health monitor.
+#[derive(Debug, Clone, Default)]
+struct ServiceCounters {
+    total_requests: u64,
+    successful_requests: u64,
+    consecutive_failures: u64,
+}
+
+/// Error-rate threshold above which a service is classified Unhealthy.
+const HEALTH_ERROR_RATE_THRESHOLD: f64 = 0.1;
+/// Success-rate threshold below which a service is classified Degraded.
+const HEALTH_SUCCESS_RATE_THRESHOLD: f64 = 0.8;
+
+/// Apply a success/failure to a circuit breaker without persistence.
+///
+/// Mirrors the transition rules of `record_failure_with_mode` / `record_success`
+/// (threshold open, success resets while closed, half-open re-trip) so the sync
+/// `record_outcome` path and the async breaker methods cannot drift.
+fn apply_breaker_outcome(cb: &mut CircuitBreaker, success: bool, threshold: u64) {
+    let now = now_millis();
+    if success {
+        match cb.state {
+            CircuitState::HalfOpen => {
+                cb.state = CircuitState::Closed;
+                cb.failure_count = 0;
+                cb.half_open_attempts = 0;
+                cb.last_failure_ms = 0;
+            }
+            CircuitState::Closed => {
+                cb.failure_count = 0;
+            }
+            CircuitState::Open => {}
+        }
+    } else {
+        match cb.state {
+            CircuitState::Closed => {
+                cb.failure_count += 1;
+                cb.last_failure_ms = now;
+                if cb.failure_count >= threshold {
+                    cb.state = CircuitState::Open;
+                }
+            }
+            CircuitState::Open => {
+                cb.last_failure_ms = now;
+            }
+            CircuitState::HalfOpen => {
+                cb.state = CircuitState::Open;
+                cb.failure_count += 1;
+                cb.last_failure_ms = now;
+                cb.half_open_attempts = 0;
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DegradationLevel — unified system-wide degradation level.
-// failure_prevention re-exports this type via `pub use`.
 // ---------------------------------------------------------------------------
 
 /// System-wide degradation level.
@@ -203,6 +287,12 @@ pub struct HyperResilienceEngine {
     config: RwLock<ResilienceConfig>,
     circuit_breakers: Mutex<HashMap<String, CircuitBreaker>>,
     failover_groups: Mutex<HashMap<String, FailoverGroup>>,
+    /// Per-service health monitors (unified with circuit breakers — the
+    /// engine is the single resilience authority for breakers + health +
+    /// degradation, replacing the former `failure_prevention` state machine).
+    service_health: Mutex<HashMap<String, ServiceHealth>>,
+    /// Per-service outcome counters driving the health monitor.
+    service_counters: Mutex<HashMap<String, ServiceCounters>>,
     healing_actions_taken: AtomicU64,
     started_ms: u64,
     test_metrics: Mutex<TestMetrics>,
@@ -249,6 +339,8 @@ impl HyperResilienceEngine {
             config: RwLock::new(config),
             circuit_breakers: Mutex::new(HashMap::new()),
             failover_groups: Mutex::new(HashMap::new()),
+            service_health: Mutex::new(HashMap::new()),
+            service_counters: Mutex::new(HashMap::new()),
             healing_actions_taken: AtomicU64::new(0),
             started_ms: now_ms,
             test_metrics: Mutex::new(TestMetrics {
@@ -330,6 +422,276 @@ impl HyperResilienceEngine {
             },
         );
         Ok(())
+    }
+
+    // ── Service health monitoring (unified authority) ───────────────────
+    // The former `optimization::failure_prevention` state machine was merged
+    // into this engine: per-service health monitors, degradation levels and
+    // recovery now live here alongside the circuit breakers, so breaker state,
+    // health status and degradation all come from one source.
+
+    /// Register a service for health monitoring + breaker tracking.
+    ///
+    /// Idempotent. Lock scopes are deliberately kept separate (never hold two
+    /// locks at once) to preserve the documented `circuit_breakers`-first lock
+    /// order used by the background health-check loop.
+    pub fn register_service(&self, name: &str) {
+        {
+            let mut sh = lock_mutex(&self.service_health);
+            sh.entry(name.to_string()).or_insert_with(|| ServiceHealth {
+                service_name: name.to_string(),
+                status: HealthStatus::Healthy,
+                success_rate: 1.0,
+                error_rate: 0.0,
+                avg_latency_ms: 100.0,
+                last_check_timestamp: now_millis() / 1000,
+            });
+        }
+        {
+            let mut sc = lock_mutex(&self.service_counters);
+            sc.entry(name.to_string()).or_default();
+        }
+        {
+            let threshold = read_lock(&self.config).circuit_breaker_threshold;
+            let recovery = read_lock(&self.config).recovery_timeout_ms;
+            let mut cbs = lock_mutex(&self.circuit_breakers);
+            if !cbs.contains_key(name) {
+                cbs.insert(
+                    name.to_string(),
+                    CircuitBreaker {
+                        name: name.to_string(),
+                        state: CircuitState::Closed,
+                        failure_count: 0,
+                        threshold,
+                        recovery_timeout_ms: recovery,
+                        last_failure_ms: 0,
+                        half_open_attempts: 0,
+                        last_failure_mode: None,
+                        failure_history: Vec::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Record a request outcome for a service.
+    ///
+    /// Updates the per-service health monitor (success/error rates, EMA
+    /// latency, status) and drives the service's circuit breaker — one call
+    /// for both, so breaker and health can never drift. Synchronous: the
+    /// underlying locks are `std::Mutex` and are never held across an `.await`.
+    pub fn record_outcome(&self, name: &str, success: bool, latency_ms: u64) {
+        self.register_service(name);
+        let max_failure_threshold = read_lock(&self.config).circuit_breaker_threshold;
+
+        let (success_rate, error_rate, avg_latency_ms, status) = {
+            let mut sc = lock_mutex(&self.service_counters);
+            let counters = sc.entry(name.to_string()).or_default();
+            counters.total_requests += 1;
+            if success {
+                counters.successful_requests += 1;
+                counters.consecutive_failures = 0;
+            } else {
+                counters.consecutive_failures += 1;
+            }
+            let total = counters.total_requests;
+            let success_n = counters.successful_requests;
+            let failure_count = counters.consecutive_failures;
+            let success_rate = if total == 0 {
+                1.0
+            } else {
+                success_n as f64 / total as f64
+            };
+            let error_rate = if total == 0 {
+                0.0
+            } else {
+                (total.saturating_sub(success_n)) as f64 / total as f64
+            };
+            // When failures exceed the breaker threshold, blend in a severity
+            // factor so the health status reflects how badly the breaker tripped.
+            let error_rate = if failure_count > 0 && failure_count >= max_failure_threshold {
+                let severity = (failure_count as f64 / max_failure_threshold as f64).min(1.0);
+                error_rate.max(severity * 0.5)
+            } else {
+                error_rate
+            };
+            let prior_avg = lock_mutex(&self.service_health)
+                .get(name)
+                .map(|h| h.avg_latency_ms)
+                .unwrap_or(100.0);
+            let samples = total.max(1) as f64;
+            let previous_weight = (samples - 1.0).max(0.0);
+            let avg_latency_ms = if previous_weight == 0.0 {
+                latency_ms as f64
+            } else {
+                (prior_avg * previous_weight + latency_ms as f64) / samples
+            };
+            let status = if error_rate > HEALTH_ERROR_RATE_THRESHOLD {
+                HealthStatus::Unhealthy
+            } else if success_rate < HEALTH_SUCCESS_RATE_THRESHOLD {
+                HealthStatus::Degraded
+            } else {
+                HealthStatus::Healthy
+            };
+            (success_rate, error_rate, avg_latency_ms, status)
+        };
+
+        {
+            let mut sh = lock_mutex(&self.service_health);
+            if let Some(h) = sh.get_mut(name) {
+                h.success_rate = success_rate;
+                h.error_rate = error_rate;
+                h.avg_latency_ms = avg_latency_ms;
+                h.status = status;
+                h.last_check_timestamp = now_millis() / 1000;
+            }
+        }
+
+        // Drive the breaker from the same outcome (sync inline update — the
+        // async record_success/record_failure_with_mode additionally persist
+        // state when `persist_path` is configured, which production never is).
+        let mut cbs = lock_mutex(&self.circuit_breakers);
+        if let Some(cb) = cbs.get_mut(name) {
+            apply_breaker_outcome(cb, success, max_failure_threshold);
+        }
+    }
+
+    /// Current health snapshot for a service (None when not registered).
+    pub fn service_health(&self, name: &str) -> Option<ServiceHealth> {
+        lock_mutex(&self.service_health).get(name).cloned()
+    }
+
+    /// Health snapshots for all registered services.
+    pub fn health_report(&self) -> Vec<ServiceHealth> {
+        lock_mutex(&self.service_health).values().cloned().collect()
+    }
+
+    /// Degradation level for a service (Normal/Degraded/Constrained/Emergency).
+    pub fn degradation_level(&self, name: &str) -> DegradationLevel {
+        match lock_mutex(&self.service_health).get(name) {
+            Some(h) => match h.status {
+                HealthStatus::Healthy => DegradationLevel::Normal,
+                HealthStatus::Degraded => DegradationLevel::Degraded,
+                HealthStatus::Unhealthy => {
+                    if h.success_rate < 0.5 {
+                        DegradationLevel::Emergency
+                    } else {
+                        DegradationLevel::Constrained
+                    }
+                }
+            },
+            None => DegradationLevel::Normal,
+        }
+    }
+
+    /// Whether the service should be degraded (falls back to a simpler path).
+    pub fn should_degrade(&self, name: &str) -> bool {
+        self.degradation_level(name) >= DegradationLevel::Constrained
+    }
+
+    /// Recover one or all services back to the healthy baseline (breaker
+    /// closed, counters zeroed, health reset). Returns the recovered names.
+    pub fn recover_services(&self, name: Option<&str>) -> Vec<String> {
+        let names: Vec<String> = match name {
+            Some(n) => vec![n.to_string()],
+            None => lock_mutex(&self.service_health).keys().cloned().collect(),
+        };
+        let mut recovered = Vec::new();
+        for n in names {
+            if self.recover_service(&n) {
+                recovered.push(n);
+            }
+        }
+        recovered.sort();
+        recovered
+    }
+
+    fn recover_service(&self, name: &str) -> bool {
+        let health = lock_mutex(&self.service_health).get(name).cloned();
+        let Some(health) = health else {
+            return false;
+        };
+        let breaker_state = lock_mutex(&self.circuit_breakers)
+            .get(name)
+            .map(|cb| cb.state)
+            .unwrap_or(CircuitState::Closed);
+        let failure_count = lock_mutex(&self.service_counters)
+            .get(name)
+            .map(|c| c.consecutive_failures)
+            .unwrap_or(0);
+        let already_healthy = matches!(health.status, HealthStatus::Healthy)
+            && breaker_state == CircuitState::Closed
+            && failure_count == 0;
+        if already_healthy {
+            return false;
+        }
+        {
+            let mut sc = lock_mutex(&self.service_counters);
+            if let Some(c) = sc.get_mut(name) {
+                c.consecutive_failures = 0;
+                c.total_requests = 0;
+                c.successful_requests = 0;
+            }
+        }
+        {
+            let mut cbs = lock_mutex(&self.circuit_breakers);
+            if let Some(cb) = cbs.get_mut(name) {
+                cb.state = CircuitState::Closed;
+                cb.failure_count = 0;
+                cb.half_open_attempts = 0;
+                cb.last_failure_ms = 0;
+            }
+        }
+        {
+            let mut sh = lock_mutex(&self.service_health);
+            if let Some(h) = sh.get_mut(name) {
+                h.status = HealthStatus::Healthy;
+                h.success_rate = 1.0;
+                h.error_rate = 0.0;
+                h.last_check_timestamp = now_millis() / 1000;
+            }
+        }
+        true
+    }
+
+    /// Snapshot all circuit breakers as
+    /// `(name, state, failure_count, total_requests, successful_requests)`.
+    pub fn breaker_snapshots(&self) -> Vec<(String, CircuitState, u64, u64, u64)> {
+        // Lock circuit_breakers first (documented order), then release before
+        // touching counters so no two locks are held simultaneously.
+        let snap: Vec<(String, CircuitState, u64)> = lock_mutex(&self.circuit_breakers)
+            .iter()
+            .map(|(n, cb)| (n.clone(), cb.state, cb.failure_count))
+            .collect();
+        let counters = lock_mutex(&self.service_counters);
+        snap.into_iter()
+            .map(|(name, state, failures)| {
+                let c = counters.get(&name);
+                (
+                    name,
+                    state,
+                    failures,
+                    c.map(|c| c.total_requests).unwrap_or(0),
+                    c.map(|c| c.successful_requests).unwrap_or(0),
+                )
+            })
+            .collect()
+    }
+
+    /// Current breaker state for a service (Closed when unregistered).
+    pub fn breaker_state(&self, name: &str) -> CircuitState {
+        lock_mutex(&self.circuit_breakers)
+            .get(name)
+            .map(|cb| cb.state)
+            .unwrap_or(CircuitState::Closed)
+    }
+
+    /// Number of currently open circuit breakers.
+    pub fn open_breaker_count(&self) -> u32 {
+        lock_mutex(&self.circuit_breakers)
+            .values()
+            .filter(|cb| cb.state == CircuitState::Open)
+            .count() as u32
     }
 
     /// Record a failure against the named circuit breaker.
@@ -1191,6 +1553,8 @@ impl HyperResilienceEngine {
             config: RwLock::new(config),
             circuit_breakers: Mutex::new(circuit_breakers),
             failover_groups: Mutex::new(HashMap::new()),
+            service_health: Mutex::new(HashMap::new()),
+            service_counters: Mutex::new(HashMap::new()),
             healing_actions_taken: AtomicU64::new(0),
             started_ms: now_ms,
             test_metrics: Mutex::new(TestMetrics {
@@ -1904,5 +2268,128 @@ mod tests {
         assert!(err
             .to_string()
             .contains("error.circuit_breaker_already_registered"));
+    }
+
+    // ── Unified health-monitoring (ported from the former failure_prevention) ──
+
+    /// Record five failures → the service breaker trips open and health goes
+    /// Unhealthy (failure_prevention parity: threshold 5, error rate blended).
+    #[test]
+    fn test_record_outcome_trips_breaker_and_marks_unhealthy() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_service("service1");
+        for _ in 0..5 {
+            engine.record_outcome("service1", false, 900);
+        }
+        assert_eq!(engine.breaker_state("service1"), CircuitState::Open);
+        let health = engine.service_health("service1").unwrap();
+        assert_eq!(health.status, HealthStatus::Unhealthy);
+        assert!(health.error_rate > 0.1);
+    }
+
+    /// A success while closed resets the failure streak (parity: breaker
+    /// failure count resets, so it cannot trip; health is rate-based and may
+    /// still show degradation until more successes accumulate).
+    #[test]
+    fn test_success_resets_failure_count() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_service("api");
+        for _ in 0..4 {
+            engine.record_outcome("api", false, 900);
+        }
+        assert_eq!(engine.breaker_state("api"), CircuitState::Closed);
+        engine.record_outcome("api", true, 100);
+        // The breaker failure count reset — 5 consecutive failures would have
+        // opened it, so this proves the streak was broken.
+        assert_eq!(engine.breaker_state("api"), CircuitState::Closed);
+        // Health is rate-based: 4/5 errors is still Unhealthy (parity with
+        // the former failure_prevention).
+        assert_eq!(
+            engine.service_health("api").unwrap().status,
+            HealthStatus::Unhealthy
+        );
+    }
+
+    /// register_service → update_service_health semantics preserved via
+    /// record_outcome: a healthy run keeps status Healthy.
+    #[test]
+    fn test_health_monitoring_healthy_run() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_service("api");
+        engine.record_outcome("api", true, 100);
+        let health = engine.service_health("api").unwrap();
+        assert_eq!(health.status, HealthStatus::Healthy);
+        assert!(health.success_rate > 0.9);
+    }
+
+    /// Degraded → Degraded level; Unhealthy with low success rate → Emergency.
+    #[test]
+    fn test_degradation_strategy() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_service("api");
+        // Simulate a degraded service: mix successes and failures so the
+        // success rate drops below 0.8 but the error rate stays low.
+        for i in 0..20 {
+            engine.record_outcome("api", i % 5 != 0, 100);
+        }
+        let level = engine.degradation_level("api");
+        assert!(
+            matches!(
+                level,
+                DegradationLevel::Degraded | DegradationLevel::Constrained
+            ),
+            "expected degraded-level degradation, got {level:?}"
+        );
+        assert!(engine.should_degrade("api") || level == DegradationLevel::Degraded);
+    }
+
+    /// should_degrade is true once a service is Unhealthy (Constrained+).
+    #[test]
+    fn test_should_degrade() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_service("api");
+        for _ in 0..5 {
+            engine.record_outcome("api", false, 900);
+        }
+        assert!(engine.should_degrade("api"));
+    }
+
+    /// recover_services resets an unhealthy service back to healthy baseline.
+    #[test]
+    fn test_recover_services_resets_unhealthy_service() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_service("api");
+        for _ in 0..5 {
+            engine.record_outcome("api", false, 900);
+        }
+        assert!(engine.should_degrade("api"));
+
+        let recovered = engine.recover_services(Some("api"));
+        assert_eq!(recovered, vec!["api".to_string()]);
+        assert_eq!(engine.breaker_state("api"), CircuitState::Closed);
+        assert_eq!(
+            engine.service_health("api").unwrap().status,
+            HealthStatus::Healthy
+        );
+        assert!(!engine.should_degrade("api"));
+    }
+
+    /// breaker_snapshots report per-service totals (name, state, failures,
+    /// total, successes) for the health/observability consumers.
+    #[test]
+    fn test_breaker_snapshots_report_totals() {
+        let engine = HyperResilienceEngine::new(ResilienceConfig::default());
+        engine.register_service("api");
+        engine.record_outcome("api", true, 100);
+        engine.record_outcome("api", false, 900);
+        let snapshots = engine.breaker_snapshots();
+        let (name, state, _failures, total, successes) = snapshots
+            .iter()
+            .find(|(n, ..)| n == "api")
+            .expect("api snapshot");
+        assert_eq!(name, "api");
+        assert_eq!(*total, 2);
+        assert_eq!(*successes, 1);
+        assert!(matches!(state, CircuitState::Closed));
     }
 }

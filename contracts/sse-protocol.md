@@ -122,8 +122,8 @@ All SSE consumers MUST implement the following parsing behavior:
 
 | Consumer        | File                                         | Parser                             |
 |-----------------|----------------------------------------------|------------------------------------|
-| GUI (streaming) | `gui/src/views/chat/chat_impl/runtime.rs`    | `StreamProcessor` (backend.rs)     |
-| GUI (fallback)  | `gui/src/backend.rs`                         | `StreamProcessor::push_chunk()`    |
+| GUI (streaming) | `gui/src/views/chat/chat_impl/runtime.rs`    | `StreamProcessor` (`gui/src/backend/state.rs`) |
+| GUI (fallback)  | `gui/src/backend/mod.rs`                     | `StreamProcessor::push_chunk()`    |
 | VSCode addon    | `vscode-addon/src/runtime/sseStream.ts`      | `parseSseDataLine()` / `parseSseChunk()` |
 
-All consumers derive from the `StreamProcessor` in `gui/src/backend.rs` (Rust) or the `parseSseChunk` functions in `runtime/sseStream.ts` (TypeScript).
+All consumers derive from the `StreamProcessor` in `gui/src/backend/state.rs` (Rust) or the `parseSseChunk` functions in `runtime/sseStream.ts` (TypeScript). Field extraction (`extract_chunk_text` / `extract_result_meta`) is also shared from `gui/src/backend/state.rs` so the `token`/`text` fallback and result metadata cannot drift between the two GUI consumers.

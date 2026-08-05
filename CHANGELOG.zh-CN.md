@@ -6,6 +6,19 @@
 
 版本 1.5.0 汇总 24 轮超级深度+超级广度多智能体扫描成果（见 `docs/log/`），以 `docs/blueprints/principle.md` 为原则收敛：零死代码、零占位、零假修复、三端（backend / GUI / VS Code）统一架构。
 
+#### 第 25–29 轮精炼（均在 1.5.0 下）
+
+- **断路器统一**：按代理的 failure_prevention 并行状态机（~600 行）退役；健康监控、降级策略、恢复与快照全部迁入 `HyperResilienceEngine`，成为唯一韧性权威（`breaker.*` RPC / `governance.status` / 健康探针读同一真源）。
+- **模型建议统一**：GUI 手维护的 ~180 行模型表迁入后端权威源（`ProviderSpec::model_suggestions`），由 `gen-provider-catalog.py --check` 生成并校验一致性。
+- **审计管道统一**：规范审计 sink 现在把**每一条**落盘记录哈希链入 `~/.goon/audit_chain.ndjson`（单写线程、顺序精确、链文件按尺寸轮转）。独立 per-server `HashChainAuditor` 布线与每请求 `spawn_blocking` 追加被删除；请求台账改经 sink 记录（脱敏、非阻塞）；可选 Ed25519 签名（`GOON_AUDIT_SIGNING_KEY`）与新增 `governance.audit.verify` RPC（链摘要、完整性违规、时间窗报表）闭环验证。
+- **SSE 与 SDK 对齐**：VS Code/Node.js SSE 分块解析对齐契约；Node.js 聊天流改为真增量 AsyncGenerator；`tests/e2e/` 更名 `tests/structural/`。
+- **Bench 回归修复**：`benches/acp_bench.rs` 原始字符串定界符断损导致运行时无效 JSON（criterion `--test` 模式 panic）。
+- **第30轮 — SSE 字段提取统一**：`extract_chunk_text` / `extract_agent_model` / `extract_result_meta` 落在 `gui/src/backend/state.rs`（单一真源）；富流式路径与非流式回退共用，消除 `token`/`text` 回退漂移。
+- **第30轮 — 退避骨架统一**：新增 `gui/src/backoff.rs::exp_backoff_ms`，健康轮询、崩溃重启限流、channel 满重试、RPC 重试 base 四处复用。
+- **第30轮 — 跨 SDK 退避契约漂移修复**：Rust/Node/Python/TypeScript SDK 原为 AWS full-jitter，与契约 ±30% jitter（`min(base×2^n, 30s) × (0.7+random×0.3)`）不符；4 端全部对齐 GUI/VSCode 实现；VSCode 二进制下载重试补上缺失的 30s cap。
+- **第31轮 — `governance.audit.verify` 全链路接线**：4 个 SDK 补齐类型化包装、VSCode 新增 `go-on.governanceAuditVerify` 命令、e2e 测试用真实二进制端到端验证 RPC 路由。
+- **第31轮 — TS SDK 测试套件首次运行**：补齐 `node_modules` 后全量执行；修复第30轮退避改动引发的超时回归（HTTP 错误测试改 `maxRetries: 0`）与一直存在的 abort 流挂起缺陷（mock 流在 abort 时 close）。
+
 #### 冗余消除与统一
 
 - **Provider 目录三分拷贝 → 1 权威源 + 2 生成产物**：`src/core/providers.rs` 为唯一权威；GUI `generated_catalog.rs` 与 vscode `providerCatalog.generated.ts` 均由 `scripts/gen-provider-catalog.py` 生成（带 `--check` 双输出校验）。VS Code 目录补齐 kimi/siliconflow，env var 与分组全部派生自后端。

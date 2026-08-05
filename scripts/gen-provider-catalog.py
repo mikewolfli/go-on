@@ -79,6 +79,12 @@ def parse_specs(src: str) -> list[dict]:
                 spec[m.group(1)] = None
         if "name" not in spec:
             continue
+        # model_suggestions: vec![ ... ] (single- or multi-line, DOTALL)
+        vec_m = re.search(r"model_suggestions: vec!\[(.*?)\]", body, re.DOTALL)
+        if vec_m:
+            spec["model_suggestions"] = re.findall(
+                r'"((?:[^"\\]|\\.)*)"\.to_string\(\)', vec_m.group(1)
+            )
         specs.append(spec)
     return specs
 
@@ -153,6 +159,22 @@ def render_gui(specs: list[dict]) -> str:
         '            supports_system: false,\n'
         "        },"
     )
+    lines.append("    }")
+    lines.append("}")
+    lines.append("")
+    lines.append(
+        "/// Offline default-model suggestions per provider (synced with the"
+    )
+    lines.append("/// backend `ProviderSpec::model_suggestions` field). Empty for")
+    lines.append("/// providers without curated suggestions. The UI-only `auto`")
+    lines.append("/// entry is not included — callers prepend it themselves.")
+    lines.append("pub fn default_models(name: &str) -> &'static [&'static str] {")
+    lines.append("    match name {")
+    for s in specs:
+        models = s.get("model_suggestions") or []
+        items = ", ".join(rust_str(m) for m in models)
+        lines.append(f"        {rust_str(s['name'])} => &[{items}],")
+    lines.append("        _ => &[],")
     lines.append("    }")
     lines.append("}")
     lines.append("")

@@ -45,8 +45,8 @@ impl BackendClient {
         // delay = min(1000 * 2^(attempt-1), 30000) * (0.7 + random * 0.3)
         // Attempt 1: ~1s, 2: ~2s, 3: ~4s, 4: ~8s, 5: ~16s, 6+: ~30s
         // See contracts/cross-client-sync.md for the full specification.
-        let base_ms = 1000 * 2u64.pow((attempt.saturating_sub(1)) as u32);
-        let capped_ms = base_ms.min(30000);
+        let capped_ms =
+            crate::backoff::exp_backoff_ms(1000, attempt.saturating_sub(1) as u32, 30_000);
         let jitter_factor = 0.7 + fastrand::f64() * 0.3;
         Duration::from_secs_f64((capped_ms as f64 * jitter_factor) / 1000.0)
     }

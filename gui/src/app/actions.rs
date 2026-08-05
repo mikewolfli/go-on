@@ -1137,18 +1137,19 @@ top_k = 2
     /// Backoff sequence: 1s, 2s, 4s, 8s, 16s (capped at 60s max).
     /// Once connected, resumes the normal `backend_refresh_interval`.
     pub(crate) fn maybe_refresh_backend(&mut self) {
-        // Progressive backoff: skip polls after consecutive failures
+        // Progressive backoff: skip polls after consecutive failures.
+        // Sequence: 1s, 2s, 4s, 8s, 16s (exponent bounded at 5), capped at 60s.
         if self.connection.consecutive_poll_failures > 0 {
-            let backoff_secs = (2u64).pow(
+            let effective_backoff = crate::backoff::exp_backoff_ms(
+                1000,
                 self.connection
                     .consecutive_poll_failures
                     .min(5)
                     .saturating_sub(1) as u32,
-            ); // 1, 2, 4, 8, 16
-            let max_backoff = 60u64;
-            let effective_backoff = backoff_secs.min(max_backoff);
+                60_000,
+            );
             if self.connection.last_refresh.elapsed()
-                < std::time::Duration::from_secs(effective_backoff)
+                < std::time::Duration::from_millis(effective_backoff)
             {
                 return;
             }

@@ -57,8 +57,12 @@ When a reconnect attempt succeeds, the attempt counter resets to 0 so that the n
 
 | Platform | File | Key component | Notes |
 |----------|------|--------------|-------|
-| GUI (Rust) | `gui/src/backend.rs` | `retry_backoff()`, `QUICK_RPC_ATTEMPTS`, `FULL_RPC_ATTEMPTS` | Used for RPC call retries to the backend. Retry count set to 1000 (effectively unlimited). |
+| GUI (Rust) | `gui/src/backend/rpc.rs` | `retry_backoff()`, `QUICK_RPC_ATTEMPTS`, `FULL_RPC_ATTEMPTS` | Used for RPC call retries to the backend. Bounded: 20 attempts ≈ 5 minutes before giving up (base formula shared via `gui/src/backoff.rs::exp_backoff_ms`). |
 | VSCode (TypeScript) | `vscode-addon/src/runtime/reconnect.ts` | `ReconnectManager.backoffMs()`, `ReconnectManager.schedule()` | Used for restarting the backend process. Already had unlimited retries; updated cap from 300 s to 30 s and base from 2 s to 1 s. |
+| Rust SDK | `sdk/rust/src/client.rs` | `GoOnClient::backoff_delay()` | RPC retries with the same formula (`min(base*2^n, 30s) * (0.7 + random*0.3)`). |
+| Node SDK | `sdk/nodejs/src/client.ts` | `GoOnClient._retryDelayForAttempt()` | Same formula (ms). |
+| Python SDK | `sdk/python/go_on_sdk/client.py` | `GoOnClient._retry_delay_for_attempt()` | Same formula (seconds). |
+| TypeScript SDK | `sdk/typescript/src/client.ts` | `GoOnClient.delay()` | Same formula (ms). |
 
 ### Remaining Platform Differences
 
@@ -142,7 +146,7 @@ GET    /v1/state/events     → SSE stream of state change events (real-time)
 | `src/protocol/state_sync.rs` | `StateSyncEvent` enum + global `StateSyncBroadcaster` |
 | `src/acp/impl/runtime/http.rs` | SSE endpoint `/v1/state/events` |
 | `src/core/config/hot_reload.rs` | Publishes `ConfigReloaded` on successful hot-reload |
-| `gui/src/backend.rs` | GUI RPC client with unified backoff + state sync listener |
+| `gui/src/backend/rpc.rs` | GUI RPC client with unified backoff (`retry_backoff`) |
 | `vscode-addon/src/stateSync.ts` | VSCode state sync listener |
 | `vscode-addon/src/runtime/reconnect.ts` | VSCode reconnection manager with unified backoff |
 | `vscode-addon/src/runtimeManager.ts` | VSCode runtime manager that drives reconnection |

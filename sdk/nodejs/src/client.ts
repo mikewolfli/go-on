@@ -85,15 +85,16 @@ export class GoOnClient {
   // ── Internal helpers ──────────────────────────────────────────────
 
   /**
-   * Compute retry delay with exponential backoff + full jitter.
-   *
-   * Uses AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
-   * This prevents thundering herd during recovery from transient failures.
+   * Compute retry delay with the unified exponential backoff contract
+   * (contracts/cross-client-sync.md):
+   * `delay = min(base * 2^attempt, 30s) * (0.7 + random() * 0.3)`
+   * The ±30% jitter keeps delays above 70% of the base, matching the GUI
+   * and VS Code implementations exactly.
    */
   private _retryDelayForAttempt(attempt: number): number {
-    const baseMs = this.retryDelayMs * Math.pow(2, Math.min(attempt, 6)); // cap at 64x
-    // Full jitter: random between 0 and baseMs
-    return Math.floor(Math.random() * baseMs);
+    const cappedMs = Math.min(30_000, this.retryDelayMs * Math.pow(2, attempt));
+    const jitter = 0.7 + Math.random() * 0.3;
+    return Math.floor(cappedMs * jitter);
   }
 
   /** Build URL from base + path. */
@@ -423,6 +424,23 @@ export class GoOnClient {
   ): Promise<Record<string, unknown>> {
     return (await this._jsonRpc("governance.audit.recent", {
       limit,
+    })) as Record<string, unknown>;
+  }
+
+  /**
+   * Verify the tamper-evident audit hash chain.
+   * Optional params: `fromMs`/`toMs` export a time-window report,
+   * `publicKeyHex` enables Ed25519 signature verification.
+   */
+  async governanceAuditVerify(params: {
+    fromMs?: number;
+    toMs?: number;
+    publicKeyHex?: string;
+  } = {}): Promise<Record<string, unknown>> {
+    return (await this._jsonRpc("governance.audit.verify", {
+      from_ms: params.fromMs,
+      to_ms: params.toMs,
+      public_key_hex: params.publicKeyHex,
     })) as Record<string, unknown>;
   }
 

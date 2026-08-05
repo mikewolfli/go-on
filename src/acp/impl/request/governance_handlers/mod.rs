@@ -21,7 +21,8 @@ use super::*;
 
 #[allow(unused_imports)] // re-exports used by sibling packs via super::governance_handlers::*
 pub(super) use audit::{
-    append_governance_audit_event, load_governance_audit_events, GovernanceAuditEvent,
+    append_governance_audit_event, governance_audit_verify_payload, load_governance_audit_events,
+    GovernanceAuditEvent,
 };
 
 #[allow(unused_imports)]

@@ -6,6 +6,7 @@
 mod app;
 mod backend;
 mod backend_manager;
+mod backoff;
 mod config;
 mod config_store;
 mod connection;

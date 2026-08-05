@@ -60,6 +60,7 @@ closes the connection.
 | `governanceStatus()` | `governance.status` | HarnessBus profile + policy stats |
 | `governancePlanGet(id)` | `governance.plan.get` | Governance plan by ID |
 | `governanceAuditRecent(n)` | `governance.audit.recent` | Recent audit entries |
+| `governanceAuditVerify(params)` | `governance.audit.verify` | Verify the tamper-evident audit hash chain (optional `fromMs`/`toMs` report, `publicKeyHex` signature check) |
 
 ### Observability
 | Method | RPC | Description |

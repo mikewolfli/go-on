@@ -8,7 +8,8 @@
  *   Backend → SSE stream → stateSync.ts → callbacks → UI updates
  *
  * BLUE68 P5-4: SSE connections use AbortController with configurable
- * timeout and exponential backoff with full jitter for reconnection.
+ * timeout and the unified exponential backoff with ±30% jitter (see
+ * contracts/cross-client-sync.md) for reconnection.
  */
 
 import * as vscode from "vscode";

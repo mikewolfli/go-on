@@ -35,7 +35,6 @@ pub use crate::memory::vector;
 pub use crate::observability::observability as observability_module;
 pub use crate::observability::performance;
 pub use crate::observability::telemetry_enhanced;
-pub use crate::optimization::failure_prevention;
 pub use crate::orchestration::flow;
 pub use crate::orchestration::mode;
 pub use crate::orchestration::orchestrator;

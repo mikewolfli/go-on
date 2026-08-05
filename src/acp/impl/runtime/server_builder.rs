@@ -253,21 +253,11 @@ pub async fn new_acp_server(
     // tool calls on low-severity matches (e.g. an email address in args),
     // so the wiring is intentionally left to an explicit conservative config.
 
-    // Wire hash chain auditor — persistence lives in the same `~/.goon/`
-    // directory as the canonical audit sink (`audit.ndjson`), so the
-    // tamper-evident chain and the general decision log are siblings.
-    {
-        let auditor_path = crate::governance::audit::audit_chain_path();
-        use crate::security::audit_integrity::HashChainAuditor;
-        match HashChainAuditor::new(auditor_path) {
-            Ok(auditor) => {
-                builder = builder.with_hash_chain_auditor(Arc::new(std::sync::Mutex::new(auditor)));
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create HashChainAuditor: {}", e);
-            }
-        }
-    }
+    // Wire hash chain auditor — REMOVED in the audit-pipeline unification:
+    // the canonical sink (`ThreadSafeAuditLog` / `global_audit_log`) now owns
+    // the tamper-evident chain and chains every persisted record in its own
+    // writer thread (see `governance/audit.rs`). No per-server auditor is
+    // needed anymore.
 
     // Wire secret manager — REMOVED: the SecretManager rotation subsystem
     // (register_key/get_key/rotate_key/VaultRotator) had zero production
@@ -390,6 +380,13 @@ pub async fn new_acp_server(
     }
 
     let mut server = builder.build();
+    // Pre-register all agents into the unified hyper-resilience engine so
+    // breaker/health reports include every agent from startup (formerly done
+    // by the removed `failure_prevention` in ServerBuilder::build, which is
+    // sync; registration here is async). Idempotent per agent.
+    for name in registry.names() {
+        server.resilience.hyper_resilience.register_service(&name);
+    }
     // Set fields that aren't available in ServerBuilder yet
     server.cache_deps.vector_config = vector_config;
     server.cache_deps.autotune = autotune;

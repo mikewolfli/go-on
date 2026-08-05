@@ -494,34 +494,42 @@ pub async fn handle_request(
         .await;
     }
 
-    // BLUE56-D07: Hash chain audit integrity — append to hash chain.
-    // The disk append is offloaded to the blocking pool so the request hot
-    // path never blocks on synchronous file I/O; ordering within the chain is
-    // still guaranteed by the auditor's mutex.
-    if let Some(ref hca) = server.governance_deps.hash_chain_auditor {
-        let hca = hca.clone();
-        // Serialize the params ONCE instead of deep-cloning the `Value` and
-        // letting `json!` re-serialize it — the hash chain treats the payload
-        // as opaque integrity content (`payload_hash` covers the full payload),
-        // so the compact JSON-string form preserves verifiability while
-        // halving the hot-path work on every request.
-        let params_json =
-            serde_json::to_string(&request.params).unwrap_or_else(|_| "null".to_string());
-        let payload = serde_json::json!({
-            "id": request.id.as_ref().map(|v| format!("{:?}", v)).unwrap_or_default(),
-            "method": method.as_ref(),
-            "params": params_json,
-            "timestamp_ms": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis(),
-        });
-        tokio::task::spawn_blocking(move || {
-            if let Ok(mut hca_guard) = hca.lock() {
-                let _ = hca_guard.append(payload);
-            }
-        });
-    }
+    // BLUE56-D07: request ledger — every accepted request leaves a tamper-
+    // evident record in the canonical audit sink. The sink's writer thread
+    // appends each record to the hash chain, so no separate auditor plumbing
+    // or blocking-pool offload is needed on this hot path (the old
+    // spawn_blocking + HashChainAuditor append is subsumed by the sink).
+    // Only request identity and timing are retained — the full payload is
+    // deliberately NOT kept in memory/on disk to keep the bounded buffer lean;
+    // content-level evidence lives in conversation checkpoints and memory.
+    let ledger_tenant = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("tenant_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("default")
+        .to_string();
+    let ledger_id = request
+        .id
+        .as_ref()
+        .map(|v| format!("{:?}", v))
+        .unwrap_or_default();
+    crate::governance::audit::global_audit_log().record(crate::governance::audit::AuditLogEntry {
+        timestamp: crate::governance::audit::chrono_now(),
+        task_id: ledger_id,
+        phase: "request".to_string(),
+        agent: None,
+        tool: None,
+        decision: method.as_ref().to_string(),
+        inputs: serde_json::Value::Null,
+        outputs: None,
+        error: None,
+        confidence: None,
+        data_classification: None,
+        compliance_tags: vec![],
+        retention_policy: None,
+        correlation_id: Some(ledger_tenant),
+    });
 
     let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());
     let task_type = infer_task_type(method.as_ref(), &request.params);
@@ -2021,6 +2029,17 @@ pub async fn handle_request(
                         server,
                         request_id,
                         governance_handlers::governance_audit_recent_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        ),
+                    )
+                    .await
+                }
+                "governance.audit.verify" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        governance_handlers::governance_audit_verify_payload(
                             server,
                             request.params.unwrap_or_default(),
                         ),

@@ -593,6 +593,36 @@ export function registerConfigRpcCommands(
     },
   );
 
+  const governanceAuditVerifyRpcCommand = vscode.commands.registerCommand(
+    "go-on.governanceAuditVerify",
+    async () => {
+      if (!(await ensureRunning(deps))) {
+        return;
+      }
+      try {
+        const result = asRecord(
+          await deps.sendRequest("governance.audit.verify", {}),
+        );
+        const violations = asArray(result.violations).length;
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.rpcCommandResult, [
+            "governance.audit.verify",
+            `entries=${result.entry_count ?? 0}, intact=${String(
+              result.is_chain_intact,
+            )}, violations=${violations}`,
+          ]),
+        );
+      } catch (error: unknown) {
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "governance.audit.verify",
+            getErrorMessage(error),
+          ]),
+        );
+      }
+    },
+  );
+
   // ── Release readiness ───────────────────────────────────────────────
   const releaseReadinessRpcCommand = vscode.commands.registerCommand(
     "go-on.releaseReadiness",
@@ -883,6 +913,7 @@ export function registerConfigRpcCommands(
     governanceStatusRpcCommand,
     governancePlanGetRpcCommand,
     governanceAuditRecentRpcCommand,
+    governanceAuditVerifyRpcCommand,
     releaseReadinessRpcCommand,
     runtimeStabilityRpcCommand,
     traceGetRpcCommand,

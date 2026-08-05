@@ -296,6 +296,38 @@ mod e2e_tests {
         harness.wait_for_exit(Duration::from_secs(5));
     }
 
+    /// E2E-02b: governance.audit.verify round-trips the hash-chain endpoint
+    #[test]
+    fn e2e_governance_audit_verify_returns_chain_shape() {
+        let mut harness = E2eHarness::spawn();
+        let resp = harness.request(1, "governance.audit.verify", None);
+
+        let result = resp
+            .get("result")
+            .expect("governance.audit.verify should return result");
+        assert_eq!(
+            result.get("ok").and_then(Value::as_bool),
+            Some(true),
+            "verify should succeed"
+        );
+        // The chain file may not exist yet on a fresh machine — entry_count
+        // must still be a number and the integrity fields must be present.
+        assert!(
+            result.get("entry_count").is_some(),
+            "verify should report entry_count"
+        );
+        assert!(
+            result.get("is_chain_intact").is_some(),
+            "verify should report is_chain_intact"
+        );
+        assert!(
+            result.get("violations").is_some(),
+            "verify should report violations list"
+        );
+
+        harness.wait_for_exit(Duration::from_secs(5));
+    }
+
     /// E2E-02: Governance status reports all bus metrics
     #[test]
     fn e2e_governance_status_returns_bus_metrics() {

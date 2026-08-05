@@ -20,7 +20,6 @@ use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::i18n::runtime::tf;
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::memory::vector::VectorStore;
-use crate::optimization::failure_prevention::FailurePrevention;
 use crate::orchestration::task_router::TaskRouter;
 
 // ============================================================================
@@ -44,11 +43,10 @@ pub(crate) struct RuntimeExecutionContext {
     // See docs/log/log-20260625-1.md §Remaining Non-Issues.
     pub(super) adaptive_selector: Arc<std::sync::Mutex<AdaptiveModelSelector>>,
     pub(super) outcome_tx: tokio::sync::mpsc::UnboundedSender<OutcomeEvent>,
-    // NOTE: Intentionally using std::sync::Mutex (not tokio::sync::Mutex).
-    // Every lock() on failure_prevention is scoped to a block that ends before
-    // any .await — verified at all 3 callsites in execute_single_subtask.
-    // See docs/log/log-20260625-1.md §Remaining Non-Issues.
-    pub(super) failure_prevention: Arc<std::sync::Mutex<FailurePrevention>>,
+    /// Unified resilience engine — the single authority for per-agent circuit
+    /// breakers, health monitors and degradation (formerly `failure_prevention`).
+    /// All methods are synchronous (std-Mutex-backed, no cross-await locks).
+    pub(super) hyper_resilience: Arc<crate::resilience::hyper_resilience::HyperResilienceEngine>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) memory_store: Arc<std::sync::Mutex<MemoryStore>>,
     pub(super) lazy_policy: super::LazyLoadPolicy,
@@ -262,7 +260,7 @@ pub(crate) async fn build_execution_context(
         failure_strategy: failure_strategy.clone(),
         adaptive_selector: server.model_deps.adaptive_model_selector.clone(),
         outcome_tx: server.resilience.outcome_tx.clone(),
-        failure_prevention: server.resilience.failure_prevention.clone(),
+        hyper_resilience: server.resilience.hyper_resilience.clone(),
         metrics: server.observability.metrics.clone(),
         memory_store: server.persistence.memory_store.clone(),
         lazy_policy,
@@ -864,17 +862,11 @@ async fn execute_single_subtask(
                 .sort_by_key(|(name, _)| order.get(name).copied().unwrap_or(usize::MAX));
         }
     }
-    let degraded_set: std::collections::HashSet<String> = context
-        .failure_prevention
-        .lock()
-        .map(|fp| {
-            agent_names
-                .iter()
-                .filter(|n| fp.should_degrade(n))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
+    let degraded_set: std::collections::HashSet<String> = agent_names
+        .iter()
+        .filter(|n| context.hyper_resilience.should_degrade(n))
+        .cloned()
+        .collect();
     if !degraded_set.is_empty()
         && context
             .candidates
@@ -925,16 +917,9 @@ async fn execute_single_subtask(
             success: run_result.is_ok(),
             duration_ms,
         });
-        {
-            let mut fp = context
-                .failure_prevention
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("Failure prevention lock poisoned in execute_single_subtask, recovering");
-                    poisoned.into_inner()
-                });
-            fp.record_outcome(agent_name, run_result.is_ok(), duration_ms);
-        }
+        context
+            .hyper_resilience
+            .record_outcome(agent_name, run_result.is_ok(), duration_ms);
 
         match run_result {
             Ok(response) if !response.trim().is_empty() => {

@@ -20,3 +20,7 @@ pub struct ProviderSpec {
 /// kept in sync with the backend's `built_in_provider_specs()` (single source
 /// of truth). Unknown names fall back to the generic openai_compatible shape.
 pub use super::generated_catalog::built_in_provider_specs;
+
+/// Offline default-model suggestions per provider — mirrors the backend's
+/// `ProviderSpec::model_suggestions` (generated, single source of truth).
+pub use super::generated_catalog::default_models;

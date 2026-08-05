@@ -1,9 +1,11 @@
 //! OptimizationBus — Unified optimization sub-bus (BLUE38 §1, ARCH-13 multi-bus architecture)
 //!
-//! OptimizationBus wraps the existing CostOptimizer, SpeedOptimizer, FailurePrevention,
-//! ReliabilityOptimizer and WorkflowOptimizer into a single, unified sub-bus that
-//! exposes optimization recommendations, circuit-breaker queries, and execution
-//! feedback to the CapabilityBus coordinator.
+//! OptimizationBus wraps the CostOptimizer, SpeedOptimizer, the unified
+//! hyper-resilience engine (circuit breakers + health + degradation, formerly
+//! `FailurePrevention`), ReliabilityOptimizer and WorkflowOptimizer into a
+//! single, unified sub-bus that exposes optimization recommendations,
+//! circuit-breaker queries, and execution feedback to the CapabilityBus
+//! coordinator.
 //!
 //! # Architecture
 //!
@@ -21,10 +23,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::optimization::failure_prevention::FailurePrevention;
 use crate::orchestration::workflow_optimizer::{
     CostOptimizer as WfCostOptimizer, OptimizationContext, WorkflowOptimizerPlugin,
 };
+use crate::resilience::hyper_resilience::{HyperResilienceEngine, ResilienceConfig};
 
 // ---------------------------------------------------------------------------
 // Supporting types
@@ -203,41 +205,41 @@ impl SpeedEstimator {
 // Lightweight delegating wrappers for the bus's five sub-optimisers.
 // ---------------------------------------------------------------------------
 
-/// Wraps the real `FailurePrevention` behind a `Mutex` interface suitable
-/// for the bus.
-struct BusFailurePrevention {
-    inner: Arc<Mutex<FailurePrevention>>,
+/// Wraps the unified `HyperResilienceEngine` for the optimization bus.
+///
+/// The engine is the single resilience authority (breakers + health +
+/// degradation); the bus is a thin read/write facade over it.
+struct BusResilience {
+    inner: Arc<HyperResilienceEngine>,
 }
 
-impl BusFailurePrevention {
+impl BusResilience {
     fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(FailurePrevention::new())),
+            inner: Arc::new(HyperResilienceEngine::new(ResilienceConfig::default())),
         }
     }
 
     fn is_circuit_broken(&self, agent: &str) -> bool {
-        let fp = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         matches!(
-            fp.get_circuit_state(agent),
-            crate::optimization::failure_prevention::CircuitBreakerState::Open
+            self.inner.breaker_state(agent),
+            crate::resilience::hyper_resilience::CircuitState::Open
         )
     }
 
     fn record_outcome(&self, agent: &str, duration_ms: u64, success: bool) {
-        let mut fp = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        fp.record_outcome(agent, success, duration_ms);
+        self.inner.record_outcome(agent, success, duration_ms);
     }
 
     fn circuit_breaker_trips(&self) -> u64 {
         // Count how many agents currently have an open circuit breaker.
-        let fp = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        fp.get_health_report()
+        self.inner
+            .health_report()
             .iter()
             .filter(|h| {
                 matches!(
-                    fp.get_circuit_state(&h.service_name),
-                    crate::optimization::failure_prevention::CircuitBreakerState::Open
+                    self.inner.breaker_state(&h.service_name),
+                    crate::resilience::hyper_resilience::CircuitState::Open
                 )
             })
             .count() as u64
@@ -306,8 +308,8 @@ pub struct OptimizationBus {
     cost_optimizer: Arc<Mutex<CostEstimator>>,
     /// Speed optimizer reference
     speed_optimizer: Arc<Mutex<SpeedOptimizer>>,
-    /// Failure prevention reference
-    failure_prevention: BusFailurePrevention,
+    /// Unified resilience facade (circuit breakers + health + degradation)
+    resilience: BusResilience,
     /// Reliability optimizer reference
     reliability_optimizer: Arc<Mutex<ReliabilityOptimizer>>,
     /// Profile metrics
@@ -320,7 +322,7 @@ impl OptimizationBus {
         Self {
             cost_optimizer: Arc::new(Mutex::new(CostEstimator::new())),
             speed_optimizer: Arc::new(Mutex::new(SpeedOptimizer::new())),
-            failure_prevention: BusFailurePrevention::new(),
+            resilience: BusResilience::new(),
             reliability_optimizer: Arc::new(Mutex::new(ReliabilityOptimizer::new())),
             profile: Arc::new(Mutex::new(OptimizationBusProfile::default())),
         }
@@ -390,7 +392,7 @@ impl OptimizationBus {
 
     /// Check if an agent is currently circuit-broken (open circuit).
     pub fn is_circuit_broken(&self, agent: &str) -> bool {
-        let broken = self.failure_prevention.is_circuit_broken(agent);
+        let broken = self.resilience.is_circuit_broken(agent);
         if broken {
             let mut profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
             profile.circuit_breaker_trips = profile.circuit_breaker_trips.wrapping_add(1);
@@ -404,8 +406,7 @@ impl OptimizationBus {
     /// future circuit-breaker and recommendation decisions are informed by
     /// real execution data.
     pub fn record_execution(&self, agent: &str, duration_ms: u64, _token_cost: u64, success: bool) {
-        self.failure_prevention
-            .record_outcome(agent, duration_ms, success);
+        self.resilience.record_outcome(agent, duration_ms, success);
 
         // If this was a failure, log a reliability flag.
         if !success {
@@ -417,7 +418,7 @@ impl OptimizationBus {
     /// Return a snapshot of the current bus profile.
     pub fn profile(&self) -> OptimizationBusProfile {
         let profile = self.profile.lock().unwrap_or_else(|e| e.into_inner());
-        let trips = self.failure_prevention.circuit_breaker_trips();
+        let trips = self.resilience.circuit_breaker_trips();
         OptimizationBusProfile {
             circuit_breaker_trips: trips,
             ..profile.clone()

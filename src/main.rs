@@ -21,7 +21,6 @@ mod mcp;
 mod memory;
 mod multimodal;
 mod observability;
-mod optimization;
 mod orchestration;
 mod protocol;
 mod resilience;

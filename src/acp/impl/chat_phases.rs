@@ -245,14 +245,29 @@ pub(crate) async fn observe_phase(
                 "prompt injection detected — taking action"
             );
 
-            // Always record to audit trail.
-            if let Some(ref auditor) = server.governance_deps.hash_chain_auditor {
-                if let Ok(mut auditor) = auditor.lock() {
-                    let _ = auditor.append(
-                        json!({"event": "prompt_injection", "action": "enforced", "warnings": &all_violations, "contamination_score": max_contamination}),
-                    );
-                }
-            }
+            // Always record to the canonical audit sink (chained by the sink's
+            // writer thread — tamper-evident by construction).
+            crate::governance::audit::global_audit_log().record(
+                crate::governance::audit::AuditLogEntry {
+                    timestamp: crate::governance::audit::chrono_now(),
+                    task_id: ctx.tenant_id.clone(),
+                    phase: "security".to_string(),
+                    agent: None,
+                    tool: None,
+                    decision: "prompt_injection_enforced".to_string(),
+                    inputs: json!({
+                        "warnings": &all_violations,
+                        "contamination_score": max_contamination,
+                    }),
+                    outputs: None,
+                    error: None,
+                    confidence: None,
+                    data_classification: None,
+                    compliance_tags: vec![],
+                    retention_policy: None,
+                    correlation_id: None,
+                },
+            );
 
             // ── HIGH/CRITICAL: block the request ───────────────────────
             if has_high_or_critical {

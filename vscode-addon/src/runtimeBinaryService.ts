@@ -238,8 +238,9 @@ async function downloadFile(
   } catch (err) {
     if (attempt < MAX_DOWNLOAD_RETRIES) {
       // Exponential backoff with 30% jitter to prevent thundering herd.
-      // delay = (2^attempt * 1000) * (0.7 + random * 0.3)
-      const delay = Math.pow(2, attempt) * 1000;
+      // Unified formula (contracts/cross-client-sync.md):
+      // delay = min(2^attempt * 1000, 30s) * (0.7 + random * 0.3)
+      const delay = Math.min(30000, Math.pow(2, attempt) * 1000);
       const jitter = 0.7 + Math.random() * 0.3;
       await new Promise((resolve) =>
         setTimeout(resolve, Math.round(delay * jitter)),

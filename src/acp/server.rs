@@ -24,7 +24,6 @@ use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
 
 use crate::acp::r#impl::request::prompts_pack::PromptManager;
 use crate::acp::r#impl::session::SessionManager;
-use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::governance::harness_bus::HarnessBus;
 use crate::intelligence::capability_bus::core::CapabilityBus;
@@ -259,9 +258,6 @@ pub struct GovernanceServerDeps {
         Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     /// Prompt injection detector (GAP-B52-25)
     pub injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
-    /// Hash chain audit integrity protector (GAP-B52-27)
-    pub hash_chain_auditor:
-        Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
     /// Memory persistence manager (GAP-B52-11)
     pub memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
     /// Self-evolution loop handle (GAP-B52-02) — designed extension point.
@@ -350,8 +346,9 @@ pub struct ResilienceContext {
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
     // which acquires, reads/writes, and drops the guard within a single synchronous closure.
     pub circuit_breakers: Arc<StdMutex<CircuitBreakerRegistry>>,
-    /// Hyper-resilience engine for circuit breaking, failover, and self-healing (BLUE56-GAP-C04)
-    // This field is NOT a StdMutex — it is an async-safe engine.
+    /// Hyper-resilience engine — the unified resilience authority for
+    /// circuit breakers, per-service health monitoring and degradation
+    /// (formerly split across `failure_prevention` and the registry).
     pub hyper_resilience: Arc<crate::resilience::hyper_resilience::HyperResilienceEngine>,
     /// Maintenance tracker for system health monitoring
     // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
@@ -365,10 +362,6 @@ pub struct ResilienceContext {
     // SAFETY: StdMutex is never held across `.await` — review timeout checks are
     // synchronous lookups that complete and drop the guard within the same scope.
     pub review_timeout_policy: Arc<std::sync::RwLock<ReviewTimeoutPolicy>>,
-    /// Failure prevention system
-    // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
-    // critical sections (evaluate failure conditions, update state) with no `.await` inside.
-    pub failure_prevention: Arc<StdMutex<FailurePrevention>>,
     /// Phase rate limiter (held by ResilienceContext since it governs per-phase request admission)
     // SAFETY: StdMutex is never held across `.await` — rate limit admission checks are
     // synchronous token-bucket operations that complete before any async yield.
@@ -895,8 +888,6 @@ pub struct ServerBuilder {
     approval_engine:
         Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
-    hash_chain_auditor:
-        Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
     memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
     evolution_loop: Option<
         Arc<
@@ -942,7 +933,6 @@ impl ServerBuilder {
             planner_executor_config: (),
             approval_engine: None,
             injection_detector: None,
-            hash_chain_auditor: None,
             memory_persistence: None,
             evolution_loop: None,
             dependency_vulnerability_scanner: None,
@@ -1025,15 +1015,6 @@ impl ServerBuilder {
         detector: Arc<crate::security::prompt_injection::InjectionDetector>,
     ) -> Self {
         self.injection_detector = Some(detector);
-        self
-    }
-
-    /// Set the hash chain auditor
-    pub fn with_hash_chain_auditor(
-        mut self,
-        auditor: Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>,
-    ) -> Self {
-        self.hash_chain_auditor = Some(auditor);
         self
     }
 
@@ -1127,18 +1108,11 @@ impl ServerBuilder {
         }));
 
         let adaptive_model_selector = Arc::new(StdMutex::new(AdaptiveModelSelector::default()));
-        let mut failure_prevention_state = FailurePrevention::new();
-        if let Some(agent_registry) = &self.agent_registry {
-            for name in agent_registry.names() {
-                failure_prevention_state.register_service(&name);
-            }
-        }
-        let failure_prevention = Arc::new(StdMutex::new(failure_prevention_state));
-        // Wire the live breaker source so circuit_breakers.snapshots()/open_count()
-        // report REAL FailurePrevention state instead of an always-empty map
-        // (previously readiness gates saw breaker_open_count == 0 unconditionally).
+        // Per-agent circuit breakers + health monitors are owned by the unified
+        // hyper-resilience engine (registered in `new_acp_server` after build,
+        // which is async). The registry reports live state via that engine.
         if let Ok(mut cb) = circuit_breakers.lock() {
-            cb.attach_source(Arc::clone(&failure_prevention));
+            cb.attach_source(Arc::clone(&hyper_resilience));
         }
         let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
 
@@ -1361,11 +1335,6 @@ impl ServerBuilder {
                 } else {
                     None
                 },
-                hash_chain_auditor: if governance_enabled {
-                    self.hash_chain_auditor
-                } else {
-                    None
-                },
                 memory_persistence: if governance_enabled {
                     self.memory_persistence
                 } else {
@@ -1431,7 +1400,6 @@ impl ServerBuilder {
                 maintenance_tracker,
                 lifecycle_state,
                 review_timeout_policy,
-                failure_prevention,
                 phase_rate_limiter,
             },
             session: SessionContext {

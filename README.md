@@ -117,7 +117,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **RBAC** — role-based access control with tenant registration
 - **Tenant isolation** — cross-tenant blocking; budget-aware concurrency limits
 - **Audit trail** — full decision pipeline recording with replay capability
-- **Audit integrity** — hash-chain verified audit entries for tamper detection
+- **Audit integrity** — every audit entry hash-chain verified for tamper detection (`governance.audit.verify` + optional Ed25519 signing)
 - **Prompt injection detection** — runtime scanning for injection patterns with configurable threshold
 - **Content safety checking** — SafeGuard mode for AI-powered risk assessment
 

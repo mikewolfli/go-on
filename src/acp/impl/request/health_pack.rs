@@ -34,20 +34,10 @@ pub(super) async fn breaker_reset_payload(server: &AcpServer, params: Value) -> 
         .get("agent")
         .or_else(|| params.get("name"))
         .and_then(Value::as_str);
-    // Reset the REAL per-agent breakers (FailurePrevention). The registry
-    // reset below only clears its (source-backed) bookkeeping map.
-    let recovered = server
-        .resilience
-        .failure_prevention
-        .lock()
-        .map(|mut fp| fp.recover(target))
-        .unwrap_or_default();
-    let reset_count = server
-        .resilience
-        .circuit_breakers
-        .lock()
-        .map(|mut guard| guard.reset(target))
-        .unwrap_or(0);
+    // Reset the REAL per-agent breakers + health through the unified
+    // hyper-resilience engine.
+    let recovered = server.resilience.hyper_resilience.recover_services(target);
+    let reset_count = recovered.len();
     let breakers = server
         .resilience
         .circuit_breakers
@@ -68,48 +58,54 @@ pub(super) async fn breaker_reset_payload(server: &AcpServer, params: Value) -> 
 // Breaker Recovery
 // ---------------------------------------------------------------------------
 
-fn health_status_label(status: crate::failure_prevention::HealthStatus) -> &'static str {
+fn health_status_label(status: crate::resilience::hyper_resilience::HealthStatus) -> &'static str {
     match status {
-        crate::failure_prevention::HealthStatus::Healthy => "healthy",
-        crate::failure_prevention::HealthStatus::Degraded => "degraded",
-        crate::failure_prevention::HealthStatus::Unhealthy => "unhealthy",
+        crate::resilience::hyper_resilience::HealthStatus::Healthy => "healthy",
+        crate::resilience::hyper_resilience::HealthStatus::Degraded => "degraded",
+        crate::resilience::hyper_resilience::HealthStatus::Unhealthy => "unhealthy",
     }
 }
 
-fn circuit_state_label(state: crate::failure_prevention::CircuitBreakerState) -> &'static str {
+fn circuit_state_label(
+    state: crate::resilience::hyper_resilience::CircuitBreakerState,
+) -> &'static str {
     match state {
-        crate::failure_prevention::CircuitBreakerState::Closed => "closed",
-        crate::failure_prevention::CircuitBreakerState::Open => "open",
-        crate::failure_prevention::CircuitBreakerState::HalfOpen => "half-open",
+        crate::resilience::hyper_resilience::CircuitBreakerState::Closed => "closed",
+        crate::resilience::hyper_resilience::CircuitBreakerState::Open => "open",
+        crate::resilience::hyper_resilience::CircuitBreakerState::HalfOpen => "half-open",
     }
 }
 
-fn degradation_level_label(level: crate::failure_prevention::DegradationLevel) -> &'static str {
+fn degradation_level_label(
+    level: crate::resilience::hyper_resilience::DegradationLevel,
+) -> &'static str {
     match level {
-        crate::failure_prevention::DegradationLevel::Normal => "normal",
-        crate::failure_prevention::DegradationLevel::Degraded => "degraded",
-        crate::failure_prevention::DegradationLevel::Constrained => "constrained",
-        crate::failure_prevention::DegradationLevel::Emergency => "emergency",
+        crate::resilience::hyper_resilience::DegradationLevel::Normal => "normal",
+        crate::resilience::hyper_resilience::DegradationLevel::Degraded => "degraded",
+        crate::resilience::hyper_resilience::DegradationLevel::Constrained => "constrained",
+        crate::resilience::hyper_resilience::DegradationLevel::Emergency => "emergency",
     }
 }
 
 fn recovery_action(
-    status: crate::failure_prevention::HealthStatus,
-    level: crate::failure_prevention::DegradationLevel,
+    status: crate::resilience::hyper_resilience::HealthStatus,
+    level: crate::resilience::hyper_resilience::DegradationLevel,
 ) -> &'static str {
-    if matches!(status, crate::failure_prevention::HealthStatus::Unhealthy)
-        || matches!(
-            level,
-            crate::failure_prevention::DegradationLevel::Emergency
-        )
-    {
+    if matches!(
+        status,
+        crate::resilience::hyper_resilience::HealthStatus::Unhealthy
+    ) || matches!(
+        level,
+        crate::resilience::hyper_resilience::DegradationLevel::Emergency
+    ) {
         "reset_breaker_and_fallback"
-    } else if matches!(status, crate::failure_prevention::HealthStatus::Degraded)
-        || matches!(
-            level,
-            crate::failure_prevention::DegradationLevel::Constrained
-        )
-    {
+    } else if matches!(
+        status,
+        crate::resilience::hyper_resilience::HealthStatus::Degraded
+    ) || matches!(
+        level,
+        crate::resilience::hyper_resilience::DegradationLevel::Constrained
+    ) {
         "degrade_to_secondary_agent"
     } else {
         "observe"
@@ -117,43 +113,35 @@ fn recovery_action(
 }
 
 pub(super) fn collect_degraded_services(server: &AcpServer) -> Vec<Value> {
-    server
-        .resilience
-        .failure_prevention
-        .lock()
-        .map(|fp| {
-            let mut services = fp.get_health_report();
-            services.sort_by(|a, b| a.service_name.cmp(&b.service_name));
-            services
-                .into_iter()
-                .filter_map(|health| {
-                    let circuit = fp.get_circuit_state(&health.service_name);
-                    let level = fp.get_degradation_strategy(&health.service_name);
-                    let should_recover = !matches!(
-                        health.status,
-                        crate::failure_prevention::HealthStatus::Healthy
-                    ) || !matches!(
-                        circuit,
-                        crate::failure_prevention::CircuitBreakerState::Closed
-                    ) || fp.should_degrade(&health.service_name);
-                    if !should_recover {
-                        return None;
-                    }
-
-                    Some(json!({
-                        "service": health.service_name,
-                        "health_status": health_status_label(health.status),
-                        "circuit_state": circuit_state_label(circuit),
-                        "degradation_level": degradation_level_label(level),
-                        "success_rate": health.success_rate,
-                        "error_rate": health.error_rate,
-                        "avg_latency_ms": health.avg_latency_ms,
-                        "recommended_action": recovery_action(health.status, level),
-                    }))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+    let hre = &server.resilience.hyper_resilience;
+    let mut services = hre.health_report();
+    services.sort_by(|a, b| a.service_name.cmp(&b.service_name));
+    let mut out = Vec::new();
+    for health in services {
+        let circuit = hre.breaker_state(&health.service_name);
+        let level = hre.degradation_level(&health.service_name);
+        let should_recover = !matches!(
+            health.status,
+            crate::resilience::hyper_resilience::HealthStatus::Healthy
+        ) || !matches!(
+            circuit,
+            crate::resilience::hyper_resilience::CircuitState::Closed
+        ) || hre.should_degrade(&health.service_name);
+        if !should_recover {
+            continue;
+        }
+        out.push(json!({
+            "service": health.service_name,
+            "health_status": health_status_label(health.status),
+            "circuit_state": circuit_state_label(circuit),
+            "degradation_level": degradation_level_label(level),
+            "success_rate": health.success_rate,
+            "error_rate": health.error_rate,
+            "avg_latency_ms": health.avg_latency_ms,
+            "recommended_action": recovery_action(health.status, level),
+        }));
+    }
+    out
 }
 
 pub(super) async fn breaker_recovery_payload(server: &AcpServer, params: Value) -> Result<Value> {
@@ -182,18 +170,9 @@ pub(super) async fn breaker_recovery_payload(server: &AcpServer, params: Value) 
     let (recovered_services, breaker_reset_count) = if dry_run {
         (Vec::new(), 0)
     } else {
-        let recovered_services = server
-            .resilience
-            .failure_prevention
-            .lock()
-            .map(|mut fp| fp.recover(target))
-            .unwrap_or_default();
-        let breaker_reset_count = server
-            .resilience
-            .circuit_breakers
-            .lock()
-            .map(|mut guard| guard.reset(target))
-            .unwrap_or(0);
+        // Recover through the unified engine (breaker + health + counters).
+        let recovered_services = server.resilience.hyper_resilience.recover_services(target);
+        let breaker_reset_count = recovered_services.len();
         (recovered_services, breaker_reset_count)
     };
     let degraded_after = collect_degraded_services(server);
@@ -286,7 +265,7 @@ mod tests {
 
     #[test]
     fn degradation_level_label_all_variants() {
-        use crate::failure_prevention::DegradationLevel;
+        use crate::resilience::hyper_resilience::DegradationLevel;
         assert_eq!(degradation_level_label(DegradationLevel::Normal), "normal");
         assert_eq!(
             degradation_level_label(DegradationLevel::Degraded),
@@ -306,7 +285,7 @@ mod tests {
 
     #[test]
     fn recovery_action_unhealthy_returns_reset() {
-        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        use crate::resilience::hyper_resilience::{DegradationLevel, HealthStatus};
         assert_eq!(
             recovery_action(HealthStatus::Unhealthy, DegradationLevel::Normal),
             "reset_breaker_and_fallback"
@@ -315,7 +294,7 @@ mod tests {
 
     #[test]
     fn recovery_action_critical_level_returns_reset() {
-        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        use crate::resilience::hyper_resilience::{DegradationLevel, HealthStatus};
         assert_eq!(
             recovery_action(HealthStatus::Degraded, DegradationLevel::Emergency),
             "reset_breaker_and_fallback"
@@ -324,7 +303,7 @@ mod tests {
 
     #[test]
     fn recovery_action_degraded_significant() {
-        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        use crate::resilience::hyper_resilience::{DegradationLevel, HealthStatus};
         assert_eq!(
             recovery_action(HealthStatus::Degraded, DegradationLevel::Constrained),
             "degrade_to_secondary_agent"
@@ -333,7 +312,7 @@ mod tests {
 
     #[test]
     fn recovery_action_healthy_none_observes() {
-        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        use crate::resilience::hyper_resilience::{DegradationLevel, HealthStatus};
         assert_eq!(
             recovery_action(HealthStatus::Healthy, DegradationLevel::Normal),
             "observe"

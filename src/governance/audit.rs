@@ -5,6 +5,15 @@
 //! Provides [`ThreadSafeAuditLog`] — thread-safe version with optional NDJSON file persistence.
 //!
 //! Records agent/tool/phase decisions for compliance and debugging.
+//!
+//! # Integrity
+//!
+//! The canonical sink is also the single producer of the tamper-evident hash
+//! chain (`audit_chain.ndjson`, sibling of the NDJSON log). Every persisted
+//! entry is chained by the same background writer thread, so the entire audit
+//! stream (not just select security events) is protected against retroactive
+//! modification. The chain primitives live in
+//! [`crate::security::audit_integrity`]; this module owns their wiring.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,6 +23,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
+
+use crate::security::audit_integrity::HashChainAuditor;
 
 #[derive(Debug, Error)]
 pub enum AuditError {
@@ -34,6 +45,12 @@ impl From<std::io::Error> for AuditError {
 impl From<serde_json::Error> for AuditError {
     fn from(e: serde_json::Error) -> Self {
         AuditError::Serialization(e.to_string())
+    }
+}
+
+impl From<crate::security::audit_integrity::AuditError> for AuditError {
+    fn from(e: crate::security::audit_integrity::AuditError) -> Self {
+        AuditError::Integrity(e.to_string())
     }
 }
 
@@ -77,6 +94,12 @@ pub struct AuditLogEntry {
 /// When the active file exceeds 100 MB it is compressed into a gzip archive
 /// (`audit.ndjson.1.gz` → `.2.gz` → …) and a fresh file is started. Old
 /// archives beyond `max_archives` are deleted automatically.
+///
+/// Every persisted entry is additionally appended to the sibling hash chain
+/// (`audit_chain.ndjson`, same directory) by the same writer thread — this is
+/// the single tamper-evidence layer for the whole audit stream. The chain file
+/// rotates at the same size threshold; each archive keeps its own intact chain
+/// and the fresh file restarts from the genesis hash.
 ///
 /// Cloning shares the same underlying buffer (an `Arc`), so every handle
 /// observes the same entries — this is how the process-wide single sink is
@@ -139,30 +162,71 @@ impl ThreadSafeAuditLog {
         // Spawn a dedicated writer thread that owns all NDJSON file I/O. The
         // request hot path (`record`) only pushes to the in-memory buffer and
         // sends the entry over an unbounded channel — no synchronous disk write.
+        // The same thread also owns the hash-chain append, so the log line and
+        // its chain entry are written in exact order by a single producer.
         let (tx, rx) = std::sync::mpsc::channel::<AuditWriterMsg>();
         let writer_path = log_path.clone();
+        let chain_path = log_path
+            .parent()
+            .map(|p| p.join("audit_chain.ndjson"))
+            .unwrap_or_else(|| PathBuf::from("audit_chain.ndjson"));
         let max_archives = 10usize;
         std::thread::Builder::new()
             .name("goon-audit-writer".to_string())
             .spawn(move || {
+                // Tamper-evidence layer: chain every entry that was persisted.
+                // If the chain cannot be initialized (e.g. unwritable sibling
+                // path), the audit log itself keeps working and the failure is
+                // reported once.
+                let mut chain = open_chain(&chain_path);
                 while let Ok(msg) = rx.recv() {
                     match msg {
                         AuditWriterMsg::Entry(entry) => {
-                            match append_ndjson_entry(&writer_path, &entry) {
+                            let persisted = match append_ndjson_entry(&writer_path, &entry) {
                                 Ok(true) => {
                                     // The archive cleanup (directory scan) only
                                     // runs when the file was rotated.
                                     if let Some(parent) = writer_path.parent() {
                                         cleanup_old_archives(parent, "audit.ndjson", max_archives);
                                     }
+                                    true
                                 }
-                                Ok(false) => {}
+                                Ok(false) => true,
                                 Err(e) => {
                                     tracing::warn!(
                                         "audit: failed to persist entry to {}: {}",
                                         writer_path.display(),
                                         e
                                     );
+                                    false
+                                }
+                            };
+                            // Chain only entries that actually reached the log
+                            // file, keeping the two artifacts in lockstep.
+                            if persisted {
+                                if let Some(auditor) = chain.as_mut() {
+                                    match serde_json::to_value(&entry) {
+                                        Ok(payload) => {
+                                            if let Err(e) = auditor.append(payload) {
+                                                tracing::warn!("audit: chain append failed: {}", e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "audit: chain serialization failed: {}",
+                                                e
+                                            )
+                                        }
+                                    }
+                                }
+                                if chain.is_some() {
+                                    if let Err(e) = rotate_chain_if_needed(
+                                        &mut chain,
+                                        &chain_path,
+                                        CHAIN_ROTATION_BYTES,
+                                    ) {
+                                        tracing::warn!("audit: chain rotation failed: {}", e);
+                                    }
                                 }
                             }
                         }
@@ -406,20 +470,81 @@ fn dirs_or_fallback() -> PathBuf {
     base.join("audit.ndjson")
 }
 
-/// Resolve `~/.goon/audit_chain.ndjson` (or `.goon/audit_chain.ndjson`), the
-/// sibling of the canonical audit sink used by the tamper-evident
-/// `HashChainAuditor`. Keeping both artifacts in the same `.goon` directory
-/// unifies the audit persistence location.
-pub(crate) fn audit_chain_path() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
-    let base = if home.is_empty() {
-        PathBuf::from(".goon")
-    } else {
-        PathBuf::from(home).join(".goon")
+/// Chain-file rotation threshold (100 MB, matching the NDJSON log). Each gzip
+/// archive retains its own intact hash chain; the fresh file starts a new
+/// chain period from the genesis hash, so tamper-evidence never weakens while
+/// disk growth stays bounded.
+const CHAIN_ROTATION_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Open the hash chain for a writer thread, optionally signing every entry
+/// with the Ed25519 seed in `GOON_AUDIT_SIGNING_KEY` (hex-encoded 32-byte
+/// seed or 64-byte keypair) for non-repudiation.
+fn open_chain(chain_path: &Path) -> Option<HashChainAuditor> {
+    let opened = match audit_signing_key_from_env() {
+        Some((key_id, key)) => {
+            HashChainAuditor::new_signed(chain_path.to_path_buf(), &key_id, &key)
+        }
+        None => HashChainAuditor::new(chain_path.to_path_buf()),
     };
-    base.join("audit_chain.ndjson")
+    match opened {
+        Ok(auditor) => Some(auditor),
+        Err(e) => {
+            tracing::warn!(
+                "audit: hash chain unavailable at {}: {}",
+                chain_path.display(),
+                e
+            );
+            None
+        }
+    }
+}
+
+/// Parse the optional `GOON_AUDIT_SIGNING_KEY` environment variable: a
+/// hex-encoded Ed25519 seed (32 bytes) or keypair (64 bytes). When set, every
+/// chain entry is signed; the matching public key can be supplied to
+/// `governance.audit.verify` for signature verification.
+fn audit_signing_key_from_env() -> Option<(String, Vec<u8>)> {
+    let raw = std::env::var("GOON_AUDIT_SIGNING_KEY").ok()?;
+    let bytes = hex::decode(raw.trim()).ok()?;
+    if bytes.len() != 32 && bytes.len() != 64 {
+        tracing::warn!(
+            "audit: GOON_AUDIT_SIGNING_KEY must be 64 (seed) or 128 (keypair) hex chars, got {}",
+            raw.trim().len()
+        );
+        return None;
+    }
+    Some(("goon-audit".to_string(), bytes))
+}
+
+/// Rotate the hash chain file once it exceeds `threshold` bytes.
+///
+/// The archive (`<chain>.1.gz`) keeps the completed chain intact, and the
+/// in-memory auditor is replaced with a fresh genesis chain for the new file.
+/// Returns `Ok(true)` when a rotation happened.
+fn rotate_chain_if_needed(
+    chain: &mut Option<HashChainAuditor>,
+    chain_path: &Path,
+    threshold: u64,
+) -> Result<bool, AuditError> {
+    if chain.is_none() || !chain_path.exists() {
+        return Ok(false);
+    }
+    if fs::metadata(chain_path)?.len() <= threshold {
+        return Ok(false);
+    }
+    rotate_file(chain_path)?;
+    *chain = Some(HashChainAuditor::new(chain_path.to_path_buf())?);
+    Ok(true)
+}
+
+/// Resolve `~/.goon/audit_chain.ndjson` (or `.goon/audit_chain.ndjson`), the
+/// sibling of the canonical audit sink. The sink's writer thread chains every
+/// persisted entry to this file; `governance.audit.verify` reads it back.
+pub(crate) fn audit_chain_path() -> PathBuf {
+    dirs_or_fallback()
+        .parent()
+        .map(|p| p.join("audit_chain.ndjson"))
+        .unwrap_or_else(|| PathBuf::from("audit_chain.ndjson"))
 }
 
 /// Convenience wrapper that creates an [`AuditLogEntry`] from simple arguments
@@ -463,7 +588,7 @@ pub fn record_audit_threadsafe(
 }
 
 /// Get the current UTC time as an ISO-8601 string.
-fn chrono_now() -> String {
+pub(crate) fn chrono_now() -> String {
     // Manual ISO-8601 formatting without pulling in the chrono crate
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -670,5 +795,71 @@ mod tests {
             serde_json::json!("**REDACTED**")
         );
         assert_eq!(recorded.inputs["prompt"], serde_json::json!("hello world"));
+    }
+
+    // ── Hash chain integrity: every persisted entry is chained ──────────────
+
+    #[test]
+    fn test_every_record_is_chained() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let log_path = dir.path().join("audit.ndjson");
+        let chain_path = dir.path().join("audit_chain.ndjson");
+
+        let log = ThreadSafeAuditLog::new_with_path(10, log_path.clone());
+        log.record(sample_entry("2026-05-26T10:00:00Z"));
+        log.record(sample_entry("2026-05-26T10:00:01Z"));
+        log.record(sample_entry("2026-05-26T10:00:02Z"));
+        log.flush();
+
+        // The sink's writer thread must have produced one chain entry per
+        // persisted log line, and the chain must verify cleanly.
+        let auditor = HashChainAuditor::new(chain_path.clone())
+            .expect("chain file must exist next to the audit log");
+        assert_eq!(
+            auditor.entry_count().expect("entry count"),
+            3,
+            "every persisted entry must be chained"
+        );
+        assert!(
+            auditor.verify_integrity(None).expect("verify").is_empty(),
+            "chain must be intact"
+        );
+    }
+
+    #[test]
+    fn test_chain_rotation_starts_fresh_period() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let log_path = dir.path().join("audit.ndjson");
+        let chain_path = dir.path().join("audit_chain.ndjson");
+
+        let log = ThreadSafeAuditLog::new_with_path(10, log_path.clone());
+        log.record(sample_entry("2026-05-26T10:00:00Z"));
+        log.record(sample_entry("2026-05-26T10:00:01Z"));
+        log.flush();
+
+        let mut chain = HashChainAuditor::new(chain_path.clone())
+            .expect("chain file must exist")
+            .into();
+        let rotated =
+            rotate_chain_if_needed(&mut chain, &chain_path, 1).expect("rotation must not fail");
+        assert!(rotated, "threshold 1 byte must force rotation");
+        assert!(
+            dir.path().join("audit_chain.ndjson.1.gz").exists(),
+            "old chain must be archived"
+        );
+
+        // The new file restarts from genesis: appending succeeds and the
+        // previous entries are no longer part of the live chain.
+        let fresh = HashChainAuditor::new(chain_path.clone()).expect("fresh chain");
+        assert_eq!(fresh.entry_count().expect("entry count"), 0);
+        let mut fresh = fresh;
+        fresh
+            .append(serde_json::json!({"event": "post_rotation"}))
+            .expect("append after rotation must succeed");
+        assert_eq!(fresh.entry_count().expect("entry count"), 1);
+        assert!(
+            fresh.verify_integrity(None).expect("verify").is_empty(),
+            "fresh period chain must be intact"
+        );
     }
 }

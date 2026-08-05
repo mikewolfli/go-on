@@ -354,6 +354,12 @@ pub struct ProviderSpec {
     pub chat_path: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Curated model suggestions for the provider (offline UI fallback).
+    /// The single source of truth for GUI/VS Code model dropdowns; the
+    /// generator emits them into the client catalogs so no hand-maintained
+    /// copy can drift.
+    #[serde(default)]
+    pub model_suggestions: Vec<String>,
     #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(default)]

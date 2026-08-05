@@ -43,15 +43,17 @@ fn split_thinking_from_content(raw: &str) -> (String, String) {
 
 /// Retry `tx.try_send(msg)` with exponential backoff when the channel is full.
 /// Gives up immediately if the channel has been closed.
+/// Backoff: 5ms, 10ms, 20ms, … capped at 200ms (shared `exp_backoff_ms`).
 async fn try_send_with_retry<T>(tx: &mpsc::SyncSender<T>, mut msg: T) {
-    let mut delay_ms = 5u64;
+    let mut attempt = 0u32;
     loop {
         match tx.try_send(msg) {
             Ok(_) => return,
             Err(TrySendError::Full(ret)) => {
                 msg = ret;
+                let delay_ms = crate::backoff::exp_backoff_ms(5, attempt, 200);
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                delay_ms = (delay_ms * 2).min(200);
+                attempt += 1;
             }
             Err(TrySendError::Disconnected(_)) => return,
         }
@@ -382,16 +384,11 @@ async fn process_stream_events(
 
                     match event_type {
                         "chunk" | "" => {
-                            let token = val
-                                .get("token")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_string();
-                            let reasoning = val
-                                .get("reasoning")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_string();
+                            // Shared chunk field extraction (token/text fallback +
+                            // reasoning) — single source of truth with the
+                            // non-streaming fallback in backend/mod.rs.
+                            let (token, reasoning) =
+                                crate::backend::state::extract_chunk_text(&val);
 
                             if !token.is_empty() || !reasoning.is_empty() {
                                 let token_bytes = token.len();
@@ -564,35 +561,17 @@ async fn process_stream_events(
                             .await;
                         }
                         "result" | "done" => {
-                            let new_content = val
-                                .get("response")
-                                .or_else(|| val.get("content"))
-                                .and_then(|v| v.as_str())
-                                .map(ToOwned::to_owned);
-                            if let Some(ref c) = new_content {
+                            // Shared final-result metadata extraction — single
+                            // source of truth with the non-streaming fallback.
+                            let meta = crate::backend::state::extract_result_meta(&val);
+                            if let Some(ref c) = meta.response {
                                 if !c.trim().is_empty() {
                                     result.content = Some(c.clone());
                                 }
                             }
-                            result.thinking = val
-                                .get("thinking")
-                                .and_then(|v| v.as_str())
-                                .map(ToOwned::to_owned);
-                            let new_agent = val
-                                .get("agent")
-                                .or_else(|| val.get("selected_agent"))
-                                .or_else(|| val.pointer("/capability_routing/selected_agent"))
-                                .and_then(|v| v.as_str())
-                                .map(String::from);
-                            if let Some(ref a) = new_agent {
-                                if !a.trim().is_empty() {
-                                    result.agent = Some(a.clone());
-                                }
-                            }
-                            result.used_model = val
-                                .get("selected_model")
-                                .and_then(|v| v.as_str())
-                                .map(String::from);
+                            result.thinking = meta.thinking;
+                            result.agent = meta.agent;
+                            result.used_model = meta.model;
                             result.conv_id = val
                                 .get("conversation_id")
                                 .and_then(|v| v.as_str())

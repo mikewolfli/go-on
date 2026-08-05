@@ -98,6 +98,7 @@ pub(crate) fn is_acp_request(method: &str) -> bool {
         "debug_panel.get",
         "error.contract",
         "governance.audit.recent",
+        "governance.audit.verify",
         "governance.config.save",
         "governance.plan.get",
         "governance.plan.update",

@@ -162,6 +162,84 @@ pub(crate) fn parse_sse_frame_lines(lines: &[&str]) -> (Option<String>, Option<S
     (current_event_type, current_data)
 }
 
+// ── Shared SSE event field extraction ───────────────────────────────────────
+// Single source of truth for the transport-agnostic fields consumed by both
+// stream paths (rich UI stream in `views/chat/chat_impl/runtime.rs` and the
+// non-streaming fallback in `backend/mod.rs`). Keeps the `token`/`text`
+// fallback and the result metadata extraction from drifting between callers.
+
+/// Extract the incremental text of a `chunk` event: the `token` field
+/// (canonical) with a `text` fallback for legacy/other protocol emitters,
+/// plus the optional `reasoning` text. Returns `(token, reasoning)`.
+pub(crate) fn extract_chunk_text(val: &serde_json::Value) -> (String, String) {
+    let token = val
+        .get("token")
+        .or_else(|| val.get("text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let reasoning = val
+        .get("reasoning")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    (token, reasoning)
+}
+
+/// Extract `agent`/`selected_agent` and `selected_model` from an SSE event
+/// (both `chunk` and `result`/`done` events may carry them). Empty strings
+/// are filtered so callers can assign unconditionally.
+pub(crate) fn extract_agent_model(val: &serde_json::Value) -> (Option<String>, Option<String>) {
+    let agent = val
+        .get("agent")
+        .or_else(|| val.get("selected_agent"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .filter(|s| !s.is_empty());
+    let model = val
+        .get("selected_model")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .filter(|s| !s.is_empty());
+    (agent, model)
+}
+
+/// Shared result metadata carried by `result`/`done` events.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct StreamResultMeta {
+    pub response: Option<String>,
+    pub thinking: Option<String>,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+}
+
+/// Extract the final-result metadata shared by both stream paths
+/// (`response`/`content` text, `thinking`, agent, model).
+pub(crate) fn extract_result_meta(val: &serde_json::Value) -> StreamResultMeta {
+    let response = val
+        .get("response")
+        .or_else(|| val.get("content"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let thinking = val
+        .get("thinking")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let (agent, model) = extract_agent_model(val);
+    let agent = agent.or_else(|| {
+        val.pointer("/capability_routing/selected_agent")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .filter(|s| !s.is_empty())
+    });
+    StreamResultMeta {
+        response,
+        thinking,
+        agent,
+        model,
+    }
+}
+
 // ── AbortController ────────────────────────────────────────────────────────
 
 /// Shared cancellation signal for in-progress SSE streams.

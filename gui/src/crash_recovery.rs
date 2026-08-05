@@ -33,8 +33,14 @@ impl CrashRecovery {
         self.backend_crash_count >= 10
     }
 
-    /// Compute the backoff duration in seconds for the current crash count.
+    /// Compute the backoff duration in milliseconds for the current crash count.
+    /// Base 3s, exponential growth bounded at exponent 5 (96s max).
+    pub fn backoff_ms(&self) -> u64 {
+        crate::backoff::exp_backoff_ms(3000, self.backend_crash_count.min(5) as u32, u64::MAX)
+    }
+
+    /// Backoff duration in seconds (for display/decision purposes).
     pub fn backoff_secs(&self) -> u64 {
-        3u64 * (1u64 << self.backend_crash_count.min(5))
+        self.backoff_ms() / 1000
     }
 }

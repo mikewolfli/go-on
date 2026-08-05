@@ -263,20 +263,21 @@ class GoOnClient:
         )
 
     def _retry_delay_for_attempt(self, attempt: int) -> float:
-        """Compute retry delay with exponential backoff and full jitter.
+        """Compute retry delay with the unified backoff contract (seconds).
 
-        Uses AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
-        Prevents thundering herd during recovery from transient failures.
-        - attempt 0: random(0, 1.0s)
-        - attempt 1: random(0, 2.0s)
-        - attempt 2: random(0, 4.0s)
-        - attempt 3+: random(0, 64.0s) (capped)
+        contracts/cross-client-sync.md formula:
+        delay = min(base * 2^attempt, 30s) * (0.7 + random() * 0.3)
+        The ±30% jitter keeps delays above 70% of the base, matching the
+        GUI, VS Code, and other SDK implementations exactly.
+        - attempt 0: ~0.7-1.0s
+        - attempt 1: ~1.4-2.0s
+        - attempt 2: ~2.8-4.0s
+        - attempt 5+: ~21-30s (capped)
         """
         if not self._use_exponential_backoff:
             return self.retry_delay
-        base = self.retry_delay * (2.0 ** min(attempt, 6))  # cap at 64x
-        # Full jitter: random between 0 and base
-        return random.uniform(0, base)
+        capped = min(30.0, self.retry_delay * (2.0**attempt))
+        return capped * (0.7 + random.random() * 0.3)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -458,6 +459,27 @@ class GoOnClient:
     async def governance_audit_recent(self, limit: int = 20) -> dict[str, Any]:
         """governance.audit.recent — view recent audit entries."""
         return await self._json_rpc("governance.audit.recent", {"limit": limit})
+
+    async def governance_audit_verify(
+        self,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+        public_key_hex: str | None = None,
+    ) -> dict[str, Any]:
+        """governance.audit.verify — verify the tamper-evident audit hash chain.
+
+        Optional: from_ms/to_ms export a time-window audit report;
+        public_key_hex (hex-encoded Ed25519 public key) enables signature
+        verification of signed chains.
+        """
+        params: dict[str, Any] = {}
+        if from_ms is not None:
+            params["from_ms"] = from_ms
+        if to_ms is not None:
+            params["to_ms"] = to_ms
+        if public_key_hex is not None:
+            params["public_key_hex"] = public_key_hex
+        return await self._json_rpc("governance.audit.verify", params)
 
     # ── Observability ─────────────────────────────────────────────────
 

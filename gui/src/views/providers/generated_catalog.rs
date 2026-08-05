@@ -285,3 +285,50 @@ pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
         },
     }
 }
+
+/// Offline default-model suggestions per provider (synced with the
+/// backend `ProviderSpec::model_suggestions` field). Empty for
+/// providers without curated suggestions. The UI-only `auto`
+/// entry is not included — callers prepend it themselves.
+pub fn default_models(name: &str) -> &'static [&'static str] {
+    match name {
+        "openai" => &["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o3-mini", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+        "openai_compatible" => &[],
+        "anthropic" => &["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-3-5-sonnet", "claude-3-opus", "claude-3-haiku"],
+        "cohere" => &["command-a-03-2025", "command-a-reasoning-08-2025", "command-r7b-12-2024", "command-r-plus-08-2024", "command-r-08-2024"],
+        "deepseek" => &["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-r1"],
+        "wenxin" => &["ERNIE-4.5-8K", "ernie-4.0-turbo-8k", "ernie-3.5-turbo"],
+        "qianfan" => &["ERNIE-4.5-8K", "ernie-4.0-8k", "ernie-3.5-8k", "ernie-speed", "ernie-lite"],
+        "qwen" => &["qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct"],
+        "glm" => &["glm-4-flash", "glm-4v", "glm-4-plus", "glm-3-turbo"],
+        "yi" => &["yi-lightning", "yi-large"],
+        "hunyuan" => &["hunyuan-turbo-latest", "hunyuan-turbo", "hunyuan-pro"],
+        "doubao" => &["doubao-1.5-pro-32k-250115"],
+        "facewall" => &["facewall-chat", "facewall-chat-large"],
+        "langboat" => &["langboat-chat", "langboat-chat-large"],
+        "skywork" => &["skywork-chat", "skywork-chat-large"],
+        "stepfun" => &["step-2-16k", "step-1-8k", "step-1-flash"],
+        "xihu" => &["xihu-chat", "xihu-chat-large"],
+        "moonshot" => &["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+        "minimax" => &["MiniMax-Text-01", "MiniMax-Text-01-mini"],
+        "kimi" => &["kimi-k2.6", "kimi-k2.5", "kimi-k2", "kimi-k2-thinking", "moonshot-v1"],
+        "siliconflow" => &["deepseek-ai/DeepSeek-V3.2", "deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V2.5", "Qwen/Qwen2.5-72B-Instruct-128K", "Qwen/Qwen2.5-32B-Instruct", "Qwen/QwQ-32B", "TeleAI/TeleChat-T2", "THUDM/glm-4-9b-chat", "internlm/internlm2_5-20b-chat"],
+        "ai21" => &["jamba-1.5-mini", "jamba-1.5-large"],
+        "aleph" => &["luminous-base", "luminous-extended"],
+        "copilot" => &["claude-opus-4", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5", "gpt-4.1", "gpt-4o", "o1", "o3-mini", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini", "claude-3.5-sonnet", "gemini-2.0-flash-001"],
+        "deepquest" => &["deepquest-chat", "deepquest-chat-large"],
+        "fireworks" => &["accounts/fireworks/models/llama-v3p1-8b-instruct", "accounts/fireworks/models/llama-v3p1-405b-instruct", "accounts/fireworks/models/mixtral-8x22b-instruct"],
+        "gemini" => &["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-3.1-pro-preview-03-2026", "gemini-3-flash-preview-03-2026", "gemini-2.0-flash", "gemini-2.0-pro"],
+        "groq" => &["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "qwen/qwen3-32b"],
+        "llama" => &["llama3.2", "llama3.2-vision"],
+        "loopai" => &["loopai-chat", "loopai-chat-pro"],
+        "mistral" => &["mistral-large-2512", "mistral-medium-2508", "mistral-small-2603"],
+        "nim" => &["meta/llama-3.1-70b-instruct", "meta/llama-3.1-405b-instruct", "mistralai/mixtral-8x22b-instruct"],
+        "perplexity" => &["sonar-pro", "sonar", "sonar-reasoning-pro", "sonar-deep-research"],
+        "replicate" => &["meta/meta-llama-3-70b-instruct", "meta/meta-llama-3-8b-instruct"],
+        "titan" => &["amazon.titan-text-premier-v1:0", "amazon.titan-text-express-v1"],
+        "together" => &["meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", "mistralai/Mixtral-8x22B-Instruct-v0.1"],
+        "xai" => &["grok-2", "grok-3"],
+        _ => &[],
+    }
+}

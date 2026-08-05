@@ -250,6 +250,11 @@
         "icon": "$(history)"
       },
       {
+        "command": "go-on.governanceAuditVerify",
+        "title": "Verify Governance Audit Chain (RPC)",
+        "icon": "$(verified)"
+      },
+      {
         "command": "go-on.skillListImported",
         "title": "List Imported Skills (RPC)",
         "icon": "$(list-unordered)"

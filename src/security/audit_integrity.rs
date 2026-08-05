@@ -1,9 +1,19 @@
 //! Audit Integrity — Hash Chain Auditor (GAP-B52-27)
 //!
-//! Provides tamper-evident audit logging using a hash chain.
+//! Tamper-evident audit logging primitives built on a hash chain.
 //! Each entry includes the previous entry's hash, a payload hash,
 //! a timestamp, and an optional signature. The chain can be verified
 //! for integrity and exported as a report.
+//!
+//! # Integration
+//!
+//! Since the audit-pipeline unification, [`HashChainAuditor`] is the integrity
+//! primitive of the canonical audit sink ([`crate::governance::audit`]): the
+//! sink's background writer thread chains **every** persisted record to the
+//! sibling `audit_chain.ndjson` file. Production code therefore never calls
+//! [`HashChainAuditor`] directly — the module is exercised by the sink and by
+//! the integrity tests in [`crate::governance::audit`] and
+//! `tests/structural/test_security.rs`.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -244,15 +254,6 @@ impl HashChainAuditor {
         let mut auditor = Self::new(chain_file)?;
         auditor.signing_key = Some((key_id.to_string(), private_key.to_vec()));
         Ok(auditor)
-    }
-
-    /// Configure the auditor to sign every appended entry with the given key.
-    ///
-    /// Returns `self` so calls can be chained:
-    /// `HashChainAuditor::new(path)?.with_signing_key("key-1", &keypair)`
-    pub fn with_signing_key(mut self, key_id: &str, private_key: &[u8]) -> Self {
-        self.signing_key = Some((key_id.to_string(), private_key.to_vec()));
-        self
     }
 
     /// Append a new audit entry to the chain.

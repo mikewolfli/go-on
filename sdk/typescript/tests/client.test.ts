@@ -77,6 +77,23 @@ describe("GoOnClient", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("should handle governance.audit.verify", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        ok: true,
+        entry_count: 3,
+        is_chain_intact: true,
+        violations: [],
+      },
+    });
+
+    const result = await client.governanceAuditVerify({});
+    expect(result.ok).toBe(true);
+    expect(result.is_chain_intact).toBe(true);
+  });
+
   it("should handle JSON-RPC error responses", async () => {
     globalThis.fetch = createMockFetch(true, {
       jsonrpc: "2.0",
@@ -88,9 +105,15 @@ describe("GoOnClient", () => {
   });
 
   it("should handle HTTP errors", async () => {
+    // Disable retries so the error path is exercised directly (the default
+    // unified backoff would otherwise sleep ~5s across 3 retries).
+    const noRetryClient = new GoOnClient({
+      baseUrl: MOCK_BASE_URL,
+      maxRetries: 0,
+    });
     globalThis.fetch = createMockFetch(false, { error: "Internal error" });
 
-    await expect(client.governanceStatus()).rejects.toThrow();
+    await expect(noRetryClient.governanceStatus()).rejects.toThrow();
   });
 
   // ── Chat streaming ────────────────────────────────────────────────────
@@ -121,12 +144,14 @@ describe("GoOnClient", () => {
     expect(chunks.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("should abort chat stream on signal", async () => {
+  it("should abort chat stream on signal without hanging", async () => {
     const controller = new AbortController();
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode('data: {"token":"Hello"}\n\n'));
+      start(c) {
+        c.enqueue(encoder.encode('data: {"token":"Hello"}\n\n'));
+        // Simulate the server stream being cut off when the signal fires.
+        controller.signal.addEventListener("abort", () => c.close());
       },
     });
 
@@ -136,16 +161,23 @@ describe("GoOnClient", () => {
       headers: new Headers(),
     } as Response);
 
-    controller.abort();
     const generator = client.chatStream(
       { messages: [{ role: "user", content: "Hi" }] },
       controller.signal,
     );
-    // Should not hang
-    for await (const _chunk of generator) {
-      // consume
-    }
-    expect(true).toBe(true);
+    const chunks: Record<string, unknown>[] = [];
+    const consume = (async () => {
+      for await (const chunk of generator) {
+        chunks.push(chunk);
+      }
+    })();
+
+    // Let the first frame land, then abort — the stream must terminate
+    // instead of hanging on a never-closing connection.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await consume;
+    expect(chunks.length).toBeGreaterThanOrEqual(1);
   });
 });
 

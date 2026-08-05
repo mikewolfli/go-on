@@ -403,17 +403,17 @@ impl GoOnClient {
         }))
     }
 
-    /// Compute retry delay with exponential backoff + full jitter.
-    ///
-    /// Uses AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
-    /// This prevents thundering herd during recovery from transient failures.
+    /// Compute retry delay with the unified exponential backoff contract
+    /// (contracts/cross-client-sync.md):
+    /// `delay = min(base * 2^attempt, 30s) * (0.7 + random() * 0.3)`
+    /// The ±30% jitter keeps delays above 70% of the base, matching the GUI
+    /// and VS Code implementations exactly.
     fn backoff_delay(base: Duration, attempt: u32) -> Duration {
-        let cap = base
-            .checked_mul(2u32.saturating_pow(attempt))
-            .unwrap_or(Duration::from_secs(30))
-            .min(Duration::from_secs(30));
-        // Full jitter: random between 0 and the capped exponential base
-        Duration::from_secs_f64(fastrand::f64() * cap.as_secs_f64())
+        let base_ms = base.as_millis() as u64;
+        let grown = base_ms.saturating_mul(1u64 << attempt.min(63));
+        let capped_ms = grown.min(30_000);
+        let jitter_factor = 0.7 + fastrand::f64() * 0.3;
+        Duration::from_secs_f64((capped_ms as f64 * jitter_factor) / 1000.0)
     }
 
     fn extract<T>(&self, result: Value) -> Result<T, SdkError>
@@ -488,6 +488,31 @@ impl GoOnClient {
             serde_json::json!({ "limit": limit }),
         )
         .await
+    }
+
+    /// governance.audit.verify — verify the tamper-evident audit hash chain.
+    ///
+    /// `from_ms`/`to_ms` optionally export a time-window audit report;
+    /// `public_key_hex` (hex-encoded Ed25519 public key) optionally enables
+    /// signature verification of signed chains.
+    pub async fn governance_audit_verify(
+        &self,
+        from_ms: Option<u64>,
+        to_ms: Option<u64>,
+        public_key_hex: Option<&str>,
+    ) -> Result<Value, SdkError> {
+        let mut params = serde_json::Map::new();
+        if let Some(f) = from_ms {
+            params.insert("from_ms".to_string(), serde_json::json!(f));
+        }
+        if let Some(t) = to_ms {
+            params.insert("to_ms".to_string(), serde_json::json!(t));
+        }
+        if let Some(pk) = public_key_hex {
+            params.insert("public_key_hex".to_string(), serde_json::json!(pk));
+        }
+        self.json_rpc("governance.audit.verify", serde_json::Value::Object(params))
+            .await
     }
 
     // ── Observability ─────────────────────────────────────────────────

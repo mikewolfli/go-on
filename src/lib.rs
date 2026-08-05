@@ -27,7 +27,6 @@ pub mod mcp;
 pub mod memory;
 pub mod multimodal;
 pub mod observability;
-pub mod optimization;
 pub mod orchestration;
 pub mod protocol;
 pub mod resilience;

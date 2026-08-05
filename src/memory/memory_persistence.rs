@@ -232,7 +232,7 @@ impl HotCache {
         let expired_ids: Vec<String> = self
             .entries
             .iter()
-            .filter(|(_, he)| now.duration_since(he.inserted_at) > self.ttl)
+            .filter(|(_, he)| now.duration_since(he.inserted_at) >= self.ttl)
             .map(|(id, _)| id.clone())
             .collect();
 

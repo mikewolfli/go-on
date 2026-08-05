@@ -104,7 +104,7 @@ fn bench_acp_deserialize_session_prompt(c: &mut Criterion) {
         r#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"#,
         r#""sessionId":"acp-session-abc123","prompt":[{"type":"text","#,
         r#""text":"List all files in the current directory"},{"type":"#,
-        r#""resource","resource":{"uri":"file:///home/user/project/src/#,
+        r#""resource","resource":{"uri":"file:///home/user/project/src/"#,
         r#"main.rs","text":"fn main() {}"}}]}}"#
     );
 
