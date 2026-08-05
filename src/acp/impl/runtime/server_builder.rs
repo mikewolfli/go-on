@@ -400,6 +400,16 @@ pub async fn new_acp_server(
     server.governance_deps.provenance_ledger = Some(provenance_ledger);
     server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
 
+    // P2-3 wiring: give CapabilityBus::decide the server's shared adaptive
+    // model selector so candidate re-ranking + learned outcomes are visible
+    // to provider tests / autotune (previously the field was always None and
+    // the adaptive re-rank path was dead).
+    if let Some(cb) = server.governance_deps.capability_bus.as_mut() {
+        if let Some(cb_inner) = Arc::get_mut(cb) {
+            cb_inner.model_selector = Some(Arc::clone(&server.model_deps.adaptive_model_selector));
+        }
+    }
+
     #[cfg(feature = "multi-users-server")]
     {
         server.rate_limiting.rate_limit_middleware = Some(Arc::new(

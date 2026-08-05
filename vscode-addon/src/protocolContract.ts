@@ -139,18 +139,6 @@ export type FramedMessage = {
   [key: string]: unknown;
 };
 
-/** Heartbeat ping sent by the client every 30s to check connection liveness. */
-export type HeartbeatPing = {
-  message_id: string;
-  type: "heartbeat.ping";
-};
-
-/** Heartbeat pong sent by the server in response to a heartbeat.ping. */
-export type HeartbeatPong = {
-  message_id: string;
-  type: "heartbeat.pong";
-};
-
 export type ProtocolContract = {
   version: string;
   runtime: {
@@ -591,17 +579,6 @@ function refreshProtocolContract(): void {
 // The interval is intentionally not cleared — the extension lives for the lifetime
 // of the VS Code window, so the refresh runs until the window closes.
 setInterval(refreshProtocolContract, REFRESH_INTERVAL_MS);
-
-export const workflowControlModes = protocolContract.protocol
-  .workflowControlModes ?? ["manual", "assisted", "autonomous"];
-export const defaultWorkflowControlMode =
-  protocolContract.protocol.defaultWorkflowControlMode ?? "assisted";
-export const platformModes = protocolContract.protocol.platformModes ?? [
-  "universal",
-  "phase_compat",
-];
-export const defaultPlatformMode =
-  protocolContract.protocol.defaultPlatformMode ?? "phase_compat";
 
 const protocolModeAliases: Record<string, string> = {
   adaptive: "adaptive",

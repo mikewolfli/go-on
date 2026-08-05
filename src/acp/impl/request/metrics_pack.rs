@@ -27,32 +27,6 @@ pub(super) async fn metrics_reset_payload(server: &AcpServer) -> Result<Value> {
     Ok(serde_json::json!({ "ok": true, "reset": true }))
 }
 
-pub(super) async fn metrics_window_query_payload(
-    _server: &AcpServer,
-    params: Value,
-) -> Result<Value> {
-    let window = params.get("window").and_then(Value::as_str).unwrap_or("5m");
-    Ok(serde_json::json!({ "ok": true, "window": window }))
-}
-
-pub(super) async fn metrics_errors_summary_payload(
-    server: &AcpServer,
-    params: Value,
-) -> Result<Value> {
-    let limit = params
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|v| v as usize)
-        .unwrap_or(20)
-        .min(200);
-    let status = server.get_status();
-    Ok(serde_json::json!({
-        "ok": true,
-        "total": limit,
-        "error_count": status.metrics.failed_requests,
-    }))
-}
-
 pub(super) async fn handle_metrics_prometheus(server: &AcpServer) -> Result<DispatchOutput> {
     let status = server.get_status();
     let m = &status.metrics;

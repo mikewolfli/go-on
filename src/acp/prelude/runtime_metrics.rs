@@ -170,12 +170,6 @@ impl RuntimeMetrics {
     }
 
     #[inline]
-    pub fn inc_failed_requests(&self) {
-        self.failed_requests.fetch_add(1, Ordering::Relaxed);
-        self.total_requests.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
     pub fn inc_active_requests(&self) {
         self.active_requests.fetch_add(1, Ordering::Relaxed);
     }
@@ -239,16 +233,6 @@ impl RuntimeMetrics {
     pub fn inc_review_gate_approved(&self) {
         self.review_gate_approved_total
             .fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn inc_review_gate_invalid_response(&self) {
-        self.review_gate_invalid_response_total
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub fn inc_chat_requests(&self) {
-        self.chat_requests_total.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record one ACP request outcome with duration.
@@ -348,15 +332,6 @@ impl RuntimeMetrics {
         let bucket_idx = latency_bucket_index_ms(duration_ms);
         guard.review_latency_bucket_counts[bucket_idx] =
             guard.review_latency_bucket_counts[bucket_idx].saturating_add(1);
-    }
-
-    /// Update multiple snapshot fields atomically via a closure.
-    pub fn update_snapshot<F>(&self, f: F)
-    where
-        F: FnOnce(&mut MetricsSnapshot),
-    {
-        let mut snapshot = self.snapshot();
-        f(&mut snapshot);
     }
 
     /// Get the current metrics snapshot (combines atomics + aggregates).

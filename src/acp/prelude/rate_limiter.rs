@@ -5,8 +5,6 @@
 
 use std::collections::HashMap;
 
-use tracing::trace;
-
 use crate::shared::token_bucket::{rpm_to_refill_per_second, BucketMap};
 
 // ============================================================================
@@ -41,23 +39,5 @@ impl PhaseRateLimiter {
     /// Snapshot of current tokens per phase
     pub fn snapshot(&self) -> HashMap<String, (f64, f64)> {
         self.inner.snapshot()
-    }
-
-    /// Check if rate limiter is healthy
-    pub fn is_healthy(&self) -> bool {
-        let snapshot = self.inner.snapshot();
-        let healthy = if snapshot.is_empty() {
-            // No phases configured — nothing to rate-limit, considered healthy
-            true
-        } else {
-            // Healthy if all tracked token buckets have at least one token available
-            snapshot.values().all(|(tokens, _)| *tokens >= 1.0)
-        };
-        trace!(
-            "rate_limiter health check: tracked_phases={}, healthy={}",
-            snapshot.len(),
-            healthy
-        );
-        healthy
     }
 }

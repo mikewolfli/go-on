@@ -12,7 +12,6 @@ use super::sense::SensingOutput;
 use crate::governance::harness_bus::{AgentExecutionPolicy, PolicyVerdict};
 use crate::governance::pua::TaskContext;
 use crate::intelligence::adaptive_selector::ContextFeatures;
-use crate::intelligence::token_cache::{estimate_token_count, ContextLengthClass};
 
 use serde::Serialize;
 use std::env;
@@ -376,48 +375,13 @@ impl CapabilityBus {
             }
         }
 
-        // ── P2-1: TokenCache check ────────────────────────────────────────
-        // If a cached decision exists for this task type, return it directly
-        // to skip full agent selection (hot path optimization).
-        let task_type_str = format!("{:?}", task.task_type);
-        if let Some(ref cache) = self.token_cache {
-            let context_class = ContextLengthClass::from_token_count(task_type_str.len());
-            if let Some((_level, entry)) = cache.lookup(&task_type_str, context_class).await {
-                tracing::info!(
-                    "decide: token_cache hit for task_type={}, cached_agent={}",
-                    task_type_str,
-                    entry.agent_name.as_deref().unwrap_or("unknown")
-                );
-                let agent_policy = entry
-                    .agent_name
-                    .as_ref()
-                    .map(|agent| self.harness.get_agent_policy(agent, &task_type_str));
-                self.record_event(
-                    "decision",
-                    entry.agent_name.clone(),
-                    None,
-                    "cache_hit",
-                    serde_json::json!({
-                        "task_type": task_type_str,
-                        "cached_agent": entry.agent_name,
-                    }),
-                );
-                return DecisionOutput {
-                    verdict: PolicyVerdict::Allow,
-                    selected_agent: entry.agent_name.clone(),
-                    agent_policy,
-                    confidence: 0.9,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                    recommended_mode: "auto".to_string(),
-                    #[cfg(feature = "sub-bus-tool")]
-                    available_tools: vec![],
-                };
-            }
-        }
-
         // Step C: pick best agent from capability graph + reputation
         // BLUE56-B11: Also query QLearningAgent for learned routing preferences
         // First build candidate agent list, then use Q-learning to inform selection.
+        // (The former P2-1 token-cache fast path was removed in round 32: it
+        // shared the LLM response cache and its no-TTL task→agent entries
+        // would freeze agent routing; full selection runs every time.)
+        let task_type_str = format!("{:?}", task.task_type);
         let candidate_agents = self
             .capability_graph
             .lock()
@@ -568,22 +532,6 @@ impl CapabilityBus {
                     true,
                     Some(&context),
                 );
-            }
-        }
-
-        // ── P2-1: Store decision result in token_cache for future lookups ──
-        if let Some(ref cache) = self.token_cache {
-            if let Some(ref agent) = selected_agent {
-                let token_count = estimate_token_count(&task_type_str);
-                cache
-                    .store(
-                        &task_type_str,
-                        agent,
-                        token_count,
-                        Some(agent.clone()),
-                        None,
-                    )
-                    .await;
             }
         }
 

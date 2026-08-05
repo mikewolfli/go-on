@@ -44,8 +44,6 @@ export interface ProviderSecretTarget {
   envVar: string;
 }
 
-export type ProviderGroupKey = "openai" | "chinese" | "other";
-
 /**
  * Built-in provider catalog — the default set of AI providers supported
  * out of the box. Each entry includes connection details, env var names,

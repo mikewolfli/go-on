@@ -1300,8 +1300,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         let metrics = guard.metrics();
         json!({
             "failover_count": metrics.failover_count,
-            "cooldown_skips": metrics.cooldown_skips,
-            "total_failover_latency_ms": metrics.total_failover_latency_ms,
         })
     };
 
@@ -1675,6 +1673,19 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
                 "mode_issue_prevention": mode_issue_prevention_profile,
                 "subagent_architecture": subagent_architecture_profile,
                 "subagent_collaboration": subagent_collaboration_profile,
+                "communication_bus": crate::orchestration::tool_extended::spawn_agent::communication_bus()
+                    .map(|bus| {
+                        let p = bus.profile_sync();
+                        json!({
+                            "ready": p.healthy,
+                            "registered_agents": p.registered_agents,
+                            "messages_sent": p.messages_sent,
+                            "messages_received": p.messages_received,
+                            "forks_created": p.forks_created,
+                            "cancellations": p.cancellations,
+                        })
+                    })
+                    .unwrap_or_else(|| json!({"ready": false, "registered_agents": 0})),
                 "subagent_observability": subagent_observability_profile,
                 "knowledge_management": knowledge_management_profile,
                 "performance_optimization": performance_optimization_profile,

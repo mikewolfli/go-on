@@ -133,7 +133,6 @@ mod tests {
     fn circuit_breaker_defaults_to_closed() {
         let registry = CircuitBreakerRegistry::new();
         assert_eq!(registry.open_count(), 0);
-        assert!(registry.is_healthy());
         assert!(registry.snapshots().is_empty());
     }
 

@@ -67,7 +67,6 @@ use crate::intelligence::metacognitive::MetacognitiveController;
 
 use crate::intelligence::reinforcement::learning::RewardFunction;
 use crate::intelligence::self_model::SelfModelCore;
-use crate::intelligence::token_cache::TokenMultiLevelCache;
 use crate::observability::live_performance::LivePerformanceFeed;
 
 use crate::intelligence::world_model::WorldModel;
@@ -369,11 +368,10 @@ pub struct CapabilityBus {
     /// Continuous learning center — lifelong learning (F-GAP-24)
     pub continuous_learning: Arc<Mutex<ContinuousLearningCenter>>,
 
-    /// Token multi-level cache for LLM response caching (P2-1)
-    pub token_cache: Option<Arc<TokenMultiLevelCache>>,
-
-    /// Adaptive model selector for context-aware model routing (P2-3)
-    pub model_selector: Option<Mutex<AdaptiveModelSelector>>,
+    /// Adaptive model selector for context-aware model routing (P2-3).
+    /// Wired to the server's shared selector (`server.model_deps.adaptive_model_selector`)
+    /// so learned re-ranking is visible to provider tests / autotune.
+    pub model_selector: Option<Arc<std::sync::Mutex<AdaptiveModelSelector>>>,
 
     /// Live performance feed — EMA-smoothed model cost estimates (P2-6)
     pub live_performance: Option<Arc<LivePerformanceFeed>>,
@@ -486,7 +484,6 @@ impl CapabilityBus {
             continuous_learning: Arc::new(Mutex::new(ContinuousLearningCenter::new(
                 Default::default(),
             ))),
-            token_cache: None,
             model_selector: None,
             live_performance: None,
             config: CapabilityBusConfig::default(),
@@ -527,9 +524,11 @@ impl CapabilityBus {
     // with_remote_skills / with_token_cache / with_model_selector /
     // with_federated_learning) had zero callers and were
     // removed. The buses are wired directly through their fields
-    // (e.g. memory_bus.set_backends in server_builder) and the P2-* fields
-    // (token_cache/model_selector) remain designed extension points
-    // (always None unless set by an embedder).
+    // (e.g. memory_bus.set_backends in server_builder) and the P2-3 model
+    // selector is injected by `new_acp_server` from the server's shared
+    // adaptive selector (the former P2-1 token-cache routing fast path was
+    // removed in round 32: it shared the LLM response cache and its no-TTL
+    // task→agent entries would freeze agent routing).
 
     /// Inject an LLM agent into the MetacognitiveController (BLUE56-GAP-B02).
     ///

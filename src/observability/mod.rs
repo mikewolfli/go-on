@@ -8,8 +8,6 @@ pub mod alert_manager;
 pub mod live_performance;
 pub mod memory_health;
 pub mod metrics_exporter;
-#[allow(clippy::module_inception)]
-pub mod observability;
 pub mod performance;
 pub mod provenance;
 pub mod telemetry_enhanced;

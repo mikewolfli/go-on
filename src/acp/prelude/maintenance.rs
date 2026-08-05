@@ -83,29 +83,11 @@ impl MaintenanceTracker {
         self.snapshot.clone()
     }
 
-    /// Begin maintenance
-    pub fn begin_maintenance(&mut self) {
-        self.snapshot.maintenance_in_progress = true;
-    }
-
     /// Note that maintenance has started
     pub fn note_started(&mut self) {
         self.snapshot.running = true;
         self.snapshot.last_started_at = Some(now_ts());
         self.snapshot.last_error = None;
-    }
-
-    /// End maintenance
-    pub fn end_maintenance(&mut self) {
-        self.snapshot.maintenance_in_progress = false;
-        self.snapshot.last_maintenance = now_ts();
-        self.snapshot.next_maintenance_due =
-            self.snapshot.last_maintenance + self.snapshot.maintenance_interval;
-    }
-
-    /// Note that maintenance has failed
-    pub fn note_failed(&mut self, error: &str) {
-        self.snapshot.last_error = Some(error.to_string());
     }
 
     /// Record maintenance cycle completion
@@ -115,14 +97,5 @@ impl MaintenanceTracker {
         self.snapshot.last_memory_expired_removed = memory_removed as u64;
         self.snapshot.last_error = None;
         self.snapshot.cycles_total += 1;
-    }
-
-    /// Record health check result
-    pub fn record_health_check(&mut self, healthy: bool) {
-        if healthy {
-            self.snapshot.tasks_completed += 1;
-        } else {
-            self.snapshot.tasks_failed += 1;
-        }
     }
 }

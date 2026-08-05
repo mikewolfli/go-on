@@ -1397,11 +1397,10 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        metrics_pack::metrics_window_query_payload(
+                        Ok(runtime_pack::metrics_window_query_payload(
                             server,
-                            request.params.unwrap_or_default(),
-                        )
-                        .await,
+                            &request.params.unwrap_or_default(),
+                        )),
                     )
                     .await
                 }
@@ -1409,11 +1408,10 @@ pub async fn handle_request(
                     crate::acp::r#impl::io::respond(
                         server,
                         request_id,
-                        metrics_pack::metrics_errors_summary_payload(
+                        Ok(runtime_pack::metrics_errors_summary_payload(
                             server,
-                            request.params.unwrap_or_default(),
-                        )
-                        .await,
+                            &request.params.unwrap_or_default(),
+                        )),
                     )
                     .await
                 }

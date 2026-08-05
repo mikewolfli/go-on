@@ -32,7 +32,6 @@ pub use crate::intelligence::verification;
 pub use crate::memory::cache;
 pub use crate::memory::memory as memory_module;
 pub use crate::memory::vector;
-pub use crate::observability::observability as observability_module;
 pub use crate::observability::performance;
 pub use crate::observability::telemetry_enhanced;
 pub use crate::orchestration::flow;

@@ -132,11 +132,6 @@ impl CircuitBreakerRegistry {
             .collect()
     }
 
-    /// Check if all circuit breakers are closed.
-    pub fn is_healthy(&self) -> bool {
-        self.open_count() == 0
-    }
-
     /// Recover one breaker or all tracked breakers back to the healthy
     /// baseline via the unified engine (breaker closed, counters zeroed,
     /// health reset). Returns the number of services actually recovered.

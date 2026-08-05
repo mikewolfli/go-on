@@ -352,7 +352,7 @@ fn bench_acp_server_increment_request(c: &mut Criterion) {
 
     c.bench_function("acp_server/increment_request", |b| {
         b.iter(|| {
-            server.increment_request_counter();
+            server.observability.metrics.inc_successful_requests();
         });
     });
 }

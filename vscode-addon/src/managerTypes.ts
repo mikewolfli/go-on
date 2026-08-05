@@ -1,9 +1,3 @@
-export interface StreamEvent {
-  type: "token" | "done" | "error";
-  content?: string;
-  message?: string;
-}
-
 export interface StreamingCallbacks {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onToken: (_token: string) => void;

@@ -68,16 +68,6 @@ impl LifecycleState {
         self.healthy
     }
 
-    /// Mark server as healthy
-    pub fn mark_healthy(&mut self) {
-        self.healthy = true;
-    }
-
-    /// Mark server as unhealthy
-    pub fn mark_unhealthy(&mut self) {
-        self.healthy = false;
-    }
-
     /// Check if shutdown has been requested
     pub fn shutdown_requested(&self) -> bool {
         self.shutdown_requested
@@ -100,20 +90,5 @@ impl LifecycleState {
             last_health_check: self.last_health_check,
             shutdown_requested: self.shutdown_requested,
         }
-    }
-
-    /// Increment total requests counter
-    pub fn increment_requests(&mut self) {
-        self.total_requests = self.total_requests.saturating_add(1);
-    }
-
-    /// Update current phase
-    pub fn update_phase(&mut self, phase: &str) {
-        self.current_phase = phase.to_string();
-    }
-
-    /// Update health check timestamp
-    pub fn update_health_check(&mut self) {
-        self.last_health_check = now_ts();
     }
 }

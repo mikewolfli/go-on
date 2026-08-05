@@ -792,12 +792,6 @@ impl AcpServer {
             .map(|guard| Arc::new(guard.clone()))
     }
 
-    /// Increment the request counter and return the new value
-    pub fn increment_request_counter(&self) -> u64 {
-        self.observability.metrics.inc_successful_requests();
-        self.observability.metrics.total_requests()
-    }
-
     pub fn register_skill(&self, skill: Arc<dyn crate::orchestration::skill::Skill>) {
         let mut registry = self
             .orchestration_deps

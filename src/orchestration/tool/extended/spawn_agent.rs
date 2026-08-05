@@ -106,7 +106,9 @@ fn agent_registry() -> Result<&'static Arc<AgentRegistry>> {
         .ok_or_else(|| anyhow::anyhow!("SpawnAgentTool: AgentRegistry not initialised"))
 }
 
-fn communication_bus() -> Option<&'static Arc<CommunicationBus>> {
+/// Access the process-wide CommunicationBus (set by `new_acp_server`).
+/// Exposed for governance.status agent-tree observability (BLUE70).
+pub(crate) fn communication_bus() -> Option<&'static Arc<CommunicationBus>> {
     SPAWN_COMMUNICATION_BUS.get()
 }
 

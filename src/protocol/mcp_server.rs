@@ -460,11 +460,6 @@ impl McpHttpServer {
         self.rate_limiter = Some(rate_limiter);
         self
     }
-
-    /// Request a graceful shutdown of the HTTP server.
-    pub fn shutdown(&self) {
-        self.shutdown_notify.notify_waiters();
-    }
 }
 
 async fn handle_http_connection(

@@ -231,6 +231,36 @@ impl CommunicationBus {
         }
     }
 
+    /// Synchronous profile snapshot for non-async consumers (e.g.
+    /// `governance.status`). Agent count degrades to 0 when the tree lock is
+    /// contended — counters are always exact.
+    pub fn profile_sync(&self) -> CommunicationBusProfile {
+        let (messages_sent, messages_received, forks_created, cancellations) = {
+            let m = match self.metrics.read() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("CommunicationBus metrics lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            (
+                m.messages_sent,
+                m.messages_received,
+                m.forks_created,
+                m.cancellations,
+            )
+        };
+        let registered_agents = self.tree.try_read().map(|t| t.len()).unwrap_or(0);
+        CommunicationBusProfile {
+            registered_agents,
+            messages_sent,
+            messages_received,
+            forks_created,
+            cancellations,
+            healthy: true,
+        }
+    }
+
     /// Get health status.
     pub async fn health(&self) -> CommunicationHealth {
         let profile = self.profile().await;

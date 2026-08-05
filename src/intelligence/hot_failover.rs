@@ -21,10 +21,6 @@ use tracing::warn;
 pub struct FailoverMetrics {
     /// Total failover events triggered.
     pub failover_count: u64,
-    /// Total models skipped due to cooldown.
-    pub cooldown_skips: u64,
-    /// Cumulative extra latency added by failovers (ms).
-    pub total_failover_latency_ms: u64,
 }
 
 // ---------------------------------------------------------------------------
