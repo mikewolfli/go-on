@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.4.3
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.5.0
 </p>
 
 <p align="center">
@@ -11,19 +11,19 @@
 </p>
 
 <p align="center">
-  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 2164+ tests · zero clippy warnings</em>
+  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 2018+ tests · zero clippy warnings</em>
 </p>
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.4.3-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.5.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![CI](https://github.com/mikeli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikeli/go-on/actions/workflows/build.yml)
-[![Tests](https://img.shields.io/badge/tests-2164-brightgreen)]()
+[![CI](https://github.com/mikewolfli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikewolfli/go-on/actions/workflows/build.yml)
+[![Tests](https://img.shields.io/badge/tests-2018-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
-[![Providers](https://img.shields.io/badge/providers-38-9cf)]()
+[![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-265K-blue)]()
+[![LOC](https://img.shields.io/badge/code-238K-blue)]()
 
 ## What is go-on?
 
@@ -92,7 +92,7 @@ Default health endpoint: `http://127.0.0.1:8090/health`
 - **Fast path cache** — SHA-256 fingerprint, TTL/LRU eviction, 4-tier caching (intent/skill/env/route)
 - **Multi-model voter** — Concurrent agent voting for high-stakes decisions (majority/weighted/unanimous/fusion)
 
-### AI Provider Support (38)
+### AI Provider Support (37)
 OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · Wenxin · Xihu
 
 Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Groq, and xAI Grok.
@@ -160,8 +160,8 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **OTel** — distributed tracing via OTLP collector (default: `localhost:4317`)
 - **Trilingual i18n** — English, Simplified Chinese, Traditional Chinese (~95% coverage across backend, GUI, VS Code)
 
-### Skill Marketplace (18 skills)
-- **Built-in skills**: api-docs-generator, changelog-generator, ci-pipeline-generator, code-reviewer, commit-message-generator, data-transformer, dependency-analyzer, dockerfile-generator, knowledge-retriever, log-analyzer, prompt-optimizer, refactoring-advisor, regex-builder, skill-creator, sql-query-helper, task-planner, test-generator, web-scraper
+### Skill Marketplace (37 skills)
+- **Marketplace catalog**: 37 verified skill entries — code-reviewer, commit-message-generator, refactoring-advisor, test-generator, api-docs-generator, changelog-generator, ci-pipeline-generator, data-transformer, dependency-analyzer, dockerfile-generator, knowledge-retriever, log-analyzer, prompt-optimizer, regex-builder, skill-creator, sql-query-helper, task-planner, web-scraper + more
 - **Import from GitHub/URL/local** — SkillImportStore fetches and validates SKILL.md manifests
 - **Auto-discovery** — `~/.agents/skills/` directory scanned on startup
 
@@ -169,7 +169,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 
 ## Architecture
 
-go-on uses a **12-bus capability architecture** (11 consolidated + 1 communication) with a cognitive loop and a unified **DispatchOutput** handler pattern:
+go-on uses a **13-sub-bus capability architecture** with a cognitive loop and a unified **DispatchOutput** handler pattern:
 
 ```
 ┌────────────────────────────────────────────────────────────┐

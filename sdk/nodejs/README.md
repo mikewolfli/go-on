@@ -34,6 +34,15 @@ process.stdout.write("\n");
 client.close();
 ```
 
+`chatStream(messages, options?)` is a **true streaming** async generator over
+SSE at `/chat/stream`: it yields each content token as it arrives over the
+wire (`event: chunk` frames, preferring the `token` field, falling back to
+legacy `content`/`text`). Frames without a text field (e.g. `telemetry`,
+`done`) are yielded as their raw JSON payload so nothing is silently dropped.
+`error` events throw a `GoOnClientError`; the generator terminates on the
+`[DONE]` sentinel, on the terminal `done`/`result` event, or when the server
+closes the connection.
+
 ## API Reference
 
 ### Runtime
@@ -42,8 +51,8 @@ client.close();
 | `health()` | `runtime.health` | Backend health status |
 | `runtimeHealth()` | `health.probes` | Detailed module health |
 | `runtimeStability()` | `runtime.stability` | Stability metrics |
-| `initialize(profile)` | `runtime.initialize` | Initialize runtime |
-| `shutdown()` | `runtime.shutdown` | Graceful shutdown |
+| `initialize(profile)` | `initialize` | ACP initialize handshake |
+| `shutdown()` | `shutdown` | Graceful shutdown |
 
 ### Governance
 | Method | RPC | Description |
@@ -64,13 +73,13 @@ client.close();
 | Method | RPC | Description |
 |--------|-----|-------------|
 | `breakerStatus()` | `breaker.status` | Circuit breaker states |
-| `breakerReset(group)` | `breaker.reset` | Reset a breaker |
+| `breakerReset(name)` | `breaker.reset` | Reset a breaker by name |
 | `maintenanceGc()` | `maintenance.gc` | Trigger GC |
 
 ### Checkpoint & Recovery
 | Method | RPC | Description |
 |--------|-----|-------------|
-| `checkpointCreate()` | `checkpoint.create` | Create checkpoint |
+| `checkpointCreate(conversationId, messages, branch?)` | `conversation.checkpoint.create` | Create checkpoint for a conversation |
 | `checkpointList()` | `checkpoint.list` | List checkpoints |
 | `conversationRollback(id)` | `conversation.rollback` | Rollback conversation |
 
@@ -96,6 +105,12 @@ client.close();
 | `configBaseline()` | `config.baseline` | Config snapshot |
 | `configReload()` | `config.reload` | Hot-reload config |
 | `harnessStatus()` | `harness.status` | Governance status |
+
+## Streaming Chat
+
+`chatStream(messages, options?)` returns an `AsyncGenerator<string>` that
+streams tokens from the backend's SSE endpoint. See the Quick Start for a
+usage example and the notes below it for the exact yield semantics.
 
 ## Error Handling
 

@@ -41,8 +41,8 @@ Go-On 是一个 ACP 运行时代理，集成了多智能体编排能力，可运
 ### 工具
 
 - [工具系统](guides/tool-system.zh.md) — 工具注册表、管道和自定义工具
-- [代码索引](guides/code-index.zh.md) — 语义代码搜索工具
-- [技能系统](guides/skill-system.zh.md) — SKILL.md 发现、导入、执行
+- [代码索引](guides/code-index.en.md) — 语义代码搜索工具（英文版）
+- [技能系统](../cookbook/src/zh-CN/skills.md) — SKILL.md 发现、导入、执行
 
 ### 可观测性
 

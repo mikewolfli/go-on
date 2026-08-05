@@ -1,5 +1,50 @@
 # 更新日志
 
+## [1.5.0] - 2026-08-05
+
+### 24 轮深度+广度扫描与统一优化（2026-07-24 → 2026-08-05）
+
+版本 1.5.0 汇总 24 轮超级深度+超级广度多智能体扫描成果（见 `docs/log/`），以 `docs/blueprints/principle.md` 为原则收敛：零死代码、零占位、零假修复、三端（backend / GUI / VS Code）统一架构。
+
+#### 冗余消除与统一
+
+- **Provider 目录三分拷贝 → 1 权威源 + 2 生成产物**：`src/core/providers.rs` 为唯一权威；GUI `generated_catalog.rs` 与 vscode `providerCatalog.generated.ts` 均由 `scripts/gen-provider-catalog.py` 生成（带 `--check` 双输出校验）。VS Code 目录补齐 kimi/siliconflow，env var 与分组全部派生自后端。
+- **MCP 桥接 ↔ 原生处理器漂移闭合**：`mcp.resources.list` 不再返回空列表；`mcp.resources.subscribe` / `mcp.logging.setLevel` / `mcp.completion.complete` 假成功空响应改为与原生 `src/mcp/handlers.rs` 一致的真实实现/诚实错误。
+- **PostgreSQL TLS 连接栈合并**（消除 ~200 行重复）：`parse_sslmode` / `PermissiveVerifier` / `connect_postgres` 统一收敛至 `src/memory/pg_pool.rs`。
+- **重复时钟助手合并**：`agents::unix_now_secs` 改为委托 `shared::timestamps::now_ts`。
+- **`keyring://` 常量统一**：`agents`、`acp::helpers::planning::context`、`config_validation`、`env_override` 共用一份。
+- **废弃产物删除**：8.5 MB `scripts/go-on` 二进制、空文件 `debug_binding.py`、孤立 shell 脚本、TypeScript 死导出、Rust 死 API（`Agent::on_message`/`send_message`、`AgentMessenger::with_capacity`/`peek`、`new_safeguard`）。
+
+#### PostgreSQL 生产加固
+
+- 连接池（deadpool）+ 读写副本分离 + 版本化迁移 + `sslmode` TLS（require/verify-ca/verify-full）。
+
+#### 功能补齐（闭合缺口）
+
+- **F-GAP-66 附件多模态**：GUI 附件（文件选择器 + 粘贴/拖拽）真实进入后端多模态管线（图像提取、文档解析、音频转写、`repo:` 分析），不再只是文本摘要。
+- **MCP `initialize` 能力声明统一**：仅声明双入口（原生+桥接）均有真实 handler 的能力；`sampling` 从共享声明中移除。
+- **Copilot URL 权威值收敛** 至 `https://api.githubcopilot.com`（原为漂移的 localhost 拷贝）。
+- **`build_role_routing` 读取已填充的全局角色注册表**（原构造恒空注册表，`available_custom_roles` 恒为 0）。
+
+#### SDK 协议漂移修复
+
+- `checkpoint.create` → `conversation.checkpoint.create`（需 `conversation_id`），覆盖 rust / nodejs / python SDK。
+- nodejs `runtime.initialize`/`runtime.shutdown` → 规范名 `initialize`/`shutdown`。
+- `breaker.reset` 参数契约与后端（`agent`/`name`）对齐。
+
+#### 文档与版本
+
+- 全平台版本统一为 **1.5.0**（workspace、GUI、VS Code 插件、rust/nodejs/python/typescript SDK、crates）。
+- 恢复缺失的 `[1.2.0]` 英文条目（原滞留为陈旧的 `[Unreleased]`）。
+- README 统计按实测修正（2018 测试、37 供应商、37 技能、~238K LOC、13 子总线架构）；CI 徽章 URL 修正。
+
+### 验证
+
+- 后端：`cargo check --all-targets` 通过；`cargo test` 全绿；`cargo clippy --all-targets -- -D warnings` 零警告。
+- GUI：`cargo check` 通过。
+- VS Code 插件：`tsc --noEmit` + mocha 全绿。
+- Provider 生成器：`scripts/gen-provider-catalog.py --check` 双输出 OK（37 providers）。
+
 ## [1.4.3] - 2026-07-24
 
 ### BLUE71 — 三系统深度对比分析与高收益改进

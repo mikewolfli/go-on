@@ -2,17 +2,16 @@
 //!
 //! Implements anomaly detection, advanced circuit breaker, health monitoring,
 //! and graceful degradation to reduce failure rate by 60-70%.
+//!
+//! NOTE: the per-agent breaker/health state machine here is the live source
+//! consumed by `ACP CircuitBreakerRegistry`, `health_pack`, `exec_pack::task`
+//! and the capability-bus optimization bus. The anomaly-*detection* machinery
+//! (`detect_anomaly` / `AnomalyType` / `AnomalyDetectionResult`), the legacy
+//! `CircuitBreaker` struct and the `UnifiedCircuitBreaker` alias had zero
+//! callers and were removed (round-26 cleanup).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-/// Re-export the unified circuit breaker type from the hyper-resilience module.
-///
-/// All new code should use `UnifiedCircuitBreaker` or import directly from
-/// `go_on::resilience::hyper_resilience::CircuitBreaker`. The legacy
-/// `CircuitBreaker` struct below exists only for backward compatibility and
-/// can be converted via `From<CircuitBreaker> for UnifiedCircuitBreaker`.
-pub use crate::resilience::hyper_resilience::CircuitBreaker as UnifiedCircuitBreaker;
 
 fn now_epoch_seconds() -> u64 {
     crate::shared::timestamps::now_ts() as u64
@@ -34,27 +33,6 @@ pub enum CircuitBreakerState {
     HalfOpen,
 }
 
-/// Legacy circuit breaker (name + state) for migration to the unified type.
-///
-/// This bare-bones representation is preserved for backward compatibility
-/// with callers that hold the old `(String, CircuitBreakerState)` pair.
-/// Convert to [`UnifiedCircuitBreaker`] via `From` to gain access to full
-/// resilience features (threshold, recovery timeout, failure history, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CircuitBreaker {
-    pub name: String,
-    pub state: CircuitBreakerState,
-}
-
-/// Anomaly type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AnomalyType {
-    Input,
-    ModelBehavior,
-    SystemState,
-    Performance,
-}
-
 /// Re-export the unified degradation level from the hyper-resilience module.
 pub use crate::resilience::hyper_resilience::DegradationLevel;
 
@@ -69,15 +47,6 @@ pub struct ServiceHealth {
     pub last_check_timestamp: u64,
 }
 
-/// Anomaly detection result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnomalyDetectionResult {
-    pub detected: bool,
-    pub anomaly_type: Option<AnomalyType>,
-    pub confidence: f64,
-    pub recommended_action: String,
-}
-
 /// Maximum circuit breaker states to track before evicting oldest.
 const MAX_CIRCUIT_BREAKERS: usize = 1000;
 /// Maximum per-service failure count entries before evicting oldest.
@@ -86,6 +55,24 @@ const MAX_FAILURES: usize = 1000;
 const MAX_HEALTH_MONITORS: usize = 1000;
 /// Maximum request count entries before evicting oldest.
 const MAX_REQUESTS: usize = 1000;
+
+/// Health classification thresholds used to derive `HealthStatus`.
+#[derive(Debug, Clone)]
+pub struct AnomalyThresholds {
+    pub error_rate_threshold: f64,
+    pub latency_spike_multiplier: f64,
+    pub success_rate_threshold: f64,
+}
+
+impl Default for AnomalyThresholds {
+    fn default() -> Self {
+        Self {
+            error_rate_threshold: 0.1, // 10% error rate
+            latency_spike_multiplier: 2.0,
+            success_rate_threshold: 0.8,
+        }
+    }
+}
 
 /// Failure prevention system
 #[derive(Debug, Clone)]
@@ -99,14 +86,6 @@ pub struct FailurePrevention {
     max_failure_threshold: u32,
 }
 
-/// Anomaly detection thresholds
-#[derive(Debug, Clone)]
-pub struct AnomalyThresholds {
-    pub error_rate_threshold: f64,
-    pub latency_spike_multiplier: f64,
-    pub success_rate_threshold: f64,
-}
-
 impl FailurePrevention {
     pub fn new() -> Self {
         Self {
@@ -115,61 +94,9 @@ impl FailurePrevention {
             health_monitors: HashMap::new(),
             total_requests: HashMap::new(),
             successful_requests: HashMap::new(),
-            anomaly_thresholds: AnomalyThresholds {
-                error_rate_threshold: 0.1, // 10% error rate
-                latency_spike_multiplier: 2.0,
-                success_rate_threshold: 0.8,
-            },
+            anomaly_thresholds: AnomalyThresholds::default(),
             max_failure_threshold: 5,
         }
-    }
-
-    /// Detect anomaly in input or behavior
-    pub fn detect_anomaly(
-        &self,
-        input: &str,
-        _context: &HashMap<String, String>,
-    ) -> AnomalyDetectionResult {
-        // Input anomaly detection
-        if input.is_empty() || input.len() > 1_000_000 {
-            return AnomalyDetectionResult {
-                detected: true,
-                anomaly_type: Some(AnomalyType::Input),
-                confidence: 0.95,
-                recommended_action: "Validate input before retry".to_string(),
-            };
-        }
-
-        // Check for suspicious patterns
-        let suspicious_patterns = ["DROP", "DELETE", "TRUNCATE", "exec(", "eval("];
-        for pattern in &suspicious_patterns {
-            if input.to_uppercase().contains(pattern) {
-                return AnomalyDetectionResult {
-                    detected: true,
-                    anomaly_type: Some(AnomalyType::Input),
-                    confidence: 0.9,
-                    recommended_action: "Potentially malicious input detected".to_string(),
-                };
-            }
-        }
-
-        AnomalyDetectionResult {
-            detected: false,
-            anomaly_type: None,
-            confidence: 0.0,
-            recommended_action: String::new(),
-        }
-    }
-
-    /// Record failure for a service
-    pub fn record_failure(&mut self, service_name: &str) {
-        self.ensure_service_registered(service_name);
-        self.evict_oldest_request_entry(service_name);
-        *self
-            .total_requests
-            .entry(service_name.to_string())
-            .or_insert(0) += 1;
-        self.record_failure_with_latency(service_name, None);
     }
 
     fn record_failure_with_latency(&mut self, service_name: &str, latency_ms: Option<u64>) {
@@ -188,21 +115,6 @@ impl FailurePrevention {
         self.update_health_from_counters(service_name, latency_ms.map(|v| v as f64));
     }
 
-    /// Record success and reset failure count
-    pub fn record_success(&mut self, service_name: &str) {
-        self.ensure_service_registered(service_name);
-        self.evict_oldest_request_entry(service_name);
-        *self
-            .total_requests
-            .entry(service_name.to_string())
-            .or_insert(0) += 1;
-        *self
-            .successful_requests
-            .entry(service_name.to_string())
-            .or_insert(0) += 1;
-        self.record_success_with_latency(service_name, None);
-    }
-
     fn record_success_with_latency(&mut self, service_name: &str, latency_ms: Option<u64>) {
         self.ensure_service_registered(service_name);
         self.failure_counts.insert(service_name.to_string(), 0);
@@ -211,6 +123,7 @@ impl FailurePrevention {
         self.update_health_from_counters(service_name, latency_ms.map(|v| v as f64));
     }
 
+    /// Record a request outcome for a service (drives circuit opening and health).
     pub fn record_outcome(&mut self, service_name: &str, success: bool, latency_ms: u64) {
         self.ensure_service_registered(service_name);
         self.evict_oldest_request_entry(service_name);
@@ -227,7 +140,6 @@ impl FailurePrevention {
         } else {
             self.record_failure_with_latency(service_name, Some(latency_ms));
         }
-        // Internal methods handle update_health_from_counters with latency.
     }
 
     /// Open circuit breaker for a service (predictive failure prevention)
@@ -498,7 +410,7 @@ mod tests {
     fn test_circuit_breaker() {
         let mut prevention = FailurePrevention::new();
         for _ in 0..5 {
-            prevention.record_failure("service1");
+            prevention.record_outcome("service1", false, 900);
         }
         assert_eq!(
             prevention.get_circuit_state("service1"),
@@ -558,7 +470,7 @@ mod tests {
         let mut prevention = FailurePrevention::new();
         prevention.register_service("api");
         for _ in 0..5 {
-            prevention.record_failure("api");
+            prevention.record_outcome("api", false, 900);
         }
 
         let recovered = prevention.recover(Some("api"));
@@ -573,7 +485,25 @@ mod tests {
             .into_iter()
             .find(|item| item.service_name == "api")
             .expect("api health should exist");
-        assert!(matches!(health.status, HealthStatus::Healthy));
-        assert!((health.error_rate - 0.0).abs() < f64::EPSILON);
+        assert_eq!(health.status, HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn test_success_resets_failure_count() {
+        let mut prevention = FailurePrevention::new();
+        prevention.register_service("api");
+        for _ in 0..4 {
+            prevention.record_outcome("api", false, 900);
+        }
+        assert_eq!(
+            prevention.get_circuit_state("api"),
+            CircuitBreakerState::Closed
+        );
+        // A success resets the failure streak before the threshold trips.
+        prevention.record_outcome("api", true, 100);
+        assert_eq!(
+            prevention.get_circuit_state("api"),
+            CircuitBreakerState::Closed
+        );
     }
 }

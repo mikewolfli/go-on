@@ -2,19 +2,18 @@
 //!
 //! Centralized orchestrator that enforces resource limits before and during
 //! agent sub-tree execution: depth limits, concurrency caps, token ceilings,
-//! and wall-clock timeouts. Integrates with `AgentExecutionBudget` and the
-//! `AgentMessenger` cancellation system.
+//! and wall-clock timeouts. Integrates with `AgentExecutionBudget`.
 //!
 //! Design notes (simplified vs original):
 //! - Direct Semaphore::acquire — no SpawnReservation reserved mode.
 //! - check_limits + acquire are separate calls (window is microseconds, risk negligible).
-//! - Cancellation is delegated to AgentMessenger::cancel_subtree.
+//! - Cancellation is owned by `AgentMessenger::cancel_subtree` and surfaced
+//!   through `CommunicationBus::cancel_subtree` (which records metrics).
 
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, Semaphore, TryAcquireError};
 
 use crate::agents::communication::budget::AgentExecutionBudget;
-use crate::agents::communication::messenger::AgentMessenger;
 use crate::agents::communication::path::AgentPath;
 use crate::agents::communication::tree::AgentTree;
 
@@ -43,8 +42,6 @@ pub struct ExecutionGovernor {
     semaphore: Semaphore,
     /// Reference to the agent tree (for depth checks).
     tree: Arc<AsyncRwLock<AgentTree>>,
-    /// Optional messenger reference (for cancellation propagation).
-    messenger: Option<Arc<AgentMessenger>>,
 }
 
 impl ExecutionGovernor {
@@ -53,7 +50,6 @@ impl ExecutionGovernor {
         Self {
             semaphore: Semaphore::new(DEFAULT_GLOBAL_MAX_CONCURRENCY),
             tree,
-            messenger: None,
         }
     }
 
@@ -62,14 +58,7 @@ impl ExecutionGovernor {
         Self {
             semaphore: Semaphore::new(max),
             tree,
-            messenger: None,
         }
-    }
-
-    /// Attach an AgentMessenger for cancellation propagation.
-    pub fn with_messenger(mut self, messenger: Arc<AgentMessenger>) -> Self {
-        self.messenger = Some(messenger);
-        self
     }
 
     /// Check all limits for spawning a child at the given path (BLUE70 §7.1).
@@ -139,21 +128,14 @@ impl ExecutionGovernor {
         })
     }
 
-    /// Cancel all agents in a sub-tree (BLUE70 §5.3).
-    ///
-    /// Delegates to AgentMessenger::cancel_subtree if a messenger is attached.
-    pub async fn cancel_subtree(&self, path: &AgentPath, reason: &str) {
-        if let Some(ref messenger) = self.messenger {
-            messenger.cancel_subtree(path, reason).await;
-        }
-        // If no messenger, cancellation is a no-op (logging is caller's responsibility).
-    }
-
     /// Get the number of available permits.
     pub fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }
 }
+
+// (cancel_subtree removed — cancellation is owned by AgentMessenger and
+// surfaced through CommunicationBus::cancel_subtree, which records metrics.)
 
 #[cfg(test)]
 mod tests {

@@ -195,7 +195,7 @@ pub struct AgentAuditLog {
 
 /// Keyring prefix for secret references
 ///
-/// Duplicated from acp::helpers::planning::context — consider using a shared constant.
+/// Shared with `acp::helpers::planning::context` via `shared::keyring_ref`.
 ///
 /// # SECURITY POLICY
 ///
@@ -207,7 +207,7 @@ pub struct AgentAuditLog {
 /// The env var fallback in load_secret_value() exists ONLY for advanced
 /// users who deliberately export env vars (e.g., CI/CD pipelines).
 /// Do NOT add .env file loading here.
-const KEYRING_PREFIX: &str = "keyring://";
+use crate::shared::keyring_ref::KEYRING_PREFIX;
 static SECRET_POOL_STATE: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 
 fn secret_pool_state() -> &'static Mutex<HashMap<String, usize>> {

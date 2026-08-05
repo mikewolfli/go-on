@@ -545,10 +545,26 @@ impl GoOnClient {
 
     // ── Checkpoint (Phase 4) ──────────────────────────────────────────
 
-    /// checkpoint.create — create a runtime checkpoint.
-    pub async fn checkpoint_create(&self, branch: &str) -> Result<Value, SdkError> {
-        self.json_rpc("checkpoint.create", serde_json::json!({ "branch": branch }))
-            .await
+    /// conversation.checkpoint.create — create a checkpoint for a conversation.
+    ///
+    /// The backend `conversation.checkpoint.create` handler requires a
+    /// non-empty `conversation_id` and a non-empty `messages` list; `branch`
+    /// defaults to `main`.
+    pub async fn checkpoint_create(
+        &self,
+        conversation_id: &str,
+        messages: &[ChatMessage],
+        branch: Option<&str>,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "conversation.checkpoint.create",
+            serde_json::json!({
+                "conversation_id": conversation_id,
+                "branch": branch.unwrap_or("main"),
+                "messages": messages,
+            }),
+        )
+        .await
     }
 
     /// checkpoint.list — list available checkpoints.

@@ -13,7 +13,6 @@ pub(super) mod artifact;
 pub(super) mod execute;
 pub(super) mod pua;
 pub(super) mod repair;
-pub(super) mod requirement;
 pub(super) mod task;
 pub(super) mod workflow;
 

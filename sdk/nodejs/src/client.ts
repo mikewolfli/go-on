@@ -12,6 +12,8 @@ import * as url from "url";
 import { v4 as uuidv4 } from "uuid";
 
 import { GoOnClientError, GoOnJsonRpcError, GoOnHttpError } from "./errors";
+import { createSseParser } from "./sse";
+import type { SseFrame } from "./sse";
 import type {
   AcpSessionNewRequest,
   AcpSessionNewResponse,
@@ -225,8 +227,62 @@ export class GoOnClient {
   }
 
   /**
+   * POST a JSON body and resolve with the response as soon as the status
+   * line and headers arrive, leaving the body to be streamed incrementally.
+   * Rejects with `GoOnClientError` on network errors.
+   */
+  private _requestStream(
+    path: string,
+    body: string,
+  ): Promise<http.IncomingMessage> {
+    return new Promise((resolve, reject) => {
+      const parsedUrl = new url.URL(this._url(path));
+      const isHttps = parsedUrl.protocol === "https:";
+      const lib = isHttps ? https : http;
+
+      const req = lib.request(
+        {
+          hostname: parsedUrl.hostname,
+          port: parsedUrl.port ? parseInt(parsedUrl.port, 10) : undefined,
+          path: parsedUrl.pathname + parsedUrl.search,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+            "Content-Length": Buffer.byteLength(body).toString(),
+          },
+          timeout: 0, // SSE streams are long-lived; socket idle time is expected
+        },
+        (res) => {
+          resolve(res);
+        },
+      );
+
+      req.on("error", (err) => {
+        reject(new GoOnClientError(`Network error: ${err.message}`));
+      });
+
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new GoOnClientError("Request timed out"));
+      });
+
+      req.write(body);
+      req.end();
+    });
+  }
+
+  /**
    * Chat streaming via SSE at `/chat/stream`.
    * Yields content chunks as they arrive from the server.
+   *
+   * This is a true streaming generator: each yielded value is the text
+   * content of an SSE `chunk` event as it arrives over the wire (preferring
+   * the `token` field, then legacy `content`/`text`). Frames without a text
+   * field (e.g. `telemetry`, `done`) are yielded as their raw JSON payload so
+   * nothing is silently dropped. `error` events throw a `GoOnClientError`.
+   * The generator terminates on the `[DONE]` sentinel, on the terminal
+   * `done`/`result` event, or when the server closes the connection.
    */
   async *chatStream(
     messages: Array<{ role: string; content: string }>,
@@ -236,10 +292,6 @@ export class GoOnClient {
       maxTokens?: number;
     },
   ): AsyncGenerator<string> {
-    const parsedUrl = new url.URL(this._url("/chat/stream"));
-    const isHttps = parsedUrl.protocol === "https:";
-    const lib = isHttps ? https : http;
-
     const payload = JSON.stringify({
       messages,
       model: options?.model,
@@ -248,74 +300,71 @@ export class GoOnClient {
       stream: true,
     });
 
-    const result = await new Promise<{
-      statusCode: number;
-      body: string;
-    }>((resolve, reject) => {
-      const req = lib.request(
-        {
-          hostname: parsedUrl.hostname,
-          port: parsedUrl.port ? parseInt(parsedUrl.port, 10) : undefined,
-          path: parsedUrl.pathname,
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload).toString(),
-          },
-          timeout: 0, // no timeout for SSE
-        },
-        (res) => {
-          let buffer = "";
-          res.on("data", (chunk: Buffer) => {
-            buffer += chunk.toString("utf-8");
-            // Parse SSE chunks
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
+    const res = await this._requestStream("/chat/stream", payload);
 
-            for (const line of lines) {
-              if (line.startsWith("data: ")) {
-                const data = line.slice(6);
-                if (data === "[DONE]") return;
-                try {
-                  const parsed = JSON.parse(data) as {
-                    content?: string;
-                    text?: string;
-                  };
-                  const token = parsed.content || parsed.text || "";
-                  if (token) {
-                    // We can't yield from inside the callback,
-                    // so we collect in a string for returning
-                  }
-                } catch {
-                  // ignore parse errors in SSE parsing
-                }
-              }
-            }
-          });
-
-          res.on("end", () => {
-            resolve({
-              statusCode: res.statusCode || 200,
-              body: buffer,
-            });
-          });
-        },
-      );
-
-      req.on("error", (err) => {
-        reject(new GoOnClientError(`SSE error: ${err.message}`));
-      });
-
-      req.write(payload);
-      req.end();
-    });
-
-    if (result.statusCode !== 200) {
-      throw new GoOnHttpError(result.statusCode, "chat/stream failed");
+    if (res.statusCode !== 200) {
+      res.resume(); // drain so the connection can be closed/reused cleanly
+      throw new GoOnHttpError(res.statusCode || 0, "chat/stream failed");
     }
 
-    // For true streaming, yield collected response
-    yield result.body;
+    const parser = createSseParser();
+    try {
+      for await (const chunk of res) {
+        const frames = parser.push(chunk.toString("utf-8"));
+        for (const frame of frames) {
+          const text = this._sseFrameText(frame);
+          if (text !== undefined) yield text;
+        }
+        if (parser.done) return;
+      }
+
+      // The server may omit the trailing blank line after the last frame.
+      const tail = parser.flush();
+      for (const frame of tail) {
+        const text = this._sseFrameText(frame);
+        if (text !== undefined) yield text;
+      }
+    } catch (err) {
+      if (err instanceof GoOnClientError || err instanceof GoOnHttpError) {
+        throw err;
+      }
+      throw new GoOnClientError(
+        `SSE stream error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      // Release the socket if the consumer stopped iterating early.
+      res.destroy();
+    }
+  }
+
+  /**
+   * Convert a parsed SSE frame into a yielded string, or `undefined` to skip.
+   *
+   * - `error` events throw a `GoOnClientError` carrying the error message.
+   * - Frames with a non-empty `token`/`content`/`text` field yield that text.
+   * - Frames whose `token` field is present but empty (reasoning-only chunks)
+   *   yield nothing.
+   * - Any other frame (no text field at all) yields its raw JSON payload so
+   *   that no frame is silently dropped.
+   */
+  private _sseFrameText(frame: SseFrame): string | undefined {
+    const { data } = frame;
+
+    if (frame.eventType === "error") {
+      const message =
+        typeof data.message === "string"
+          ? data.message
+          : JSON.stringify(data);
+      throw new GoOnClientError(`Chat stream error: ${message}`);
+    }
+
+    const token = typeof data.token === "string" ? data.token : undefined;
+    const content = typeof data.content === "string" ? data.content : undefined;
+    const text = typeof data.text === "string" ? data.text : undefined;
+    const piece = token || content || text;
+    if (piece) return piece;
+    if (token !== undefined) return undefined; // token field present but empty
+    return JSON.stringify(data);
   }
 
   // ── Runtime API ───────────────────────────────────────────────────
@@ -338,16 +387,18 @@ export class GoOnClient {
     >;
   }
 
-  /** Initialize the runtime with a profile. */
-  async initialize(profile: string = "full"): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("runtime.initialize", {
+  /** Initialize the runtime (ACP `initialize` handshake). */
+  async initialize(
+    profile: string = "full",
+  ): Promise<Record<string, unknown>> {
+    return (await this._jsonRpc("initialize", {
       profile,
     })) as Record<string, unknown>;
   }
 
-  /** Shutdown the runtime gracefully. */
+  /** Shutdown the runtime gracefully (ACP `shutdown`). */
   async shutdown(): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("runtime.shutdown")) as Record<string, unknown>;
+    return (await this._jsonRpc("shutdown")) as Record<string, unknown>;
   }
 
   // ── Governance API ────────────────────────────────────────────────
@@ -406,9 +457,9 @@ export class GoOnClient {
     return (await this._jsonRpc("breaker.status")) as BreakerStatusResponse;
   }
 
-  /** Reset a circuit breaker by group name. */
-  async breakerReset(group: string): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("breaker.reset", { group })) as Record<
+  /** Reset a circuit breaker by name. */
+  async breakerReset(name: string): Promise<Record<string, unknown>> {
+    return (await this._jsonRpc("breaker.reset", { name })) as Record<
       string,
       unknown
     >;
@@ -421,12 +472,17 @@ export class GoOnClient {
 
   // ── Checkpoint & Recovery API ─────────────────────────────────────
 
-  /** Create a checkpoint for the current conversation. */
-  async checkpointCreate(): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("checkpoint.create")) as Record<
-      string,
-      unknown
-    >;
+  /** Create a checkpoint for a conversation. */
+  async checkpointCreate(
+    conversationId: string,
+    messages: Array<{ role: string; content: string }>,
+    branch: string = "main",
+  ): Promise<Record<string, unknown>> {
+    return (await this._jsonRpc("conversation.checkpoint.create", {
+      conversation_id: conversationId,
+      branch,
+      messages,
+    })) as Record<string, unknown>;
   }
 
   /** List available checkpoints. */

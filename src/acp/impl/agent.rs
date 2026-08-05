@@ -75,7 +75,6 @@ pub struct ReviewGateOutcome {
     /// Review duration in milliseconds
     pub duration_ms: u64,
     /// Semantic verdict (Approve/Reject/Invalid etc.)
-    #[allow(dead_code)]
     pub verdict: QualityVerdict,
 }
 

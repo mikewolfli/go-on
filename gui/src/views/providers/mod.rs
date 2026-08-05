@@ -14,7 +14,6 @@ pub use generated_catalog::PROVIDER_NAMES;
 
 use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
-use crate::connection::{build_copilot_http_client, COPILOT_HTTP_CLIENT};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
 use serde_json::Value;

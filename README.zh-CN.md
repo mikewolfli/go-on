@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.4.3
+  <strong>go-on</strong> — 用 Rust 编写的 AI 智能体编排运行时，提供桌面 GUI、VS Code 插件、SSE 流式传输、MCP/ACP 协议、自治工作流与内置治理。v1.5.0
 </p>
 
 <p align="center">
@@ -12,13 +12,13 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.4.3-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.5.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2164-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-2018-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
-[![Providers](https://img.shields.io/badge/providers-38-9cf)]()
+[![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-265K-blue)]()
+[![LOC](https://img.shields.io/badge/code-238K-blue)]()
 
 ## go-on 是什么？
 
@@ -271,14 +271,14 @@ npm run compile
 
 | 指标 | 数值 |
 |:-----|:-----|
-| Rust 后端代码行数 | ~234K（490+ 个模块）|
+| Rust 后端代码行数 | ~211K（490+ 个模块）|
 | GUI（EGUI）代码行数 | ~22K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
-| SDK（Rust + Python + TypeScript）代码行数 | ~3K |
+| SDK（Rust + Python + TypeScript）代码行数 | ~4K |
 | 内置工具数量 | 60+ |
-| AI 供应商数量 | 38 |
-| 技能市场数量 | 18 |
-| 单元测试数量 | 1946（全部通过，零失败）|
+| AI 供应商数量 | 37 |
+| 技能市场数量 | 37 |
+| 单元测试数量 | 2018（全部通过，零失败）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置

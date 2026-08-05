@@ -1051,8 +1051,16 @@ pub(crate) async fn act_phase(
                         outcome.comments.join("; ")
                     )
                 };
-                tracing::info!("safeguard review gate blocked execution: {reason}");
-                emit_status_event(stream_observer.as_ref(), &reason, "warning").await?;
+                tracing::info!(
+                    "safeguard review gate blocked execution (verdict={:?}): {reason}",
+                    outcome.verdict
+                );
+                emit_status_event(
+                    stream_observer.as_ref(),
+                    &format!("{} (verdict: {:?})", reason, outcome.verdict),
+                    "warning",
+                )
+                .await?;
                 response_text = reason;
                 review_blocked = true;
             }

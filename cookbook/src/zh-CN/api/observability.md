@@ -17,7 +17,7 @@
 ```json
 {
   "status": "ok",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "uptime_seconds": 84321,
   "modules": {
     "acp": { "status": "ok" },

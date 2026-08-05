@@ -35,6 +35,106 @@ pub fn validate_input_size(data: &[u8], max_bytes: usize) -> Result<(), String> 
     Ok(())
 }
 
+// ── Shared HTTP client / request-body helpers ───────────────────────────────
+
+/// Build an HTTP client with the given total request timeout (in seconds),
+/// optional read timeout, and optional TCP keepalive. The builder is retried
+/// once without keepalive and finally falls back to `reqwest::Client::new()`.
+/// All GUI HTTP clients share this construction so timeout/fallback behavior
+/// stays consistent.
+pub(crate) fn build_http_client(
+    timeout_secs: u64,
+    read_timeout_secs: Option<u64>,
+    keepalive_secs: Option<u64>,
+) -> reqwest::Client {
+    let build = |with_keepalive: bool| {
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(timeout_secs));
+        if let Some(rt) = read_timeout_secs {
+            builder = builder.read_timeout(Duration::from_secs(rt));
+        }
+        if with_keepalive {
+            if let Some(ka) = keepalive_secs {
+                builder = builder.tcp_keepalive(Some(Duration::from_secs(ka)));
+            }
+        }
+        builder.build()
+    };
+    build(true).unwrap_or_else(|_| build(false).unwrap_or_else(|_| reqwest::Client::new()))
+}
+
+/// Build the JSON request body for the chat stream endpoint, shared by the
+/// streaming chat path (`chat_impl`) and the non-streaming
+/// `BackendClient::chat_with_options` fallback.
+///
+/// The `phase` field is included when non-empty so the backend uses the
+/// user-selected phase instead of default/adaptive inference. `options_extra`
+/// values are flattened into `options` (NOT under an `extra` key), conversation
+/// tracking IDs are emitted as top-level keys, and a non-empty `selected_agent`
+/// is emitted as `options.preferred_agent`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_chat_request_body(
+    messages: &[serde_json::Value],
+    mode: &str,
+    phase: &str,
+    model: Option<&str>,
+    options_extra: Option<&serde_json::Value>,
+    conv_id: Option<&str>,
+    branch_id: Option<&str>,
+    selected_agent: &str,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "messages": messages,
+        "mode": mode,
+    });
+
+    // Include the phase so the backend uses the user-selected phase instead of
+    // default/adaptive inference.
+    if !phase.is_empty() {
+        body["phase"] = serde_json::json!(phase);
+    }
+
+    // Only set an explicit model when one was selected (skip empty/"auto").
+    if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
+        body["options"] = serde_json::json!({
+            "model": selected_model,
+        });
+    }
+
+    if let Some(extra) = options_extra {
+        if body.get("options").is_none() {
+            body["options"] = serde_json::json!({});
+        }
+        // Flatten extra values into options, NOT under an "extra" key.
+        if let Some(obj) = extra.as_object() {
+            for (k, v) in obj {
+                body["options"][k] = v.clone();
+            }
+        }
+    }
+
+    // Conversation tracking IDs as top-level keys.
+    if let Some(cid) = conv_id {
+        body["conversation_id"] = serde_json::json!(cid);
+    }
+    if let Some(bid) = branch_id {
+        body["branch_id"] = serde_json::json!(bid);
+    }
+
+    // Always send preferred_agent when explicitly selected.
+    if !selected_agent.is_empty() {
+        if let Some(serde_json::Value::Object(ref mut options_map)) = body.get_mut("options") {
+            options_map.insert(
+                "preferred_agent".to_string(),
+                serde_json::Value::String(selected_agent.to_string()),
+            );
+        } else {
+            body["options"] = serde_json::json!({"preferred_agent": selected_agent});
+        }
+    }
+
+    body
+}
+
 // ── BackendClient ───────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -54,34 +154,11 @@ pub struct BackendClient {
 
 impl BackendClient {
     pub fn new(base_url: &str) -> Self {
-        let quick_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .tcp_keepalive(Some(Duration::from_secs(30)))
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::warn!("Failed to build quick HTTP client: {e}; retrying with builder");
-                reqwest::Client::builder()
-                    .timeout(Duration::from_secs(5))
-                    .build()
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("Failed to build HTTP client on retry: {e}; using default");
-                        reqwest::Client::new()
-                    })
-            });
-        let long_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(180))
-            .tcp_keepalive(Some(Duration::from_secs(45)))
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::warn!("Failed to build long HTTP client: {e}; retrying with builder");
-                reqwest::Client::builder()
-                    .timeout(Duration::from_secs(180))
-                    .build()
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("Failed to build HTTP client on retry: {e}; using default");
-                        reqwest::Client::new()
-                    })
-            });
+        // Quick client: 5s total timeout + 30s keepalive (keepalive is
+        // primary-only, matching the historical fallback chain).
+        let quick_client = build_http_client(5, None, Some(30));
+        // Long client: 180s total timeout + 45s keepalive (as before).
+        let long_client = build_http_client(180, None, Some(45));
         Self {
             quick_client,
             long_client,
@@ -448,41 +525,22 @@ impl BackendClient {
         // Use the UI-selected mode (edit, ask, plan, etc.).
         // Default to "edit" if mode is empty.
         let effective_mode = if mode.is_empty() { "edit" } else { mode };
-        let mut body = serde_json::json!({
-            "messages": messages,
-            "mode": effective_mode,
-        });
-
-        // Wire the phase into the request body so the backend uses the
-        // user-selected phase instead of default/adaptive inference.
-        if !phase.is_empty() {
-            body["phase"] = serde_json::json!(phase);
-        }
-
-        if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
-            body["options"] = serde_json::json!({
-                "model": selected_model,
-            });
-        }
-
-        if let Some(ref extra) = options_extra {
-            if body.get("options").is_none() {
-                body["options"] = serde_json::json!({});
-            }
-            // Flatten extra values into options, NOT under "extra" key
-            if let Some(obj) = extra.as_object() {
-                for (k, v) in obj {
-                    body["options"][k] = v.clone();
-                }
-            }
-            // Include conversation tracking IDs if available
-            if let Some(cid) = extra.get("conversation_id").and_then(|v| v.as_str()) {
-                body["conversation_id"] = serde_json::json!(cid);
-            }
-            if let Some(bid) = extra.get("branch_id").and_then(|v| v.as_str()) {
-                body["branch_id"] = serde_json::json!(bid);
-            }
-        }
+        let body = build_chat_request_body(
+            &messages,
+            effective_mode,
+            phase,
+            model,
+            options_extra.as_ref(),
+            // Conversation tracking IDs ride inside `options_extra`; lift them
+            // to top-level keys (same shape as the streaming chat path).
+            options_extra
+                .as_ref()
+                .and_then(|extra| extra.get("conversation_id").and_then(|v| v.as_str())),
+            options_extra
+                .as_ref()
+                .and_then(|extra| extra.get("branch_id").and_then(|v| v.as_str())),
+            "",
+        );
 
         let mut last_err = String::new();
         let mut response = None;
@@ -745,6 +803,23 @@ impl BackendClient {
         self.rpc_call("runtime.restart", None).await
     }
 
+    /// Start the GitHub Copilot OAuth device-code flow via the backend RPC.
+    /// Returns `device_code`, `user_code`, `verification_uri`, and `interval`.
+    pub async fn copilot_device_code(&self) -> Result<Value, String> {
+        self.rpc_call("provider.copilot_device_code", Some(serde_json::json!({})))
+            .await
+    }
+
+    /// Poll for the Copilot access token with the device code issued by
+    /// [`copilot_device_code`](Self::copilot_device_code).
+    pub async fn copilot_device_code_poll(&self, device_code: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "provider.copilot_device_code_poll",
+            Some(serde_json::json!({ "device_code": device_code })),
+        )
+        .await
+    }
+
     /// Approve a tool that was blocked by the sandbox whitelist.
     /// Called when the user clicks "Approve" in the chat UI.
     pub async fn approve_tool(&self, tool_name: &str) -> Result<Value, String> {
@@ -957,39 +1032,27 @@ pub struct WorkflowRunsResult {
 }
 
 impl BackendClient {
-    pub async fn list_workflow_runs(
-        &self,
-        limit: usize,
-        offset: usize,
-        status: Option<&str>,
-    ) -> Result<Value, String> {
-        let mut params = serde_json::json!({"limit": limit, "offset": offset});
-        if let Some(status) = status {
-            params["status"] = Value::String(status.to_string());
-        }
-        self.rpc_call("workflow.run.list", Some(params)).await
-    }
-
     pub async fn list_workflow_runs_typed(
         &self,
         limit: usize,
         offset: usize,
         status: Option<&str>,
     ) -> Result<Vec<WorkflowRunRecord>, String> {
-        let value = self.list_workflow_runs(limit, offset, status).await?;
+        let mut params = serde_json::json!({"limit": limit, "offset": offset});
+        if let Some(status) = status {
+            params["status"] = Value::String(status.to_string());
+        }
+        let value = self.rpc_call("workflow.run.list", Some(params)).await?;
         Self::decode_workflow_runs(value)
     }
 
-    pub async fn get_workflow_run(&self, run_id: &str) -> Result<Value, String> {
-        self.rpc_call(
-            "workflow.run.get",
-            Some(serde_json::json!({"run_id": run_id})),
-        )
-        .await
-    }
-
     pub async fn get_workflow_run_typed(&self, run_id: &str) -> Result<WorkflowRunRecord, String> {
-        let value = self.get_workflow_run(run_id).await?;
+        let value = self
+            .rpc_call(
+                "workflow.run.get",
+                Some(serde_json::json!({"run_id": run_id})),
+            )
+            .await?;
         let candidate = value
             .get("run")
             .cloned()

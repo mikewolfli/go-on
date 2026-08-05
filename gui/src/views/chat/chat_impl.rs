@@ -1,4 +1,6 @@
-use crate::backend::{AbortController, BackendClient, StreamProcessor, TokenProgress};
+use crate::backend::{
+    build_http_client, AbortController, BackendClient, StreamProcessor, TokenProgress,
+};
 use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
 use crate::views::risk_decision::RiskDecisionDraft;
@@ -479,17 +481,7 @@ impl ChatView {
             stream_chunk_flush_interval: std::time::Duration::from_millis(33),
             stream_repaint_interval: std::time::Duration::from_millis(33),
             max_pending_events_per_frame: 256,
-            stream_client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
-                .read_timeout(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| {
-                    reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(300))
-                        .read_timeout(std::time::Duration::from_secs(60))
-                        .build()
-                        .unwrap_or_else(|_| reqwest::Client::new())
-                }),
+            stream_client: build_http_client(300, Some(60), None),
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             last_repaint: std::time::Instant::now(),

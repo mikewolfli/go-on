@@ -146,7 +146,9 @@ struct ChatRequestBodyParams<'a> {
 }
 
 /// Build the JSON request body for the chat stream endpoint.
-/// Supports both standard chat mode and workflow RPC mode.
+/// Workflow mode uses a JSON-RPC envelope; standard chat mode delegates to the
+/// shared `crate::backend::build_chat_request_body` helper (used by
+/// `BackendClient::chat_with_options` too) so the body shape stays identical.
 /// The `phase` field is included when non-empty so the backend can use
 /// the selected phase instead of default/adaptive inference.
 async fn build_chat_request_body(p: ChatRequestBodyParams<'_>) -> serde_json::Value {
@@ -162,8 +164,9 @@ async fn build_chat_request_body(p: ChatRequestBodyParams<'_>) -> serde_json::Va
         branch_id,
         selected_agent,
     } = p;
-    let mut body = if use_workflow_rpc {
-        serde_json::json!({
+
+    if use_workflow_rpc {
+        return serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "workflow.ask",
@@ -172,57 +175,19 @@ async fn build_chat_request_body(p: ChatRequestBodyParams<'_>) -> serde_json::Va
                 "auto_create_skills": true,
                 "auto_create_workflow": true,
             }
-        })
-    } else {
-        let mut body = serde_json::json!({
-            "messages": history_messages,
-            "mode": mode,
         });
-        // Include phase so the backend uses the user-selected phase
-        if !phase.is_empty() {
-            body["phase"] = serde_json::json!(phase);
-        }
-        body
-    };
-
-    if !use_workflow_rpc {
-        // Model selection logic
-        if !model.trim().is_empty() && model != "auto" {
-            body["options"] = serde_json::json!({"model": model});
-        }
-
-        if let Some(extra) = request_options.clone() {
-            if body.get("options").is_none() {
-                body["options"] = serde_json::json!({});
-            }
-            if let Some(obj) = extra.as_object() {
-                for (k, v) in obj {
-                    body["options"][k] = v.clone();
-                }
-            }
-        }
-
-        if let Some(cid) = conv_id {
-            body["conversation_id"] = serde_json::json!(cid);
-        }
-        if let Some(bid) = branch_id {
-            body["branch_id"] = serde_json::json!(bid);
-        }
-
-        // Always send preferred_agent when explicitly selected
-        if !selected_agent.is_empty() {
-            if let Some(serde_json::Value::Object(ref mut options_map)) = body.get_mut("options") {
-                options_map.insert(
-                    "preferred_agent".to_string(),
-                    serde_json::Value::String(selected_agent.to_string()),
-                );
-            } else {
-                body["options"] = serde_json::json!({"preferred_agent": selected_agent});
-            }
-        }
     }
 
-    body
+    crate::backend::build_chat_request_body(
+        history_messages,
+        mode,
+        phase,
+        Some(model),
+        request_options.as_ref(),
+        conv_id.as_deref(),
+        branch_id.as_deref(),
+        selected_agent,
+    )
 }
 
 /// Handle the workflow RPC path (non-streaming). Returns `true` if the request
@@ -233,17 +198,7 @@ async fn handle_workflow_rpc(
     generation_id: u64,
     tx: &mpsc::SyncSender<PendingResponse>,
 ) -> bool {
-    let workflow_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .read_timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap_or_else(|_| {
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
-                .read_timeout(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new())
-        });
+    let workflow_client = build_http_client(300, Some(60), None);
     match workflow_client
         .post(format!("{}/rpc", base_url.trim_end_matches('/')))
         .json(body)

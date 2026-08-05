@@ -1230,12 +1230,30 @@ pub(crate) async fn handle_workflow_ask(
     }
 
     // Step 2b: Auto-register workflow if enabled
-    // The workflow is already persisted to the artifact ledger via workflow_artifact_path.
-    // Full WorkflowRegistry registration requires CapabilityBus to expose its
-    // internal workflow_registry field. For now, the persisted artifact serves
-    // as the reusable workflow definition.
+    // Register the generated DAG as a named preset in the global WorkflowRegistry
+    // (owned by CapabilityBus), so it becomes observable via capability_bus_profile()
+    // and routable via TaskRouter::route_task_with_workflow — not just a persisted
+    // artifact ledger entry.
     if auto_create_workflow {
-        let _ = &workflow_artifact_path;
+        let preset_name = format!("auto-{}", task.trim().to_lowercase().replace(' ', "-"));
+        let preset = crate::orchestration::workflow_registry::WorkflowPreset {
+            name: preset_name,
+            workflow_type: crate::config::WorkflowType::Custom,
+            phases: workflow.execution_order.iter().flatten().cloned().collect(),
+            description: format!("Auto-generated workflow for task: {}", task.trim()),
+        };
+        if let Some(cb) = server.governance_deps.capability_bus.as_ref() {
+            if let Some(wr) = cb.workflow_registry.as_ref() {
+                let mut registry = wr.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("workflow registry lock poisoned – recovering");
+                    poisoned.into_inner()
+                });
+                if let Err(err) = registry.register(preset) {
+                    // Duplicate preset from a prior run is expected — skip silently.
+                    debug!("workflow auto-register skipped: {}", err);
+                }
+            }
+        }
     }
 
     // Step 3: Execute workflow
@@ -1266,6 +1284,7 @@ pub(crate) async fn handle_workflow_ask(
             ),
         },
         "plan_artifact_path": plan_artifact_path.display().to_string(),
+        "workflow_artifact_path": workflow_artifact_path.display().to_string(),
         "workflow_graph": {
             "nodes": workflow.nodes.iter().map(|n| json!({
                 "id": n.id,

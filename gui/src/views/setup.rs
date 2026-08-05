@@ -1,6 +1,5 @@
 use crate::backend::BackendClient;
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
-use crate::connection::{build_copilot_http_client, COPILOT_HTTP_CLIENT};
 use crate::i18n::I18n;
 use crate::views::providers::{models_for_provider, provider_requires_secret};
 use serde_json::Value;
@@ -500,77 +499,32 @@ impl SetupView {
                         self.copilot_device_state = Some("requesting".to_string());
                         self.copilot_status =
                             i18n.t("providers.copilot_requesting").to_string();
+                        let backend_clone = backend.clone();
                         let tx = self.pending_tx.clone();
                         let ctx_clone = ctx.clone();
                         tokio::spawn(async move {
-                            let client = COPILOT_HTTP_CLIENT
-                                .get_or_init(build_copilot_http_client);
-                            let params = [
-                                ("client_id", "01ab8ac9400c4e429b23"),
-                                ("scope", "read:user,copilot"),
-                            ];
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(15),
-                                client
-                                    .post("https://github.com/login/device/code")
-                                    .header("Accept", "application/json")
-                                    .header("User-Agent", "go-on-gui")
-                                    .form(&params)
-                                    .send(),
+                                backend_clone.copilot_device_code(),
                             )
                             .await
                             {
-                                Ok(Ok(resp)) if resp.status().is_success() => {
-                                    match resp.json::<serde_json::Value>().await {
-                                        Ok(body) => {
-                                            let msg = format!(
-                                                "__copilot_device__:{}",
-                                                serde_json::to_string(&body)
-                                                    .unwrap_or_default()
-                                            );
-                                            if let Err(e) = tx.try_send(msg) {
-                                                eprintln!(
-                                                    "WARN: setup try_send failed: {:?}",
-                                                    e
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let msg = format!(
-                                                "__copilot_device_err__:Parse error: {}",
-                                                e
-                                            );
-                                            if let Err(e) = tx.try_send(msg) {
-                                                eprintln!(
-                                                    "WARN: setup try_send failed: {:?}",
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                Ok(Ok(resp)) => {
-                                    let status = resp.status();
-                                    let text = resp.text().await.unwrap_or_default();
+                                Ok(Ok(body)) => {
                                     let msg = format!(
-                                        "__copilot_device_err__:GitHub {status}: {text}"
+                                        "__copilot_device__:{}",
+                                        serde_json::to_string(&body)
+                                            .unwrap_or_default()
                                     );
                                     if let Err(e) = tx.try_send(msg) {
-                                        eprintln!("WARN: setup try_send failed: {:?}", e);
+                                        eprintln!(
+                                            "WARN: setup try_send failed: {:?}",
+                                            e
+                                        );
                                     }
                                 }
                                 Ok(Err(e)) => {
-                                    let detail = if e.is_connect() {
-                                        format!("connection refused: {}", e)
-                                    } else if e.is_timeout() {
-                                        format!("timeout: {}", e)
-                                    } else if e.is_body() {
-                                        format!("body error: {}", e)
-                                    } else {
-                                        format!("{}", e)
-                                    };
                                     let msg =
-                                        format!("__copilot_device_err__:{}", detail);
+                                        format!("__copilot_device_err__:{}", e);
                                     if let Err(e) = tx.try_send(msg) {
                                         eprintln!(
                                             "WARN: setup try_send failed: {:?}",
@@ -1061,6 +1015,7 @@ impl SetupView {
                 self.copilot_last_poll = Instant::now();
                 self.copilot_poll_repaint_requested = false;
                 self.copilot_poll_attempts = self.copilot_poll_attempts.saturating_add(1);
+                let backend_clone = backend.clone();
                 let tx = self.pending_tx.clone();
                 let device_code = self.copilot_device_code.clone();
                 let ctx_clone = ctx.clone();
@@ -1074,49 +1029,23 @@ impl SetupView {
                     );
                 }
                 tokio::spawn(async move {
-                    let poll_client = COPILOT_HTTP_CLIENT.get_or_init(build_copilot_http_client);
-                    let poll_params = [
-                        ("client_id", "01ab8ac9400c4e429b23"),
-                        ("device_code", &device_code),
-                        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                    ];
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(15),
-                        poll_client
-                            .post("https://github.com/login/oauth/access_token")
-                            .header("Accept", "application/json")
-                            .header("User-Agent", "go-on-gui")
-                            .form(&poll_params)
-                            .send(),
+                        backend_clone.copilot_device_code_poll(&device_code),
                     )
                     .await
                     {
-                        Ok(Ok(resp)) => match resp.json::<serde_json::Value>().await {
-                            Ok(body) => {
-                                let msg = format!(
-                                    "__copilot_poll__:{}",
-                                    serde_json::to_string(&body).unwrap_or_default()
-                                );
-                                if let Err(e) = tx.try_send(msg) {
-                                    eprintln!("WARN: setup try_send failed: {:?}", e);
-                                }
+                        Ok(Ok(body)) => {
+                            let msg = format!(
+                                "__copilot_poll__:{}",
+                                serde_json::to_string(&body).unwrap_or_default()
+                            );
+                            if let Err(e) = tx.try_send(msg) {
+                                eprintln!("WARN: setup try_send failed: {:?}", e);
                             }
-                            Err(e) => {
-                                let msg = format!("__copilot_poll_err__:Parse error: {}", e);
-                                if let Err(e) = tx.try_send(msg) {
-                                    eprintln!("WARN: setup try_send failed: {:?}", e);
-                                }
-                            }
-                        },
+                        }
                         Ok(Err(e)) => {
-                            let detail = if e.is_connect() {
-                                format!("connection refused: {}", e)
-                            } else if e.is_timeout() {
-                                format!("timeout: {}", e)
-                            } else {
-                                format!("{}", e)
-                            };
-                            let msg = format!("__copilot_poll_err__:{}", detail);
+                            let msg = format!("__copilot_poll_err__:{}", e);
                             if let Err(e) = tx.try_send(msg) {
                                 eprintln!("WARN: setup try_send failed: {:?}", e);
                             }

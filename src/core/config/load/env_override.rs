@@ -70,7 +70,7 @@ fn required_env_vars(agent: &AgentConfig) -> Vec<String> {
 }
 
 fn is_keyring_ref(value: &str) -> bool {
-    value.starts_with("keyring://")
+    value.starts_with(crate::shared::keyring_ref::KEYRING_PREFIX)
 }
 
 // ── Keyring / secret validation ───────────────────────────────────────────
@@ -138,7 +138,7 @@ pub(crate) fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
     }
 
     let locator = value
-        .strip_prefix("keyring://")
+        .strip_prefix(crate::shared::keyring_ref::KEYRING_PREFIX)
         .ok_or_else(|| anyhow::anyhow!("invalid keyring ref for {}", field_name))?;
     let (service, account) = locator.split_once('/').ok_or_else(|| {
         anyhow::anyhow!(

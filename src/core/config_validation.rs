@@ -562,7 +562,7 @@ impl ConfigValidator {
 
         // Check API key configuration
         if let Some(api_key_env) = &agent.api_key_env {
-            if api_key_env.starts_with("keyring://") {
+            if api_key_env.starts_with(crate::shared::keyring_ref::KEYRING_PREFIX) {
                 result
                     .dependencies
                     .required_keyring_entries
@@ -575,7 +575,7 @@ impl ConfigValidator {
             }
         }
         if let Some(secret_key_env) = &agent.secret_key_env {
-            if secret_key_env.starts_with("keyring://") {
+            if secret_key_env.starts_with(crate::shared::keyring_ref::KEYRING_PREFIX) {
                 result
                     .dependencies
                     .required_keyring_entries
@@ -744,7 +744,7 @@ impl ConfigValidator {
         let mut uses_keyring = false;
         for agent in self.config.agents().values() {
             if let Some(api_key_env) = &agent.api_key_env {
-                if api_key_env.starts_with("keyring://") {
+                if api_key_env.starts_with(crate::shared::keyring_ref::KEYRING_PREFIX) {
                     uses_keyring = true;
                     break;
                 }

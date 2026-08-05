@@ -253,21 +253,18 @@ pub async fn new_acp_server(
     // tool calls on low-severity matches (e.g. an email address in args),
     // so the wiring is intentionally left to an explicit conservative config.
 
-    // Wire hash chain auditor (requires config path)
-    if let Some(ref path) = config_path {
-        let auditor_path = std::path::Path::new(path)
-            .parent()
-            .map(|p| p.join("audit_chain.ndjson"));
-        if let Some(auditor_path) = auditor_path {
-            use crate::security::audit_integrity::HashChainAuditor;
-            match HashChainAuditor::new(auditor_path) {
-                Ok(auditor) => {
-                    builder =
-                        builder.with_hash_chain_auditor(Arc::new(std::sync::Mutex::new(auditor)));
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to create HashChainAuditor: {}", e);
-                }
+    // Wire hash chain auditor — persistence lives in the same `~/.goon/`
+    // directory as the canonical audit sink (`audit.ndjson`), so the
+    // tamper-evident chain and the general decision log are siblings.
+    {
+        let auditor_path = crate::governance::audit::audit_chain_path();
+        use crate::security::audit_integrity::HashChainAuditor;
+        match HashChainAuditor::new(auditor_path) {
+            Ok(auditor) => {
+                builder = builder.with_hash_chain_auditor(Arc::new(std::sync::Mutex::new(auditor)));
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create HashChainAuditor: {}", e);
             }
         }
     }

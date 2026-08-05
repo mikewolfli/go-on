@@ -497,9 +497,25 @@ class GoOnClient:
 
     # ── Checkpoint (Phase 4) ──────────────────────────────────────────
 
-    async def checkpoint_create(self, branch: str) -> dict[str, Any]:
-        """checkpoint.create — create a runtime checkpoint."""
-        return await self._json_rpc("checkpoint.create", {"branch": branch})
+    async def checkpoint_create(
+        self,
+        conversation_id: str,
+        messages: list[dict[str, str]],
+        branch: str = "main",
+    ) -> dict[str, Any]:
+        """conversation.checkpoint.create — create a checkpoint for a conversation.
+
+        The backend requires a non-empty `conversation_id` and a non-empty
+        `messages` list; `branch` defaults to "main".
+        """
+        return await self._json_rpc(
+            "conversation.checkpoint.create",
+            {
+                "conversation_id": conversation_id,
+                "branch": branch,
+                "messages": messages,
+            },
+        )
 
     async def checkpoint_list(self) -> CheckpointListResponse:
         """checkpoint.list — list available checkpoints."""

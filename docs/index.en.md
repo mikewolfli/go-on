@@ -42,7 +42,7 @@ Go-On is an ACP runtime proxy with integrated multi-agent orchestration, capable
 
 - [Tool System](guides/tool-system.en.md) — Tool registry, pipeline, and custom tools
 - [Code Index](guides/code-index.en.md) — Semantic code search tool
-- [Skill System](guides/skill-system.en.md) — SKILL.md discovery, import, execution
+- [Skill System](../cookbook/src/en/skills.md) — SKILL.md discovery, import, execution
 
 ### Observability
 

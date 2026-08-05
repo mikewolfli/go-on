@@ -232,11 +232,12 @@ impl TokenCache {
 }
 
 /// Current Unix time in seconds.
+///
+/// Delegates to the shared timestamp helper (`shared::timestamps::now_ts`) —
+/// the single source of truth for epoch-second clocks, per the timestamps
+/// module's documented intent.
 pub(crate) fn unix_now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    crate::shared::timestamps::now_ts() as u64
 }
 
 /// Build a streaming config from request options, honoring the

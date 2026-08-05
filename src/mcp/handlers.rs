@@ -624,21 +624,6 @@ impl McpServer {
         // reusing the same shared baseline descriptor set.
         let mut tools = build_mcp_tool_descriptors(None);
 
-        // Inject registered skills from ACP server (if available)
-        if let Some(registry) = self.skill_registry() {
-            let guard = registry.read().unwrap_or_else(|poisoned| {
-                tracing::warn!("MCP skill_registry lock poisoned – recovered");
-                poisoned.into_inner()
-            });
-            for descriptor in guard.list(false) {
-                tools.push(json!({
-                    "name": descriptor.name,
-                    "description": descriptor.description,
-                    "input_schema": descriptor.input_schema,
-                }));
-            }
-        }
-
         tools.sort_by(|a, b| {
             let a_name = a.get("name").and_then(Value::as_str).unwrap_or_default();
             let b_name = b.get("name").and_then(Value::as_str).unwrap_or_default();

@@ -1,6 +1,6 @@
 # go-on as Zed Agent Server
 
-This guide explains how to configure [go-on](https://github.com/mark3labs/go-on) as a
+This guide explains how to configure [go-on](https://github.com/mikewolfli/go-on) as a
 [Zed Agent Server](https://zed.dev/docs/assistant/agent-servers), enabling Zed's AI panel to
 communicate with go-on via the Agent Communication Protocol (ACP).
 

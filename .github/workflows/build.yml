@@ -57,6 +57,8 @@ jobs:
         run: cargo check --no-default-features --features full --locked
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test (all targets, locked)
+        run: cargo test --all-targets --locked
       - name: Cargo deny (advisories / licenses / bans)
         run: cargo deny check
 

@@ -524,7 +524,7 @@ fn resolve_secret_target(name: Option<&str>) -> Result<(String, String)> {
         return Ok((service.clone(), account.clone()));
     }
 
-    if let Some(locator) = name.strip_prefix("keyring://") {
+    if let Some(locator) = name.strip_prefix(crate::shared::keyring_ref::KEYRING_PREFIX) {
         let (service, account) = locator.split_once('/').ok_or_else(|| {
             anyhow::anyhow!(
                 "invalid keyring secret reference '{}': expected keyring://<service>/<account>",

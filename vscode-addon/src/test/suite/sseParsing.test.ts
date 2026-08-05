@@ -87,9 +87,11 @@ suite("sseParsing", () => {
       const chunk =
         'data: {"token":"hello"}\n\ndata: {"token":"world"}\n\ndata: [DONE]\n\n';
       const results = parseSseChunk(chunk);
-      assert.strictEqual(results.length, 2);
+      assert.strictEqual(results.length, 3);
       assert.strictEqual(results[0].data.token, "hello");
       assert.strictEqual(results[1].data.token, "world");
+      assert.strictEqual(results[2].eventType, "done");
+      assert.strictEqual(results[2].data.data, "[DONE]");
     });
 
     test("injects event type as _event_type into parsed data", () => {
@@ -155,17 +157,21 @@ suite("sseParsing", () => {
       const stream =
         'event: chunk\ndata: {"token":"The"}\n\nevent: chunk\ndata: {"token":" quick"}\n\nevent: chunk\ndata: {"token":" brown"}\n\nevent: chunk\ndata: {"token":" fox"}\n\ndata: [DONE]\n\n';
       const results = parseSseChunk(stream);
-      assert.strictEqual(results.length, 4);
-      const tokens = results.map((r) => r.data.token as string);
+      assert.strictEqual(results.length, 5);
+      const tokens = results.slice(0, 4).map((r) => r.data.token as string);
       assert.deepStrictEqual(tokens, ["The", " quick", " brown", " fox"]);
+      assert.strictEqual(results[4].eventType, "done");
+      assert.strictEqual(results[4].data.data, "[DONE]");
     });
 
-    test("skips [DONE] sentinel frames", () => {
+    test("represents [DONE] sentinel frames as completion frames", () => {
       const results = parseSseChunk(
         'data: {"token":"hello"}\n\ndata: [DONE]\n\n',
       );
-      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results.length, 2);
       assert.strictEqual(results[0].data.token, "hello");
+      assert.strictEqual(results[1].eventType, "done");
+      assert.strictEqual(results[1].data.data, "[DONE]");
     });
 
     test("skips malformed JSON frames", () => {
@@ -174,6 +180,46 @@ suite("sseParsing", () => {
       );
       assert.strictEqual(results.length, 1);
       assert.strictEqual(results[0].data.ok, "yes");
+    });
+
+    test("falls back to \\n delimiter for line-delimited streams", () => {
+      const chunk =
+        'data: {"token":"hello"}\ndata: {"token":"world"}\ndata: [DONE]\n';
+      const results = parseSseChunk(chunk);
+      assert.strictEqual(results.length, 3);
+      assert.strictEqual(results[0].data.token, "hello");
+      assert.strictEqual(results[1].data.token, "world");
+      assert.strictEqual(results[2].eventType, "done");
+      assert.strictEqual(results[2].data.data, "[DONE]");
+    });
+
+    test("parses a single data line without trailing separator", () => {
+      const results = parseSseChunk('data: {"token":"hello"}');
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].data.token, "hello");
+    });
+
+    test("represents a bare [DONE] sentinel as a done frame", () => {
+      const results = parseSseChunk("data: [DONE]\n\n");
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].eventType, "done");
+      assert.strictEqual(results[0].data.data, "[DONE]");
+    });
+
+    test("preserves event type on a [DONE] sentinel frame", () => {
+      const results = parseSseChunk("event: done\ndata: [DONE]\n\n");
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].eventType, "done");
+      assert.strictEqual(results[0].data._event_type, "done");
+      assert.strictEqual(results[0].data.data, "[DONE]");
+    });
+
+    test("normalises CRLF line endings before splitting", () => {
+      const chunk = 'event: chunk\r\ndata: {"token":"hello"}\r\n\r\n';
+      const results = parseSseChunk(chunk);
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].eventType, "chunk");
+      assert.strictEqual(results[0].data.token, "hello");
     });
   });
 

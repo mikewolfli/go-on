@@ -94,20 +94,26 @@ pub(crate) async fn emit_stream_chunk(
     }
 
     if let Some(sender) = &observer.sse_sender {
-        let mut payload = json!({
-            "agent": meta.agent_name,
-            "chunk_index": chunk_index,
-            "phase": meta.phase_name,
-            "token": display_token,
-            "total_chars": total_chars,
-            "trace_id": meta.trace_id,
-            "mode": meta.mode,
-            "risk_score": meta.risk_score,
-            "degrade_policy": meta.degrade_policy,
-        });
-        if !reasoning_token.is_empty() {
-            payload["reasoning"] = json!(reasoning_token);
-        }
+        // Shared core fields (agent/token/chunk_index/total_chars/phase/
+        // trace_id/reasoning) come from helpers::metrics::chunk_core_fields so
+        // the SSE frame and the JSON-RPC notification cannot drift; only the
+        // transport-specific fields are added here.
+        let mut payload = crate::acp::helpers::metrics::chunk_core_fields(
+            meta.agent_name,
+            display_token,
+            chunk_index,
+            total_chars,
+            Some(meta.phase_name),
+            Some(meta.trace_id),
+            if reasoning_token.is_empty() {
+                None
+            } else {
+                Some(reasoning_token)
+            },
+        );
+        payload.insert("mode".to_string(), json!(meta.mode));
+        payload.insert("risk_score".to_string(), json!(meta.risk_score));
+        payload.insert("degrade_policy".to_string(), json!(meta.degrade_policy));
         let status = if reasoning_token.is_empty() && display_token.is_empty() {
             Some("thinking")
         } else {
@@ -116,7 +122,7 @@ pub(crate) async fn emit_stream_chunk(
         // Send failure is expected when client disconnects — non-critical.
         let _ = sender.send(StreamFrame {
             event: STREAM_EVENT_CHUNK,
-            payload,
+            payload: Value::Object(payload),
             status,
         });
     }
@@ -163,37 +169,36 @@ pub(crate) async fn emit_stream_done(
     }
 
     if let Some(sender) = &observer.sse_sender {
-        // NOTE: This SSE frame structure should match helpers/metrics::stream_done_notification
-        let mut payload = json!({
-            "agent": meta.agent_name,
-            "chunks": chunk_index,
-            "done": true,
-            "duration_ms": duration_ms,
-            "phase": meta.phase_name,
-            "total_chars": total_chars,
-            "trace_id": meta.trace_id,
-            "mode": meta.mode,
-            "risk_score": meta.risk_score,
-            "degrade_policy": meta.degrade_policy,
-        });
-        if let Some(ref m) = selected_model {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("selected_model".to_string(), json!(m));
-            }
+        // Shared core fields (agent/done/chunks/total_chars/duration_ms/phase/
+        // trace_id) come from helpers::metrics::done_core_fields so the SSE
+        // frame and the JSON-RPC notification cannot drift; transport-specific
+        // fields (mode/risk_score/degrade_policy/selected_model/response) are
+        // added here.
+        let mut payload = crate::acp::helpers::metrics::done_core_fields(
+            meta.agent_name,
+            chunk_index,
+            total_chars,
+            Some(meta.phase_name),
+            Some(meta.trace_id),
+            duration_ms,
+        );
+        payload.insert("mode".to_string(), json!(meta.mode));
+        payload.insert("risk_score".to_string(), json!(meta.risk_score));
+        payload.insert("degrade_policy".to_string(), json!(meta.degrade_policy));
+        if let Some(m) = selected_model {
+            payload.insert("selected_model".to_string(), json!(m));
         }
         // Always include response in the done event when available, so the GUI
         // frontend can set final_content from either "done" or "result".
         // This prevents the "chat stream ended without producing a response" error
         // when the "result" event arrives after the HTTP stream has ended.
         if let Some(response_text) = response {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("response".to_string(), json!(response_text));
-            }
+            payload.insert("response".to_string(), json!(response_text));
         }
         // Send failure is expected when client disconnects — non-critical.
         let _ = sender.send(StreamFrame {
             event: STREAM_EVENT_DONE,
-            payload,
+            payload: Value::Object(payload),
             status: None,
         });
     }

@@ -315,8 +315,9 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
 fn secret_ref_ready(secret_ref: &str) -> bool {
     // Use get_secret() which checks in-memory override map first, then env vars.
     // This ensures API keys set via GUI/CLI secret overrides are properly detected.
-    if secret_ref.starts_with("keyring://") {
-        let locator = secret_ref.trim_start_matches("keyring://");
+    let keyring_prefix = crate::shared::keyring_ref::KEYRING_PREFIX;
+    if secret_ref.starts_with(keyring_prefix) {
+        let locator = secret_ref.trim_start_matches(keyring_prefix);
         if let Some((service, account)) = locator.split_once('/') {
             if keyring_lookup_accounts(service, account).into_iter().any(
                 |(service_name, account_name)| {

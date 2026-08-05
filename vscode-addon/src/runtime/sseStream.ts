@@ -29,11 +29,14 @@ export interface SseFrame {
  * Parse a chunk of raw SSE text into structured frames.
  *
  * The parser:
- * 1. Splits the text on `\n\n` boundaries to identify SSE frames
- * 2. Within each frame, extracts `event:` and `data:` lines
- * 3. Injects the event type as `_event_type` into the parsed JSON payload
- * 4. Filters out `[DONE]` sentinel frames
- * 5. Skips malformed JSON without throwing
+ * 1. Splits the text on `\n\n` boundaries to identify SSE frames, falling back
+ *    to `\n` (line-delimited) when no blank-line separator is present
+ * 2. Normalises CRLF line endings to LF before splitting
+ * 3. Within each frame, extracts `event:` and `data:` lines
+ * 4. Injects the event type as `_event_type` into the parsed JSON payload
+ * 5. Represents `[DONE]` sentinel frames as completion frames (mirroring the
+ *    GUI's StreamProcessor) instead of silently dropping them
+ * 6. Skips malformed JSON without throwing
  *
  * @param text - Raw SSE text chunk (may contain multiple frames)
  * @returns Array of parsed SseFrame (empty if none found)
@@ -41,8 +44,15 @@ export interface SseFrame {
 export function parseSseChunk(text: string): SseFrame[] {
   const results: SseFrame[] = [];
 
-  // Split on \n\n to isolate individual SSE frames
-  const frames = text.split("\n\n");
+  // Normalise CRLF → LF before splitting (mirrors the GUI's StreamProcessor,
+  // which strips \r from each chunk; see gui/src/backend/state.rs).
+  const normalized = text.replace(/\r/g, "");
+
+  // Delimiter selection mirrors the GUI: prefer \n\n frame boundaries, but
+  // fall back to \n (line-delimited) when the chunk contains no blank-line
+  // separator so single-line "data: {...}" streams still parse frame-by-frame.
+  const delimiter = normalized.includes("\n\n") ? "\n\n" : "\n";
+  const frames = normalized.split(delimiter);
   for (const frame of frames) {
     if (!frame.trim()) continue;
 
@@ -63,8 +73,26 @@ export function parseSseChunk(text: string): SseFrame[] {
       }
     }
 
-    // Skip [DONE] sentinel
-    if (currentData === "[DONE]") continue;
+    // [DONE] sentinel: signal stream completion instead of silently dropping
+    // it. Mirrors gui/src/backend/state.rs:96-107:
+    //  - with an event type: wrapped as {"_event_type": ev, "data": "[DONE]"}
+    //  - bare (no event type): the GUI yields the raw "[DONE]" string; in the
+    //    SseFrame shape that is represented as eventType "done" so downstream
+    //    routing (runtimeManager) can finalize the response.
+    if (currentData === "[DONE]") {
+      if (currentEventType) {
+        results.push({
+          eventType: currentEventType,
+          data: { _event_type: currentEventType, data: "[DONE]" },
+        });
+      } else {
+        results.push({
+          eventType: "done",
+          data: { data: "[DONE]" },
+        });
+      }
+      continue;
+    }
 
     // Skip frames with no data payload
     if (!currentData) continue;

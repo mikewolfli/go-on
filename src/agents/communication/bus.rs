@@ -96,7 +96,7 @@ impl CommunicationBus {
         let tree = Arc::new(AsyncRwLock::new(AgentTree::new()));
         let messenger_inner = AgentMessenger::new(tree.clone());
         let messenger = Arc::new(messenger_inner);
-        let governor = ExecutionGovernor::new(tree.clone()).with_messenger(messenger.clone());
+        let governor = ExecutionGovernor::new(tree.clone());
         Self {
             tree,
             messenger,

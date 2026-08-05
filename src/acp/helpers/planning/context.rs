@@ -13,7 +13,7 @@ use tokio::net::{lookup_host, TcpStream};
 ///
 /// SECURITY: ALL secrets MUST come from keyring only.
 /// Do NOT add .env or env var fallbacks here.
-const KEYRING_PREFIX: &str = "keyring://";
+use crate::shared::keyring_ref::KEYRING_PREFIX;
 
 use crate::config::{AppConfig, PhaseOptions};
 

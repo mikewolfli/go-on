@@ -240,25 +240,6 @@ impl std::fmt::Debug for HyperResilienceEngine {
     }
 }
 
-/// Convert a legacy bare-bones circuit breaker (name + state) into the full
-/// unified `CircuitBreaker` with sensible defaults for threshold, recovery
-/// timeout, and other fields.
-impl From<crate::optimization::failure_prevention::CircuitBreaker> for CircuitBreaker {
-    fn from(legacy: crate::optimization::failure_prevention::CircuitBreaker) -> Self {
-        Self {
-            name: legacy.name,
-            state: legacy.state,
-            failure_count: 0,
-            threshold: 5,
-            recovery_timeout_ms: 30_000,
-            last_failure_ms: 0,
-            half_open_attempts: 0,
-            last_failure_mode: None,
-            failure_history: Vec::new(),
-        }
-    }
-}
-
 impl HyperResilienceEngine {
     /// Create a new hyper-resilience engine with the given configuration.
     pub fn new(config: ResilienceConfig) -> Self {

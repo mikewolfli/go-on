@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 
-use crate::orchestration::roles::{AgentRole, RoleRegistry};
+use crate::orchestration::roles::AgentRole;
 
 /// Bundles all parameters required to assemble a chat response payload.
 ///
@@ -190,15 +190,17 @@ pub fn build_role_routing(task_description: &str) -> Value {
         suggested_roles = vec![AgentRole::Planner, AgentRole::Coder, AgentRole::Reviewer];
     }
 
-    let role_registry = RoleRegistry::new();
-    let role_definitions = role_registry.all();
+    // Read custom roles from the populated global registry (installed during
+    // config load via `orchestration::roles::install_role_registry`). A fresh
+    // `RoleRegistry::new()` here would always be empty.
+    let role_definitions_count = crate::orchestration::roles::role_registry_count();
 
     json!({
         "role_routing": {
             "suggested_roles": suggested_roles.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
             "role_count": suggested_roles.len(),
             "task_analysis": task_description,
-            "available_custom_roles": role_definitions.len(),
+            "available_custom_roles": role_definitions_count,
             "handoff_ready": true,
         }
     })

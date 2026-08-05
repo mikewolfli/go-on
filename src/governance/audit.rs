@@ -406,6 +406,22 @@ fn dirs_or_fallback() -> PathBuf {
     base.join("audit.ndjson")
 }
 
+/// Resolve `~/.goon/audit_chain.ndjson` (or `.goon/audit_chain.ndjson`), the
+/// sibling of the canonical audit sink used by the tamper-evident
+/// `HashChainAuditor`. Keeping both artifacts in the same `.goon` directory
+/// unifies the audit persistence location.
+pub(crate) fn audit_chain_path() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let base = if home.is_empty() {
+        PathBuf::from(".goon")
+    } else {
+        PathBuf::from(home).join(".goon")
+    };
+    base.join("audit_chain.ndjson")
+}
+
 /// Convenience wrapper that creates an [`AuditLogEntry`] from simple arguments
 /// and records it into the given [`ThreadSafeAuditLog`].
 ///

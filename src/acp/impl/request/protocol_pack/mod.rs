@@ -36,7 +36,8 @@ pub(super) use core::{
 // MCP protocol handlers
 pub(super) use mcp::{
     mcp_completion_complete_payload, mcp_logging_set_level_payload, mcp_ping_payload,
-    mcp_resources_list_payload, mcp_resources_read_payload, mcp_resources_subscribe_payload,
+    mcp_prompts_get_payload, mcp_prompts_list_payload, mcp_resources_list_payload,
+    mcp_resources_read_payload, mcp_resources_subscribe_payload,
     mcp_sampling_create_message_payload, mcp_tools_call_payload, mcp_tools_list_payload,
 };
 

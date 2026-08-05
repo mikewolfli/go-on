@@ -2,15 +2,15 @@
 
 `go-on` is a three-surface runtime around a Rust backend:
 
-- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with cognitive modules. All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum.
+- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 13-sub-bus capability architecture with cognitive modules. All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum.
 - **GUI**: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.
 - **VS Code addon**: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.
 
 ## Version
 
-- Core runtime: **1.4.3**
-- GUI desktop: **1.4.3**
-- VS Code addon: **1.4.3**
+- Core runtime: **1.5.0**
+- GUI desktop: **1.5.0**
+- VS Code addon: **1.5.0**
 
 ## GUI Desktop App
 
@@ -103,7 +103,7 @@ That split matters for the three clients:
 
 ## Architecture: Multi-Bus Capability System
 
-go-on implements a **14-bus architecture** centered on `CapabilityBus` and `HarnessBus`.
+go-on implements a **13-sub-bus architecture** centered on `CapabilityBus` and `HarnessBus`.
 
 ### Core Buses
 

@@ -377,9 +377,17 @@ export class GoOnClient {
 
   // ── Checkpoint ─────────────────────────────────────────────────────
 
-  /** checkpoint.create — create a runtime checkpoint. */
-  async checkpointCreate(branch: string): Promise<Record<string, unknown>> {
-    return this.jsonRpc("checkpoint.create", { branch });
+  /** conversation.checkpoint.create — create a checkpoint for a conversation. */
+  async checkpointCreate(
+    conversationId: string,
+    messages: Array<{ role: string; content: string }>,
+    branch: string = "main",
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc("conversation.checkpoint.create", {
+      conversation_id: conversationId,
+      branch,
+      messages,
+    });
   }
 
   /** checkpoint.list — list available checkpoints. */

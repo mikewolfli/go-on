@@ -87,7 +87,6 @@ mod learning_pack;
 mod lifecycle_handlers;
 mod lifecycle_pack;
 mod metrics_pack;
-mod ops_pack;
 pub mod prompts_pack;
 mod protocol;
 mod protocol_pack;
@@ -998,6 +997,30 @@ pub async fn handle_request(
                         server,
                         request_id,
                         protocol_pack::mcp_sampling_create_message_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                "mcp.prompts.list" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::mcp_prompts_list_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                "mcp.prompts.get" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::mcp_prompts_get_payload(
                             server,
                             request.params.unwrap_or_default(),
                         )

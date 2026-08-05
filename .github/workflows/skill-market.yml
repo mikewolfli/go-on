@@ -213,27 +213,36 @@ jobs:
           touch config/sqlite3/acp_cache.sqlite3
           touch config/sqlite3/acp_vector.sqlite3
 
-      - name: Test skill import via go-on CLI
+      - name: Validate skill manifests
         shell: bash
         run: |
-          # For each skill, verify go-on can parse its SKILL.md
+          # Real validation: every skill directory must ship a SKILL.md with
+          # YAML frontmatter (---) and a description field. Fails the job on
+          # any violation instead of always exiting 0.
+          failed=0
           for skill_dir in ${{ env.SKILLS_DIR }}/*/; do
             [ -d "$skill_dir" ] || continue
             manifest="$skill_dir/SKILL.md"
-            [ -f "$manifest" ] || continue
-
             skill_name="$(basename "$skill_dir")"
-            echo "Testing: $skill_name"
-
-            # Use the skill_reload tool via a simple config-based test
-            # by starting go-on, importing, and checking output
-            SKILL_MANIFEST="$manifest" \
-            timeout 10 \
-              ./target/debug/go-on skill list 2>&1 \
-              | grep -q "import" \
-              && echo "  ✅ $skill_name: import OK" \
-              || echo "  ⚠️  $skill_name: import not tested (CLI may not support direct import)"
+            if [ ! -f "$manifest" ]; then
+              echo "  ❌ $skill_name: missing SKILL.md"
+              failed=1
+              continue
+            fi
+            if head -1 "$manifest" | grep -q "^---" \
+              && grep -q "^description:" "$manifest" \
+              && grep -q "^name:" "$manifest"; then
+              echo "  ✅ $skill_name: manifest valid"
+            else
+              echo "  ❌ $skill_name: SKILL.md missing required frontmatter (--- / name: / description:)"
+              failed=1
+            fi
           done
+          if [ "$failed" -ne 0 ]; then
+            echo "Skill manifest validation failed."
+            exit 1
+          fi
+          echo "All skill manifests valid."
 
   # ── Job 3: Publish index to GitHub Pages (manual only) ─────────
   publish:
