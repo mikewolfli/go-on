@@ -367,24 +367,49 @@ fn extract_terms(text: &str, max_terms: usize) -> Vec<String> {
     terms
 }
 
+/// Mtime-keyed cache for the knowledge artifact file so chat requests do not
+/// re-read and re-parse the JSON on every turn (the file only changes when
+/// knowledge is persisted).
+struct KnowledgeArtifactCache {
+    mtime: Option<std::time::SystemTime>,
+    bus: KnowledgeBusArtifact,
+}
+
+fn knowledge_artifact_cached(server: &AcpServer) -> Option<KnowledgeBusArtifact> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<Option<KnowledgeArtifactCache>>> = OnceLock::new();
+
+    let ledger = crate::acp::r#impl::runtime::artifact_ledger(server);
+    let path = ledger.latest_path("spec", "latest-knowledge.json");
+    if !Path::new(&path).exists() {
+        return None;
+    }
+    let mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+
+    let mut guard = CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if guard.as_ref().and_then(|c| c.mtime) == mtime {
+        return Some(guard.as_ref()?.bus.clone());
+    }
+
+    let raw = fs::read_to_string(path).ok()?;
+    let bus = serde_json::from_str::<KnowledgeBusArtifact>(&raw).ok()?;
+    *guard = Some(KnowledgeArtifactCache {
+        mtime,
+        bus: bus.clone(),
+    });
+    Some(bus)
+}
+
 pub(crate) fn load_recent_knowledge_context(
     server: &AcpServer,
     phase_name: &str,
     limit: usize,
 ) -> Vec<String> {
-    let ledger = crate::acp::r#impl::runtime::artifact_ledger(server);
-    let path = ledger.latest_path("spec", "latest-knowledge.json");
-    if !Path::new(&path).exists() {
+    let Some(bus) = knowledge_artifact_cached(server) else {
         return Vec::new();
-    }
-
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(_) => return Vec::new(),
-    };
-    let bus = match serde_json::from_str::<KnowledgeBusArtifact>(&raw) {
-        Ok(bus) => bus,
-        Err(_) => return Vec::new(),
     };
 
     bus.events

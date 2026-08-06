@@ -2,659 +2,226 @@
 
 ## 概述
 
-核心運行時 API 提供系統初始化、關閉、配置管理和基本運行時操作的端點。這些端點對於管理 go-on 運行時生命週期至關重要。
+核心運行時 API 涵蓋運行時生命週期、健康檢查、配置管理和維護操作。go-on 的主要程式化介面是**基於 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；少量 HTTP GET 端點與 SSE 串流端點用於健康探針、指標抓取和對話串流傳輸。
 
-## 端點
+完整且權威的 JSON-RPC 方法參考見 `docs/protocol-guide.md`。本頁僅記錄當前真實存在的端點；未列出的端點不應假定其存在。
 
-### 健康檢查
+## HTTP 端點
 
-#### GET /health
-檢查運行時的整體健康狀態。
+### GET 端點
 
-**請求：**
-```http
-GET /health HTTP/1.1
-Host: localhost:8090
-Accept: application/json
-```
+| 路徑 | 說明 |
+|---|---|
+| `/` | 根能力回應（協定、端點、版本） |
+| `/health` | 伺服器狀態快照（見下文） |
+| `/health/ready` | 就緒探針——就緒時回傳 `200`，排空（draining）時回傳 `503` |
+| `/metrics` | Prometheus 文字格式指標 |
+| `/protocol/version` | 支援的協定版本和伺服器版本 |
+| `/v1/models` | 列出可用模型（OpenAI 相容） |
+| `/v1/model` | `/v1/models` 的別名 |
+| `/models` | `/v1/models` 的別名 |
+| `/v1/responses` | 列出 OpenAI Responses API 載荷 |
+| `/v1/responses/{id}` | 依 ID 取得回應（OpenAI Responses API） |
+| `/v1/state/events` | 狀態同步事件的 SSE 串流 |
 
-**查詢參數：**
-- `verbose` (boolean, 可選)：包含詳細的組件狀態
-- `timeout` (integer, 可選)：超時時間（毫秒，默認：5000）
+### POST 端點
 
-**響應：**
+| 路徑 | 說明 |
+|---|---|
+| `/rpc` | JSON-RPC 2.0 方法分發（主要介面；`/` 也可接受） |
+| `/chat` | 對話補全（ACP JSON-RPC 格式） |
+| `/chat/stream` | 串流對話補全（SSE） |
+| `/v1/chat/completions` | OpenAI 相容對話補全 |
+| `/chat/completions` | OpenAI 相容對話補全 |
+| `/v1/responses` | OpenAI Responses API |
+
+> 下文所有 JSON-RPC 方法名稱均透過 `POST /rpc` 分發。完整方法參考見
+> `docs/protocol-guide.md`。
+
+## 健康檢查
+
+### GET /health
+
+回傳完整的伺服器狀態快照（`ServerStatus`）：請求指標、生命週期狀態、斷路器快照、維護狀態、治理狀態和時間戳。
+
+**回應：**
+
 ```json
 {
-  "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "version": "0.6.1",
-  "uptime_seconds": 3600,
-  "components": {
-    "database": "healthy",
-    "cache": "healthy",
-    "vector_store": "healthy",
-    "model_providers": {
-      "openai": "healthy",
-      "anthropic": "healthy"
-    }
-  }
-}
-```
-
-**狀態碼：**
-- `200 OK`：運行時健康
-- `503 Service Unavailable`：運行時不健康
-
-#### GET /health/ready
-檢查運行時是否準備好接受請求。
-
-**響應：**
-```json
-{
-  "status": "ready",
-  "timestamp": "2024-01-01T00:00:00Z"
-}
-```
-
-#### GET /health/live
-檢查運行時進程是否存活（存活探針）。
-
-**響應：**
-```json
-{
-  "status": "alive",
-  "timestamp": "2024-01-01T00:00:00Z"
-}
-```
-
-### 運行時信息
-
-#### GET /runtime/info
-獲取詳細的運行時信息。
-
-**響應：**
-```json
-{
-  "version": "0.6.1",
-  "build_date": "2024-01-01T00:00:00Z",
-  "git_commit": "a1b2c3d4e5f6",
-  "features": ["backend-sqlite", "sqlite-vec"],
-  "protocols": ["acp_stdio", "acp_http", "mcp_stdio", "mcp_http"],
-  "config_path": "/path/to/config.toml",
-  "data_directory": "/path/to/data",
-  "start_time": "2024-01-01T00:00:00Z",
-  "uptime_seconds": 3600
-}
-```
-
-#### GET /runtime/stats
-獲取運行時統計信息。
-
-**響應：**
-```json
-{
-  "requests": {
-    "total": 1000,
-    "successful": 950,
-    "failed": 50,
-    "rate_per_second": 10.5
+  "metrics": {
+    "total_requests": 1000,
+    "successful_requests": 950,
+    "failed_requests": 50,
+    "avg_request_duration_ms": 42.5,
+    "active_requests": 3,
+    "cache_hit_rate": 0.8,
+    "chat_requests_total": 400
   },
-  "memory": {
-    "used_mb": 256,
-    "total_mb": 1024,
-    "peak_mb": 512
-  },
-  "cache": {
-    "hits": 800,
-    "misses": 200,
-    "hit_rate": 0.8,
-    "size": 5000,
-    "max_size": 10000
-  },
-  "vector_store": {
-    "entries": 1000,
-    "searches": 500,
-    "avg_search_time_ms": 150
-  }
+  "lifecycle": { "state": "running" },
+  "circuit_breakers": [],
+  "maintenance": { "active": false },
+  "governance": { "status": "healthy" },
+  "timestamp": 1760000000
 }
 ```
 
-### 配置管理
+### GET /health/ready
 
-#### GET /config
-獲取當前運行時配置。
+就緒探針。伺服器可接受請求時回傳 `200` 及 `{"ok": true, "status": "ready", "healthy": true}`；排空期間回傳 `503` 及 `{"ok": false, "status": "draining", "message": "Server is shutting down"}`。
 
-**查詢參數：**
-- `include_secrets` (boolean, 可選)：包含密鑰值（默認：false）
-- `format` (string, 可選)：輸出格式：`json` 或 `toml`（默認：`json`）
+### JSON-RPC 健康方法
 
-**響應：**
-```json
-{
-  "default_phase": "coding",
-  "model_selection_mode": "adaptive",
-  "protocol": {
-    "mode": "adaptive"
-  },
-  "cache": {
-    "enabled": true,
-    "path": "acp_cache.sqlite3",
-    "default_ttl_seconds": 3600,
-    "max_entries": 5000
-  },
-  "vector": {
-    "enabled": true,
-    "auto_mode": true,
-    "path": "acp_vector.sqlite3",
-    "dimensions": 192
-  }
-}
-```
+| 方法 | 說明 |
+|---|---|
+| `health` / `runtime.health` | 運行時健康快照 |
+| `health.probes` | 模組級健康探針 |
+| `health.check` | 執行完整健康檢查；成功時回傳 `{"ok": true}` |
 
-#### POST /config/reload
-從磁盤重新加載配置。
+範例：
 
-**請求：**
-```http
-POST /config/reload HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "配置重新加載成功",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "changes": {
-    "added": [],
-    "modified": ["cache.max_entries"],
-    "removed": []
-  }
-}
-```
-
-#### PUT /config
-更新運行時配置。
-
-**請求：**
-```http
-PUT /config HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "cache": {
-    "max_entries": 10000
-  }
-}
-```
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "配置更新成功",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "requires_restart": false
-}
-```
-
-### 初始化
-
-#### POST /initialize
-使用新配置初始化運行時。
-
-**請求：**
-```http
-POST /initialize HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "setup_level": "standard",
-  "config_overrides": {
-    "default_phase": "coding"
-  }
-}
-```
-
-**查詢參數：**
-- `setup_level` (string, 可選)：`quick`、`standard` 或 `custom`（默認：`standard`）
-- `force` (boolean, 可選)：強制重新初始化（默認：false）
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "運行時初始化成功",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "config_path": "/path/to/config.toml",
-  "data_directory": "/path/to/data",
-  "components_initialized": ["database", "cache", "vector_store"]
-}
-```
-
-### 關閉
-
-#### POST /shutdown
-優雅地關閉運行時。
-
-**請求：**
-```http
-POST /shutdown HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "timeout_seconds": 30,
-  "drain_connections": true
-}
-```
-
-**查詢參數：**
-- `timeout_seconds` (integer, 可選)：優雅關閉的超時時間（默認：30）
-- `drain_connections` (boolean, 可選)：等待活動連接完成（默認：true）
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "關閉已啟動",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "shutdown_timeout_seconds": 30
-}
-```
-
-### 協議管理
-
-#### GET /protocols
-獲取可用的協議模式及其狀態。
-
-**響應：**
-```json
-{
-  "current_mode": "adaptive",
-  "available_modes": [
-    {
-      "name": "adaptive",
-      "description": "具有自適應路由的雙棧能力",
-      "enabled": true,
-      "active": true
-    },
-    {
-      "name": "acp_stdio",
-      "description": "ACP over stdio",
-      "enabled": true,
-      "active": false
-    },
-    {
-      "name": "acp_http",
-      "description": "ACP over HTTP",
-      "enabled": true,
-      "active": false
-    },
-    {
-      "name": "mcp_stdio",
-      "description": "MCP over stdio",
-      "enabled": true,
-      "active": false
-    },
-    {
-      "name": "mcp_http",
-      "description": "MCP over HTTP",
-      "enabled": true,
-      "active": false
-    }
-  ]
-}
-```
-
-#### POST /protocols/{mode}/activate
-激活特定的協議模式。
-
-**請求：**
-```http
-POST /protocols/acp_http/activate HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "協議模式已激活",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "previous_mode": "adaptive",
-  "new_mode": "acp_http",
-  "requires_restart": false
-}
-```
-
-### 特性管理
-
-#### GET /features
-獲取啟用的特性及其狀態。
-
-**響應：**
-```json
-{
-  "features": [
-    {
-      "name": "backend-sqlite",
-      "enabled": true,
-      "description": "SQLite 數據庫支持",
-      "version": "0.39.0"
-    },
-    {
-      "name": "sqlite-vec",
-      "enabled": true,
-      "description": "SQLite 的向量擴展",
-      "version": "0.1.9"
-    },
-    {
-      "name": "otel",
-      "enabled": false,
-      "description": "OpenTelemetry 支持",
-      "version": null
-    }
-  ]
-}
-```
-
-#### POST /features/{name}/enable
-啟用特定特性。
-
-**請求：**
-```http
-POST /features/otel/enable HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "特性已啟用",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "feature": "otel",
-  "requires_restart": true
-}
-```
-
-#### POST /features/{name}/disable
-禁用特定特性。
-
-**請求：**
-```http
-POST /features/sqlite-vec/disable HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "特性已禁用",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "feature": "sqlite-vec",
-  "requires_restart": true
-}
-```
-
-### 維護操作
-
-#### POST /maintenance/gc
-運行垃圾回收。
-
-**請求：**
-```http
-POST /maintenance/gc HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "components": ["cache", "vector_store"],
-  "aggressive": false
-}
-```
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "垃圾回收完成",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "components": {
-    "cache": {
-      "entries_removed": 100,
-      "space_freed_mb": 10
-    },
-    "vector_store": {
-      "entries_removed": 50,
-      "space_freed_mb": 5
-    }
-  }
-}
-```
-
-#### POST /maintenance/vacuum
-壓縮數據庫。
-
-**請求：**
-```http
-POST /maintenance/vacuum HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "databases": ["cache", "vector_store"],
-  "analyze": true
-}
-```
-
-**響應：**
-```json
-{
-  "success": true,
-  "message": "壓縮完成",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "databases": {
-    "cache": {
-      "size_before_mb": 100,
-      "size_after_mb": 80,
-      "space_freed_mb": 20
-    },
-    "vector_store": {
-      "size_before_mb": 200,
-      "size_after_mb": 150,
-      "space_freed_mb": 50
-    }
-  }
-}
-```
-
-### 診斷
-
-#### GET /diagnostics
-獲取運行時診斷信息。
-
-**查詢參數：**
-- `level` (string, 可選)：`basic`、`detailed` 或 `full`（默認：`basic`）
-- `include_logs` (boolean, 可選)：包含最近日誌（默認：false）
-
-**響應：**
-```json
-{
-  "timestamp": "2024-01-01T00:00:00Z",
-  "system": {
-    "os": "Linux",
-    "arch": "x86_64",
-    "cpu_cores": 8,
-    "total_memory_mb": 16384,
-    "available_memory_mb": 8192
-  },
-  "runtime": {
-    "version": "0.6.1",
-    "uptime_seconds": 3600,
-    "threads": 12,
-    "memory_usage_mb": 256
-  },
-  "components": {
-    "database": {
-      "status": "healthy",
-      "connections": 5,
-      "size_mb": 100
-    },
-    "cache": {
-      "status": "healthy",
-      "entries": 5000,
-      "hit_rate": 0.85
-    }
-  },
-  "issues": [
-    {
-      "level": "warning",
-      "component": "vector_store",
-      "message": "向量存儲接近容量限制",
-      "suggestion": "考慮增加 max_entries 或運行維護"
-    }
-  ]
-}
-```
-
-## WebSocket 端點
-
-### WS /ws/runtime
-實時運行時更新。
-
-**事件：**
-```json
-{
-  "type": "runtime.status_changed",
-  "data": {
-    "status": "healthy",
-    "timestamp": "2024-01-01T00:00:00Z"
-  }
-}
-```
-
-```json
-{
-  "type": "config.updated",
-  "data": {
-    "path": "cache.max_entries",
-    "old_value": 5000,
-    "new_value": 10000,
-    "timestamp": "2024-01-01T00:00:00Z"
-  }
-}
-```
-
-## 命令行界面
-
-### 健康檢查
 ```bash
-go-on --health
-go-on --health --verbose
-go-on --health --timeout 10000
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"runtime.health","params":{}}'
 ```
 
-### 配置
+## 運行時資訊
+
+運行時內省透過 JSON-RPC 方法提供：
+
+| 方法 | 說明 |
+|---|---|
+| `runtime.stability` | 運行時穩定性指標 |
+| `runtime.features` | 已啟用的運行時特性 |
+| `runtime.self_model` | 自模型快照（穩定性、學習、知識） |
+| `provider.status` | 已設定 AI 提供方就緒狀態 |
+| `provider.catalog` / `provider.list_models` | 提供方/模型目錄 |
+| `capabilities.list` | 伺服器能力 |
+| `selector.status` | 模型/工具選擇狀態 |
+| `models.list` / `models/list` | 列出可用模型 |
+
+## 配置管理
+
+配置透過 JSON-RPC 管理，而非 REST：
+
+| 方法 | 說明 |
+|---|---|
+| `config.reload` | 重新驗證並從磁碟載入配置；在相關變更時發布狀態同步事件（`ConfigReloaded`、`AgentsChanged`、`ModelsChanged`） |
+| `config.baseline` | 生效配置基線與舊版鍵遷移報告 |
+| `debug_panel.get` / `debug.panel.get` | 偵錯面板載荷 |
+
+注意：`config.reload` 會立即套用運行時設定，但 agent/快取/向量變更需要重新啟動（回應包含警告數量與配置檔位建議）。
+
+範例：
+
 ```bash
-go-on --config-show
-go-on --config-show --format toml
-go-on --config-reload
-go-on --config-update '{"cache.max_entries": 10000}'
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"config.reload","params":{}}'
 ```
 
-### 初始化
+## 生命週期
+
+### JSON-RPC
+
+| 方法 | 說明 |
+|---|---|
+| `initialize` | ACP 初始化握手 |
+| `shutdown` | 優雅關閉 |
+| `session/new`、`session/load`、`session/resume`、`session/close`、`session/list` | 會話生命週期 |
+| `authenticate` / `logout` | 認證 |
+| `mcp.initialize`、`mcp.ping` | MCP 握手 |
+
+### 命令列
+
+運行時生命週期也可以透過 CLI 驅動（見 `src/main/cli.rs`）：
+
 ```bash
-go-on --init
-go-on --init --setup-level standard
-go-on --init --config config.toml
+go-on --setup                  # 執行設定精靈（別名：--init）
+go-on --setup-level standard   # quick | standard | custom
+go-on --setup-profile PROFILE  # 使用的設定檔位
+go-on --status                 # 輸出運行時就緒狀態（別名：--check）
+go-on --healthcheck            # 產生運行時健康檢查報告到 .goon/
+go-on --diagnose               # 執行端到端診斷並給出修復建議
+go-on --validate-config        # 驗證配置後退出（別名：--doctor）
+go-on --config config.toml     # 明確指定配置檔案（別名：-c）
+go-on --secret --secret-name KEY --secret-value VALUE   # 金鑰管理
+go-on -b 127.0.0.1:8090        # 綁定 ACP HTTP 伺服器（別名：--acp-http-bind / --bind）
+go-on -m adaptive              # 協定模式覆蓋（別名：--protocol-mode / --mode）
+go-on -a                       # 啟動互動式終端對話會話
 ```
 
-### 關閉
+子命令：`init`、`status`、`diagnose`、`skill`、`hub`（特性門控）。
+
+## 維護操作
+
+| 方法 | 說明 |
+|---|---|
+| `maintenance.gc` | 執行維護性垃圾回收 |
+| `data.lifecycle` | 資料生命週期審查（重放序列、保留策略） |
+| `cache.clear` | 清空快取 |
+| `vector.clear` | 清空向量儲存 |
+| `breaker.status` / `breaker.reset` / `breaker.recovery` | 斷路器管理 |
+| `hardness.status` | 硬度（hardness）狀態 |
+| `lock.status` | ACP 鎖狀態 |
+
+範例：
+
 ```bash
-go-on --shutdown
-go-on --shutdown --timeout 60
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"maintenance.gc","params":{}}'
 ```
 
-## 錯誤碼
+## 串流傳輸
 
-### 常見錯誤
-- `RUNTIME_NOT_INITIALIZED`：運行時未初始化
-- `CONFIG_INVALID`：配置無效或格式錯誤
-- `FEATURE_NOT_AVAILABLE`：請求的特性不可用
-- `PROTOCOL_NOT_SUPPORTED`：請求的協議不支持
-- `MAINTENANCE_IN_PROGRESS`：維護操作已在進行中
+### POST /chat/stream
 
-### 錯誤示例
+SSE 串流對話補全。伺服器向連線寫入 SSE 幀（`event: chunk`、`done`、`status`、`telemetry`、`tool_approval`、`error`），直到串流結束。
+
+```bash
+curl -N http://localhost:8090/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello"}]}'
+```
+
+## 錯誤處理
+
+JSON-RPC 回應使用標準的 JSON-RPC 2.0 錯誤物件：
+
 ```json
 {
+  "jsonrpc": "2.0",
+  "id": 1,
   "error": {
-    "code": "RUNTIME_NOT_INITIALIZED",
-    "message": "運行時未初始化。請先運行 /initialize。",
-    "details": {
-      "required_action": "initialize"
-    }
+    "code": -32602,
+    "message": "invalid params: missing field `name`",
+    "data": { "code": "DISPATCH_ERROR" }
   }
 }
 ```
 
-## 速率限制
+標準錯誤碼：
 
-### 默認限制
-- 健康端點：每分鐘 60 個請求
-- 配置端點：每分鐘 30 個請求
-- 維護端點：每分鐘 10 個請求
+| 代碼 | 含義 |
+|---|---|
+| `-32700` | 解析錯誤 |
+| `-32600` | 無效請求 |
+| `-32601` | 方法不存在 |
+| `-32602` | 無效參數 |
+| `-32603` | 內部錯誤 |
 
-### 頭部
-```
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 55
-X-RateLimit-Reset: 1614556800
-```
+HTTP 狀態碼：`200 OK`、`400 Bad Request`、`401 Unauthorized`、`404 Not Found`、`405 Method Not Allowed`、`429 Too Many Requests`、`500 Internal Server Error`、`502 Bad Gateway`（上游錯誤）、`503 Service Unavailable`。
 
-## 安全考慮
+## 安全考量
 
-### 認證
-- 本地模式：可選的 API 密鑰
-- 服務器模式：必需的 API 密鑰
-- 敏感操作：始終需要認證
-
-### 授權
-- 健康端點：公開（只讀）
-- 配置端點：需要管理員權限
-- 維護端點：需要管理員權限
-
-### 審計日誌
-所有配置更改和維護操作都記錄到審計日誌中。
-
-## 最佳實踐
-
-### 健康監控
-- 使用 `/health` 進行就緒探針
-- 使用 `/health/live` 進行存活探針
-- 監控響應時間和錯誤率
-
-### 配置管理
-- 使用版本控制管理配置文件
-- 先在暫存環境測試配置更改
-- 使用 `/config/reload` 進行動態更新
-
-### 維護調度
-- 在非高峰時段安排維護
-- 運行壓縮前監控磁盤空間
-- 重大維護操作前備份數據
+- 本機模式：API 金鑰可選
+- 伺服器模式：API 金鑰必需（透過 `X-Api-Key` / `X-Go-On-Key` 傳送）
+- RBAC：敏感操作（`shutdown`、`maintenance.gc`）需要管理員權限
+- HTTP 處理器對每個請求強制執行入口守衛、認證和 RBAC
 
 ## 下一步
 
 - 探索 [安全和治理 API](./safety-governance.md)
-- 瞭解 [可觀測性 API](./observability.md)
-- 查看 [工作流和任務 API](./workflow-task.md)
+- 了解 [可觀測性 API](./observability.md)
+- 檢視 [工作流和任務 API](./workflow-task.md)

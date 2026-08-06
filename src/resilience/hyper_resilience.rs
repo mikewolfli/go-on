@@ -444,8 +444,10 @@ impl HyperResilienceEngine {
     /// for both, so breaker and health can never drift. Synchronous: the
     /// underlying locks are `std::Mutex` and are never held across an `.await`.
     pub fn record_outcome(&self, name: &str, success: bool, latency_ms: u64) {
-        self.register_service(name);
-        let max_failure_threshold = read_lock(&self.config).circuit_breaker_threshold;
+        let (max_failure_threshold, recovery_timeout_ms) = {
+            let config = read_lock(&self.config);
+            (config.circuit_breaker_threshold, config.recovery_timeout_ms)
+        };
 
         let (success_rate, error_rate, avg_latency_ms, status) = {
             let mut sc = lock_mutex(&self.service_counters);
@@ -501,20 +503,37 @@ impl HyperResilienceEngine {
 
         {
             let mut sh = lock_mutex(&self.service_health);
-            if let Some(h) = sh.get_mut(name) {
-                h.success_rate = success_rate;
-                h.error_rate = error_rate;
-                h.avg_latency_ms = avg_latency_ms;
-                h.status = status;
-                h.last_check_timestamp = crate::shared::timestamps::now_ts_ms_u64() / 1000;
-            }
+            let h = sh.entry(name.to_string()).or_insert_with(|| ServiceHealth {
+                service_name: name.to_string(),
+                status: HealthStatus::Healthy,
+                success_rate: 1.0,
+                error_rate: 0.0,
+                avg_latency_ms: 100.0,
+                last_check_timestamp: crate::shared::timestamps::now_ts_ms_u64() / 1000,
+            });
+            h.success_rate = success_rate;
+            h.error_rate = error_rate;
+            h.avg_latency_ms = avg_latency_ms;
+            h.status = status;
+            h.last_check_timestamp = crate::shared::timestamps::now_ts_ms_u64() / 1000;
         }
 
         // Drive the breaker from the same outcome (sync inline update).
         let mut cbs = lock_mutex(&self.circuit_breakers);
-        if let Some(cb) = cbs.get_mut(name) {
-            apply_breaker_outcome(cb, success, max_failure_threshold);
-        }
+        let cb = cbs
+            .entry(name.to_string())
+            .or_insert_with(|| CircuitBreaker {
+                name: name.to_string(),
+                state: CircuitState::Closed,
+                failure_count: 0,
+                threshold: max_failure_threshold,
+                recovery_timeout_ms,
+                last_failure_ms: 0,
+                half_open_attempts: 0,
+                last_failure_mode: None,
+                failure_history: Vec::new(),
+            });
+        apply_breaker_outcome(cb, success, max_failure_threshold);
     }
 
     /// Current health snapshot for a service (None when not registered).

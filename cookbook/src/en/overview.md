@@ -2,7 +2,7 @@
 
 `go-on` is a three-surface runtime around a Rust backend:
 
-- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 13-sub-bus capability architecture with cognitive modules. All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum.
+- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 7-feature-gated sub-bus capability architecture with cognitive modules. All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum.
 - **GUI**: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.
 - **VS Code addon**: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.
 
@@ -42,12 +42,12 @@ Four build profiles support different deployment scenarios:
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **local** | ✅ **Zero warnings** | **3478** |
+| **local** | ✅ **Zero warnings** | **~1.7K (1 known failure)** |
 | **simple-server** | ✅ **Zero warnings** | **all pass** |
 | **full** | ✅ **Zero warnings** | **all pass** |
 | **multi-users-server** | ✅ **Zero warnings** | **all pass** |
 
-All 3478 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
+The last `cargo test` run (default `local` profile) passes every suite except one pre-existing failure in `governance::security_governor::tests::test_profile_reflects_state`. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
 
 ## Unified Handler Dispatch Pattern
 
@@ -103,7 +103,7 @@ That split matters for the three clients:
 
 ## Architecture: Multi-Bus Capability System
 
-go-on implements a **13-sub-bus architecture** centered on `CapabilityBus` and `HarnessBus`.
+go-on implements a **sub-bus architecture** — 7 feature-gated sub-buses (per `Cargo.toml`) — centered on `CapabilityBus` and `HarnessBus`.
 
 ### Core Buses
 

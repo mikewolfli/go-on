@@ -179,16 +179,6 @@ impl SemanticResponseCache {
         self.put_inner(request, response, self.config.default_ttl_seconds);
     }
 
-    /// Store a string response (convenience wrapper for `put`).
-    pub fn put_string(&self, request: &str, response_text: String) {
-        self.put(request, Value::String(response_text));
-    }
-
-    /// Store a string response with an explicit per-entry TTL (seconds).
-    pub fn put_string_with_ttl(&self, request: &str, response_text: String, ttl_seconds: u64) {
-        self.put_inner(request, Value::String(response_text), ttl_seconds);
-    }
-
     /// Shared insert path with an explicit per-entry TTL.
     fn put_inner(&self, request: &str, response: Value, ttl_seconds: u64) {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
@@ -233,14 +223,6 @@ impl SemanticResponseCache {
         };
 
         guard.entry(hash).or_default().push(entry);
-    }
-
-    /// Retrieve a string response (convenience wrapper for `get`).
-    pub fn get_string(&self, request: &str) -> Option<String> {
-        self.get(request).and_then(|v| match v {
-            Value::String(s) => Some(s),
-            _ => v.as_str().map(String::from),
-        })
     }
 
     /// Clear all entries

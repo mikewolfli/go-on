@@ -675,7 +675,7 @@ impl SecurityGovernor {
                     )],
                 },
                 PolicyAction::Deny => {
-                    inner.total_denials += 1;
+                    // Denial count is recorded centrally in `record_audit`.
                     PolicyVerdict {
                         allowed: false,
                         required_review: false,
@@ -688,7 +688,7 @@ impl SecurityGovernor {
                     }
                 }
                 PolicyAction::RequireReview => {
-                    inner.total_reviews += 1;
+                    // Review count is recorded centrally in `record_audit`.
                     PolicyVerdict {
                         allowed: true,
                         required_review: true,
@@ -762,7 +762,7 @@ impl SecurityGovernor {
                 }
             }
             PolicyAction::Escalate => {
-                inner.active_escalations += 1;
+                // Escalation count is recorded centrally in `record_audit`.
                 PolicyVerdict {
                     allowed: true,
                     required_review: false,
@@ -774,22 +774,22 @@ impl SecurityGovernor {
         })
     }
 
-    /// Record an audit log entry: appends to the internal audit log, mirrors
-    /// the entry into the canonical global audit sink, and updates governance
-    /// metric counters (evaluations, denials, reviews).
+    /// Record an audit log entry: mirrors the entry into the canonical global
+    /// audit sink and updates governance metric counters (denials, reviews,
+    /// active escalations). Evaluation totals are counted in [`Self::evaluate`]
+    /// — this method does not double-count them.
     pub fn record_audit(&self, entry: AuditEntry) {
         let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("SecurityGovernor lock poisoned in record_audit, recovering");
             poisoned.into_inner()
         });
-        inner.total_evaluations += 1;
         if !entry.verdict.allowed {
             inner.total_denials += 1;
         }
         if entry.verdict.required_review {
             inner.total_reviews += 1;
         }
-        if !entry.verdict.escalation_level.is_empty() {
+        if entry.verdict.escalation_level == "elevated" {
             inner.active_escalations += 1;
         }
         // Single process-wide audit sink (From conversion).
@@ -1079,9 +1079,26 @@ mod tests {
         assert_eq!(profile.total_reviews, 0);
 
         // Perform evaluations.
-        governor.evaluate("x", "u", &HashMap::new()).ok();
-        governor.evaluate("y", "u", &HashMap::new()).ok();
+        let v1 = governor.evaluate("x", "u", &HashMap::new()).ok();
+        let v2 = governor.evaluate("y", "u", &HashMap::new()).ok();
 
+        let profile = governor.profile();
+        assert_eq!(profile.total_evaluations, 2);
+        // Denial/review/escalation counters are driven by `record_audit`
+        // (the production path — HarnessBus records an audit entry after
+        // every evaluation) so `evaluate` alone does not bump them.
+        assert_eq!(profile.total_denials, 0);
+
+        // Production-shaped audit recording for both verdicts.
+        for verdict in [v1, v2].into_iter().flatten() {
+            governor.record_audit(AuditEntry::new(
+                verdict.matched_policy.clone().unwrap_or_default(),
+                verdict,
+                "test".to_string(),
+                "u".to_string(),
+                String::new(),
+            ));
+        }
         let profile = governor.profile();
         assert_eq!(profile.total_evaluations, 2);
         assert_eq!(profile.total_denials, 1);

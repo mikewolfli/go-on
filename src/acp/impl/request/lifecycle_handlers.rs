@@ -45,13 +45,16 @@ pub(super) async fn health_payload(server: &AcpServer) -> Result<Value> {
 
     // Module-level health profiles — read from harness_bus and capability_bus.
     let harness_profile = if let Some(hb) = server.governance_deps.harness_bus.as_ref() {
+        // resilience/fault_tolerance profiles are independent — run in parallel.
+        let (resilience, fault_tolerance) =
+            tokio::join!(hb.resilience_profile(), hb.fault_tolerance_profile());
         json!({
             "enabled": true,
             "governance": hb.governance_profile(),
             "drift": hb.drift_profile(),
             "artifact": hb.artifact_profile(),
-            "resilience": hb.resilience_profile().await,
-            "fault_tolerance": hb.fault_tolerance_profile().await,
+            "resilience": resilience,
+            "fault_tolerance": fault_tolerance,
         })
     } else {
         json!({"enabled": false})

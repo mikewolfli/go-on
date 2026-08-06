@@ -22,7 +22,7 @@ Multi-Users Server mode (`multi-users-server`) is the enterprise-grade build pro
 - **High availability**: Built-in redundancy and failover support
 - **Enterprise monitoring**: Comprehensive observability stack
 - **Scalability**: Horizontal scaling capabilities
-- **Full Phase 4 architecture**: All 14 buses and 21 F-GAP modules
+- **Full Phase 4 architecture**: All 7 feature-gated sub-buses and 21 F-GAP modules
 - **Distributed memory bus**: Cross-node memory sharing via DistributedMemoryBus
 - **Fault tolerance engine**: Cross-node fault isolation and auto-recovery
 - **Multi-channel transport**: 6-channel, QoS-enabled message transport

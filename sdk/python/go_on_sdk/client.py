@@ -9,7 +9,7 @@ import random
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, cast
 
 import httpx
@@ -68,10 +68,15 @@ class ChatRequest:
 
 @dataclass
 class HealthResponse:
-    status: str
-    version: str
-    uptime_seconds: int
-    modules: dict[str, Any] = field(default_factory=dict)
+    lifecycle: dict[str, Any] | None = None
+    version: str | None = None
+    stats: dict[str, Any] | None = None
+    maintenance: dict[str, Any] | None = None
+    timestamp: int | None = None
+    metrics: dict[str, Any] | None = None
+    status: str | None = None
+    uptime_seconds: int | None = None
+    modules: dict[str, Any] | None = None
 
 
 @dataclass
@@ -409,25 +414,30 @@ class GoOnClient:
     # ── Core Runtime ──────────────────────────────────────────────────
 
     async def health(self) -> HealthResponse:
-        """GET /health — quick health check."""
+        """GET /health — quick health check (ServerStatus payload)."""
         resp = await self._client.get(f"{self.base_url}/health")
         _ = resp.raise_for_status()
         data = cast(dict[str, Any], resp.json())
         return HealthResponse(
-            status=cast(str, data.get("status", "unknown")),
-            version=cast(str, data.get("version", "")),
-            uptime_seconds=cast(int, data.get("uptime_seconds", 0)),
-            modules=cast(dict[str, Any], data.get("modules", {})),
+            lifecycle=cast(Any, data.get("lifecycle")),
+            version=cast(Any, data.get("version")),
+            stats=cast(Any, data.get("stats")),
+            maintenance=cast(Any, data.get("maintenance")),
+            timestamp=cast(Any, data.get("timestamp")),
+            metrics=cast(Any, data.get("metrics")),
+            modules=cast(Any, data.get("modules")),
         )
 
     async def runtime_health(self) -> HealthResponse:
         """runtime.health — full runtime health via JSON-RPC."""
         result = await self._json_rpc("runtime.health")
         return HealthResponse(
-            status=cast(str, result.get("status", "unknown")),
-            version=cast(str, result.get("version", "")),
-            uptime_seconds=cast(int, result.get("uptime_seconds", 0)),
-            modules=cast(dict[str, Any], result.get("modules", {})),
+            lifecycle=cast(Any, result.get("lifecycle")),
+            version=cast(Any, result.get("version")),
+            stats=cast(Any, result.get("stats")),
+            maintenance=cast(Any, result.get("maintenance")),
+            timestamp=cast(Any, result.get("timestamp")),
+            modules=cast(Any, result.get("modules")),
         )
 
     async def runtime_stability(self) -> dict[str, Any]:
@@ -556,14 +566,14 @@ class GoOnClient:
         """workflow.execute — execute the current workflow."""
         return await self._json_rpc("workflow.execute")
 
-    async def task_plan(self, description: str) -> TaskPlanResponse:
+    async def task_plan(self, task: str) -> TaskPlanResponse:
         """task.plan — plan a task."""
-        result = await self._json_rpc("task.plan", {"description": description})
+        result = await self._json_rpc("task.plan", {"task": task})
         return TaskPlanResponse(plan=cast(dict[str, Any], result.get("plan", {})))
 
-    async def task_execute(self, plan_id: str) -> dict[str, Any]:
+    async def task_execute(self, task: str) -> dict[str, Any]:
         """task.execute — execute a planned task."""
-        return await self._json_rpc("task.execute", {"plan_id": plan_id})
+        return await self._json_rpc("task.execute", {"task": task})
 
     # ── Learning / Intelligence ───────────────────────────────────────
 
@@ -577,9 +587,12 @@ class GoOnClient:
         result = await self._json_rpc("selector.status")
         return SelectorStatusResponse(selector=cast(dict[str, Any], result.get("selector", {})))
 
-    async def knowledge_distill(self, source: str) -> dict[str, Any]:
-        """knowledge.distill — run knowledge distillation."""
-        return await self._json_rpc("knowledge.distill", {"source": source})
+    async def knowledge_distill(self, limit: int | None = None) -> dict[str, Any]:
+        """knowledge.distill — run knowledge distillation over the last `limit` events."""
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        return await self._json_rpc("knowledge.distill", params)
 
     async def rl_alignment_offline_eval(self) -> dict[str, Any]:
         """rl.alignment.offline_eval — run RL alignment offline evaluation."""

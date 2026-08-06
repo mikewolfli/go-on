@@ -1,58 +1,53 @@
 # 工作流和任务 API
 
-*文档即将推出。此 API 提供工作流执行、任务规划和任务管理的端点。*
-
 ## 概述
 
-工作流和任务 API 支持复杂工作流的编排、任务规划、执行管理和结果跟踪。
+工作流和任务 API 支持复杂工作流的编排、任务规划、执行管理和结果跟踪。该 API 是**基于 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；这些能力没有专用的 REST 端点。
 
-## 主要特性
+> 权威的 JSON-RPC 方法参考见 `docs/protocol-guide.md`。
 
-- **工作流编排**：定义和执行复杂工作流
-- **任务规划**：智能任务规划和调度
-- **执行管理**：监控和控制任务执行
-- **结果跟踪**：跟踪工作流和任务结果
-- **依赖管理**：处理任务依赖和约束
+## 方法
 
-## 端点
+所有方法均通过 `POST /rpc` 分发：
+
+```bash
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"task.plan","params":{}}'
+```
 
 ### 工作流
-- `GET /workflows` - 列出工作流
-- `POST /workflows` - 创建工作流
-- `GET /workflows/{id}` - 获取工作流
-- `PUT /workflows/{id}` - 更新工作流
-- `DELETE /workflows/{id}` - 删除工作流
-- `POST /workflows/{id}/execute` - 执行工作流
+
+| 方法 | 说明 |
+|---|---|
+| `workflow.execute` | 执行工作流 |
+| `workflow.generate` | 根据提示生成工作流 |
+| `workflow.generate_from_chat` | 根据当前聊天上下文生成工作流 |
+| `workflow.confirm` | 确认工作流步骤 |
+| `workflow.clarify` | 在工作流期间请求澄清 |
+| `workflow.research` | 运行研究步骤 |
+| `workflow.consult` | 工作流执行期间咨询 |
+| `workflow.ask` | 工作流执行期间提问 |
+| `workflow.run.list` | 列出工作流运行 |
+| `workflow.run.get` | 按 ID 获取工作流运行 |
+| `workflow.run.cancel` | 取消工作流运行 |
+| `workflow.run.pause` | 暂停工作流运行 |
+| `workflow.run.resume` | 恢复工作流运行 |
 
 ### 任务
-- `GET /tasks` - 列出任务
-- `POST /tasks` - 创建任务
-- `GET /tasks/{id}` - 获取任务
-- `PUT /tasks/{id}` - 更新任务
-- `DELETE /tasks/{id}` - 删除任务
-- `POST /tasks/{id}/execute` - 执行任务
 
-### 执行
-- `GET /executions` - 列出执行
-- `GET /executions/{id}` - 获取执行详情
-- `POST /executions/{id}/cancel` - 取消执行
-- `GET /executions/{id}/results` - 获取执行结果
-
-### 规划
-- `POST /plan` - 创建执行计划
-- `GET /plans/{id}` - 获取计划详情
-- `POST /plans/{id}/validate` - 验证计划
+| 方法 | 说明 |
+|---|---|
+| `task.plan` | 规划任务（受控任务计划产物） |
+| `task.execute` | 执行任务 |
+| `action.check` | 针对 `.goon/` 产物运行动作检查（all/spec/qa/retest/final） |
 
 ## 认证
 
-所有端点都需要具有适当权限的认证。
-
-## 速率限制
-
-- 工作流端点：每分钟 60 个请求
-- 任务端点：每分钟 120 个请求
-- 执行端点：每分钟 90 个请求
+所有方法都需要具有适当权限的认证（按请求强制执行 RBAC）。
 
 ## 下一步
 
-本文档正在开发中。请稍后查看完整的 API 参考。
+- 探索 [学习和智能 API](./learning-intelligence.md)
+- 参见 [优化和操作 API](./optimization-ops.md)
+- 查看 [安全和治理 API](./safety-governance.md)

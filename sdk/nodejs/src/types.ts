@@ -15,11 +15,14 @@ export interface ChatRequest {
   stream?: boolean;
 }
 
-/** Response from the /rpc health endpoint. */
+/** Health check response (ServerStatus / runtime.health payloads). */
 export interface HealthResponse {
-  status: string;
-  version: string;
-  uptime_seconds: number;
+  lifecycle?: Record<string, unknown>;
+  version?: string;
+  stats?: Record<string, unknown>;
+  maintenance?: Record<string, unknown>;
+  timestamp?: number;
+  metrics?: Record<string, unknown>;
   modules?: Record<string, unknown>;
 }
 

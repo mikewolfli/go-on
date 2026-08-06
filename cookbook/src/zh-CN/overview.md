@@ -2,7 +2,7 @@
 
 `go-on` 是一个围绕 Rust 后端构建的三端运行时体系：
 
-- **后端**：负责配置加载、Provider 选择、路由、setup、健康检查、协议协商、stdio 或 HTTP 传输层，以及包含 13 条子总线和认知模块的能力架构。
+- **后端**：负责配置加载、Provider 选择、路由、setup、健康检查、协议协商、stdio 或 HTTP 传输层，以及包含 7 个特性门控子总线和认知模块的能力架构。
 - **GUI**：EGUI（Rust 原生）桌面图形界面，负责后端发现、进程生命周期、集成探测、监控、对话和配置管理。
 - **VS Code 插件**：负责拉起或探测运行时，暴露基于 RPC 的命令，并可在工作区级别覆盖协议模式。
 
@@ -42,12 +42,12 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo clippy -D warnings` | 测试数 |
 |:--------|:--------------------------:|:------:|
-| **local** | ✅ **零警告** | **3478** |
+| **local** | ✅ **零警告** | **~1.7K（1 个已知失败）** |
 | **simple-server** | ✅ **零警告** | **全部通过** |
 | **full** | ✅ **零警告** | **全部通过** |
 | **multi-users-server** | ✅ **零警告** | **全部通过** |
 
-全部 3478 个单元测试零失败、零忽略通过。E2E 测试（需要基础设施）标记为 `#[ignore]`。
+最近一次 `cargo test`（默认 `local` 配置）除 `governance::security_governor::tests::test_profile_reflects_state` 一处既有失败外全部通过。E2E 测试（需要基础设施）标记为 `#[ignore]`。
 
 ## 运行时协议模式
 
@@ -78,7 +78,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 ## 架构：多总线能力系统
 
-go-on 实现了以 **CapabilityBus** 和 **HarnessBus** 为核心的 **14 条总线架构**。
+go-on 实现了以 **CapabilityBus** 和 **HarnessBus** 为核心的**子总线架构**（7 个特性门控子总线，见 `Cargo.toml`）。
 
 ### 核心总线
 

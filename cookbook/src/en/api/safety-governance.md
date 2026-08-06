@@ -1,54 +1,55 @@
 # Safety and Governance API
 
-*Documentation coming soon. This API provides endpoints for security policies, audit logging, compliance monitoring, and governance operations.*
-
 ## Overview
 
-The Safety and Governance API enables security management, policy enforcement, audit trail maintenance, and compliance monitoring for go-on deployments.
+The Safety and Governance API enables security policy enforcement, audit trail maintenance, compliance monitoring, and access control for go-on deployments. The API is **JSON-RPC 2.0 over HTTP** (`POST /rpc`); there are no dedicated REST endpoints for these capabilities.
 
-## Key Features
+> The authoritative JSON-RPC method reference lives in `docs/protocol-guide.md`.
 
-- **Security Policies**: Define and enforce security rules
-- **Audit Logging**: Comprehensive audit trail for all operations
-- **Compliance Monitoring**: Track compliance with regulations and standards
-- **Access Control**: Role-based access control (RBAC)
-- **Incident Response**: Security incident management
+## Methods
 
-## Endpoints
+All methods are dispatched via `POST /rpc`:
 
-### Security Policies
-- `GET /security/policies` - List security policies
-- `POST /security/policies` - Create security policy
-- `GET /security/policies/{id}` - Get security policy
-- `PUT /security/policies/{id}` - Update security policy
-- `DELETE /security/policies/{id}` - Delete security policy
+```bash
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"governance.status","params":{}}'
+```
 
-### Audit Logs
-- `GET /audit/logs` - Query audit logs
-- `GET /audit/logs/{id}` - Get audit log entry
-- `POST /audit/logs/export` - Export audit logs
+### Governance
 
-### Compliance
-- `GET /compliance/status` - Get compliance status
-- `POST /compliance/checks` - Run compliance checks
-- `GET /compliance/reports` - Generate compliance reports
+| Method | Description |
+|---|---|
+| `governance.status` | Governance status (HarnessBus profile, policies, gates) |
+| `governance.plan.get` | Get the governance plan |
+| `governance.plan.update` | Update the governance plan |
+| `governance.audit.recent` | Recent audit log entries |
+| `governance.audit.verify` | Verify the tamper-evident audit hash chain |
+| `governance.remediate` | Run governance remediation |
+| `governance.config.save` | Save governance configuration |
+
+### Security
+
+| Method | Description |
+|---|---|
+| `security.baseline` | Security baseline and risk report |
+| `harness.status` | HarnessBus status (policy, drift, resilience, audit dimensions) |
+| `tool.approve` | Approve a tool for execution (params: `tool_name`) |
 
 ### Access Control
-- `GET /access/roles` - List roles
-- `POST /access/roles` - Create role
-- `GET /access/permissions` - List permissions
-- `POST /access/assignments` - Assign roles to users
 
-## Authentication
+Authentication and RBAC are enforced per request:
 
-All endpoints require authentication with appropriate permissions.
+- `authenticate` — authenticate a session
+- `logout` — end a session
+- RBAC maps each method to a permission level (`Admin`, `ManageUsers`, `ManageConfig`, `Read`, `Execute`); sensitive methods (`shutdown`, `maintenance.gc`) require admin privileges
 
-## Rate Limiting
+## Audit Trail
 
-- Security endpoints: 30 requests per minute
-- Audit endpoints: 60 requests per minute
-- Compliance endpoints: 20 requests per minute
+Configuration changes and maintenance operations are recorded in the audit log, and the audit hash chain can be verified via `governance.audit.verify`.
 
 ## Next Steps
 
-This documentation is under development. Check back soon for complete API reference.
+- Explore [Core Runtime API](./core-runtime.md)
+- See [Optimization and Operations API](./optimization-ops.md)
+- Review [Observability API](./observability.md)

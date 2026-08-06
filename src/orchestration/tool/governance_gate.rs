@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::SystemTime;
@@ -75,8 +74,6 @@ impl GovernanceCache {
 /// simultaneously.
 pub struct ShardedGovernanceCache {
     shards: Vec<Mutex<GovernanceCache>>,
-    hits: AtomicU64,
-    misses: AtomicU64,
 }
 
 /// Fast FNV-1a hash for distributing keys across shards.
@@ -101,11 +98,7 @@ impl ShardedGovernanceCache {
         let shards = (0..SHARD_COUNT)
             .map(|_| Mutex::new(GovernanceCache::new(per_shard)))
             .collect();
-        Self {
-            shards,
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
-        }
+        Self { shards }
     }
 
     /// Pick the shard index for a key via its hash.
@@ -120,13 +113,7 @@ impl ShardedGovernanceCache {
     pub fn get(&self, key: &str) -> Option<bool> {
         let idx = self.shard_index(key);
         let guard = self.shards[idx].lock().unwrap_or_else(|e| e.into_inner());
-        let result = guard.get(key);
-        if result.is_some() {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-        }
-        result
+        guard.get(key)
     }
 
     /// Insert a permission result into the cache.

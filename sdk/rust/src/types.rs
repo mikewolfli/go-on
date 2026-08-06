@@ -32,11 +32,33 @@ pub struct ChatMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
-    pub status: String,
-    pub version: String,
-    pub uptime_seconds: u64,
+    /// Lifecycle snapshot — present on `runtime.health` (JSON-RPC) responses.
     #[serde(default)]
-    pub modules: Value,
+    pub lifecycle: Option<Value>,
+    /// Version string — present on both endpoints.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Request statistics — present on `runtime.health`.
+    #[serde(default)]
+    pub stats: Option<Value>,
+    /// Maintenance snapshot — present on both endpoints.
+    #[serde(default)]
+    pub maintenance: Option<Value>,
+    /// Monotonic server timestamp (ms) — present on both endpoints.
+    #[serde(default)]
+    pub timestamp: Option<i64>,
+    /// Metrics snapshot — present on `GET /health` (ServerStatus payload).
+    #[serde(default)]
+    pub metrics: Option<Value>,
+    /// Compatibility alias — the backend does not emit this field.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Compatibility alias — the backend does not emit this field.
+    #[serde(default)]
+    pub uptime_seconds: Option<u64>,
+    /// Module health probes — present on `runtime.health`.
+    #[serde(default)]
+    pub modules: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

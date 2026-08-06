@@ -2,656 +2,223 @@
 
 ## Overview
 
-The Core Runtime API provides endpoints for system initialization, shutdown, configuration management, and basic runtime operations. These endpoints are essential for managing the go-on runtime lifecycle.
+The Core Runtime API covers runtime lifecycle, health, configuration, and maintenance operations. go-on's primary programmatic interface is **JSON-RPC 2.0 over HTTP** (`POST /rpc`); a small set of HTTP GET endpoints and the SSE streaming endpoint complement it for health probes, metrics scraping, and chat streaming.
 
-## Endpoints
+The complete, authoritative JSON-RPC method reference lives in `docs/protocol-guide.md`. This page documents the endpoints that exist today; anything not listed here should not be assumed to exist.
 
-### Health Check
+## HTTP Endpoints
 
-#### GET /health
-Check the overall health status of the runtime.
+### GET Endpoints
 
-**Request:**
-```http
-GET /health HTTP/1.1
-Host: localhost:8090
-Accept: application/json
-```
+| Path | Description |
+|---|---|
+| `/` | Root capabilities response (protocol, endpoints, version) |
+| `/health` | Server status snapshot (see below) |
+| `/health/ready` | Readiness probe — `200` when ready, `503` while draining |
+| `/metrics` | Prometheus text-format metrics |
+| `/protocol/version` | Supported protocol versions and server version |
+| `/v1/models` | List available models (OpenAI-compatible) |
+| `/v1/model` | Alias for `/v1/models` |
+| `/models` | Alias for `/v1/models` |
+| `/v1/responses` | List OpenAI Responses API payloads |
+| `/v1/responses/{id}` | Get a response by ID (OpenAI Responses API) |
+| `/v1/state/events` | SSE stream of state sync events |
 
-**Query Parameters:**
-- `verbose` (boolean, optional): Include detailed component status
-- `timeout` (integer, optional): Timeout in milliseconds (default: 5000)
+### POST Endpoints
 
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "version": "0.6.1",
-  "uptime_seconds": 3600,
-  "components": {
-    "database": "healthy",
-    "cache": "healthy",
-    "vector_store": "healthy",
-    "model_providers": {
-      "openai": "healthy",
-      "anthropic": "healthy"
-    }
-  }
-}
-```
+| Path | Description |
+|---|---|
+| `/rpc` | JSON-RPC 2.0 method dispatch (primary interface; `/` also accepts it) |
+| `/chat` | Chat completion (ACP JSON-RPC format) |
+| `/chat/stream` | Streaming chat completion (SSE) |
+| `/v1/chat/completions` | OpenAI-compatible chat completions |
+| `/chat/completions` | OpenAI-compatible chat completions |
+| `/v1/responses` | OpenAI Responses API |
 
-**Status Codes:**
-- `200 OK`: Runtime is healthy
-- `503 Service Unavailable`: Runtime is unhealthy
+> All JSON-RPC method names below are dispatched via `POST /rpc`. For the full
+> method reference, see `docs/protocol-guide.md`.
 
-#### GET /health/ready
-Check if the runtime is ready to accept requests.
+## Health Checks
+
+### GET /health
+
+Returns the full server status snapshot (`ServerStatus`): request metrics, lifecycle state, circuit breaker snapshots, maintenance status, governance status, and a timestamp.
 
 **Response:**
+
 ```json
 {
-  "status": "ready",
-  "timestamp": "2024-01-01T00:00:00Z"
-}
-```
-
-#### GET /health/live
-Check if the runtime process is alive (liveness probe).
-
-**Response:**
-```json
-{
-  "status": "alive",
-  "timestamp": "2024-01-01T00:00:00Z"
-}
-```
-
-### Runtime Information
-
-#### GET /runtime/info
-Get detailed runtime information.
-
-**Response:**
-```json
-{
-  "version": "0.6.1",
-  "build_date": "2024-01-01T00:00:00Z",
-  "git_commit": "a1b2c3d4e5f6",
-  "features": ["backend-sqlite", "sqlite-vec"],
-  "protocols": ["acp_stdio", "acp_http", "mcp_stdio", "mcp_http"],
-  "config_path": "/path/to/config.toml",
-  "data_directory": "/path/to/data",
-  "start_time": "2024-01-01T00:00:00Z",
-  "uptime_seconds": 3600
-}
-```
-
-#### GET /runtime/stats
-Get runtime statistics.
-
-**Response:**
-```json
-{
-  "requests": {
-    "total": 1000,
-    "successful": 950,
-    "failed": 50,
-    "rate_per_second": 10.5
+  "metrics": {
+    "total_requests": 1000,
+    "successful_requests": 950,
+    "failed_requests": 50,
+    "avg_request_duration_ms": 42.5,
+    "active_requests": 3,
+    "cache_hit_rate": 0.8,
+    "chat_requests_total": 400
   },
-  "memory": {
-    "used_mb": 256,
-    "total_mb": 1024,
-    "peak_mb": 512
-  },
-  "cache": {
-    "hits": 800,
-    "misses": 200,
-    "hit_rate": 0.8,
-    "size": 5000,
-    "max_size": 10000
-  },
-  "vector_store": {
-    "entries": 1000,
-    "searches": 500,
-    "avg_search_time_ms": 150
-  }
+  "lifecycle": { "state": "running" },
+  "circuit_breakers": [],
+  "maintenance": { "active": false },
+  "governance": { "status": "healthy" },
+  "timestamp": 1760000000
 }
 ```
 
-### Configuration Management
+### GET /health/ready
 
-#### GET /config
-Get current runtime configuration.
+Readiness probe. Returns `200` with `{"ok": true, "status": "ready", "healthy": true}` when the server can accept requests, and `503` with `{"ok": false, "status": "draining", "message": "Server is shutting down"}` while draining.
 
-**Query Parameters:**
-- `include_secrets` (boolean, optional): Include secret values (default: false)
-- `format` (string, optional): Output format: `json` or `toml` (default: `json`)
+### JSON-RPC health methods
 
-**Response:**
-```json
-{
-  "default_phase": "coding",
-  "model_selection_mode": "adaptive",
-  "protocol": {
-    "mode": "adaptive"
-  },
-  "cache": {
-    "enabled": true,
-    "path": "acp_cache.sqlite3",
-    "default_ttl_seconds": 3600,
-    "max_entries": 5000
-  },
-  "vector": {
-    "enabled": true,
-    "auto_mode": true,
-    "path": "acp_vector.sqlite3",
-    "dimensions": 192
-  }
-}
-```
+| Method | Description |
+|---|---|
+| `health` / `runtime.health` | Runtime health snapshot |
+| `health.probes` | Module-level health probes |
+| `health.check` | Runs a full health check; returns `{"ok": true}` on success |
 
-#### POST /config/reload
-Reload configuration from disk.
+Example:
 
-**Request:**
-```http
-POST /config/reload HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Configuration reloaded successfully",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "changes": {
-    "added": [],
-    "modified": ["cache.max_entries"],
-    "removed": []
-  }
-}
-```
-
-#### PUT /config
-Update runtime configuration.
-
-**Request:**
-```http
-PUT /config HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "cache": {
-    "max_entries": 10000
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Configuration updated successfully",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "requires_restart": false
-}
-```
-
-### Initialization
-
-#### POST /initialize
-Initialize the runtime with a new configuration.
-
-**Request:**
-```http
-POST /initialize HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "setup_level": "standard",
-  "config_overrides": {
-    "default_phase": "coding"
-  }
-}
-```
-
-**Query Parameters:**
-- `setup_level` (string, optional): `quick`, `standard`, or `custom` (default: `standard`)
-- `force` (boolean, optional): Force reinitialization (default: false)
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Runtime initialized successfully",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "config_path": "/path/to/config.toml",
-  "data_directory": "/path/to/data",
-  "components_initialized": ["database", "cache", "vector_store"]
-}
-```
-
-### Shutdown
-
-#### POST /shutdown
-Gracefully shutdown the runtime.
-
-**Request:**
-```http
-POST /shutdown HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "timeout_seconds": 30,
-  "drain_connections": true
-}
-```
-
-**Query Parameters:**
-- `timeout_seconds` (integer, optional): Timeout for graceful shutdown (default: 30)
-- `drain_connections` (boolean, optional): Wait for active connections to complete (default: true)
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Shutdown initiated",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "shutdown_timeout_seconds": 30
-}
-```
-
-### Protocol Management
-
-#### GET /protocols
-Get available protocol modes and their status.
-
-**Response:**
-```json
-{
-  "current_mode": "adaptive",
-  "available_modes": [
-    {
-      "name": "adaptive",
-      "description": "Dual-stack capability with adaptive routing",
-      "enabled": true,
-      "active": true
-    },
-    {
-      "name": "acp_stdio",
-      "description": "ACP over stdio",
-      "enabled": true,
-      "active": false
-    },
-    {
-      "name": "acp_http",
-      "description": "ACP over HTTP",
-      "enabled": true,
-      "active": false
-    },
-    {
-      "name": "mcp_stdio",
-      "description": "MCP over stdio",
-      "enabled": true,
-      "active": false
-    },
-    {
-      "name": "mcp_http",
-      "description": "MCP over HTTP",
-      "enabled": true,
-      "active": false
-    }
-  ]
-}
-```
-
-#### POST /protocols/{mode}/activate
-Activate a specific protocol mode.
-
-**Request:**
-```http
-POST /protocols/acp_http/activate HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Protocol mode activated",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "previous_mode": "adaptive",
-  "new_mode": "acp_http",
-  "requires_restart": false
-}
-```
-
-### Feature Management
-
-#### GET /features
-Get enabled features and their status.
-
-**Response:**
-```json
-{
-  "features": [
-    {
-      "name": "backend-sqlite",
-      "enabled": true,
-      "description": "SQLite database support",
-      "version": "0.39.0"
-    },
-    {
-      "name": "sqlite-vec",
-      "enabled": true,
-      "description": "Vector extension for SQLite",
-      "version": "0.1.9"
-    },
-    {
-      "name": "otel",
-      "enabled": false,
-      "description": "OpenTelemetry support",
-      "version": null
-    }
-  ]
-}
-```
-
-#### POST /features/{name}/enable
-Enable a specific feature.
-
-**Request:**
-```http
-POST /features/otel/enable HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Feature enabled",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "feature": "otel",
-  "requires_restart": true
-}
-```
-
-#### POST /features/{name}/disable
-Disable a specific feature.
-
-**Request:**
-```http
-POST /features/sqlite-vec/disable HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Feature disabled",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "feature": "sqlite-vec",
-  "requires_restart": true
-}
-```
-
-### Maintenance Operations
-
-#### POST /maintenance/gc
-Run garbage collection.
-
-**Request:**
-```http
-POST /maintenance/gc HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "components": ["cache", "vector_store"],
-  "aggressive": false
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Garbage collection completed",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "components": {
-    "cache": {
-      "entries_removed": 100,
-      "space_freed_mb": 10
-    },
-    "vector_store": {
-      "entries_removed": 50,
-      "space_freed_mb": 5
-    }
-  }
-}
-```
-
-#### POST /maintenance/vacuum
-Vacuum databases.
-
-**Request:**
-```http
-POST /maintenance/vacuum HTTP/1.1
-Host: localhost:8090
-Content-Type: application/json
-
-{
-  "databases": ["cache", "vector_store"],
-  "analyze": true
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Vacuum completed",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "databases": {
-    "cache": {
-      "size_before_mb": 100,
-      "size_after_mb": 80,
-      "space_freed_mb": 20
-    },
-    "vector_store": {
-      "size_before_mb": 200,
-      "size_after_mb": 150,
-      "space_freed_mb": 50
-    }
-  }
-}
-```
-
-### Diagnostics
-
-#### GET /diagnostics
-Get runtime diagnostics.
-
-**Query Parameters:**
-- `level` (string, optional): `basic`, `detailed`, or `full` (default: `basic`)
-- `include_logs` (boolean, optional): Include recent logs (default: false)
-
-**Response:**
-```json
-{
-  "timestamp": "2024-01-01T00:00:00Z",
-  "system": {
-    "os": "Linux",
-    "arch": "x86_64",
-    "cpu_cores": 8,
-    "total_memory_mb": 16384,
-    "available_memory_mb": 8192
-  },
-  "runtime": {
-    "version": "0.6.1",
-    "uptime_seconds": 3600,
-    "threads": 12,
-    "memory_usage_mb": 256
-  },
-  "components": {
-    "database": {
-      "status": "healthy",
-      "connections": 5,
-      "size_mb": 100
-    },
-    "cache": {
-      "status": "healthy",
-      "entries": 5000,
-      "hit_rate": 0.85
-    }
-  },
-  "issues": [
-    {
-      "level": "warning",
-      "component": "vector_store",
-      "message": "Vector store approaching capacity",
-      "suggestion": "Consider increasing max_entries or running maintenance"
-    }
-  ]
-}
-```
-
-## WebSocket Endpoints
-
-### WS /ws/runtime
-Real-time runtime updates.
-
-**Events:**
-```json
-{
-  "type": "runtime.status_changed",
-  "data": {
-    "status": "healthy",
-    "timestamp": "2024-01-01T00:00:00Z"
-  }
-}
-```
-
-```json
-{
-  "type": "config.updated",
-  "data": {
-    "path": "cache.max_entries",
-    "old_value": 5000,
-    "new_value": 10000,
-    "timestamp": "2024-01-01T00:00:00Z"
-  }
-}
-```
-
-## Command Line Interface
-
-### Health Check
 ```bash
-go-on --health
-go-on --health --verbose
-go-on --health --timeout 10000
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"runtime.health","params":{}}'
 ```
 
-### Configuration
+## Runtime Information
+
+Runtime introspection is available through JSON-RPC methods:
+
+| Method | Description |
+|---|---|
+| `runtime.stability` | Runtime stability metrics |
+| `runtime.features` | Enabled runtime features |
+| `runtime.self_model` | Self-model snapshot (stability, learning, knowledge) |
+| `provider.status` | Configured AI provider readiness |
+| `provider.catalog` / `provider.list_models` | Provider/model catalog |
+| `capabilities.list` | Server capabilities |
+| `selector.status` | Model/tool selection status |
+| `models.list` / `models/list` | List available models |
+
+## Configuration Management
+
+Configuration is managed via JSON-RPC, not REST:
+
+| Method | Description |
+|---|---|
+| `config.reload` | Re-validate and reload configuration from disk; publishes state-sync events (`ConfigReloaded`, `AgentsChanged`, `ModelsChanged`) when relevant |
+| `config.baseline` | Effective configuration baseline and legacy-key migration report |
+| `debug_panel.get` / `debug.panel.get` | Debug panel payload |
+
+Note: `config.reload` applies runtime settings immediately, but agent/cache/vector changes require a restart (the response includes a warning count and profile recommendation).
+
+Example:
+
 ```bash
-go-on --config-show
-go-on --config-show --format toml
-go-on --config-reload
-go-on --config-update '{"cache.max_entries": 10000}'
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"config.reload","params":{}}'
 ```
 
-### Initialization
+## Lifecycle
+
+### JSON-RPC
+
+| Method | Description |
+|---|---|
+| `initialize` | ACP initialize handshake |
+| `shutdown` | Graceful shutdown |
+| `session/new`, `session/load`, `session/resume`, `session/close`, `session/list` | Session lifecycle |
+| `authenticate` / `logout` | Authentication |
+| `mcp.initialize`, `mcp.ping` | MCP handshake |
+
+### Command Line
+
+Runtime lifecycle is also driven from the CLI (see `src/main/cli.rs`):
+
 ```bash
-go-on --init
-go-on --init --setup-level standard
-go-on --init --config config.toml
+go-on --setup                  # run setup wizard (alias: --init)
+go-on --setup-level standard   # quick | standard | custom
+go-on --setup-profile PROFILE  # setup profile to use
+go-on --status                 # print runtime readiness (alias: --check)
+go-on --healthcheck            # generate a runtime healthcheck report into .goon/
+go-on --diagnose               # run end-to-end diagnosis with remediation hints
+go-on --validate-config        # validate configuration and exit (alias: --doctor)
+go-on --config config.toml     # explicit config file (alias: -c)
+go-on --secret --secret-name KEY --secret-value VALUE   # secret management
+go-on -b 127.0.0.1:8090        # bind the ACP HTTP server (alias: --acp-http-bind / --bind)
+go-on -m adaptive              # protocol mode override (alias: --protocol-mode / --mode)
+go-on -a                       # start interactive terminal chat session
 ```
 
-### Shutdown
+Subcommands: `init`, `status`, `diagnose`, `skill`, and `hub` (feature-gated).
+
+## Maintenance Operations
+
+| Method | Description |
+|---|---|
+| `maintenance.gc` | Run maintenance garbage collection |
+| `data.lifecycle` | Data lifecycle review (replay sequence, retention) |
+| `cache.clear` | Clear the cache |
+| `vector.clear` | Clear the vector store |
+| `breaker.status` / `breaker.reset` / `breaker.recovery` | Circuit breaker management |
+| `hardness.status` | Harness hardness status |
+| `lock.status` | ACP lock status |
+
+Example:
+
 ```bash
-go-on --shutdown
-go-on --shutdown --timeout 60
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"maintenance.gc","params":{}}'
 ```
 
-## Error Codes
+## Streaming
 
-### Common Errors
-- `RUNTIME_NOT_INITIALIZED`: Runtime has not been initialized
-- `CONFIG_INVALID`: Configuration is invalid or malformed
-- `FEATURE_NOT_AVAILABLE`: Requested feature is not available
-- `PROTOCOL_NOT_SUPPORTED`: Requested protocol is not supported
-- `MAINTENANCE_IN_PROGRESS`: Maintenance operation already in progress
+### POST /chat/stream
 
-### Error Examples
+SSE streaming chat completion. The server writes SSE frames (`event: chunk`, `done`, `status`, `telemetry`, `tool_approval`, `error`) to the connection until the stream terminates.
+
+```bash
+curl -N http://localhost:8090/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello"}]}'
+```
+
+## Error Handling
+
+JSON-RPC responses use the standard JSON-RPC 2.0 error object:
+
 ```json
 {
+  "jsonrpc": "2.0",
+  "id": 1,
   "error": {
-    "code": "RUNTIME_NOT_INITIALIZED",
-    "message": "Runtime has not been initialized. Run /initialize first.",
-    "details": {
-      "required_action": "initialize"
-    }
+    "code": -32602,
+    "message": "invalid params: missing field `name`",
+    "data": { "code": "DISPATCH_ERROR" }
   }
 }
 ```
 
-## Rate Limiting
+Standard codes:
 
-### Default Limits
-- Health endpoints: 60 requests per minute
-- Configuration endpoints: 30 requests per minute
-- Maintenance endpoints: 10 requests per minute
+| Code | Meaning |
+|---|---|
+| `-32700` | Parse error |
+| `-32600` | Invalid request |
+| `-32601` | Method not found |
+| `-32602` | Invalid params |
+| `-32603` | Internal error |
 
-### Headers
-```
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 55
-X-RateLimit-Reset: 1614556800
-```
+HTTP status codes: `200 OK`, `400 Bad Request`, `401 Unauthorized`, `404 Not Found`, `405 Method Not Allowed`, `429 Too Many Requests`, `500 Internal Server Error`, `502 Bad Gateway` (upstream error), `503 Service Unavailable`.
 
 ## Security Considerations
 
-### Authentication
-- Local mode: Optional API key
-- Server modes: Required API key
-- Sensitive operations: Always require authentication
-
-### Authorization
-- Health endpoints: Public (read-only)
-- Configuration endpoints: Require admin privileges
-- Maintenance endpoints: Require admin privileges
-
-### Audit Logging
-All configuration changes and maintenance operations are logged to the audit log.
-
-## Best Practices
-
-### Health Monitoring
-- Use `/health` for readiness probes
-- Use `/health/live` for liveness probes
-- Monitor response times and error rates
-
-### Configuration Management
-- Use version control for configuration files
-- Test configuration changes in staging first
-- Use `/config/reload` for dynamic updates
-
-### Maintenance Scheduling
-- Schedule maintenance during off-peak hours
-- Monitor disk space before running vacuum
-- Backup data before major maintenance operations
+- Local mode: API key optional
+- Server modes: API key required (sent via `X-Api-Key` / `X-Go-On-Key`)
+- RBAC: sensitive operations (`shutdown`, `maintenance.gc`) require admin privileges
+- Entry guard, auth, and RBAC are enforced per request by the HTTP handler
 
 ## Next Steps
 

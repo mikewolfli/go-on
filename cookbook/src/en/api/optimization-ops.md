@@ -1,65 +1,59 @@
 # Optimization and Operations API
 
-*Documentation coming soon. This API provides endpoints for cost optimization, performance tuning, operational metrics, and system optimization.*
-
 ## Overview
 
-The Optimization and Operations API enables cost management, performance optimization, operational monitoring, and system tuning for go-on deployments.
+The Optimization and Operations API enables cost management, performance optimization, operational monitoring, and system tuning for go-on deployments. The API is **JSON-RPC 2.0 over HTTP** (`POST /rpc`); there are no dedicated REST endpoints for these capabilities.
 
-## Key Features
+> The authoritative JSON-RPC method reference lives in `docs/protocol-guide.md`.
 
-- **Cost Optimization**: Monitor and optimize operational costs
-- **Performance Tuning**: System performance optimization
-- **Operational Metrics**: Business and operational metrics
-- **Resource Management**: Resource allocation and optimization
-- **Quality Assurance**: Quality metrics and improvement
+## Methods
 
-## Endpoints
+All methods are dispatched via `POST /rpc`:
+
+```bash
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"cost.status","params":{}}'
+```
 
 ### Cost Optimization
-- `GET /cost/status` - Get cost status
-- `GET /cost/breakdown` - Get cost breakdown
-- `POST /cost/optimize` - Run cost optimization
-- `GET /cost/forecast` - Get cost forecast
-- `GET /cost/alerts` - Get cost alerts
 
-### Performance
-- `GET /performance/metrics` - Get performance metrics
-- `POST /performance/analyze` - Analyze performance
-- `POST /performance/optimize` - Optimize performance
-- `GET /performance/baseline` - Get performance baseline
+| Method | Description |
+|---|---|
+| `cost.status` | Cost status |
+| `optimization.peak` | Optimization peak analysis |
+| `observability.alerts` | Observability alerts |
+
+### Performance & Metrics
+
+| Method | Description |
+|---|---|
+| `metrics.get` | Structured runtime metrics |
+| `metrics` | Metrics payload |
+| `metrics.prometheus` | Prometheus-format metrics |
+| `metrics.window.query` | Query a metrics window |
+| `metrics.errors.summary` | Error summary |
+| `metrics.reset` | Reset metrics |
+| `runtime.stability` | Runtime stability metrics |
+| `trace.get` / `trace.metrics` | Trace inspection |
+| `error.contract` | Error contract payload |
 
 ### Operations
-- `GET /ops/metrics` - Get operational metrics
-- `GET /ops/health` - Get operational health
-- `POST /ops/incidents` - Report incident
-- `GET /ops/incidents` - List incidents
-- `POST /ops/incidents/{id}/resolve` - Resolve incident
 
-### Quality
-- `GET /quality/metrics` - Get quality metrics
-- `POST /quality/checks` - Run quality checks
-- `GET /quality/baseline` - Get quality baseline
-- `POST /quality/improve` - Run quality improvement
-
-### Resources
-- `GET /resources/usage` - Get resource usage
-- `POST /resources/allocate` - Allocate resources
-- `GET /resources/limits` - Get resource limits
-- `POST /resources/optimize` - Optimize resource allocation
-
-## Authentication
-
-All endpoints require authentication with appropriate permissions.
-
-## Rate Limiting
-
-- Cost endpoints: 30 requests per minute
-- Performance endpoints: 60 requests per minute
-- Operations endpoints: 90 requests per minute
-- Quality endpoints: 40 requests per minute
-- Resource endpoints: 50 requests per minute
+| Method | Description |
+|---|---|
+| `breaker.status` / `breaker.reset` / `breaker.recovery` | Circuit breaker management |
+| `lock.status` | ACP lock status |
+| `maintenance.gc` | Maintenance garbage collection |
+| `data.lifecycle` | Data lifecycle review |
+| `cache.clear` / `vector.clear` | Clear cache / vector store |
+| `autotune.get` / `autotune.status` / `autotune.reset` | Autotune management |
+| `release.readiness` | Release readiness check |
+| `harness.status` | Harness status (QA/reliability dimensions) |
+| `hardness.status` | Hardness status |
 
 ## Next Steps
 
-This documentation is under development. Check back soon for complete API reference.
+- Explore [Core Runtime API](./core-runtime.md)
+- See [Observability API](./observability.md)
+- Review [Safety and Governance API](./safety-governance.md)

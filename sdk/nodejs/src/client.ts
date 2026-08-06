@@ -167,6 +167,60 @@ export class GoOnClient {
   }
 
   /**
+   * Low-level HTTP GET using Node.js built-in http/https.
+   */
+  private _httpGet(
+    path: string,
+  ): Promise<{ statusCode: number; statusMessage: string; body: string }> {
+    return new Promise((resolve, reject) => {
+      const parsedUrl = new url.URL(this._url(path));
+      const isHttps = parsedUrl.protocol === "https:";
+      const lib = isHttps ? https : http;
+
+      const options: http.RequestOptions = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port ? parseInt(parsedUrl.port, 10) : undefined,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: "GET",
+        timeout: this.timeout * 1000,
+      };
+
+      const req = lib.request(options, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          const responseBody = Buffer.concat(chunks).toString("utf-8");
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({
+              statusCode: res.statusCode,
+              statusMessage: res.statusMessage || "",
+              body: responseBody,
+            });
+          } else {
+            reject(
+              new GoOnHttpError(
+                res.statusCode || 0,
+                res.statusMessage || "Unknown",
+              ),
+            );
+          }
+        });
+      });
+
+      req.on("error", (err) => {
+        reject(new GoOnClientError(`Network error: ${err.message}`));
+      });
+
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new GoOnClientError(`Request timed out after ${this.timeout}s`));
+      });
+
+      req.end();
+    });
+  }
+
+  /**
    * Low-level HTTP POST using Node.js built-in http/https.
    */
   private _httpPost(
@@ -370,14 +424,15 @@ export class GoOnClient {
 
   // ── Runtime API ───────────────────────────────────────────────────
 
-  /** Get backend health status. */
+  /** GET /health — quick health check. */
   async health(): Promise<HealthResponse> {
-    return (await this._jsonRpc("runtime.health")) as HealthResponse;
+    const response = await this._httpGet("/health");
+    return JSON.parse(response.body) as HealthResponse;
   }
 
-  /** Get runtime health with detailed module status. */
+  /** runtime.health — full runtime health via JSON-RPC. */
   async runtimeHealth(): Promise<HealthResponse> {
-    return (await this._jsonRpc("health.probes")) as HealthResponse;
+    return (await this._jsonRpc("runtime.health")) as HealthResponse;
   }
 
   /** Get runtime stability metrics. */
@@ -531,16 +586,16 @@ export class GoOnClient {
   }
 
   /** Plan a task from a natural language description. */
-  async taskPlan(description: string): Promise<TaskPlanResponse> {
+  async taskPlan(task: string): Promise<TaskPlanResponse> {
     return (await this._jsonRpc("task.plan", {
-      description,
+      task,
     })) as TaskPlanResponse;
   }
 
   /** Execute a planned task. */
-  async taskExecute(planId: string): Promise<Record<string, unknown>> {
+  async taskExecute(task: string): Promise<Record<string, unknown>> {
     return (await this._jsonRpc("task.execute", {
-      plan_id: planId,
+      task,
     })) as Record<string, unknown>;
   }
 

@@ -166,8 +166,9 @@ pub struct DriftProtectionEngine {
 struct DriftProtectionInner {
     policies: HashMap<String, DriftPolicy>,
     metrics: HashMap<String, DriftMetric>,
-    /// Historical metrics grouped by drift type for trend analysis.
-    metric_history: HashMap<DriftType, Vec<DriftMetric>>,
+    /// Historical metrics grouped by metric name for trend analysis and
+    /// per-metric auto-baselining (never mixed across metrics).
+    metric_history: HashMap<String, Vec<DriftMetric>>,
     alerts: Vec<DriftAlert>,
     alert_counter: u64,
 }
@@ -218,9 +219,11 @@ impl DriftProtectionEngine {
             .lock()
             .map_err(|e| anyhow::anyhow!("failed to lock drift engine: {}", e))?;
 
-        // Auto-baseline: if baseline is 0 (unset), use first historical value.
+        // Auto-baseline: if baseline is 0 (unset), use the first historical
+        // value for this exact metric name — never another metric that shares
+        // the same drift type (e.g. validate_action vs verify_output latency).
         let effective_baseline = if baseline_value == 0.0 {
-            if let Some(historical) = inner.metric_history.get(&drift_type) {
+            if let Some(historical) = inner.metric_history.get(name) {
                 historical
                     .first()
                     .map(|m| m.current_value)
@@ -243,8 +246,8 @@ impl DriftProtectionEngine {
         };
         inner.metrics.insert(name.to_string(), metric.clone());
 
-        // Track history for trend analysis (keep last 100 entries per type)
-        let entry = inner.metric_history.entry(drift_type).or_default();
+        // Track history for trend analysis (keep last 100 entries per metric).
+        let entry = inner.metric_history.entry(name.to_string()).or_default();
         entry.push(metric);
         if entry.len() > 100 {
             entry.remove(0);

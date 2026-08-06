@@ -48,12 +48,40 @@ impl CacheStrategy {
             "run tests",
             "build",
         ];
-        // Case-insensitive search without allocating a lowercased copy.
-        // Uses `str::find` on the original text with byte-level case folding.
-        let text_lower = messages_text.to_ascii_lowercase();
-        EXECUTION_HINTS.iter().any(|hint| text_lower.contains(hint))
+        // Case-insensitive scan of the original text without allocating a
+        // lowercased copy of the (potentially large) conversation history.
+        // Byte-level scanning is safe for ASCII needles: UTF-8 continuation
+        // bytes are in 0x80..=0xBF, which never match an ASCII needle byte.
+        EXECUTION_HINTS
+            .iter()
+            .any(|hint| contains_ascii_case_insensitive(messages_text, hint))
     }
+}
 
+/// Case-insensitive substring scan over a UTF-8 haystack for an ASCII needle.
+///
+/// Never allocates a lowercased copy; folds both sides to lowercase per byte.
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.is_empty() {
+        return true;
+    }
+    let hay_bytes = haystack.as_bytes();
+    if needle_bytes.len() > hay_bytes.len() {
+        return false;
+    }
+    'outer: for i in 0..=(hay_bytes.len() - needle_bytes.len()) {
+        for (j, &nb) in needle_bytes.iter().enumerate() {
+            if !hay_bytes[i + j].eq_ignore_ascii_case(&nb) {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+impl CacheStrategy {
     /// Convert a concrete cache entry into a decision using the match
     /// confidence computed by the cache lookup (callers pass the score from
     /// [`TokenMultiLevelCache::lookup`] — 1.0 for exact/durable hits, the L2

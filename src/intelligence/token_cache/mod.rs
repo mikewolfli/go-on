@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -142,8 +142,6 @@ pub struct TokenMultiLevelCache {
     pub stats: RwLock<TokenCacheStats>,
     /// Whether the cache is enabled (lock-free atomic flag)
     pub enabled: AtomicBool,
-    /// TTL in milliseconds for cached entries (0 = no expiration, lock-free atomic).
-    ttl_ms: AtomicU64,
     /// Optional durable backend (L3). When set, `lookup` falls through to it
     /// on L1/L2 miss and `store` writes back asynchronously. This gives
     /// cross-restart and cross-instance (shared SQLite/PG) cache reuse.
@@ -158,7 +156,6 @@ impl TokenMultiLevelCache {
             l2: RwLock::new(L2SemanticCache::new(l2_capacity)),
             stats: RwLock::new(TokenCacheStats::default()),
             enabled: AtomicBool::new(true),
-            ttl_ms: AtomicU64::new(0),
             persistent: None,
         }
     }
@@ -192,7 +189,6 @@ impl TokenMultiLevelCache {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let ttl = self.ttl_ms.load(Ordering::Acquire);
 
         // L1: Exact match (fastest path) — read-only peek, then best-effort
         // LRU touch (moves the key to the back of the recency order) so the
@@ -204,19 +200,14 @@ impl TokenMultiLevelCache {
         };
         if let Some(entry) = l1_hit {
             if entry.output.len() > 10 {
-                // Check TTL: skip expired entries
-                if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
-                    // Entry expired, will be cleaned up lazily from L1 on next write
-                } else {
-                    if let Ok(mut l1) = self.l1.try_write() {
-                        l1.touch(&l1_key);
-                    }
-                    self.stats
-                        .write()
-                        .await
-                        .record_hit(CacheLevel::L1, entry.token_count);
-                    return Some((CacheLevel::L1, entry, 1.0));
+                if let Ok(mut l1) = self.l1.try_write() {
+                    l1.touch(&l1_key);
                 }
+                self.stats
+                    .write()
+                    .await
+                    .record_hit(CacheLevel::L1, entry.token_count);
+                return Some((CacheLevel::L1, entry, 1.0));
             }
         }
 
@@ -230,18 +221,14 @@ impl TokenMultiLevelCache {
             };
             if let Some((idx, entry, score)) = l2_hit {
                 if entry.output.len() > 10 {
-                    if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
-                        // Skip expired entry
-                    } else {
-                        if let Ok(mut l2) = self.l2.try_write() {
-                            l2.touch(idx);
-                        }
-                        self.stats
-                            .write()
-                            .await
-                            .record_hit(CacheLevel::L2, entry.token_count);
-                        return Some((CacheLevel::L2, entry, score));
+                    if let Ok(mut l2) = self.l2.try_write() {
+                        l2.touch(idx);
                     }
+                    self.stats
+                        .write()
+                        .await
+                        .record_hit(CacheLevel::L2, entry.token_count);
+                    return Some((CacheLevel::L2, entry, score));
                 }
             }
         }
@@ -349,12 +336,6 @@ impl TokenMultiLevelCache {
         }
     }
 
-    /// Generate a JSON report of cache performance.
-    pub async fn report(&self) -> serde_json::Value {
-        let stats = self.stats.read().await;
-        stats.to_json()
-    }
-
     /// Synchronous snapshot of cache statistics.
     /// Falls back to `serde_json::Value::Null` if the lock cannot be acquired.
     pub fn stats_snapshot(&self) -> serde_json::Value {
@@ -443,17 +424,6 @@ pub fn last_user_message_is_duplicate(messages: &[crate::agent::Message]) -> boo
 // Fastest tier. Uses a HashMap with LRU eviction.
 // Targets short context (0-500 tokens) for maximum reuse of
 // frequently-asked identical questions.
-
-/// Check whether a cache entry has exceeded the TTL.
-///
-/// Returns `true` when `created_at + ttl_ms < now_ms`.
-fn is_entry_expired(entry: &CacheEntry, now_ms: u64, ttl_ms: u64) -> bool {
-    if ttl_ms == 0 {
-        return false;
-    }
-    let created_ms = (entry.created_at as u64) * 1000;
-    now_ms > created_ms.saturating_add(ttl_ms)
-}
 
 /// Simple 64-bit hash for cache keys.
 pub fn hash_input(input: &str) -> String {
@@ -707,11 +677,6 @@ impl TokenCacheStats {
                 self.long_misses += 1;
             }
         }
-    }
-
-    /// Reset all statistics.
-    pub fn reset(&mut self) {
-        *self = Self::default();
     }
 
     /// Hit rate for a given level (0.0 - 1.0).

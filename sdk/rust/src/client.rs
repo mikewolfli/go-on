@@ -618,19 +618,16 @@ impl GoOnClient {
     }
 
     /// task.plan — plan a task.
-    pub async fn task_plan(&self, description: &str) -> Result<TaskPlanResponse, SdkError> {
+    pub async fn task_plan(&self, task: &str) -> Result<TaskPlanResponse, SdkError> {
         let result = self
-            .json_rpc(
-                "task.plan",
-                serde_json::json!({ "description": description }),
-            )
+            .json_rpc("task.plan", serde_json::json!({ "task": task }))
             .await?;
         self.extract(result)
     }
 
     /// task.execute — execute a planned task.
-    pub async fn task_execute(&self, plan_id: &str) -> Result<Value, SdkError> {
-        self.json_rpc("task.execute", serde_json::json!({ "plan_id": plan_id }))
+    pub async fn task_execute(&self, task: &str) -> Result<Value, SdkError> {
+        self.json_rpc("task.execute", serde_json::json!({ "task": task }))
             .await
     }
 
@@ -653,9 +650,15 @@ impl GoOnClient {
     }
 
     /// knowledge.distill — run knowledge distillation.
-    pub async fn knowledge_distill(&self, source: &str) -> Result<Value, SdkError> {
-        self.json_rpc("knowledge.distill", serde_json::json!({ "source": source }))
-            .await
+    ///
+    /// `limit` is the analysis window (the backend reads `limit`/`window`);
+    /// when `None` the backend default (20) is used.
+    pub async fn knowledge_distill(&self, limit: Option<u64>) -> Result<Value, SdkError> {
+        let params = match limit {
+            Some(limit) => serde_json::json!({ "limit": limit }),
+            None => serde_json::json!({}),
+        };
+        self.json_rpc("knowledge.distill", params).await
     }
 
     /// rl.alignment.offline_eval — run RL alignment offline evaluation.

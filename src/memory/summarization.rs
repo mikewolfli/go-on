@@ -164,18 +164,6 @@ impl MemorySummarizer {
     pub fn should_summarize(&self, entry_count: usize) -> bool {
         entry_count > self.config.max_entries_before_summary
     }
-
-    /// Sync-only summarization that works without an async runtime.
-    /// Uses the non-LLM path (sorting + concatenation) regardless of
-    /// `use_llm_summarization`, making it suitable for synchronous use
-    /// in tier-migration or other non-async contexts.
-    pub fn summarize_sync(&self, entries: &[MemoryEntry]) -> SummarizedMemory {
-        if entries.len() <= self.config.max_entries_before_summary {
-            return SummarizedMemory::Full(entries.to_vec());
-        }
-
-        self.build_summary_entry(entries)
-    }
 }
 
 /// LLM-based summarization of memory entries.

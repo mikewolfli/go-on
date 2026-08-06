@@ -24,13 +24,15 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     let governance_audit = super::audit::load_governance_audit_events(20).unwrap_or_default();
 
     let rules = super::config_pack::governance_rule_fingerprint(server.config_path.as_deref());
-    let config_summary =
-        super::config_pack::governance_config_summary(server.config_path.as_deref());
     let app_config = server
         .config_path
         .as_deref()
         .map(std::path::Path::new)
         .and_then(|path| AppConfig::load(path).ok());
+    let config_summary = super::config_pack::governance_config_summary_with(
+        server.config_path.as_deref(),
+        app_config.as_ref(),
+    );
     let startup_context = crate::orchestration::startup_context::get();
     let role_registry_custom_count = crate::orchestration::roles::role_registry_count();
 

@@ -59,7 +59,7 @@ go-on provides a comprehensive API surface for agent orchestration, governance, 
 - **Authentication**: Bearer token or API key header (`X-Api-Key` or `X-Go-On-Key`)
 
 ### JSON-RPC over HTTP
-- **Endpoint**: `POST /v1/responses`
+- **Endpoint**: `POST /rpc`
 - **Serialization**: JSON
 - **Features**: Request/response with method routing (`runtime.health`, `governance.status`, etc.)
 
@@ -121,7 +121,7 @@ Rate limiting is enforced internally via a token bucket algorithm per phase.
 | Path | Description |
 |---|---|
 | `/` | Root capabilities response (protocol, endpoints, version) |
-| `/health` | Health check (status, version, uptime) |
+| `/health` | Server status snapshot (metrics, lifecycle, governance) |
 | `/v1/models` | List available models (OpenAI-compatible) |
 | `/v1/model` | Alias for `/v1/models` |
 | `/models` | Alias for `/v1/models` |
@@ -135,7 +135,8 @@ Rate limiting is enforced internally via a token bucket algorithm per phase.
 | `/chat/stream` | Streaming chat completion (SSE) |
 | `/v1/chat/completions` | OpenAI-compatible chat completions |
 | `/chat/completions` | OpenAI-compatible chat completions |
-| `/v1/responses` | JSON-RPC 2.0 method dispatch |
+| `/rpc` | JSON-RPC 2.0 method dispatch (primary interface) |
+| `/v1/responses` | OpenAI Responses API |
 
 ## Client Libraries
 
@@ -144,10 +145,10 @@ Rate limiting is enforced internally via a token bucket algorithm per phase.
 - **Rust**: `go-on-client` crate
 
 ### Generating a Custom Client
-The JSON-RPC interface at `POST /v1/responses` is straightforward to call from any language:
+The JSON-RPC interface at `POST /rpc` is straightforward to call from any language:
 
 ```bash
-curl http://localhost:8090/v1/responses \
+curl http://localhost:8090/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"runtime.health","params":{}}'
 ```
@@ -206,10 +207,10 @@ GET /health
 go-on uses OpenTelemetry for internal tracing of chat completions, agent calls, and review gates. Traces are emitted to any configured OTLP collector.
 
 ### Prometheus Metrics
-Internal runtime metrics (latency histograms, circuit breaker states, rate limiter tokens) are available via JSON-RPC:
+Internal runtime metrics (latency histograms, circuit breaker states, rate limiter tokens) are available via JSON-RPC, and the Prometheus text format is exposed at `GET /metrics`:
 
 ```bash
-curl http://localhost:8090/v1/responses \
+curl http://localhost:8090/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"metrics.prometheus","params":{}}'
 ```

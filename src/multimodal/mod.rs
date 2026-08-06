@@ -633,14 +633,10 @@ impl MultimodalProcessor {
             .await
             {
                 Ok(Ok(parsed)) => {
-                    let images: Vec<String> = parsed
-                        .images
-                        .iter()
-                        .map(|img| {
-                            use base64::Engine;
-                            base64::engine::general_purpose::STANDARD.encode(img)
-                        })
-                        .collect();
+                    // `parsed.images` already holds base64-encoded strings
+                    // (document_parser encodes embedded images); passing them
+                    // through here unchanged avoids double encoding.
+                    let images = parsed.images.clone();
                     return ProcessedContent {
                         text: parsed.text_content,
                         images,
@@ -680,8 +676,8 @@ impl MultimodalProcessor {
 /// with common audio codecs.
 fn detect_audio_format(bytes: &[u8]) -> crate::multimodal::audio_processor::AudioFormat {
     use crate::multimodal::audio_processor::AudioFormat;
-    if bytes.len() < 4 {
-        return AudioFormat::Wav; // fallback
+    if bytes.len() < 12 {
+        return AudioFormat::Wav; // fallback (RIFF header needs at least 12 bytes)
     }
     if &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
         AudioFormat::Wav

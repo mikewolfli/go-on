@@ -12,7 +12,7 @@
 - **改進的性能**：針對服務器工作負載優化
 - **更好的可靠性**：增強的錯誤處理和恢復
 - **生產就緒**：適用於小規模生產使用
-- **完整 Phase 4 架構**：所有 14 條總線和 21 個 F-GAP 模塊，包括 AgentFactory 和 OrchestrationCouncil
+- **完整 Phase 4 架構**：全部 7 個特性門控子總線和 21 個 F-GAP 模塊，包括 AgentFactory 和 OrchestrationCouncil
 - **條件編譯模塊**：AgentFactory 和 Council 使用 `#[cfg(feature = "simple-server")]` 門控
 
 ### 架構

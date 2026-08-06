@@ -15,7 +15,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::agents::communication::bus::CommunicationBus;
-use crate::orchestration::tool::events::{ProgressSender, ToolProgress};
 use futures_util::future::join_all;
 // Reserved for future AgentCommunicationHook use
 // use crate::agents::communication::path::AgentPath;
@@ -345,49 +344,6 @@ pub trait Tool: Send + Sync + 'static {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || self.run(&input))
-                .await
-                .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
-        })
-    }
-
-    /// Execute the tool with progress reporting.
-    ///
-    /// The default implementation sends a [`ToolProgress::Started`] event,
-    /// calls [`run`](Tool::run), then sends [`ToolProgress::Completed`]
-    /// or [`ToolProgress::Failed`] based on the result.
-    fn run_with_progress(&self, input: &ToolInput, progress: ProgressSender) -> Result<ToolOutput> {
-        let tool_name = self.name().to_string();
-        let _ = progress.send(ToolProgress::Started {
-            tool_name: tool_name.clone(),
-        });
-        let start = std::time::Instant::now();
-        let result = self.run(input);
-        let duration = start.elapsed();
-        match &result {
-            Ok(_) => {
-                let _ = progress.send(ToolProgress::Completed { duration });
-            }
-            Err(e) => {
-                let _ = progress.send(ToolProgress::Failed {
-                    error: e.to_string(),
-                });
-            }
-        }
-        result
-    }
-
-    /// Execute the tool with streaming input chunks and progress reporting.
-    ///
-    /// The default implementation waits for the full input and delegates to
-    /// [`run_with_progress`](Tool::run_with_progress). Tools that support
-    /// incremental / streaming input should override this method.
-    fn run_streaming(
-        self: Arc<Self>,
-        input: ToolInput,
-        progress: ProgressSender,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || self.run_with_progress(&input, progress))
                 .await
                 .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
         })

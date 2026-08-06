@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use rand::RngExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -87,7 +88,7 @@ impl Tool for RandomTokenTool {
 
         let token = match format {
             "base64" => {
-                let bytes: Vec<u8> = (0..length).map(|_| fastrand::u8(..)).collect();
+                let bytes: Vec<u8> = (0..length).map(|_| rand::rng().random::<u8>()).collect();
                 use base64::Engine;
                 base64::engine::general_purpose::STANDARD.encode(&bytes)
             }
@@ -96,7 +97,7 @@ impl Tool for RandomTokenTool {
                     b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
                 (0..length)
                     .map(|_| {
-                        let idx = fastrand::usize(..CHARSET.len());
+                        let idx = rand::rng().random_range(0..CHARSET.len());
                         CHARSET[idx] as char
                     })
                     .collect()
@@ -104,7 +105,7 @@ impl Tool for RandomTokenTool {
             _ => {
                 // hex
                 (0..length)
-                    .map(|_| format!("{:02x}", fastrand::u8(..)))
+                    .map(|_| format!("{:02x}", rand::rng().random::<u8>()))
                     .collect::<Vec<_>>()
                     .join("")
                     .chars()
@@ -305,9 +306,7 @@ impl Tool for HashFileTool {
                     .collect::<Vec<_>>()
                     .join("")
             }
-            "sha1" => {
-                // SHA-1 via sha2 crate (compatibility alias)
-                // Only sha256 and sha512 are directly supported; fall back to sha256
+            "sha256" => {
                 let mut hasher = Sha256::new();
                 hasher.update(&data);
                 hasher
@@ -317,16 +316,13 @@ impl Tool for HashFileTool {
                     .collect::<Vec<_>>()
                     .join("")
             }
-            _ => {
-                // default: sha256
-                let mut hasher = Sha256::new();
-                hasher.update(&data);
-                hasher
-                    .finalize()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>()
-                    .join("")
+            // Unknown algorithms are rejected instead of silently returning a
+            // sha256 digest labelled with the requested algorithm name.
+            other => {
+                anyhow::bail!(
+                    "hash_file: unsupported algorithm '{}' (expected sha256 or sha512)",
+                    other
+                );
             }
         };
 

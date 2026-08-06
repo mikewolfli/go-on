@@ -19,10 +19,10 @@ cargo run -- --config config.toml
 Current help summary:
 
 ```text
-Usage: go-on.exe [OPTIONS]
+Usage: go-on [OPTIONS] [COMMAND]
 ```
 
-There are no subcommands. Everything is driven by flags.
+Most operations are driven by flags; a small set of subcommands is also available: `init`, `status`, `diagnose`, `skill`, and `hub` (feature-gated).
 
 ## Core runtime options
 

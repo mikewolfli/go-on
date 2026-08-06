@@ -143,14 +143,22 @@ impl Tool for WebSearchTool {
 
 impl WebSearchTool {
     /// Shared async implementation used by both `run` and `run_async`.
+    ///
+    /// The HTTP client is built once and reused across searches (connection
+    /// pooling); only the query and result limit vary per call.
     async fn search_impl(&self, query: &str, max_results: usize) -> Result<Vec<serde_json::Value>> {
-        let config = WebSearchConfig {
-            provider: SearchProvider::DuckDuckGo,
-            timeout_secs: 15,
-            max_results,
-        };
-
-        let client = WebSearchClient::new(config)?;
+        static CLIENT: OnceLock<Result<WebSearchClient, String>> = OnceLock::new();
+        let client = CLIENT
+            .get_or_init(|| {
+                WebSearchClient::new(WebSearchConfig {
+                    provider: SearchProvider::DuckDuckGo,
+                    timeout_secs: 15,
+                    max_results,
+                })
+                .map_err(|e| e.to_string())
+            })
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("web_search client init failed: {}", e))?;
         let results = client.search(query, max_results).await?;
 
         let json_results: Vec<Value> = results

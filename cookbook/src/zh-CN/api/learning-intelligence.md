@@ -1,59 +1,55 @@
 # 学习和智能 API
 
-*文档即将推出。此 API 提供机器学习、强化学习、自适应选择和智能操作的端点。*
-
 ## 概述
 
-学习和智能 API 为 go-on 部署提供机器学习能力、强化学习、自适应模型选择和智能决策功能。
+学习和智能 API 暴露 go-on 的机器学习、强化学习、自适应选择和知识蒸馏能力。该 API 是**基于 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；这些能力没有专用的 REST 端点。
 
-## 主要特性
+> 权威的 JSON-RPC 方法参考见 `docs/protocol-guide.md`。
 
-- **机器学习**：模型训练和推理
-- **强化学习**：RL 算法和策略
-- **自适应选择**：智能模型和工具选择
-- **知识蒸馏**：知识提取和转移
-- **智能路由**：智能请求路由和负载均衡
+## 方法
 
-## 端点
+所有方法均通过 `POST /rpc` 分发：
 
-### 机器学习
-- `GET /ml/models` - 列出 ML 模型
-- `POST /ml/models` - 训练 ML 模型
-- `GET /ml/models/{id}` - 获取 ML 模型
-- `POST /ml/models/{id}/predict` - 进行预测
-- `POST /ml/models/{id}/evaluate` - 评估模型
+```bash
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"learning.summary","params":{}}'
+```
 
-### 强化学习
-- `GET /rl/policies` - 列出 RL 策略
-- `POST /rl/policies` - 创建 RL 策略
-- `GET /rl/policies/{id}` - 获取 RL 策略
-- `POST /rl/policies/{id}/train` - 训练 RL 策略
-- `POST /rl/policies/{id}/act` - 从策略获取动作
+### 学习与知识
 
-### 自适应选择
-- `GET /selector/status` - 获取选择器状态
-- `POST /selector/select` - 选择模型或工具
-- `GET /selector/history` - 获取选择历史
-- `POST /selector/train` - 训练选择器
+| 方法 | 说明 |
+|---|---|
+| `learning.summary` | 任务窗口的学习档案摘要 |
+| `learning.replay` | 学习重放档案 |
+| `learning.guardrail` | 学习护栏摘要（window/limit 参数） |
+| `knowledge.distill` | 知识蒸馏（基于证据权重的提取，写回 `learning.summary` / `knowledge.distill`） |
 
-### 知识
-- `GET /knowledge/bases` - 列出知识库
-- `POST /knowledge/bases` - 创建知识库
-- `GET /knowledge/bases/{id}` - 获取知识库
-- `POST /knowledge/bases/{id}/query` - 查询知识库
-- `POST /knowledge/distill` - 蒸馏知识
+### 强化学习与自适应选择
+
+| 方法 | 说明 |
+|---|---|
+| `rl.alignment.offline_eval` | RL 对齐的离线评估 |
+| `selector.status` | 模型/工具选择器状态 |
+| `phase.policy.replay` | 阶段策略重放 |
+| `primary_secondary.summary` | 主/次摘要（别名：`summary/primary_secondary`） |
+| `optimization.peak` | 优化峰值分析 |
+| `cost.status` | 成本状态 |
+
+### 辅助智能
+
+| 方法 | 说明 |
+|---|---|
+| `harness.status` | 带学习/RL 档案集成的 harness 状态 |
+| `capabilities.list` | 服务器能力列表 |
+| `models.list` / `models/list` | 可用模型 |
 
 ## 认证
 
-所有端点都需要具有适当权限的认证。
-
-## 速率限制
-
-- ML 端点：每分钟 30 个请求
-- RL 端点：每分钟 20 个请求
-- 选择端点：每分钟 60 个请求
-- 知识端点：每分钟 40 个请求
+所有方法都需要具有适当权限的认证（按请求强制执行 RBAC）。
 
 ## 下一步
 
-本文档正在开发中。请稍后查看完整的 API 参考。
+- 探索 [安全和治理 API](./safety-governance.md)
+- 查看 [工作流和任务 API](./workflow-task.md)
+- 参见 [优化和操作 API](./optimization-ops.md)

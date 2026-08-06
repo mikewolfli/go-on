@@ -377,6 +377,33 @@ impl LspClient {
     }
 }
 
+/// Connect to an LSP server, reusing a cached client when one already exists
+/// for the same address (avoids a fresh TCP connection + initialize handshake
+/// on every tool call).
+async fn cached_lsp_client(addr: &str) -> Result<Arc<LspClient>> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CLIENTS: OnceLock<Mutex<HashMap<String, Arc<LspClient>>>> = OnceLock::new();
+    {
+        // Fast path: reuse an existing client for this address. The guard is
+        // dropped before the (potentially slow) connect below.
+        let map = CLIENTS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(client) = map.get(addr) {
+            return Ok(client.clone());
+        }
+    }
+    let client = Arc::new(LspClient::connect(addr).await?);
+    let mut map = CLIENTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.insert(addr.to_string(), client.clone());
+    Ok(client)
+}
+
 /// Helper: run an async LSP `query_definition` from a sync context.
 /// Uses the shared LSP runtime to avoid creating a new Runtime each call.
 fn run_lsp_definition(
@@ -388,7 +415,7 @@ fn run_lsp_definition(
     let addr = address.to_string();
     let fp = file_path.to_string();
     lsp_runtime().block_on(async {
-        let client = LspClient::connect(&addr).await?;
+        let client = cached_lsp_client(&addr).await?;
         client.query_definition(&fp, line, column).await
     })
 }
@@ -404,7 +431,7 @@ fn run_lsp_references(
     let addr = address.to_string();
     let fp = file_path.to_string();
     lsp_runtime().block_on(async {
-        let client = LspClient::connect(&addr).await?;
+        let client = cached_lsp_client(&addr).await?;
         client.query_references(&fp, line, column).await
     })
 }
@@ -424,7 +451,7 @@ fn run_lsp_code_action(
     let act = action.to_string();
     let det = detail.to_string();
     lsp_runtime().block_on(async {
-        let client = LspClient::connect(&addr).await?;
+        let client = cached_lsp_client(&addr).await?;
         client
             .query_code_action(&fp, &act, &det, line, column)
             .await

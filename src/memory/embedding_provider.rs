@@ -17,12 +17,6 @@ pub trait EmbeddingProvider: Send + Sync {
     /// Embed `text` into a vector of `dimensions`.
     fn embed(&self, text: &str) -> Vec<f32>;
 
-    /// Return the expected dimensionality of this provider's output vectors.
-    #[allow(
-        dead_code,
-        reason = "Public API — trait method reserved for callers who need to validate output dimensionality"
-    )]
-    fn expected_dimension(&self) -> usize;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,10 +109,6 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     fn embed(&self, text: &str) -> Vec<f32> {
         local_hash_embed(text, self.dimensions)
     }
-
-    fn expected_dimension(&self) -> usize {
-        self.dimensions
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,10 +160,6 @@ impl OpenAiEmbeddingProvider {
 }
 
 impl EmbeddingProvider for OpenAiEmbeddingProvider {
-    fn expected_dimension(&self) -> usize {
-        self.config.dimensions
-    }
-
     fn embed(&self, text: &str) -> Vec<f32> {
         // If no real API key is configured, use local hash fallback silently
         if !self.has_api_key() {
@@ -296,10 +282,6 @@ impl OllamaEmbeddingProvider {
 }
 
 impl EmbeddingProvider for OllamaEmbeddingProvider {
-    fn expected_dimension(&self) -> usize {
-        self.config.dimensions
-    }
-
     fn embed(&self, text: &str) -> Vec<f32> {
         let url = format!("{}/api/embed", self.config.base_url.trim_end_matches('/'));
         let body = serde_json::json!({
@@ -412,10 +394,6 @@ impl Qwen3EmbeddingProvider {
 }
 
 impl EmbeddingProvider for Qwen3EmbeddingProvider {
-    fn expected_dimension(&self) -> usize {
-        self.config.dimensions
-    }
-
     fn embed(&self, text: &str) -> Vec<f32> {
         if !self.has_api_key() {
             debug!("Qwen3EmbeddingProvider: no DASHSCOPE_API_KEY configured");
@@ -635,10 +613,6 @@ impl EmbeddingProvider for ConfigurableEmbeddingProvider {
             );
         }
         vec
-    }
-
-    fn expected_dimension(&self) -> usize {
-        self.dimensions
     }
 }
 

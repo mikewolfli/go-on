@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS_FILE="$ROOT_DIR/.zed/settings.json"
 # Note: DOC directory was reorganized. Docs are now in docs/guides/.
-LOCAL_BASE_URL="${1:-http://127.0.0.1:8080}"
+LOCAL_BASE_URL="${1:-http://127.0.0.1:8090}"
 
 pass() { echo "[PASS] $1"; }
 fail() { echo "[FAIL] $1"; exit 1; }
@@ -17,23 +17,20 @@ pass "required Zed files exist"
 
 step "Workspace settings schema checks"
 rg -q '"agent_servers"' "$SETTINGS_FILE" || fail "agent_servers missing"
-rg -q '"language_models"' "$SETTINGS_FILE" || fail "language_models missing"
-rg -q '"openai_compatible"' "$SETTINGS_FILE" || fail "openai_compatible provider missing"
-rg -q '"available_models"' "$SETTINGS_FILE" || fail "available_models missing"
-rg -q '"gpt-5\.5"' "$SETTINGS_FILE" || fail "gpt-5.5 model entry missing"
-pass "workspace settings structure is valid"
+rg -q '"go-on"' "$SETTINGS_FILE" || fail "go-on agent server entry missing"
+pass "workspace settings define the go-on agent server"
 
 step "Docs consistency checks"
-if rg -q 'openai_compatible' "$SETTINGS_FILE"; then
-  pass "settings include openai_compatible provider"
+if rg -q '"auto_approve_tools"' "$SETTINGS_FILE"; then
+  pass "settings include auto_approve_tools"
 fi
 
 step "Local endpoint smoke checks (optional)"
 if command -v curl >/dev/null 2>&1; then
-  if curl -fsS "$LOCAL_BASE_URL/v1/models" >/dev/null 2>&1; then
-    pass "endpoint reachable: $LOCAL_BASE_URL/v1/models"
+  if curl -fsS "$LOCAL_BASE_URL/health" >/dev/null 2>&1; then
+    pass "endpoint reachable: $LOCAL_BASE_URL/health"
   else
-    echo "[WARN] endpoint not reachable at $LOCAL_BASE_URL/v1/models (start server to enable runtime verification)"
+    echo "[WARN] endpoint not reachable at $LOCAL_BASE_URL/health (start server to enable runtime verification)"
   fi
 else
   echo "[WARN] curl not found, skipped runtime endpoint check"

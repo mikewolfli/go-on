@@ -48,8 +48,8 @@ closes the connection.
 ### Runtime
 | Method | RPC | Description |
 |--------|-----|-------------|
-| `health()` | `runtime.health` | Backend health status |
-| `runtimeHealth()` | `health.probes` | Detailed module health |
+| `health()` | `GET /health` | Quick health check (HTTP) |
+| `runtimeHealth()` | `runtime.health` | Full runtime health via JSON-RPC |
 | `runtimeStability()` | `runtime.stability` | Stability metrics |
 | `initialize(profile)` | `initialize` | ACP initialize handshake |
 | `shutdown()` | `shutdown` | Graceful shutdown |

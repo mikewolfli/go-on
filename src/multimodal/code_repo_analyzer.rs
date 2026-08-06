@@ -81,6 +81,12 @@ pub struct RepoContext {
     pub head_commit: Option<String>,
     /// Language distribution (extension -> file count).
     pub language_stats: HashMap<String, usize>,
+    /// Keeps the temporary clone directory alive for the lifetime of the
+    /// context. `None` for local paths. Serialization skips it because
+    /// `TempDir` is not serializable; the `Arc` keeps the clone directory
+    /// alive as long as any clone of this context is alive.
+    #[serde(skip)]
+    pub temp_dir: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 /// Graph representation of the repository file structure.
@@ -356,7 +362,7 @@ impl RepoAnalyzer {
             || url.starts_with("git@")
             || url.starts_with("ssh://");
 
-        let root_path = if is_remote {
+        let (root_path, temp_dir) = if is_remote {
             let dir = tempfile::TempDir::new()
                 .map_err(|e| RepoAnalyzerError::CloneFailed(e.to_string()))?;
             let dest = dir.path().join("repo");
@@ -388,18 +394,21 @@ impl RepoAnalyzer {
                     )));
                 }
             }
-            dest
+            // Keep the TempDir alive for the lifetime of the RepoContext;
+            // dropping it here would delete the freshly cloned repository.
+            (dest, Some(std::sync::Arc::new(dir)))
         } else {
             let local = PathBuf::from(url);
             if !local.exists() {
                 return Err(RepoAnalyzerError::PathNotFound(url.into()));
             }
-            local
+            (local, None)
         };
 
-        // Build repo map and type index.
+        // Build repo map and type index (single scan — the map is reused
+        // for type extraction instead of walking the tree twice).
         let repo_map = self.build_repo_map(&root_path).await?;
-        let type_index = self.extract_types(&root_path).await?;
+        let type_index = self.extract_types(&root_path, &repo_map).await?;
 
         // Language statistics.
         let mut language_stats: HashMap<String, usize> = HashMap::new();
@@ -409,13 +418,26 @@ impl RepoAnalyzer {
             }
         }
 
+        // Git HEAD commit hash (best effort; missing git is not fatal).
+        let head_commit = match tokio::process::Command::new("git")
+            .args(["-C", &root_path.to_string_lossy(), "rev-parse", "HEAD"])
+            .output()
+            .await
+        {
+            Ok(out) if out.status.success() => {
+                Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            }
+            _ => None,
+        };
+
         let ctx = RepoContext {
             source: url.to_owned(),
             root_path,
             repo_map,
             type_index,
-            head_commit: None,
+            head_commit,
             language_stats,
+            temp_dir,
         };
 
         // Insert into cache.
@@ -490,7 +512,13 @@ impl RepoAnalyzer {
 
                 let file_id = repo_map.files.len();
                 repo_map.files.push(rel_path.clone());
-                repo_map.loc.insert(file_id, 0); // Populated by a real parser.
+                // Count lines of code for this file (best effort; non-UTF8
+                // or unreadable files count as 0 lines).
+                let line_count = match tokio::fs::read_to_string(&abs_path).await {
+                    Ok(c) => c.lines().count(),
+                    Err(_) => 0,
+                };
+                repo_map.loc.insert(file_id, line_count);
 
                 // In production, parse the file for imports to build edges.
                 // Here we record the file and note that edge detection would occur.
@@ -505,14 +533,16 @@ impl RepoAnalyzer {
 
     /// Extract type definitions / symbol index from the repository at `path`.
     ///
-    /// This scans source files and runs heuristic extraction for common
-    /// language constructs (struct/enum/trait/fn definitions). In production
-    /// this would use `tree-sitter` or language-specific parsers.
-    pub async fn extract_types(&self, path: &Path) -> Result<TypeIndex, RepoAnalyzerError> {
+    /// Reuses the already-built [`RepoMap`] so the file tree is scanned only
+    /// once per `clone()` call. Heuristic extraction covers common language
+    /// constructs (struct/enum/trait/fn definitions).
+    pub async fn extract_types(
+        &self,
+        path: &Path,
+        repo_map: &RepoMap,
+    ) -> Result<TypeIndex, RepoAnalyzerError> {
         info!("RepoAnalyzer::extract_types: scanning {:?}", path);
         let mut index = TypeIndex::empty();
-
-        let repo_map = self.build_repo_map(path).await?;
 
         for (file_id, rel_path) in repo_map.files.iter().enumerate() {
             let abs_path = path.join(rel_path);

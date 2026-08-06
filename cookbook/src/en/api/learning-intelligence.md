@@ -1,59 +1,55 @@
 # Learning and Intelligence API
 
-*Documentation coming soon. This API provides endpoints for machine learning, reinforcement learning, adaptive selection, and intelligent operations.*
-
 ## Overview
 
-The Learning and Intelligence API enables machine learning capabilities, reinforcement learning, adaptive model selection, and intelligent decision-making for go-on deployments.
+The Learning and Intelligence API exposes machine learning, reinforcement learning, adaptive selection, and knowledge distillation capabilities of go-on. The API is **JSON-RPC 2.0 over HTTP** (`POST /rpc`); there are no dedicated REST endpoints for these capabilities.
 
-## Key Features
+> The authoritative JSON-RPC method reference lives in `docs/protocol-guide.md`.
 
-- **Machine Learning**: Model training and inference
-- **Reinforcement Learning**: RL algorithms and policies
-- **Adaptive Selection**: Intelligent model and tool selection
-- **Knowledge Distillation**: Knowledge extraction and transfer
-- **Intelligent Routing**: Smart request routing and load balancing
+## Methods
 
-## Endpoints
+All methods are dispatched via `POST /rpc`:
 
-### Machine Learning
-- `GET /ml/models` - List ML models
-- `POST /ml/models` - Train ML model
-- `GET /ml/models/{id}` - Get ML model
-- `POST /ml/models/{id}/predict` - Make prediction
-- `POST /ml/models/{id}/evaluate` - Evaluate model
+```bash
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"learning.summary","params":{}}'
+```
 
-### Reinforcement Learning
-- `GET /rl/policies` - List RL policies
-- `POST /rl/policies` - Create RL policy
-- `GET /rl/policies/{id}` - Get RL policy
-- `POST /rl/policies/{id}/train` - Train RL policy
-- `POST /rl/policies/{id}/act` - Get action from policy
+### Learning & Knowledge
 
-### Adaptive Selection
-- `GET /selector/status` - Get selector status
-- `POST /selector/select` - Select model or tool
-- `GET /selector/history` - Get selection history
-- `POST /selector/train` - Train selector
+| Method | Description |
+|---|---|
+| `learning.summary` | Learning profile summary for a task window |
+| `learning.replay` | Learning replay profile |
+| `learning.guardrail` | Learning guardrail summary (window/limit params) |
+| `knowledge.distill` | Distill knowledge (evidence-weighted extraction, write-back to `learning.summary` / `knowledge.distill`) |
 
-### Knowledge
-- `GET /knowledge/bases` - List knowledge bases
-- `POST /knowledge/bases` - Create knowledge base
-- `GET /knowledge/bases/{id}` - Get knowledge base
-- `POST /knowledge/bases/{id}/query` - Query knowledge base
-- `POST /knowledge/distill` - Distill knowledge
+### Reinforcement Learning & Adaptive Selection
+
+| Method | Description |
+|---|---|
+| `rl.alignment.offline_eval` | Offline evaluation of RL alignment |
+| `selector.status` | Model/tool selector status |
+| `phase.policy.replay` | Phase policy replay |
+| `primary_secondary.summary` | Primary/secondary summary (alias: `summary/primary_secondary`) |
+| `optimization.peak` | Optimization peak analysis |
+| `cost.status` | Cost status |
+
+### Supporting Intelligence
+
+| Method | Description |
+|---|---|
+| `harness.status` | Harness status with learning/rl profile integration |
+| `capabilities.list` | Server capability list |
+| `models.list` / `models/list` | Available models |
 
 ## Authentication
 
-All endpoints require authentication with appropriate permissions.
-
-## Rate Limiting
-
-- ML endpoints: 30 requests per minute
-- RL endpoints: 20 requests per minute
-- Selection endpoints: 60 requests per minute
-- Knowledge endpoints: 40 requests per minute
+All methods require authentication with appropriate permissions (RBAC is enforced per request).
 
 ## Next Steps
 
-This documentation is under development. Check back soon for complete API reference.
+- Explore [Safety and Governance API](./safety-governance.md)
+- Check [Workflow and Task API](./workflow-task.md)
+- See [Optimization and Operations API](./optimization-ops.md)

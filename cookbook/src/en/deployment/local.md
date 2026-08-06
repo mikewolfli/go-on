@@ -12,7 +12,7 @@ Local mode (`local`) is the default build profile for go-on, designed for single
 - **Adaptive vector store**: Uses `sqlite-vec` when available, falls back to JSON embeddings
 - **Zero external dependencies**: No database servers required
 - **Quick setup**: Minimal configuration needed
-- **All 14 capability buses included**: Full tool, orchestration, observability, optimization, memory, and protocol sub-bus support
+- **All core sub-buses included**: Full tool, orchestration, observability, optimization, memory, and protocol sub-bus support (distributed-memory is gated to server profiles)
 
 ### Storage Architecture
 ```

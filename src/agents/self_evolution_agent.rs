@@ -1013,7 +1013,11 @@ impl SelfEvolutionAgent {
         let is_remove = ins_lower.contains("remove") || ins_lower.contains("delete");
         let is_fix = ins_lower.contains("fix") || ins_lower.contains("correct");
 
-        for (i, line) in content.lines().enumerate() {
+        // Collect the lines once — `content.lines().nth(i)` inside the loop
+        // rescans from the start of the string on every call (O(n²)).
+        let lines: Vec<&str> = content.lines().collect();
+
+        for (i, line) in lines.iter().enumerate() {
             let line_lower = line.to_lowercase();
             let trimmed = line.trim();
 
@@ -1037,16 +1041,16 @@ impl SelfEvolutionAgent {
             let include_surrounding = is_fix || is_add;
             if include_surrounding {
                 // Include the matching line plus adjacent context
-                patched.push((i + 1, line.to_string()));
+                patched.push((i + 1, (*line).to_string()));
                 // Also include the next line for context if it's not already included
-                if i + 1 < content.lines().count() {
-                    let next = content.lines().nth(i + 1).unwrap_or("");
-                    if !next.trim().is_empty() && !next.trim().starts_with("//") {
-                        patched.push((i + 2, next.to_string()));
+                if let Some(next) = lines.get(i + 1) {
+                    let next_trimmed = next.trim();
+                    if !next_trimmed.is_empty() && !next_trimmed.starts_with("//") {
+                        patched.push((i + 2, (*next).to_string()));
                     }
                 }
             } else {
-                patched.push((i + 1, line.to_string()));
+                patched.push((i + 1, (*line).to_string()));
             }
         }
 

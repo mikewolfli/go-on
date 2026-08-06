@@ -179,11 +179,22 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     });
 
     try {
-      // B51-24: Delegate workflow execution to backend via RPC
+      // B51-24: Delegate workflow execution to backend via RPC.
+      // The backend `workflow.execute` handler reads `params.task` (and
+      // `phase`); the local view model is flattened into a task description.
+      const taskText = [
+        workflow.name,
+        ...workflow.steps
+          .map((step, index) => {
+            const desc =
+              step.type === "delay"
+                ? `wait ${step.delay ?? 0} seconds`
+                : step.prompt ?? step.type;
+            return `${index + 1}. ${desc}`;
+          }),
+      ].join("\n");
       await this.manager.sendRequest("workflow.execute", {
-        workflowId,
-        name: workflow.name,
-        steps: workflow.steps,
+        task: taskText,
       });
 
       workflow.status = "completed";

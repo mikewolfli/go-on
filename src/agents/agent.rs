@@ -655,6 +655,12 @@ pub trait Agent: Send + Sync {
     /// chat() implementation when it needs to communicate with sibling
     /// or child agents. The messenger reference is typically injected
     /// via the agent's constructor or stored as a capability reference.
+    /// Send a message to another agent via the CommunicationBus.
+    ///
+    /// Convenience wrapper that should be called from inside an agent's
+    /// chat() implementation when it needs to communicate with sibling
+    /// or child agents. The messenger reference is typically injected
+    /// via the agent's constructor or stored as a capability reference.
     async fn send_message(
         &self,
         _messenger: &crate::agents::communication::bus::CommunicationBus,

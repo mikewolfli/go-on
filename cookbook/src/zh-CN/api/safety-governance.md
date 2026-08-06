@@ -1,54 +1,55 @@
 # 安全和治理 API
 
-*文档即将推出。此 API 提供安全策略、审计日志、合规性监控和治理操作的端点。*
-
 ## 概述
 
-安全和治理 API 为 go-on 部署提供安全管理、策略执行、审计跟踪维护和合规性监控功能。
+安全和治理 API 为 go-on 部署提供安全策略执行、审计追踪维护、合规性监控和访问控制。该 API 是**基于 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；这些能力没有专用的 REST 端点。
 
-## 主要特性
+> 权威的 JSON-RPC 方法参考见 `docs/protocol-guide.md`。
 
-- **安全策略**：定义和执行安全规则
-- **审计日志**：所有操作的全面审计跟踪
-- **合规性监控**：跟踪法规和标准的合规性
-- **访问控制**：基于角色的访问控制（RBAC）
-- **事件响应**：安全事件管理
+## 方法
 
-## 端点
+所有方法均通过 `POST /rpc` 分发：
 
-### 安全策略
-- `GET /security/policies` - 列出安全策略
-- `POST /security/policies` - 创建安全策略
-- `GET /security/policies/{id}` - 获取安全策略
-- `PUT /security/policies/{id}` - 更新安全策略
-- `DELETE /security/policies/{id}` - 删除安全策略
+```bash
+curl http://localhost:8090/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"governance.status","params":{}}'
+```
 
-### 审计日志
-- `GET /audit/logs` - 查询审计日志
-- `GET /audit/logs/{id}` - 获取审计日志条目
-- `POST /audit/logs/export` - 导出审计日志
+### 治理
 
-### 合规性
-- `GET /compliance/status` - 获取合规性状态
-- `POST /compliance/checks` - 运行合规性检查
-- `GET /compliance/reports` - 生成合规性报告
+| 方法 | 说明 |
+|---|---|
+| `governance.status` | 治理状态（HarnessBus 档案、策略、门控） |
+| `governance.plan.get` | 获取治理计划 |
+| `governance.plan.update` | 更新治理计划 |
+| `governance.audit.recent` | 最近的审计日志条目 |
+| `governance.audit.verify` | 验证防篡改审计哈希链 |
+| `governance.remediate` | 运行治理修复 |
+| `governance.config.save` | 保存治理配置 |
+
+### 安全
+
+| 方法 | 说明 |
+|---|---|
+| `security.baseline` | 安全基线与风险报告 |
+| `harness.status` | HarnessBus 状态（策略、漂移、弹性、审计维度） |
+| `tool.approve` | 批准工具执行（参数：`tool_name`） |
 
 ### 访问控制
-- `GET /access/roles` - 列出角色
-- `POST /access/roles` - 创建角色
-- `GET /access/permissions` - 列出权限
-- `POST /access/assignments` - 为用户分配角色
 
-## 认证
+认证和 RBAC 按请求强制执行：
 
-所有端点都需要具有适当权限的认证。
+- `authenticate` — 认证会话
+- `logout` — 结束会话
+- RBAC 将每个方法映射到权限级别（`Admin`、`ManageUsers`、`ManageConfig`、`Read`、`Execute`）；敏感方法（`shutdown`、`maintenance.gc`）需要管理员权限
 
-## 速率限制
+## 审计追踪
 
-- 安全端点：每分钟 30 个请求
-- 审计端点：每分钟 60 个请求
-- 合规性端点：每分钟 20 个请求
+配置更改和维护操作会记录到审计日志中，审计哈希链可通过 `governance.audit.verify` 验证。
 
 ## 下一步
 
-本文档正在开发中。请稍后查看完整的 API 参考。
+- 探索 [核心运行时 API](./core-runtime.md)
+- 参见 [优化和操作 API](./optimization-ops.md)
+- 查看 [可观测性 API](./observability.md)

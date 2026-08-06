@@ -843,7 +843,7 @@ pub fn default_non_ai_config_toml() -> String {
         "default_phase = \"coding\"",
         "model_selection_mode = \"adaptive\"",
         "[protocol]",
-        "mode = \"auto\"",
+        "mode = \"adaptive\"",
         "",
         "[cache]",
         "enabled = true",

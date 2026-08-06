@@ -96,17 +96,6 @@ impl EvolutionLoop {
         self
     }
 
-    /// Register the default `TickTriggerSource` that fires every 300 seconds.
-    ///
-    /// This ensures the evolution loop always has at least one active trigger
-    /// source, preventing `NoTriggerSources` errors during idle periods.
-    pub fn with_default_trigger_source(self) -> Self {
-        self.with_trigger_source(Box::new(TickTriggerSource::new(
-            "default_tick".to_string(),
-            Duration::from_secs(300),
-        )))
-    }
-
     /// Register built-in trigger sources for a fully wired evolution loop.
     pub fn with_default_trigger_sources(self) -> Self {
         // Create a shared error-counts map so the evolution loop can

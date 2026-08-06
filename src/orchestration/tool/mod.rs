@@ -6,7 +6,6 @@
 
 // ── Sub-modules (moved from orchestration/ for cohesion) ───────────────────
 pub mod builtin_tools;
-pub mod events;
 pub mod exec_common;
 pub mod executor;
 pub mod extended;
@@ -15,7 +14,9 @@ pub mod lock;
 pub mod loop_executor;
 // pub mod native; — removed: NativeToolBridge was superseded by shared::tool_descriptors
 // and all tests were already covered by autonomy_runtime tests.
-pub mod registry_macro;
+// pub mod registry_macro; — removed: the builtin_tools! macro had no production callers.
+// pub mod events; — removed: the ToolProgress/ProgressSender progress subsystem
+// had no production callers (run_with_progress/run_streaming were never invoked).
 pub mod types;
 use crate::i18n::runtime::tf;
 use anyhow::Result;

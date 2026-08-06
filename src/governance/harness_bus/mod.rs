@@ -247,7 +247,12 @@ impl HarnessBus {
                 tf("status.harness_bus.mode_standard", &[])
             };
             p.policy_violation_trend = ctrl.violation_trend();
-            p.current_active_policies = 12u32;
+            // Honest active-policy count: the security-governor policy table
+            // plus the five fixed policy bundles wired into the evaluator
+            // (dispatch / execution / governance / PUA enforcement / quality
+            // compass). Previously hardcoded to 12.
+            let sg_policies = self.evaluator.security_governor.profile().policies_count;
+            p.current_active_policies = sg_policies as u32 + 5;
         }
 
         // Record execution outcome through the resilience engine (F-GAP-27).

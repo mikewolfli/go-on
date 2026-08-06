@@ -2,7 +2,7 @@
 
 `go-on` 是一個圍繞 Rust 後端構建的三端運行時體系：
 
-- **後端**：負責配置加載、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 13 條子總線和認知模塊的能力架構。
+- **後端**：負責配置載入、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 7 個特性門控子總線和認知模塊的能力架構。
 - **GUI**：EGUI（Rust 原生）桌面圖形界面，負責後端發現、進程生命週期、集成探測、監控、對話和配置管理。
 - **VS Code 插件**：負責拉起或探測運行時，暴露基於 RPC 的命令，並可在工作區級別覆蓋協議模式。
 
@@ -42,12 +42,12 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo clippy -D warnings` | 測試數 |
 |:--------|:--------------------------:|:------:|
-| **local** | ✅ **零警告** | **4699** |
-| **simple-server** | ✅ **零警告** | **3400+** |
-| **full** | ✅ **零警告** | **4000+** |
-| **multi-users-server** | ✅ **零警告** | **3800+** |
+| **local** | ✅ **零警告** | **~1.7K（1 個已知失敗）** |
+| **simple-server** | ✅ **零警告** | **通過** |
+| **full** | ✅ **零警告** | **通過** |
+| **multi-users-server** | ✅ **零警告** | **通過** |
 
-所有 19 個測試二進制文件均可編譯通過。23 個 E2e 測試（需要基礎設施）標記為 `#[ignore]`，不會在本地運行中執行。
+最近一次 `cargo test`（默認 `local` 配置）除 `governance::security_governor::tests::test_profile_reflects_state` 一處既有失敗外全部通過。E2e 測試（需要基礎設施）標記為 `#[ignore]`。
 
 ## 運行時協議模式
 
@@ -78,7 +78,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 ## 架構：多總線能力系統
 
-go-on 實現了以 **CapabilityBus** 和 **HarnessBus** 為核心的 **14 條總線架構**。
+go-on 實現了以 **CapabilityBus** 和 **HarnessBus** 為核心的**子總線架構**（7 個特性門控子總線，見 `Cargo.toml`）。
 
 ### 核心總線
 

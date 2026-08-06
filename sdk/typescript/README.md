@@ -47,7 +47,7 @@ for await (const chunk of client.chatStream({ messages })) {
 | `breakerStatus()`    | `breaker.status`           | Circuit breaker status           |
 | `checkpointList()`   | `checkpoint.list`          | List checkpoints                 |
 | `workflowExecute()`  | `workflow.execute`         | Execute workflow                 |
-| `chatStream()`       | `POST /acp/chat`           | Streaming chat (SSE)             |
+| `chatStream()`       | `POST /chat/stream`       | Streaming chat (SSE)             |
 
 ## License
 

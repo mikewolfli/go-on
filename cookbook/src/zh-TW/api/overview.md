@@ -59,7 +59,7 @@ go-on 為智能體編排、治理和生產操作提供了全面的 API 接口。
 - **認證**：Bearer 令牌或 API 密鑰頭（`X-Api-Key` 或 `X-Go-On-Key`）
 
 ### JSON-RPC over HTTP
-- **端點**：`POST /v1/responses`
+- **端點**：`POST /rpc`
 - **序列化**：JSON
 - **特性**：通過方法路由的請求/響應（`runtime.health`、`governance.status` 等）
 
@@ -121,7 +121,7 @@ API 密鑰通過 `X-Api-Key` 或 `X-Go-On-Key` HTTP 頭髮送。認證根據運�
 | 路徑 | 描述 |
 |---|---|
 | `/` | 根能力響應（協議、端點、版本） |
-| `/health` | 健康檢查（狀態、版本、運行時間） |
+| `/health` | 伺服器狀態快照（指標、生命週期、治理） |
 | `/v1/models` | 列出可用模型（OpenAI 兼容） |
 | `/v1/model` | `/v1/models` 的別名 |
 | `/models` | `/v1/models` 的別名 |
@@ -135,7 +135,8 @@ API 密鑰通過 `X-Api-Key` 或 `X-Go-On-Key` HTTP 頭髮送。認證根據運�
 | `/chat/stream` | 流式聊天補全（SSE） |
 | `/v1/chat/completions` | OpenAI 兼容的聊天補全 |
 | `/chat/completions` | OpenAI 兼容的聊天補全 |
-| `/v1/responses` | JSON-RPC 2.0 方法分發 |
+| `/rpc` | JSON-RPC 2.0 方法分發（主要接口） |
+| `/v1/responses` | OpenAI Responses API |
 
 ## 客戶端庫
 
@@ -144,10 +145,10 @@ API 密鑰通過 `X-Api-Key` 或 `X-Go-On-Key` HTTP 頭髮送。認證根據運�
 - **Rust**：`go-on-client` crate
 
 ### 生成自定義客戶端
-`POST /v1/responses` 的 JSON-RPC 接口可以直接從任何語言調用：
+`POST /rpc` 的 JSON-RPC 接口可以直接從任何語言調用：
 
 ```bash
-curl http://localhost:8090/v1/responses \
+curl http://localhost:8090/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"runtime.health","params":{}}'
 ```
@@ -206,10 +207,10 @@ GET /health
 go-on 使用 OpenTelemetry 進行聊天補全、代理調用和審查門的內部追蹤。追蹤數據發送到任何已配置的 OTLP 收集器。
 
 ### Prometheus 指標
-內部運行時指標（延遲直方圖、斷路器狀態、速率限制器令牌）可通過 JSON-RPC 獲取：
+內部運行時指標（延遲直方圖、斷路器狀態、速率限制器令牌）可通過 JSON-RPC 獲取，Prometheus 文字格式則暴露在 `GET /metrics`：
 
 ```bash
-curl http://localhost:8090/v1/responses \
+curl http://localhost:8090/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"metrics.prometheus","params":{}}'
 ```

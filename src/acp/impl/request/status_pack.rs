@@ -121,9 +121,12 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
     let status = server.get_status();
     let metrics = server.observability.metrics.snapshot();
 
-    let stability_payload =
-        super::lifecycle_handlers::build_runtime_stability_payload(server).await?;
-    let provider_payload = super::lifecycle_handlers::build_provider_status_payload(server).await?;
+    let (stability_payload, provider_payload) = tokio::join!(
+        super::lifecycle_handlers::build_runtime_stability_payload(server),
+        super::lifecycle_handlers::build_provider_status_payload(server),
+    );
+    let stability_payload = stability_payload?;
+    let provider_payload = provider_payload?;
     let security_payload = build_security_baseline_payload(server);
     let reproducibility =
         super::repro_pack::reproducible_build_summary(server.config_path.as_deref());

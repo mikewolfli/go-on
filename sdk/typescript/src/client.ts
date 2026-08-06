@@ -451,9 +451,12 @@ export class GoOnClient {
     return this.jsonRpc("selector.status", {});
   }
 
-  /** knowledge.distill — run knowledge distillation. */
-  async knowledgeDistill(query: string): Promise<Record<string, unknown>> {
-    return this.jsonRpc("knowledge.distill", { query });
+  /** knowledge.distill — run knowledge distillation over the last `limit` events. */
+  async knowledgeDistill(limit?: number): Promise<Record<string, unknown>> {
+    return this.jsonRpc(
+      "knowledge.distill",
+      limit === undefined ? {} : { limit },
+    );
   }
 
   /** rl.alignment.offline_eval — trigger RL alignment offline evaluation. */

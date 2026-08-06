@@ -1,12 +1,14 @@
 # Observability API
 
-The Observability API exposes endpoints for health checking, Prometheus metrics, OpenTelemetry trace export, and structured log export. These endpoints are used by monitoring infrastructure, dashboards, and alerting systems.
+The Observability API exposes health checking, Prometheus metrics, and real-time state events. These endpoints are used by monitoring infrastructure, dashboards, and alerting systems.
+
+> The authoritative API reference lives in `docs/protocol-guide.md`. Only endpoints that exist are documented here.
 
 ## Endpoints
 
-### `GET /health` — Health Check
+### `GET /health` — Server Status
 
-Returns the current health status of the go-on instance, including version, uptime, and per-module health information.
+Returns the full server status snapshot (`ServerStatus`): request metrics, lifecycle state, circuit breaker snapshots, maintenance status, governance status, and a timestamp.
 
 **HTTP Method:** `GET`
 
@@ -16,14 +18,20 @@ Returns the current health status of the go-on instance, including version, upti
 
 ```json
 {
-  "status": "ok",
-  "version": "1.5.0",
-  "uptime_seconds": 84321,
-  "modules": {
-    "acp": { "status": "ok" },
-    "database": { "status": "ok", "latency_ms": 2 },
-    "search": { "status": "ok" }
-  }
+  "metrics": {
+    "total_requests": 1000,
+    "successful_requests": 950,
+    "failed_requests": 50,
+    "avg_request_duration_ms": 42.5,
+    "active_requests": 3,
+    "cache_hit_rate": 0.8,
+    "chat_requests_total": 400
+  },
+  "lifecycle": { "state": "running" },
+  "circuit_breakers": [],
+  "maintenance": { "active": false },
+  "governance": { "status": "healthy" },
+  "timestamp": 1760000000
 }
 ```
 
@@ -31,16 +39,24 @@ Returns the current health status of the go-on instance, including version, upti
 
 | Field | Type | Description |
 |---|---|---|
-| `status` | string | Overall health: `"ok"` or `"degraded"` or `"down"` |
-| `version` | string | SemVer version of the running build |
-| `uptime_seconds` | integer | Seconds since the process started |
-| `modules` | object | Per-module health; each module reports `"ok"`, `"degraded"`, or `"down"` |
+| `metrics` | object | Request/response metrics snapshot |
+| `lifecycle` | object | Lifecycle state |
+| `circuit_breakers` | array | Circuit breaker snapshots |
+| `maintenance` | object | Maintenance tracker snapshot |
+| `governance` | object \| null | Governance status (when a harness bus is configured) |
+| `timestamp` | integer | Unix timestamp of the snapshot |
+
+---
+
+### `GET /health/ready` — Readiness Probe
+
+Returns `200` with `{"ok": true, "status": "ready", "healthy": true}` when the server can accept requests, and `503` with `{"ok": false, "status": "draining", "message": "Server is shutting down"}` while draining.
 
 ---
 
 ### `GET /metrics` — Prometheus Metrics
 
-Exposes application and system metrics in Prometheus text-based exposition format. Designed to be scraped by a Prometheus server.
+Exposes runtime metrics in Prometheus text-based exposition format. Designed to be scraped by a Prometheus server.
 
 **HTTP Method:** `GET`
 
@@ -49,118 +65,91 @@ Exposes application and system metrics in Prometheus text-based exposition forma
 **Example response:**
 
 ```
-# HELP go_on_requests_total Total number of HTTP requests
-# TYPE go_on_requests_total counter
-go_on_requests_total{method="GET",path="/health",status="200"} 1024
-# HELP go_on_request_duration_seconds Request duration histogram
-# TYPE go_on_request_duration_seconds histogram
-go_on_request_duration_seconds_bucket{le="0.005"} 512
-go_on_request_duration_seconds_bucket{le="0.01"} 768
-go_on_request_duration_seconds_bucket{le="0.025"} 896
-go_on_request_duration_seconds_bucket{le="+Inf"} 1024
-go_on_request_duration_seconds_sum 12.345
-go_on_request_duration_seconds_count 1024
-# HELP go_on_active_connections Current number of active connections
-# TYPE go_on_active_connections gauge
-go_on_active_connections 42
+# HELP go_on_request_count Total number of requests processed
+# TYPE go_on_request_count counter
+go_on_request_count 1024
+# HELP go_on_request_duration_seconds Request duration in seconds
+# TYPE go_on_request_duration_seconds gauge
+go_on_request_duration_seconds 0.042
+# HELP go_on_inflight_requests Currently active requests
+# TYPE go_on_inflight_requests gauge
+go_on_inflight_requests 3
+# HELP go_on_circuit_breaker_state Number of open circuit breakers
+# TYPE go_on_circuit_breaker_state gauge
+go_on_circuit_breaker_state 0
 ```
 
 **Common metric families:**
 
 | Metric | Type | Description |
 |---|---|---|
-| `go_on_requests_total` | Counter | Total HTTP requests by method, path, and status |
-| `go_on_request_duration_seconds` | Histogram | Request latency distribution |
-| `go_on_active_connections` | Gauge | Active TCP/WebSocket connections |
-| `go_on_memory_bytes` | Gauge | RSS memory usage in bytes |
-| `go_on_cpu_seconds_total` | Counter | Cumulative CPU time |
+| `go_on_request_count` | Counter | Total requests processed |
+| `go_on_request_duration_seconds` | Gauge | Average request duration |
+| `go_on_inflight_requests` / `go_on_active_requests` | Gauge | Currently active requests |
+| `go_on_circuit_breaker_state` | Gauge | Open circuit breakers |
+| `go_on_agent_success_rate` | Gauge | Agent success rate (0–100) |
+| `go_on_p95_latency_ms` | Gauge | P95 latency |
+| `go_on_cache_hit_ratio` | Gauge | Cache hit ratio (0.0–1.0) |
+| `go_on_error_rate` | Gauge | Error rate percentage |
+| `go_on_chat_requests_total` | Counter | Chat requests processed |
+| `go_on_review_gate_total` | Counter | Review gate evaluations |
+| `go_on_vector_search_total` | Counter | Vector search operations |
+| `go_on_successful_requests_total` / `go_on_failed_requests_total` | Counter | Success/failure totals |
+| `go_on_memory_usage_bytes` | Gauge | RSS memory usage in bytes |
+| `go_on_lifecycle_healthy` / `go_on_draining` / `go_on_maintenance_mode` | Gauge | Lifecycle/maintenance flags (0/1) |
 
 ---
 
-### `GET /traces` — OpenTelemetry Trace Export
+### JSON-RPC — Trace Inspection
 
-Accepts OpenTelemetry trace data via the OTLP HTTP protocol. Intended for ingestion by a collector such as the OpenTelemetry Collector, Jaeger, or Grafana Tempo.
+Trace inspection is available through JSON-RPC (via `POST /rpc`):
 
-**HTTP Method:** `GET` (health/protocol negotiation) or `POST` (trace data export)
+| Method | Description |
+|---|---|
+| `trace.get` | Trace payload for the current request context |
+| `trace.metrics` | Trace metrics snapshot |
+| `metrics.prometheus` | Prometheus-format metrics as a JSON-RPC result |
 
-**Request format:** `application/x-protobuf` (OTLP protobuf) or `application/json`
+---
 
-**Response format:** `application/json`
+### `GET /v1/state/events` — State Sync SSE
 
-**Example (POST request):**
+Server-sent events stream of state sync events (`event: state_sync`) with a 30-second heartbeat:
 
 ```http
-POST /traces HTTP/1.1
-Content-Type: application/x-protobuf
+GET /v1/state/events HTTP/1.1
+Accept: text/event-stream
 ```
 
-**Example response:**
+| Event type | Payload | Trigger |
+|---|---|---|
+| `models_changed` | `{ models: string[] }` | Model list updated |
+| `config_reloaded` | `{ changed_keys: string[] }` | Config file hot-reloaded |
+| `agents_changed` | `{ added: string[], removed: string[] }` | Agent registry modified |
+| `backend_restarting` | `{ reason: string, restart_in_ms: number }` | Backend about to restart |
+| `heartbeat` | `{ timestamp: number }` | Periodic keep-alive (30s) |
+
+---
+
+### `GET /protocol/version`
+
+Returns supported protocol versions and the server version:
 
 ```json
 {
-  "partialSuccess": {
-    "rejectedSpans": 0,
-    "rejectedSpanCount": 0
-  }
+  "supported_versions": [1, 2],
+  "latest": 2,
+  "server": "go-on",
+  "server_version": "1.5.0"
 }
 ```
 
-**Headers:**
-
-| Header | Description |
-|---|---|
-| `Content-Type` | `application/x-protobuf` or `application/json` |
-| `Content-Encoding` | Optional: `gzip` for compressed payloads |
-
----
-
-### `GET /logs` — Structured Log Export
-
-Accepts and exposes structured log records. Supports both real-time streaming and batch export.
-
-**HTTP Method:** `GET` (query logs) / `POST` (ingest logs)
-
-**Response format:** `application/json`
-
-**Example GET request:**
-
-```http
-GET /logs?level=error&since=3600&limit=50 HTTP/1.1
-```
-
-**Example response:**
-
-```json
-[
-  {
-    "timestamp": "2026-07-29T10:00:00Z",
-    "level": "error",
-    "target": "go_on::server",
-    "message": "connection refused: dial tcp 10.0.0.1:5432",
-    "fields": {
-      "peer": "10.0.0.1:5432",
-      "component": "database"
-    }
-  }
-]
-```
-
-**Query parameters:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `level` | string | Filter by log level: `trace`, `debug`, `info`, `warn`, `error` |
-| `since` | integer | Return logs from the last N seconds |
-| `until` | string | ISO 8601 timestamp; latest log entry to return |
-| `limit` | integer | Maximum number of entries to return (default 100, max 1000) |
-| `target` | string | Filter by Rust module target (e.g., `go_on::server`) |
-
 ## Authentication
 
-Observability endpoints are generally accessible to monitoring infrastructure without authentication. In production deployments, access is typically restricted via network policy, reverse proxy authentication, or a dedicated observability API key.
+Health endpoints are generally accessible to monitoring infrastructure without authentication. In production deployments, access is typically restricted via network policy, reverse proxy authentication, or a dedicated API key.
 
 ## Next Steps
 
 - Configure Prometheus to scrape the `/metrics` endpoint.
-- Deploy an OpenTelemetry Collector to forward traces to your backend.
-- Set up health-check probes in your orchestrator using `/health`.
+- Set up health-check probes in your orchestrator using `/health` and `/health/ready`.
+- Subscribe to `/v1/state/events` for real-time state change notifications.

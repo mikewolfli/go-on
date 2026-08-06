@@ -116,7 +116,7 @@ GET    /v1/state/events     → SSE stream of state change events (real-time)
 
 | Client | Subscribe | Events Handled |
 |--------|-----------|----------------|
-| GUI | `start_state_sync_listener()` in `gui/src/backend.rs` | `ConfigReloaded` → notification, `ModelsChanged` → refresh cache |
+| GUI | `start_state_sync_listener()` in `gui/src/state_sync.rs` | `ConfigReloaded` → notification, `ModelsChanged` → refresh cache |
 | VSCode | `startStateSyncListener()` in `vscode-addon/src/stateSync.ts` | `ConfigReloaded` → status bar message, `ModelsChanged` → refresh |
 
 ### Implementation Files
@@ -125,8 +125,8 @@ GET    /v1/state/events     → SSE stream of state change events (real-time)
 |------|---------|
 | `src/protocol/state_sync.rs` | `StateSyncEvent` enum + global `StateSyncBroadcaster` |
 | `src/acp/impl/runtime/http.rs` | SSE endpoint `/v1/state/events` |
-| `src/core/config/hot_reload.rs` | Publishes `ConfigReloaded` on successful hot-reload |
-| `gui/src/backend.rs` | GUI state sync listener (`start_state_sync_listener`) |
+| `src/acp/impl/request/config_pack.rs` | Publishes `ConfigReloaded` on successful hot-reload (`config_reload_payload`) |
+| `gui/src/state_sync.rs` | GUI state sync listener (`start_state_sync_listener`) |
 | `vscode-addon/src/stateSync.ts` | VSCode state sync listener (`startStateSyncListener`) |
 | `contracts/cross-client-sync.md` | This document |
 
@@ -145,7 +145,7 @@ GET    /v1/state/events     → SSE stream of state change events (real-time)
 |------|---------|
 | `src/protocol/state_sync.rs` | `StateSyncEvent` enum + global `StateSyncBroadcaster` |
 | `src/acp/impl/runtime/http.rs` | SSE endpoint `/v1/state/events` |
-| `src/core/config/hot_reload.rs` | Publishes `ConfigReloaded` on successful hot-reload |
+| `src/acp/impl/request/config_pack.rs` | Publishes `ConfigReloaded` on successful hot-reload (`config_reload_payload`) |
 | `gui/src/backend/rpc.rs` | GUI RPC client with unified backoff (`retry_backoff`) |
 | `vscode-addon/src/stateSync.ts` | VSCode state sync listener |
 | `vscode-addon/src/runtime/reconnect.ts` | VSCode reconnection manager with unified backoff |

@@ -97,6 +97,18 @@ fn build_rule_file_info(base_dir: &Path, path: &Path) -> Option<Value> {
 }
 
 pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
+    // Load the config once; callers that already hold a parsed config should
+    // use `governance_config_summary_with` to avoid re-parsing the TOML.
+    let loaded = config_path.and_then(|path| AppConfig::load(&PathBuf::from(path)).ok());
+    governance_config_summary_with(config_path, loaded.as_ref())
+}
+
+/// Same as [`governance_config_summary`] but reuses an already-loaded
+/// [`AppConfig`] (when available) instead of re-parsing the TOML file.
+pub(super) fn governance_config_summary_with(
+    config_path: Option<&str>,
+    config: Option<&AppConfig>,
+) -> Value {
     let Some(config_path) = config_path else {
         return json!({
             "loaded": false,
@@ -114,26 +126,44 @@ pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
     };
 
     let config_path_buf = PathBuf::from(config_path);
-    let config = match AppConfig::load(&config_path_buf) {
-        Ok(config) => config,
-        Err(err) => {
-            return json!({
-                "loaded": false,
-                "production_strict": false,
-                "entry_auth_enabled": false,
-                "entry_auth_api_key_env": default_runtime_entry_auth_api_key_env(),
-                "entry_auth_key_configured": false,
-                "entry_rate_limit_rpm": default_runtime_entry_rate_limit_rpm(),
-                "entry_rate_limit_burst": default_runtime_entry_rate_limit_burst(),
-                "strict_violation_count": 1,
-                "strict_violations": [format!("failed_to_load_config:{}", err)],
-                "warning_count": 1,
-                "warnings": [format!("failed_to_load_config:{}", err)],
-            });
+    // The config is either borrowed from the caller (hot path) or loaded here;
+    // the enum keeps both variants alive for the duration of the function.
+    enum MaybeConfig<'a> {
+        Borrowed(&'a AppConfig),
+        Owned(Box<AppConfig>),
+    }
+    impl MaybeConfig<'_> {
+        fn as_ref(&self) -> &AppConfig {
+            match self {
+                MaybeConfig::Borrowed(config) => config,
+                MaybeConfig::Owned(config) => config,
+            }
         }
+    }
+    let config: MaybeConfig<'_> = match config {
+        Some(config) => MaybeConfig::Borrowed(config),
+        None => match AppConfig::load(&config_path_buf) {
+            Ok(config) => MaybeConfig::Owned(Box::new(config)),
+            Err(err) => {
+                return json!({
+                    "loaded": false,
+                    "production_strict": false,
+                    "entry_auth_enabled": false,
+                    "entry_auth_api_key_env": default_runtime_entry_auth_api_key_env(),
+                    "entry_auth_key_configured": false,
+                    "entry_rate_limit_rpm": default_runtime_entry_rate_limit_rpm(),
+                    "entry_rate_limit_burst": default_runtime_entry_rate_limit_burst(),
+                    "strict_violation_count": 1,
+                    "strict_violations": [format!("failed_to_load_config:{}", err)],
+                    "warning_count": 1,
+                    "warnings": [format!("failed_to_load_config:{}", err)],
+                });
+            }
+        },
     };
+    let config = config.as_ref();
 
-    let warnings = collect_config_warnings(&config_path_buf, &config);
+    let warnings = collect_config_warnings(&config_path_buf, config);
     let strict_enabled = config
         .runtime
         .as_ref()
@@ -162,7 +192,7 @@ pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
         .as_ref()
         .map(|runtime| runtime.entry_rate_limit_burst)
         .unwrap_or(60);
-    let strict_violations = collect_production_strict_violations(&config);
+    let strict_violations = collect_production_strict_violations(config);
     json!({
         "loaded": true,
         "production_strict": strict_enabled,

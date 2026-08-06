@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 3478+ tests · zero clippy warnings</em>
+  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · zero clippy warnings</em>
 </p>
 
 ---
@@ -19,7 +19,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.5.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/mikewolfli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikewolfli/go-on/actions/workflows/build.yml)
-[![Tests](https://img.shields.io/badge/tests-3478-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
@@ -169,7 +169,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 
 ## Architecture
 
-go-on uses a **13-sub-bus capability architecture** with a cognitive loop and a unified **DispatchOutput** handler pattern:
+go-on uses a **sub-bus capability architecture** — 7 feature-gated sub-buses (tool, orchestration, observability, optimization, memory, protocol, distributed-memory) — with a cognitive loop and a unified **DispatchOutput** handler pattern:
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -188,10 +188,13 @@ go-on uses a **13-sub-bus capability architecture** with a cognitive loop and a 
 │  AgentPath · AgentMessenger · ContextForker                │
 └────────────────────────────────────────────────────────────┘
 
-> **BLUE70**: The original 14 buses were consolidated into 11 core buses
-> (UnifiedKnowledgeBus, ReinforcementBus, LearningOptimizationBus merged
-> from 7 legacy buses). A new CommunicationBus was added for hierarchical
-> agent tree communication.
+> Sub-bus feature gates are defined in `Cargo.toml`: `sub-bus-tool`,
+> `sub-bus-orchestration`, `sub-bus-observability`, `sub-bus-optimization`,
+> `sub-bus-memory`, `sub-bus-protocol`, and `sub-bus-distributed-memory`.
+> The `local` profile enables the core four (tool, orchestration,
+> observability, optimization); `simple-server` adds distributed-memory;
+> `multi-users-server` enables all seven. The diagram groups these into
+> the capability modules above.
 ```
 
 ### Request Handler Dispatch
@@ -270,7 +273,7 @@ npm run compile
 - **TypeScript SDK** (`sdk/typescript/`) — Full TypeScript client for browser and Node.js environments
 
 ### Zed Editor Integration
-`.zed/settings.json` includes pre-configured agent server settings for Zed's built-in AI panel, supporting OpenAI-compatible protocol mode.
+`.zed/settings.json` pre-registers go-on as a Zed agent server (`agent_servers.go-on`) with auto-approve enabled, plus `auto_approve_tools` for common read-only operations (file reads, directory listings, and searches).
 
 ---
 
@@ -281,11 +284,11 @@ npm run compile
 | Rust backend LOC | ~206K (451 modules) |
 | GUI (EGUI) LOC | ~24K |
 | VS Code addon (TypeScript) LOC | ~17K |
-| SDK (Rust + Python + TypeScript) LOC | ~4K |
+| SDK (Rust + Python + Node.js + TypeScript) LOC | ~4K |
 | Built-in tools | 60+ |
 | AI providers | 37 |
 | Skills in marketplace | 37 |
-| Unit tests | 3478 (all pass, zero fail) |
+| Unit tests | ~1.7K (see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -309,12 +312,12 @@ cargo build --no-default-features --features full
 
 | Profile | `cargo clippy -D warnings` | Test Status |
 |:--------|:--------------------------:|:-----------:|
-| `local` | ✅ **Zero warnings** | ✅ **3478 pass, 0 fail, 0 ignored** |
+| `local` | ✅ **Zero warnings** | ✅ **1663 pass, 1 known failure** |
 | `simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `full` | ✅ **Zero warnings** | ✅ **all pass** |
 
-All 4 build profiles compile with zero clippy warnings. Unit tests (3478) all pass with zero failures and zero ignored tests. The GUI and VS Code addon also compile cleanly with zero errors.
+All 4 build profiles compile with zero clippy warnings. The last `cargo test` run (default `local` profile) passes every suite except one pre-existing failure in `governance::security_governor::tests::test_profile_reflects_state` (see `src/governance/security_governor.rs`). The GUI and VS Code addon also compile cleanly with zero errors.
 
 ---
 

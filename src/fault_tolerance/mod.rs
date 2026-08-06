@@ -718,7 +718,10 @@ impl FaultToleranceEngine {
             }
         }
 
-        // Auto-execute pending plans and run consistency checks on activations
+        // Auto-execute pending plans and run consistency checks on activations.
+        // A plan that passes its post-recovery consistency check is completed;
+        // a failing plan is marked failed so `recovery_plans_in_progress` can
+        // never grow unbounded.
         let pending_plans = self.active_recovery_plans().await;
         for plan in &pending_plans {
             if plan.state == RecoveryState::Pending
@@ -727,12 +730,17 @@ impl FaultToleranceEngine {
                 plans_activated += 1;
                 // Run consistency check after activation
                 let check = self.post_recovery_consistency_check(&plan.plan_id).await;
-                if !check.passed {
+                if check.passed {
+                    let _ = self
+                        .complete_recovery_plan(&plan.plan_id, "recovery_actions_completed")
+                        .await;
+                } else {
                     tracing::warn!(
                         "consistency check after activation of plan '{}': {}",
                         plan.plan_id,
                         check.details
                     );
+                    let _ = self.fail_recovery_plan(&plan.plan_id, &check.details).await;
                 }
                 consistency_checks.push(check);
             }
@@ -1308,9 +1316,17 @@ mod tests {
 
         let summary = engine.run_recovery_cycle().await;
         assert!(!summary.offenders.is_empty());
+        // The recovery cycle creates, activates, and (on a passing consistency
+        // check) completes the recovery plan — the offender moves from offline
+        // to Recovering, so cluster health may recover. The contract under
+        // test is that offenders are detected and a plan actually ran.
         assert!(
-            summary.cluster_health == ClusterHealth::Critical
-                || summary.cluster_health == ClusterHealth::Degraded
+            summary.plans_created >= 1,
+            "expected a recovery plan to be created"
+        );
+        assert!(
+            summary.plans_activated >= 1,
+            "expected the recovery plan to be activated"
         );
     }
 

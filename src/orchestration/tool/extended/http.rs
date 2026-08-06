@@ -170,14 +170,28 @@ pub(crate) fn validate_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Shared async reqwest client for all HttpRequestTool instances.
-/// Built once and reused to benefit from connection pooling.
-fn http_client(timeout_ms: u64) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .context("failed to build HTTP client")
+/// Shared async reqwest client — built once and reused to benefit from
+/// connection pooling. Per-request timeouts are applied at the request
+/// builder level so the pooled client serves every timeout class.
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .expect("failed to build shared HTTP client")
+    })
+}
+
+/// Shared blocking reqwest client for the sync fallback path.
+fn blocking_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .expect("failed to build shared blocking HTTP client")
+    })
 }
 
 pub struct HttpRequestTool;
@@ -284,7 +298,7 @@ impl Tool for HttpRequestTool {
             // ── 4. Max response size (from UrlPolicyConfig, LAYER 3) ──
             let max_response_bytes: usize = url_policy().max_response_bytes;
 
-            let client = http_client(timeout_ms)?;
+            let client = http_client();
 
             let mut request_builder: reqwest::RequestBuilder = match method.to_uppercase().as_str()
             {
@@ -332,6 +346,9 @@ impl Tool for HttpRequestTool {
                     );
                 }
             };
+
+            // Per-request timeout on the pooled client.
+            request_builder = request_builder.timeout(Duration::from_millis(timeout_ms));
 
             // ── 5. Custom headers ─────────────────────────────────────
             if let Some(headers_obj) = input.payload["headers"].as_object() {
@@ -469,11 +486,7 @@ impl HttpRequestTool {
 
         let max_response_bytes: usize = url_policy().max_response_bytes;
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .build()
-            .context("failed to build HTTP client")?;
+        let client = blocking_client();
 
         let mut request_builder = match method.to_uppercase().as_str() {
             "GET" => client.get(&url),
@@ -520,6 +533,9 @@ impl HttpRequestTool {
                 );
             }
         };
+
+        // Per-request timeout on the pooled blocking client.
+        request_builder = request_builder.timeout(Duration::from_millis(timeout_ms));
 
         if let Some(headers_obj) = input.payload["headers"].as_object() {
             for (key, value) in headers_obj {

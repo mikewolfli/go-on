@@ -517,7 +517,7 @@ fn collect_config_warnings_detailed(config_path: &Path, config: &AppConfig) -> V
             warnings.push(ConfigWarning {
                 code: "OTEL_ENDPOINT_DEFAULTED".to_string(),
                 severity: ConfigWarningSeverity::Info,
-                message: "runtime.otel_enabled=true without otel_endpoint; default collector endpoint http://127.0.0.1:4317 will be used".to_string(),
+                message: "runtime.otel_enabled=true without otel_endpoint; default collector endpoint http://localhost:4317 will be used".to_string(),
             });
         }
 

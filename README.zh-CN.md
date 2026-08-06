@@ -14,7 +14,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.5.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-3478-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
@@ -162,11 +162,14 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 
 ## 架构
 
-go-on 采用 **12 条总线能力架构**（11 条核心 + 1 条通信总线），含认知循环和统一的 **DispatchOutput** handler 模式：
+go-on 采用**子总线能力架构** —— 7 个特性门控子总线（tool、orchestration、observability、optimization、memory、protocol、distributed-memory）—— 含认知循环和统一的 **DispatchOutput** handler 模式：
 
-> **BLUE70**：原有 14 条总线通过合并精简为 11 条核心总线（UnifiedKnowledgeBus、
-> ReinforcementBus、LearningOptimizationBus），新增 CommunicationBus 作为
-> 第 12 条总线，实现层次化智能体树形通信。
+> 子总线特性门控定义在 `Cargo.toml`：`sub-bus-tool`、
+> `sub-bus-orchestration`、`sub-bus-observability`、`sub-bus-optimization`、
+> `sub-bus-memory`、`sub-bus-protocol` 和 `sub-bus-distributed-memory`。
+> `local` 配置启用核心四项（tool、orchestration、observability、optimization）；
+> `simple-server` 增加 distributed-memory；`multi-users-server` 启用全部七项。
+> 下图将上述子总线归组为上层能力模块。
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -263,7 +266,7 @@ npm run compile
 - **TypeScript SDK**（`sdk/typescript/`）— 面向浏览器和 Node.js 环境的完整 TypeScript 客户端
 
 ### Zed 编辑器集成
-`.zed/settings.json` 包含预配置的智能体服务器设置，为 Zed 内置 AI 面板提供 OpenAI 兼容协议支持。
+`.zed/settings.json` 将 go-on 预注册为 Zed 智能体服务器（`agent_servers.go-on`），启用自动批准，并配置 `auto_approve_tools` 用于常见只读操作（文件读取、目录列出、搜索）。
 
 ---
 
@@ -274,11 +277,11 @@ npm run compile
 | Rust 后端代码行数 | ~206K（451 个模块）|
 | GUI（EGUI）代码行数 | ~24K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
-| SDK（Rust + Python + TypeScript）代码行数 | ~4K |
+| SDK（Rust + Python + Node.js + TypeScript）代码行数 | ~4K |
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
 | 技能市场数量 | 37 |
-| 单元测试数量 | 3478（全部通过，零失败）|
+| 单元测试数量 | ~1.7K（见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -302,12 +305,12 @@ cargo build --no-default-features --features full
 
 | 配置 | `cargo clippy -D warnings` | 测试状态 |
 |:-----|:--------------------------:|:--------:|
-| `local` | ✅ **零警告** | ✅ **3478 通过，0 失败，0 忽略** |
+| `local` | ✅ **零警告** | ✅ **1663 通过，1 个已知失败** |
 | `simple-server` | ✅ **零警告** | ✅ **全部通过** |
 | `multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
 | `full` | ✅ **零警告** | ✅ **全部通过** |
 
-所有 4 种构建配置零 clippy 警告通过。单元测试（1946 个）全部通过，零失败，零忽略。GUI 和 VS Code 插件同样零错误编译通过。
+所有 4 种构建配置零 clippy 警告通过。最近一次 `cargo test`（默认 `local` 配置）除 `governance::security_governor::tests::test_profile_reflects_state` 一处既有失败外全部通过（见 `src/governance/security_governor.rs`）。GUI 和 VS Code 插件同样零错误编译通过。
 
 ---
 

@@ -88,6 +88,48 @@ pub fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+/// LAYER 2 runtime write sandbox shared by the sync and async write paths.
+///
+/// Enforces a maximum write size (disk-exhaustion guard) and blocks writes to
+/// sensitive system paths. Both `WriteFileTool::run` and `run_async` must go
+/// through this gate so the model cannot bypass the sandbox via the async path.
+pub fn enforce_write_sandbox(path: &std::path::Path, content: &str) -> Result<()> {
+    // Limit file size to prevent disk exhaustion (default 50MB).
+    const MAX_WRITE_BYTES: usize = 50 * 1024 * 1024;
+    if content.len() > MAX_WRITE_BYTES {
+        anyhow::bail!(
+            "write_file BLOCKED: content {} bytes exceeds maximum {} bytes",
+            content.len(),
+            MAX_WRITE_BYTES
+        );
+    }
+
+    // Block writing to sensitive system paths.
+    let path_str = path.to_string_lossy().to_lowercase();
+    let blocked_paths = [
+        "/etc/",
+        "/sys/",
+        "/proc/",
+        "/dev/",
+        "/boot/",
+        "/var/log/",
+        "/var/db/",
+        "/usr/lib/",
+        "/usr/bin/",
+        "C:\\windows\\",
+        "C:\\Program Files\\",
+    ];
+    for blocked in &blocked_paths {
+        if path_str.contains(blocked) {
+            anyhow::bail!(
+                "write_file BLOCKED: writing to system path '{}' is not allowed",
+                blocked
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Sanitize and validate a path that may not exist yet (e.g. destination for
 /// move/write operations). Resolves the parent directory and joins the
 /// filename, then validates against the allowed base directory.
@@ -247,40 +289,8 @@ impl Tool for WriteFileTool {
         let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
         let path_buf = sanitize_path_for_write(input, path)?;
 
-        // ── LAYER 2: Runtime sandbox ────────────────────────────────────
-        // Limit file size to prevent disk exhaustion (default 50MB).
-        const MAX_WRITE_BYTES: usize = 50 * 1024 * 1024;
-        if content.len() > MAX_WRITE_BYTES {
-            anyhow::bail!(
-                "write_file BLOCKED: content {} bytes exceeds maximum {} bytes",
-                content.len(),
-                MAX_WRITE_BYTES
-            );
-        }
-
-        // Block writing to sensitive system paths.
-        let path_str = path_buf.to_string_lossy().to_lowercase();
-        let blocked_paths = [
-            "/etc/",
-            "/sys/",
-            "/proc/",
-            "/dev/",
-            "/boot/",
-            "/var/log/",
-            "/var/db/",
-            "/usr/lib/",
-            "/usr/bin/",
-            "C:\\windows\\",
-            "C:\\Program Files\\",
-        ];
-        for blocked in &blocked_paths {
-            if path_str.contains(blocked) {
-                anyhow::bail!(
-                    "write_file BLOCKED: writing to system path '{}' is not allowed",
-                    blocked
-                );
-            }
-        }
+        // ── LAYER 2: Runtime sandbox (shared with run_async) ────────────
+        enforce_write_sandbox(&path_buf, content)?;
 
         // Non-blocking try_acquire write lock.
         // If lock is already held by another operation, return a transient
@@ -342,6 +352,9 @@ impl Tool for WriteFileTool {
                 .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_content")))?;
             let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
             let path_buf = sanitize_path_for_write(&input, path)?;
+
+            // ── LAYER 2: Runtime sandbox (shared with run) ────────────────
+            enforce_write_sandbox(&path_buf, content)?;
 
             let _lock = tool_lock_manager()
                 .try_acquire(&path_buf.to_string_lossy(), LockMode::Write)
