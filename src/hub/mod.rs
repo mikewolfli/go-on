@@ -26,16 +26,14 @@
 //!
 //! ## DO NOT DELETE
 //!
-//! This module is intentionally kept compiled (`pub mod hub;` in lib.rs) so that
-//! the design is preserved. If you are cleaning up dead code, skip this module —
-//! it is a deliberate reserve, not accidental dead weight.
+//! This module is a deliberate design reserve. It is feature-gated behind
+//! `sub-bus-distributed-memory` (see `src/lib.rs`), so it is NOT compiled in
+//! the default `local` profile. If you are cleaning up dead code, skip this
+//! module — it is a deliberate reserve, not accidental dead weight.
 
-pub mod client;
 pub mod discovery;
 pub mod server;
 
-#[allow(unused_imports)]
-pub use client::HubClient;
 #[allow(unused_imports)]
 pub use discovery::HubDiscovery;
 #[allow(unused_imports)]

@@ -420,13 +420,13 @@ pub(crate) fn generate_adaptive_config_toml(
 
     if adaptive_config.minimal_config.enable_cache && recommendations.cache_enabled {
         content.push_str(
-            "[cache]\nenabled = true\npath = \"acp_cache.sqlite3\"\ndefault_ttl_seconds = 3600\nmax_entries = 5000\n\n",
+            "[cache]\nenabled = true\npath = \"sqlite3/acp_cache.sqlite3\"\ndefault_ttl_seconds = 3600\nmax_entries = 5000\n\n",
         );
     }
 
     if adaptive_config.minimal_config.enable_vector_memory && recommendations.vector_enabled {
         content.push_str(
-            "[vector]\nenabled = true\nauto_mode = true\npath = \"acp_vector.sqlite3\"\ndimensions = 192\nmin_query_chars = 80\ntop_k = 2\nmin_similarity = 0.82\nmax_snippet_chars = 800\nmax_entries = 10000\nsummary_enabled = true\nsummary_trigger_messages = 8\nsummary_max_chars = 1200\n\n",
+            "[vector]\nenabled = true\nauto_mode = true\npath = \"sqlite3/acp_vector.sqlite3\"\ndimensions = 192\nmin_query_chars = 80\ntop_k = 2\nmin_similarity = 0.82\nmax_snippet_chars = 800\nmax_entries = 10000\nsummary_enabled = true\nsummary_trigger_messages = 8\nsummary_max_chars = 1200\n\n",
         );
     }
 

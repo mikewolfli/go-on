@@ -361,24 +361,7 @@ pub async fn new_acp_server(
         builder = builder.with_multimodal_processor(MultimodalProcessor::new_with_all_processors());
     }
 
-    // Wire policy reloader for hot-reloading governance policies (GAP-B58-D04)
-    {
-        use crate::governance::reloadable_policy::{
-            PolicyReloader, QualityCompassPolicy, RedLinePolicy, SandboxPolicyReloadable,
-        };
-        let mut reloader = PolicyReloader::new();
-        // Register concrete reloadable policies.
-        reloader.register(Box::new(RedLinePolicy::new(".goon/policies/redlines.toml")));
-        reloader.register(Box::new(QualityCompassPolicy::new(
-            ".goon/policies/quality_compass.toml",
-        )));
-        reloader.register(Box::new(SandboxPolicyReloadable::new(
-            ".goon/policies/sandbox.toml",
-        )));
-        let reloader = Arc::new(std::sync::Mutex::new(reloader));
-        builder = builder.with_policy_reloader(reloader);
-    }
-
+    // Wire security advisor agent
     let mut server = builder.build();
     // Pre-register all agents into the unified hyper-resilience engine so
     // breaker/health reports include every agent from startup (formerly done
@@ -757,15 +740,6 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
             });
         budget.auto_provision_default(&server.runtime_config);
     }
-
-    server.registries.optimizer_registry = Arc::clone(
-        &server
-            .governance_deps
-            .capability_bus
-            .as_ref()
-            .map(|cb| Arc::clone(&cb.optimizer_registry))
-            .unwrap_or_default(),
-    );
 
     // Wire the token cache into the agent registry so that all
     // agents returned by registry.get() are automatically wrapped

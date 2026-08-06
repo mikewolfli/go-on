@@ -55,7 +55,6 @@ protocol_mode = "acp"
 maintenance_interval_seconds = 120
 health_interval_seconds = 60
 shutdown_drain_seconds = 60
-sqlite_vacuum_interval_cycles = 120
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
 

@@ -28,6 +28,7 @@ pub fn http_client() -> Result<&'static reqwest::Client, &'static reqwest::Error
     let result = CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .user_agent("go-on/1.0")
             .build()
     });
     result.as_ref()

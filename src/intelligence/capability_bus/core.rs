@@ -79,7 +79,6 @@ use crate::observability::provenance::ProvenanceLedger;
 ))]
 use crate::orchestration::council::{CouncilConfig, OrchestrationCouncil};
 use crate::orchestration::task_schema::SchemaRegistry;
-use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::orchestration::workflow_registry::WorkflowRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -151,13 +150,15 @@ pub struct CapabilityBusProfile {
     pub event_history_len: usize,
     pub workflow_presets_count: usize,
     pub provenance_entries_count: usize,
+    // World model observability (write-side wired via fallback/evolution)
+    pub world_model_entities: usize,
+    pub world_model_events: usize,
+    pub world_model_last_update_ms: u64,
     // Phase 4 sub-bus metrics
     #[cfg(feature = "sub-bus-tool")]
     pub tool_bus_tools: u32,
     #[cfg(feature = "sub-bus-tool")]
     pub tool_bus_skills: u32,
-    #[cfg(feature = "sub-bus-tool")]
-    pub tool_bus_calls: u64,
     #[cfg(feature = "sub-bus-observability")]
     pub observability_tracked_agents: u32,
     #[cfg(feature = "sub-bus-observability")]
@@ -212,12 +213,13 @@ impl Default for CapabilityBusProfile {
             event_history_len: 0,
             workflow_presets_count: 0,
             provenance_entries_count: 0,
+            world_model_entities: 0,
+            world_model_events: 0,
+            world_model_last_update_ms: 0,
             #[cfg(feature = "sub-bus-tool")]
             tool_bus_tools: 0,
             #[cfg(feature = "sub-bus-tool")]
             tool_bus_skills: 0,
-            #[cfg(feature = "sub-bus-tool")]
-            tool_bus_calls: 0,
             #[cfg(feature = "sub-bus-observability")]
             observability_tracked_agents: 0,
             #[cfg(feature = "sub-bus-observability")]
@@ -305,9 +307,6 @@ pub struct CapabilityBus {
 
     /// Tenant budget enforcer — per-tenant resource quota management (F-GAP-08)
     pub tenant_budget: Arc<Mutex<TenantBudgetEnforcer>>,
-
-    /// Optimizer registry — workflow optimization plugins (ARCH-11)
-    pub optimizer_registry: Arc<Mutex<OptimizerRegistry>>,
 
     // ── BLUE70 consolidated buses ──
     /// UnifiedKnowledgeBus — merged KnowledgeBus + ReputationStore + ExperienceKnowledgeBase
@@ -429,7 +428,6 @@ impl CapabilityBus {
             provenance_ledger,
             schema_registry: Arc::new(Mutex::new(SchemaRegistry::new())),
             tenant_budget: Arc::new(Mutex::new(TenantBudgetEnforcer::new())),
-            optimizer_registry: Arc::new(Mutex::new(OptimizerRegistry::new())),
             // BLUE70: Consolidated buses
             unified_knowledge_bus: Arc::new(RwLock::new(UnifiedKnowledgeBus::new())),
             reinforcement_bus: Arc::new(RwLock::new(ReinforcementBus::new())),
@@ -589,33 +587,6 @@ impl CapabilityBus {
         }
     }
 
-    pub(crate) fn build_action_blocked_detail(tool_name: &str, reason: &str) -> Value {
-        serde_json::json!({
-            "schema": "capability-bus-action-v1",
-            "tool": tool_name,
-            "duration_ms": 0,
-            "logical_success": false,
-            "error": reason,
-            "policy_blocked": true,
-        })
-    }
-
-    pub(crate) fn build_action_event_detail(
-        tool_name: &str,
-        duration_ms: u64,
-        success: bool,
-        error_text: Option<String>,
-    ) -> Value {
-        serde_json::json!({
-            "schema": "capability-bus-action-v1",
-            "tool": tool_name,
-            "duration_ms": duration_ms,
-            "logical_success": success,
-            "error": error_text,
-            "policy_blocked": false,
-        })
-    }
-
     pub(crate) fn build_feedback_event_detail(
         duration_ms: u64,
         token_cost: u64,
@@ -669,13 +640,21 @@ impl CapabilityBus {
             .unwrap_or(0);
         p.provenance_entries_count = self.provenance_ledger.len();
 
+        // World model observability — surface the accumulated world state so
+        // the (previously write-only) model is inspectable via status.
+        {
+            let wm = self.world_model.profile();
+            p.world_model_entities = wm.entities;
+            p.world_model_events = wm.events;
+            p.world_model_last_update_ms = wm.last_update_ms;
+        }
+
         // Phase 4 sub-bus profile enrichment
         #[cfg(feature = "sub-bus-tool")]
         {
             let tb = self.tool_bus.profile();
             p.tool_bus_tools = tb.total_tools;
             p.tool_bus_skills = tb.total_skills;
-            p.tool_bus_calls = tb.total_calls;
         }
 
         #[cfg(feature = "sub-bus-observability")]
@@ -1027,62 +1006,7 @@ pub(crate) mod tests {
     use crate::governance::harness_bus::default_harness_bus;
     use crate::governance::pua::{TaskContext, TaskType};
     use crate::intelligence::capability_graph::CapabilityDecl;
-    use crate::orchestration::tool::ToolInput;
     use std::sync::Arc;
-
-    #[tokio::test]
-    async fn execute_tool_counts_single_call_in_tool_bus() {
-        let harness = Arc::new(default_harness_bus(None));
-        let bus = CapabilityBus::new_default(harness, None);
-
-        let before = bus.tool_bus.profile().total_calls;
-        let input = ToolInput {
-            task_id: "cb-test-001".to_string(),
-            phase: "act".to_string(),
-            agent_role: "coder".to_string(),
-            objective: "read cargo manifest".to_string(),
-            constraints: None,
-            evidence: None,
-            payload: serde_json::json!({"path": "Cargo.toml"}),
-            allowed_base_dir: None,
-        };
-
-        let result = bus.execute_tool("read_file", &input).await;
-        assert!(
-            result.is_ok(),
-            "execute_tool should succeed: {:?}",
-            result.err()
-        );
-
-        let after = bus.tool_bus.profile().total_calls;
-        assert_eq!(
-            after,
-            before + 1,
-            "tool call should be counted exactly once"
-        );
-
-        let profile = bus.capability_bus_profile().await;
-        assert_eq!(profile.tool_bus_calls, after);
-
-        let action_event = bus
-            .snapshot_events()
-            .into_iter()
-            .rev()
-            .find(|event| event.stage == "action")
-            .expect("action event should be recorded");
-        assert_eq!(action_event.outcome, "success");
-        assert_eq!(
-            action_event.detail.get("schema").and_then(|v| v.as_str()),
-            Some("capability-bus-action-v1")
-        );
-        assert_eq!(
-            action_event
-                .detail
-                .get("logical_success")
-                .and_then(|v| v.as_bool()),
-            Some(true)
-        );
-    }
 
     #[test]
     fn configured_candidate_score_weights_are_normalized() {

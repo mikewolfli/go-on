@@ -116,7 +116,7 @@ fn openai_config_with_inflight(
         runtime: Some(RuntimeConfig::default()),
         cache: Some(CacheConfig {
             enabled: true,
-            path: "acp_cache.sqlite3".to_string(),
+            path: "sqlite3/acp_cache.sqlite3".to_string(),
             default_ttl_seconds: 3600,
             max_entries: 5000,
             connection_string: None,
@@ -126,7 +126,7 @@ fn openai_config_with_inflight(
         vector: Some(VectorConfig {
             enabled: true,
             auto_mode: true,
-            path: "acp_vector.sqlite3".to_string(),
+            path: "sqlite3/acp_vector.sqlite3".to_string(),
             connection_string: None,
             dimensions: 192,
             min_query_chars: 80,

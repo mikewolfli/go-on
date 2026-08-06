@@ -8,9 +8,10 @@
 //!
 //! | Backend | Feature | Description |
 //! |---------|---------|-------------|
-//! | `WhisperLocal` | `audio-whisper-openai` | Local whisper.cpp / candle-whisper |
 //! | `OpenAIWhisper` | (always available) | Remote OpenAI Whisper REST API |
-//! | `Vosk` | `audio-vosk` | Vosk offline ASR engine |
+//!
+//! Local backends (`WhisperLocal`, `Vosk`) were removed as placeholder
+//! implementations that never ran real inference.
 //!
 //! # Error handling
 //!
@@ -203,31 +204,18 @@ impl Transcription {
 ///
 /// - `OpenAIWhisper`: Fully production-ready. Calls the OpenAI Whisper REST API.
 ///   Always available (no feature gate).
-/// - `WhisperLocal`: **PLACEHOLDER** — decodes PCM but returns simulated
-///   "(inaudible segment N)" text. Requires integration with whisper-rs or
-///   candle-whisper for real transcription.
-/// - `Vosk`: **PLACEHOLDER** — validates model path exists but returns an error.
-///   Requires vosk-rs integration for real recognition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SttBackend {
-    /// Local Whisper model (requires `audio-whisper-openai` feature).
-    /// NOTE: Not production-ready — returns simulated placeholder transcription.
-    WhisperLocal,
     /// OpenAI Whisper API (`POST https://api.openai.com/v1/audio/transcriptions`).
     /// Fully implemented and production-ready.
     OpenAIWhisper,
-    /// Vosk offline ASR engine (requires `audio-vosk` feature).
-    /// NOTE: Not production-ready — returns an error after path validation.
-    Vosk,
 }
 
 impl SttBackend {
     /// Human-readable backend name.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::WhisperLocal => "whisper-local",
             Self::OpenAIWhisper => "openai-whisper",
-            Self::Vosk => "vosk",
         }
     }
 }
@@ -254,10 +242,6 @@ pub struct AudioProcessorConfig {
     pub openai_api_key: Option<String>,
     /// OpenAI model name (e.g. `"whisper-1"`).
     pub openai_model: Option<String>,
-    /// Path to the local Whisper model file (only used for `WhisperLocal`).
-    pub local_model_path: Option<String>,
-    /// Path to the Vosk model directory (only used for `Vosk`).
-    pub vosk_model_path: Option<String>,
     /// Language hint (ISO 639-1 code, e.g. `"en"`, `"fr"`). May be empty for
     /// auto-detection.
     pub language_hint: Option<String>,
@@ -277,8 +261,6 @@ impl Default for AudioProcessorConfig {
             max_speakers: None,
             openai_api_key: None,
             openai_model: Some("whisper-1".to_string()),
-            local_model_path: None,
-            vosk_model_path: None,
             language_hint: None,
             prompt: None,
             temperature: 0.0,
@@ -335,23 +317,14 @@ impl AudioProcessor {
         let start = std::time::Instant::now();
 
         let mut result = match self.config.backend {
-            SttBackend::WhisperLocal => self.transcribe_whisper_local(audio, format)?,
             SttBackend::OpenAIWhisper => self.transcribe_openai_whisper(audio, format)?,
-            SttBackend::Vosk => self.transcribe_vosk(audio, format)?,
         };
 
         result.processing_duration = start.elapsed();
 
         // Apply diarization post-processing if enabled.
         if self.config.enable_diarization && result.segments.iter().all(|s| s.speaker.is_none()) {
-            match self.config.backend {
-                SttBackend::OpenAIWhisper => {
-                    result = self.diarize_via_openai(audio, format, result);
-                }
-                _ => {
-                    result = self.diarize_clustering(result);
-                }
-            }
+            result = self.diarize_via_openai(audio, format, result);
         }
 
         result.metadata.insert(
@@ -397,190 +370,10 @@ impl AudioProcessor {
     }
 
     // -----------------------------------------------------------------------
-    // Local Whisper backend — PLACEHOLDER (feature = "audio-whisper-openai")
-    // -----------------------------------------------------------------------
-    //
-    // Decodes PCM samples and validates the model path, but does NOT load a
-    // real whisper model. Returns simulated "(inaudible segment N)" segments.
-    // Replace with whisper-rs or candle-whisper integration for production use.
-
-    #[cfg(feature = "audio-whisper-openai")]
-    fn transcribe_whisper_local(
-        &self,
-        audio: &[u8],
-        _format: AudioFormat,
-    ) -> Result<Transcription, AudioProcessorError> {
-        let model_path = self.config.local_model_path.as_ref().ok_or_else(|| {
-            AudioProcessorError::MissingApiKey(
-                "WhisperLocal requires `local_model_path` to be set".to_string(),
-            )
-        })?;
-
-        if !std::path::Path::new(model_path).exists() {
-            return Err(AudioProcessorError::Other(format!(
-                "Whisper model not found at: {model_path}"
-            )));
-        }
-
-        // Convert audio bytes to PCM f32 samples.
-        let samples: Vec<f32> = if audio.len().is_multiple_of(2) {
-            audio
-                .chunks_exact(2)
-                .map(|chunk| {
-                    let sample = i16::from_ne_bytes([chunk[0], chunk[1]]);
-                    sample as f32 / 32768.0
-                })
-                .collect()
-        } else {
-            audio
-                .iter()
-                .map(|&b| (b as f32 / 255.0) * 2.0 - 1.0)
-                .collect()
-        };
-
-        // PLACEHOLDER: Returns simulated segments. Real whisper-rs/candle
-        // model loading and inference goes here.
-
-        let language = self
-            .config
-            .language_hint
-            .clone()
-            .unwrap_or_else(|| "en".to_string());
-
-        let duration_sec = samples.len() as f64 / self.config.sample_rate as f64;
-
-        // Transcribe the silence/placeholder audio by splitting into
-        // 30-second chunks and marking each as "(silence)".
-        let chunk_duration = 30.0_f64.min(duration_sec);
-        let num_chunks = (duration_sec / chunk_duration).ceil() as usize;
-        let mut segments = Vec::with_capacity(num_chunks);
-        for i in 0..num_chunks {
-            let start = i as f64 * chunk_duration;
-            let end = ((i + 1) as f64 * chunk_duration).min(duration_sec);
-            segments.push(TranscriptSegment {
-                start_sec: start,
-                end_sec: end,
-                text: if samples.iter().all(|&s| s == 0.0) {
-                    String::new() // silence
-                } else {
-                    format!("(inaudible segment {})", i + 1)
-                },
-                confidence: Some(if num_chunks <= 1 { 0.0 } else { 0.1 }),
-                speaker: None,
-            });
-        }
-
-        let text = segments
-            .iter()
-            .map(|s| s.text.as_str())
-            .filter(|t| !t.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        let confidence = if text.is_empty() { 0.0 } else { 0.2 };
-        let num_segments = segments.len();
-        Ok(Transcription {
-            text,
-            segments,
-            language,
-            confidence: Some(confidence),
-            processing_duration: Duration::from_secs_f64(duration_sec.max(1.0)),
-            metadata: {
-                let mut m = HashMap::new();
-                m.insert("feature".to_string(), "audio-whisper-openai".to_string());
-                m.insert("model_path".to_string(), model_path.clone());
-                m.insert("sample_count".to_string(), samples.len().to_string());
-                m.insert("num_segments".to_string(), num_segments.to_string());
-                m.insert("duration_sec".to_string(), format!("{:.1}", duration_sec));
-                m
-            },
-        })
-    }
-
-    #[cfg(not(feature = "audio-whisper-openai"))]
-    fn transcribe_whisper_local(
-        &self,
-        _audio: &[u8],
-        _format: AudioFormat,
-    ) -> Result<Transcription, AudioProcessorError> {
-        Err(AudioProcessorError::feature_disabled("Local Whisper"))
-    }
-
-    // -----------------------------------------------------------------------
-    // Vosk backend  (feature = "audio-vosk")
-    // -----------------------------------------------------------------------
-
-    #[cfg(feature = "audio-vosk")]
-    fn transcribe_vosk(
-        &self,
-        _audio: &[u8],
-        _format: AudioFormat,
-    ) -> Result<Transcription, AudioProcessorError> {
-        let model_path = self.config.vosk_model_path.as_ref().ok_or_else(|| {
-            AudioProcessorError::MissingApiKey(
-                "Vosk requires `vosk_model_path` to be set".to_string(),
-            )
-        })?;
-
-        // Validate model path exists before proceeding.
-        // A real vosk-rs backend would load the model and run recognition here.
-
-        if !std::path::Path::new(model_path).exists() {
-            return Err(AudioProcessorError::Other(format!(
-                "Vosk model not found at: {model_path}"
-            )));
-        }
-
-        Err(AudioProcessorError::Backend("Vosk backend initialized: model path exists but runtime transcription is not yet connected to the Vosk C library".to_string()))
-    }
-
-    #[cfg(not(feature = "audio-vosk"))]
-    fn transcribe_vosk(
-        &self,
-        _audio: &[u8],
-        _format: AudioFormat,
-    ) -> Result<Transcription, AudioProcessorError> {
-        Err(AudioProcessorError::feature_disabled("Vosk"))
-    }
-
-    // -----------------------------------------------------------------------
     // Speaker diarization
     // -----------------------------------------------------------------------
 
-    /// Post-hoc clustering-based diarization — assigns speaker labels by
-    /// grouping consecutive segments. This is a simple heuristic that assumes
-    /// speaker changes happen at silence boundaries.
-    fn diarize_clustering(&self, mut result: Transcription) -> Transcription {
-        if result.segments.is_empty() {
-            return result;
-        }
-
-        let max_speakers = self.config.max_speakers.unwrap_or(2).max(2);
-        let segments_per_turn = 3.max(result.segments.len() / max_speakers.max(1));
-
-        let mut current_speaker = 0usize;
-        let mut speaker_counter = 0usize;
-
-        for segment in result.segments.iter_mut() {
-            // Toggle speaker after segments_per_turn consecutive segments.
-            if speaker_counter >= segments_per_turn {
-                current_speaker = (current_speaker + 1) % max_speakers;
-                speaker_counter = 0;
-            }
-            segment.speaker = Some(format!("SPEAKER_{:02}", current_speaker));
-            speaker_counter += 1;
-        }
-
-        result
-            .metadata
-            .insert("diarization".to_string(), "clustering".to_string());
-        result.metadata.insert(
-            "diarization_max_speakers".to_string(),
-            max_speakers.to_string(),
-        );
-        result
-    }
-
+    /// Diarization via OpenAI Whisper API.
     /// Diarization via OpenAI Whisper API (if the backend is OpenAI).
     /// The API supports `diarize_speaker_count` and `response_format=verbose_json`
     /// to return speaker labels in the segments.
@@ -848,18 +641,6 @@ mod tests {
             result.unwrap_err(),
             AudioProcessorError::MissingApiKey(_)
         ));
-    }
-
-    #[test]
-    fn test_disabled_backend_returns_error() {
-        let config = AudioProcessorConfig {
-            backend: SttBackend::WhisperLocal,
-            ..Default::default()
-        };
-        let processor = AudioProcessor::new(config);
-        let result = processor.transcribe(b"dummy", AudioFormat::Wav);
-        // When the feature is disabled it returns FeatureDisabled error.
-        assert!(result.is_err());
     }
 
     #[test]

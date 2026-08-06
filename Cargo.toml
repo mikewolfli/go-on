@@ -99,8 +99,9 @@ data-export = ["dep:csv", "dep:serde_yaml"]
 barcode-tools = []
 
 # Audio processing backends (optional, feature-gated)
-audio-whisper-openai = []
-audio-vosk = []
+# audio-whisper-openai / audio-vosk were removed: both were placeholder
+# implementations (simulated transcription / always-error) and are superseded
+# by the always-available OpenAI Whisper remote backend.
 
 # Image processing tools (optional, feature-gated)
 image-processing = ["dep:image", "dep:serde_yaml"]
@@ -153,7 +154,6 @@ simple-server = [
     "sub-bus-memory",
     "sub-bus-distributed-memory",
     "sub-bus-protocol",
-    "vault",
 ]
 multi-users-server = [
     "backend-postgres",
@@ -164,7 +164,6 @@ multi-users-server = [
     "sub-bus-protocol",
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
-    "vault",
 ]
 
 # Template engine (optional, feature-gated)
@@ -186,8 +185,6 @@ full = [
     "sub-bus-distributed-memory",
     "sub-bus-multimodal",
     "document-excel-write",
-    "audio-whisper-openai",
-    "audio-vosk",
     "data-export",
     "image-processing",
     "cad-dxf",
@@ -207,7 +204,6 @@ full = [
     "barcode-tools",
     "cam-gcode",
     "gis-gpx",
-    "vault",
     # (charting, data-collection, image-extra — reserved, not yet implemented)
     "game-online",
     "game-process",
@@ -225,7 +221,6 @@ backend-postgres = ["dep:postgres", "dep:pgvector", "dep:tokio-postgres-rustls",
 
 
 # Feature gates for conditional compilation (used by source code)
-vault = []
 document-email = []
 document-invoice = []
 

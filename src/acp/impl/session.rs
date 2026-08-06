@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use sha2::{Digest, Sha256};
+use hmac::{digest::KeyInit, Mac};
+use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::config::RuntimeConfig;
@@ -429,7 +430,7 @@ impl SessionManager {
 }
 
 // ---------------------------------------------------------------------------
-// HMAC-SHA256 helper (no external `hmac` crate dependency)
+// HMAC-SHA256 helper (RFC 2104 via the `hmac` crate)
 // ---------------------------------------------------------------------------
 
 /// Compute an HMAC-SHA256 digest over `data` with the given `key` and return
@@ -442,35 +443,11 @@ fn hmac_sha256_b64(key: &[u8], data: &[u8]) -> String {
     BASE64_STANDARD.encode(&hmac_bytes)
 }
 
-/// Standard HMAC-SHA256 construction using the `sha2` crate.
-///
-/// Implements RFC 2104:
-///   HMAC(K, m) = H((K' ⊕ opad) || H((K' ⊕ ipad) || m))
+/// Compute an HMAC-SHA256 digest (RFC 2104) via the `hmac` crate.
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    const BLOCK_SIZE: usize = 64;
-
-    let mut key = key.to_vec();
-
-    // Hash key if it is longer than the block size.
-    if key.len() > BLOCK_SIZE {
-        key = Sha256::digest(&key).to_vec();
-    }
-
-    // Pad key to block size.
-    key.resize(BLOCK_SIZE, 0);
-
-    let mut ipad = [0x36u8; BLOCK_SIZE];
-    let mut opad = [0x5cu8; BLOCK_SIZE];
-
-    for i in 0..BLOCK_SIZE {
-        ipad[i] ^= key[i];
-        opad[i] ^= key[i];
-    }
-
-    let inner_hash = Sha256::digest([&ipad[..], data].concat());
-    let result = Sha256::digest([&opad[..], &inner_hash[..]].concat());
-
-    result.to_vec()
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
 }
 
 // ---------------------------------------------------------------------------

@@ -184,6 +184,34 @@ impl WorldModel {
 
         Ok(id)
     }
+
+    // -- Profile / observability ---------------------------------------------
+
+    /// Return a read-only snapshot of the world model state so the accumulated
+    /// entities/events are observable via the capability-bus profile.
+    pub fn profile(&self) -> WorldModelProfile {
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        let mut entities_by_type: HashMap<String, usize> = HashMap::new();
+        for e in &inner.entities {
+            *entities_by_type
+                .entry(format!("{:?}", e.entity_type))
+                .or_insert(0) += 1;
+        }
+        let recent_event_types = inner
+            .events
+            .iter()
+            .rev()
+            .take(10)
+            .map(|e| e.event_type.clone())
+            .collect();
+        WorldModelProfile {
+            entities: inner.entities.len(),
+            events: inner.events.len(),
+            last_update_ms: inner.last_update_ms,
+            entities_by_type,
+            recent_event_types,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

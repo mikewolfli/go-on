@@ -36,7 +36,6 @@ use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::tool::ToolRegistry;
-use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::rpc_protocol::{value_to_id, JsonRpcError, JsonRpcResponse};
 use crate::schema::{
@@ -279,21 +278,10 @@ pub struct GovernanceServerDeps {
         Option<Arc<crate::security::vulnerability_scan::SecretExposureDetector>>,
     /// Security advisor agent (GAP-B52-30)
     pub security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
-    /// Policy reloader for hot-reloading governance policies (GAP-B58-D04)
-    pub policy_reloader:
-        Option<Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>>,
 }
 
 /// Orchestration subsystems grouped together (planner + skill)
 pub struct OrchestrationServerDeps {
-    /// Planner — task decomposition engine (F-GAP-05)
-    pub planner: crate::orchestration::brain_loop::plan_construction::Planner,
-    /// Reserved for future planner-executor configuration.
-    /// Replaced `PlannerExecutorConfig` (which was an empty struct) after
-    /// planner-executor unification (the executor role was already subsumed
-    /// by BrainLoop). Kept as `()` to avoid churning call sites; may be
-    /// removed once the field is no longer referenced externally.
-    pub planner_executor_config: (),
     /// Registry for MCP skills
     pub skill_registry: Arc<std::sync::RwLock<SkillRegistry>>,
 }
@@ -407,11 +395,6 @@ pub struct RegistryContext {
     // SAFETY: StdMutex is never held across `.await` — schema lookups are synchronous
     // map accesses that complete and drop the guard before any async yield.
     pub schema_registry: Arc<StdMutex<crate::orchestration::task_schema::SchemaRegistry>>,
-    /// OptimizerRegistry — workflow optimization plugins (ARCH-11)
-    // SAFETY: StdMutex is never held across `.await` — plugin registry lookups are synchronous
-    // that complete and drop the guard before any async yield.
-    pub optimizer_registry:
-        Arc<StdMutex<crate::orchestration::workflow_optimizer::OptimizerRegistry>>,
 }
 
 /// Persistence-related data stores grouped together
@@ -877,8 +860,6 @@ pub struct ServerBuilder {
     harness_bus: Option<Arc<HarnessBus>>,
     capability_bus: Option<Arc<CapabilityBus>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
-    /// Planner-executor configuration (reserved for future use, currently unit).
-    planner_executor_config: (),
     approval_engine:
         Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
@@ -894,9 +875,6 @@ pub struct ServerBuilder {
     secret_exposure_detector:
         Option<Arc<crate::security::vulnerability_scan::SecretExposureDetector>>,
     security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
-    /// Policy reloader for hot-reloading governance policies (GAP-B58-D04)
-    policy_reloader:
-        Option<Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>>,
     /// Pre-loaded skill registry from bootstrap, avoiding redundant disk scan.
     pre_loaded_skill_registry: Option<Arc<std::sync::RwLock<SkillRegistry>>>,
     /// Optional multimodal processor for document, audio, video, and repo analysis.
@@ -924,7 +902,6 @@ impl ServerBuilder {
             harness_bus: None,
             capability_bus: None,
             provenance_ledger: None,
-            planner_executor_config: (),
             approval_engine: None,
             injection_detector: None,
             memory_persistence: None,
@@ -932,7 +909,6 @@ impl ServerBuilder {
             dependency_vulnerability_scanner: None,
             secret_exposure_detector: None,
             security_advisor: None,
-            policy_reloader: None,
             pre_loaded_skill_registry: None,
             multimodal_processor: None,
             lazy_memory_persistence_params: None,
@@ -1036,15 +1012,6 @@ impl ServerBuilder {
         advisor: Arc<crate::security::security_advisor::SecurityAdvisorAgent>,
     ) -> Self {
         self.security_advisor = Some(advisor);
-        self
-    }
-
-    /// Set the policy reloader for hot-reloading governance policies (GAP-B58-D04)
-    pub fn with_policy_reloader(
-        mut self,
-        reloader: Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>,
-    ) -> Self {
-        self.policy_reloader = Some(reloader);
         self
     }
 
@@ -1354,28 +1321,17 @@ impl ServerBuilder {
                 } else {
                     None
                 },
-                policy_reloader: if governance_enabled {
-                    self.policy_reloader
-                } else {
-                    None
-                },
             },
-            orchestration_deps: OrchestrationServerDeps {
-                planner: crate::orchestration::brain_loop::plan_construction::Planner,
-                planner_executor_config: self.planner_executor_config,
-                skill_registry,
-            },
+            orchestration_deps: OrchestrationServerDeps { skill_registry },
             runtime_config,
             config_path: self.config_path,
             observability: ObservabilityLayer {
                 metrics,
                 telemetry_runtime,
                 alert_manager: {
-                    let am = Arc::new(StdMutex::new(
-                        crate::observability::alert_manager::AlertManager::new(
-                            crate::observability::alert_manager::default_alert_rules(),
-                        ),
-                    ));
+                    // Single authoritative instance: the process-global AlertManager
+                    // (memory monitor writes here; server consumers read here).
+                    let am = crate::observability::alert_manager::shared_alert_manager();
                     // GAP-B58-C12: Call configure_from_env() so webhook is picked up
                     am.lock()
                         .unwrap_or_else(|e| {
@@ -1409,7 +1365,6 @@ impl ServerBuilder {
             },
             registries: RegistryContext {
                 schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),
-                optimizer_registry: Arc::new(StdMutex::new(OptimizerRegistry::new())),
             },
             persistence: PersistenceContext {
                 memory_store,

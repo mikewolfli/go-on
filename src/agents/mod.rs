@@ -27,7 +27,9 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use tracing::{debug, warn};
 
-use crate::orchestration::autonomy_runtime::{build_thinking_token, build_tool_call_token};
+use crate::orchestration::autonomy_runtime::{
+    build_thinking_token, build_tool_call_token, TOKEN_FINISH_REASON_PREFIX, TOKEN_USAGE_PREFIX,
+};
 
 /// Accumulated tool call state across SSE chunks (index-keyed).
 /// Zed uses the same approach: `tool_calls_by_index: HashMap<usize, RawToolCall>`
@@ -902,7 +904,7 @@ pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
     //     so a new stream on the same thread starts fresh.
     if let Some(reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
         if !reason.is_empty() && reason != "null" {
-            tokens.push(format!("__finish_reason__:{}", reason));
+            tokens.push(format!("{}:{}", TOKEN_FINISH_REASON_PREFIX, reason));
             TOOL_CALL_ACC.with(|cell| {
                 let mut acc = cell.borrow_mut();
                 for (_, entry) in acc.drain() {
@@ -930,7 +932,10 @@ pub(crate) fn extract_all_tokens(value: &Value) -> Vec<String> {
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
         if prompt > 0 || completion > 0 || total > 0 {
-            tokens.push(format!("__usage__:{},{},{}", prompt, completion, total));
+            tokens.push(format!(
+                "{}:{},{},{}",
+                TOKEN_USAGE_PREFIX, prompt, completion, total
+            ));
         }
     }
 

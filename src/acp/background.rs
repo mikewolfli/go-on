@@ -205,12 +205,11 @@ pub async fn start_background_tasks(
     }
 
     // ── mTLS certificate monitor (GAP-B52) ──────────────────────────────
-    // Certificate monitor task removed — MtlsConfig, start_cert_monitor, and
-    // spawn_cert_monitor_if_configured were dead code (F-GAP-49 reserved mTLS).
-    // TODO: Wire mTLS certificate monitoring (planned feature). The mtls_enabled
-    // config flag exists but the cert-monitoring background task has not yet been
-    // implemented. When implementing, consider polling the cert file's mtime and
-    // triggering a graceful TLS acceptor reload on change.
+    // Certificate expiry monitoring is implemented and wired in
+    // `security::wire_cert_monitor` (called from server_builder::wire_server):
+    // initial check at startup + daily re-check of the server cert's
+    // `not_after` with expiry/soon-to-expire warnings. The older
+    // MtlsConfig/start_cert_monitor symbols were removed as dead code.
 
     // ── Security scanning background tasks (GAP-B52-24, GAP-B52-30) ─────
     // S6 startup optimization: delay security scans by 500ms so the server
@@ -299,14 +298,15 @@ pub async fn start_background_tasks(
         advisor.start_digest_schedule();
     }
 
-    // BLUE56-D01: Policy reloader — REMOVED as a background task.
-    // The 60s loop read the RULES/*.toml files but nothing consumed the
-    // results (harness_bus wires policy_reloader=None), and auto-activating
-    // it is unsafe: the auto-created default RedLine policy is action=deny
-    // at risk_score>=0.5, which would hard-block task.execute (0.6),
-    // mcp.tools.call (0.7) and SecurityPatch (0.9) requests. The framework
-    // (PolicyReloader + reloadable_policy module) remains as designed
-    // API; wiring it to the evaluator is an explicit operator decision.
+    // BLUE56-D01: Policy reloader is NOT wired as a background task.
+    // The framework (PolicyReloader + reloadable_policy module) stays as a
+    // designed operator API, but no reload loop runs and the evaluator's
+    // policy_reloader is None, so the reloadable .goon/policies/*.toml files
+    // are never loaded into the runtime policy map. Auto-activating them is
+    // unsafe: the default RedLine policy is action=deny at risk_score>=0.5,
+    // which would hard-block task.execute (0.6), mcp.tools.call (0.7) and
+    // SecurityPatch (0.9) requests. Wiring merge_reloadable_policies() to a
+    // background loop is an explicit operator decision.
     // See log-20260730-18 for the risk analysis.
 
     // BLUE56-D02: Process timeouts — spawn the approval timeout loop

@@ -1,13 +1,12 @@
 //! Request Signing (GAP-B52-23)
 //!
-//! Provides Ed25519 and HMAC-SHA256 request signing with replay protection
-//! via a 30-second clock skew window. Supports sign_request and verify_request
-//! operations for authenticating inter-module and inter-node communication.
+//! Provides Ed25519 and HMAC-SHA256 request signature verification with replay
+//! protection via a 30-second clock skew window. Supports the verify_request
+//! operation for authenticating inter-module and inter-node communication.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -169,10 +168,7 @@ fn sha256(data: &[u8]) -> Vec<u8> {
 }
 
 fn current_timestamp_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ---------------------------------------------------------------------------

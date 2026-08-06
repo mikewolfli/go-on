@@ -16,3 +16,21 @@ pub mod token_bucket;
 pub mod token_estimator;
 pub mod tool_descriptors;
 pub mod vec_utils;
+
+use std::collections::HashMap;
+
+use serde_json::Value;
+
+/// Read a boolean option from a serde JSON options map with a default.
+pub fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
+    options.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+/// Read a usize option from a serde JSON options map with a default.
+pub fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize) -> usize {
+    options
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(default)
+}

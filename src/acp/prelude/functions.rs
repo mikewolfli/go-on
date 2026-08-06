@@ -5,13 +5,6 @@
 use crate::acp::prelude::constants::MAX_CHECKPOINTS_PER_CONVERSATION;
 use crate::acp::prelude::types::ConversationState;
 
-#[cfg(test)]
-use crate::agent::Message;
-#[cfg(test)]
-use std::collections::HashMap;
-#[cfg(test)]
-use std::sync::Mutex as StdMutex;
-
 /// Get current timestamp in seconds (delegates to `crate::shared::timestamps`).
 pub fn now_ts() -> i64 {
     crate::shared::timestamps::now_ts()
@@ -44,49 +37,4 @@ pub fn enforce_checkpoint_capacity(
         overflow -= 1;
         // Don't increment cursor because we removed the element at this position
     }
-}
-
-/// Calculate checkpoint message characters
-#[cfg(test)]
-pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
-    messages.iter().map(|m| m.content.chars().count()).sum()
-}
-
-/// Touch conversation order (update LRU)
-#[cfg(test)]
-pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
-    let mut guard = order.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("conversation order lock poisoned, recovering");
-        poisoned.into_inner()
-    });
-    // Remove if exists
-    guard.retain(|id| id != conversation_id);
-    // Add to front (most recent)
-    guard.insert(0, conversation_id.to_string());
-    // Trim if too long
-    const MAX_CONVERSATIONS_TRACKED: usize = 512;
-    if guard.len() > MAX_CONVERSATIONS_TRACKED {
-        guard.truncate(MAX_CONVERSATIONS_TRACKED);
-    }
-}
-
-/// Evict oldest conversation
-#[cfg(test)]
-pub fn evict_oldest_conversation(
-    store: &mut HashMap<String, ConversationState>,
-    order: &StdMutex<Vec<String>>,
-) -> Option<String> {
-    let mut order_guard = match order.lock() {
-        Ok(guard) => guard,
-        Err(_) => return None,
-    };
-
-    while let Some(oldest_id) = order_guard.pop() {
-        if store.contains_key(&oldest_id) {
-            store.remove(&oldest_id);
-            return Some(oldest_id);
-        }
-    }
-
-    None
 }

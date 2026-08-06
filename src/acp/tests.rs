@@ -6,7 +6,6 @@
 #[cfg(test)]
 mod test_suite {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use crate::acp::prelude::*;
     use crate::acp::server::ServerBuilder;
@@ -242,44 +241,6 @@ mod test_suite {
         assert!(server.model_deps.flow_manager.is_none());
     }
 
-    /// Test checkpoint message character counting
-    #[test]
-    fn test_checkpoint_message_chars() {
-        let messages = vec![
-            crate::agent::Message {
-                role: "user".to_string(),
-                content: "Hello".to_string(),
-            },
-            crate::agent::Message {
-                role: "assistant".to_string(),
-                content: "World".to_string(),
-            },
-        ];
-
-        let char_count = checkpoint_message_chars(&messages);
-        assert_eq!(char_count, 10); // "Hello" (5) + "World" (5)
-    }
-
-    /// Test conversation touch order
-    /// Test conversation order touching
-    #[test]
-    fn test_touch_conversation_order() {
-        let order = Arc::new(std::sync::Mutex::new(vec![
-            "conv1".to_string(),
-            "conv2".to_string(),
-        ]));
-
-        // Use the function from prelude module
-        use crate::acp::prelude::touch_conversation_order;
-        touch_conversation_order(&order, "conv3");
-        let guard = match order.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        assert_eq!(guard.len(), 3);
-        assert_eq!(guard[0], "conv3");
-    }
-
     /// Test checkpoint capacity enforcement
     #[test]
     fn test_enforce_checkpoint_capacity() {
@@ -307,33 +268,6 @@ mod test_suite {
 
         // Should be at or below capacity
         assert!(state.checkpoints.len() <= MAX_CHECKPOINTS_PER_CONVERSATION);
-    }
-
-    /// Test evicting oldest conversation
-    #[test]
-    fn test_evict_oldest_conversation() {
-        let mut store = std::collections::HashMap::new();
-        store.insert(
-            "conv1".to_string(),
-            crate::acp::prelude::ConversationState::default(),
-        );
-        store.insert(
-            "conv2".to_string(),
-            crate::acp::prelude::ConversationState::default(),
-        );
-
-        let order = Arc::new(std::sync::Mutex::new(vec![
-            "conv1".to_string(),
-            "conv2".to_string(),
-        ]));
-
-        // Use the function from prelude module
-        use crate::acp::prelude::evict_oldest_conversation;
-        let evicted = evict_oldest_conversation(&mut store, &order);
-
-        assert_eq!(evicted, Some("conv2".to_string()));
-        assert_eq!(store.len(), 1);
-        assert!(store.contains_key("conv1"));
     }
 
     /// Test timestamp utilities

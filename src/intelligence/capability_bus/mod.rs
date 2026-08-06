@@ -28,7 +28,6 @@
 //! 4. **Feedback**  — write results back to sub-buses (learning, reputation)
 //! 5. **Evolution** — update Q-table, decay exploration rate
 
-pub mod act;
 pub mod core;
 pub mod decide;
 pub mod discovery;

@@ -211,25 +211,16 @@ async fn test_multimodal_audio_processor_config() {
     assert!(config.openai_api_key.is_none());
     assert_eq!(config.temperature, 0.0);
 
-    // Verify construction with different backends.
-    let config_whisper = AudioProcessorConfig {
-        backend: SttBackend::WhisperLocal,
-        local_model_path: Some("/models/whisper.bin".into()),
+    // Verify construction with different backends (only OpenAIWhisper remains
+    // after the placeholder WhisperLocal/Vosk backends were removed).
+    let config_openai = AudioProcessorConfig {
+        backend: SttBackend::OpenAIWhisper,
+        openai_api_key: Some("sk-test".into()),
         language_hint: Some("en".into()),
         ..Default::default()
     };
-    assert_eq!(config_whisper.backend, SttBackend::WhisperLocal);
-    assert_eq!(
-        config_whisper.local_model_path.as_deref(),
-        Some("/models/whisper.bin")
-    );
-
-    let config_vosk = AudioProcessorConfig {
-        backend: SttBackend::Vosk,
-        vosk_model_path: Some("/models/vosk".into()),
-        ..Default::default()
-    };
-    assert_eq!(config_vosk.backend, SttBackend::Vosk);
+    assert_eq!(config_openai.backend, SttBackend::OpenAIWhisper);
+    assert_eq!(config_openai.openai_api_key.as_deref(), Some("sk-test"));
 
     // Check that we can represent different audio formats.
     let wav = AudioFormat::Wav;

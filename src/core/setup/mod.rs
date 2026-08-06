@@ -7,10 +7,9 @@
 //!
 //! New code should live in the appropriate sub-module rather than in this file.
 //!
-//! GAP-B53-23: Extract sections from this file into the sub-module files.
-//! The sub-module stubs (`config_gen.rs`, `prompts.rs`, `secrets.rs`) already
-//! exist and re-export functions from here. The extraction is tracked under
-//! GAP-B53-23 to keep the diff manageable for review.
+//! GAP-B53-23: Sections were extracted from this file into the sub-module
+//! files; the sub-modules (`config_gen.rs`, `prompts.rs`, `secrets.rs`) are
+//! full implementations (not stubs) and are re-exported from here.
 
 pub mod config_gen;
 pub mod prompts;

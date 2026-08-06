@@ -9,6 +9,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::agent::Message;
+pub(crate) use crate::shared::{option_bool, option_usize};
 
 /// Policy for configuring high-risk voting behavior.
 #[derive(Debug, Clone)]
@@ -37,18 +38,6 @@ pub(crate) struct AgentStrongVoteOutcome {
 }
 
 pub(crate) type AgentVoteSource = (String, Arc<dyn crate::agent::Agent>, HashMap<String, Value>);
-
-pub(crate) fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
-    options.get(key).and_then(Value::as_bool).unwrap_or(default)
-}
-
-fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize) -> usize {
-    options
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|v| v as usize)
-        .unwrap_or(default)
-}
 
 fn option_keywords(options: &HashMap<String, Value>, key: &str) -> Vec<String> {
     let mut out = Vec::new();

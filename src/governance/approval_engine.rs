@@ -5,7 +5,6 @@
 
 use super::approval_learning::ApprovalPreferenceLearner;
 use super::pua::PuaRuleEngine;
-use super::security_governor::{AuditEntry, PolicyVerdict, SecurityGovernor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -204,58 +203,6 @@ impl EscalationChain {
 }
 
 // ---------------------------------------------------------------------------
-// ApproverResolver trait + ApproverRegistry
-// ---------------------------------------------------------------------------
-
-/// Trait for resolving approver role names to approver identities.
-///
-/// Implementations can look up approver IDs from any source:
-/// a directory service, a config file, or static mappings.
-pub trait ApproverResolver: Send + Sync {
-    /// Resolve an approver role (e.g. "manager", "director") to an approver
-    /// identity string (e.g. "alice@example.com"). Return `None` if unknown.
-    fn resolve_approver_id(&self, request: &ApprovalRequest) -> Option<String>;
-}
-
-/// A registry of multiple [`ApproverResolver`] instances.
-///
-/// When asked to resolve a role, each registered resolver is tried in
-/// registration order until one returns `Some(...)`.
-pub struct ApproverRegistry {
-    resolvers: Vec<Box<dyn ApproverResolver>>,
-}
-
-impl ApproverRegistry {
-    /// Create an empty registry.
-    pub fn new() -> Self {
-        Self {
-            resolvers: Vec::new(),
-        }
-    }
-
-    /// Register a new resolver.
-    pub fn register(&mut self, resolver: Box<dyn ApproverResolver>) {
-        self.resolvers.push(resolver);
-    }
-
-    /// Try each resolver in order, returning the first non-`None` result.
-    pub fn resolve(&self, request: &ApprovalRequest) -> Option<String> {
-        for resolver in &self.resolvers {
-            if let Some(id) = resolver.resolve_approver_id(request) {
-                return Some(id);
-            }
-        }
-        None
-    }
-}
-
-impl Default for ApproverRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // ApprovalEngine
 // ---------------------------------------------------------------------------
 
@@ -266,13 +213,6 @@ pub struct ApprovalEngine {
     pua_engine: Arc<Mutex<PuaRuleEngine>>,
     /// Optional preference learner that records decisions for auto-approval analysis.
     learner: Option<Arc<StdRwLock<ApprovalPreferenceLearner>>>,
-    /// Registry of approver ID resolvers.
-    /// Called when building escalation chains to fill `approver_id`.
-    approver_registry: ApproverRegistry,
-    /// Optional SQLite database path for persistent approval queue.
-    db_path: Option<String>,
-    /// Optional SecurityGovernor for audit logging.
-    security_governor: Option<Arc<SecurityGovernor>>,
 }
 
 impl std::fmt::Debug for ApprovalEngine {
@@ -283,15 +223,6 @@ impl std::fmt::Debug for ApprovalEngine {
             .field("timeout_policy", &self.timeout_policy)
             .field("pua_engine", &self.pua_engine)
             .field("learner", &self.learner)
-            .field("approver_registry", &"<ApproverRegistry>")
-            .field("db_path", &self.db_path)
-            .field(
-                "security_governor",
-                &self
-                    .security_governor
-                    .as_ref()
-                    .map(|_| "<SecurityGovernor>"),
-            )
             .finish()
     }
 }
@@ -305,174 +236,13 @@ impl ApprovalEngine {
             timeout_policy,
             pua_engine,
             learner: None,
-            approver_registry: ApproverRegistry::new(),
-            db_path: None,
-            security_governor: None,
         }
-    }
-
-    /// Set the SQLite database path for persistent approval queue storage.
-    /// When set, the engine will create the `approval_queue` table on init
-    /// and reload any pending approvals from the database.
-    #[allow(
-        unused_mut,
-        reason = "needed by backend-sqlite, unused by backend-postgres"
-    )]
-    pub fn with_db_path(mut self, db_path: String) -> Self {
-        #[cfg(feature = "backend-sqlite")]
-        {
-            if let Err(e) = Self::init_sqlite(&db_path) {
-                tracing::warn!(error = %e, db_path = %db_path, "Failed to initialize SQLite approval queue");
-            } else if let Ok(requests) = Self::load_pending_from_sqlite(&db_path) {
-                tracing::info!(
-                    count = requests.len(),
-                    "Reloaded pending approvals from SQLite"
-                );
-                self.queue = requests;
-            }
-            self.db_path = Some(db_path);
-        }
-        #[cfg(not(feature = "backend-sqlite"))]
-        {
-            tracing::warn!(
-                "ApprovalEngine: db_path '{}' set but ignored without backend-sqlite feature",
-                db_path
-            );
-        }
-        self
-    }
-
-    // ── SQLite helpers (gated behind backend-sqlite) ────────────────────────
-
-    /// Create the `approval_queue` table if it doesn't exist.
-    #[cfg(feature = "backend-sqlite")]
-    fn init_sqlite(db_path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS approval_queue (
-                id TEXT PRIMARY KEY,
-                data TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending'
-            );",
-        )?;
-        Ok(())
-    }
-
-    /// Load all pending (non-finalized) approval requests from SQLite.
-    #[cfg(feature = "backend-sqlite")]
-    fn load_pending_from_sqlite(
-        db_path: &str,
-    ) -> Result<Vec<ApprovalRequest>, Box<dyn std::error::Error + Send + Sync>> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        let mut stmt = conn.prepare("SELECT data FROM approval_queue WHERE status = 'pending'")?;
-        let rows = stmt.query_map([], |row| {
-            let data: String = row.get(0)?;
-            Ok(data)
-        })?;
-
-        let mut requests = Vec::new();
-        for row in rows {
-            let data = row?;
-            if let Ok(req) = serde_json::from_str::<ApprovalRequest>(&data) {
-                requests.push(req);
-            }
-        }
-        Ok(requests)
-    }
-
-    /// Insert or update an approval request in SQLite.
-    #[cfg(feature = "backend-sqlite")]
-    fn upsert_sqlite(
-        db_path: &str,
-        request: &ApprovalRequest,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        let data = serde_json::to_string(request)?;
-        let status = match &request.status {
-            ApprovalStatus::Pending => "pending",
-            ApprovalStatus::Approved { .. } => "approved",
-            ApprovalStatus::Rejected { .. } => "rejected",
-            ApprovalStatus::EscalatedToManager { .. } => "escalated",
-            ApprovalStatus::AutoDenied { .. } => "auto_denied",
-        };
-        conn.execute(
-            "INSERT OR REPLACE INTO approval_queue (id, data, status) VALUES (?1, ?2, ?3)",
-            rusqlite::params![request.id, data, status],
-        )?;
-        Ok(())
-    }
-
-    /// Update only the status column in SQLite (used on approve/reject).
-    #[cfg(feature = "backend-sqlite")]
-    fn update_status_sqlite(
-        db_path: &str,
-        request: &ApprovalRequest,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        let data = serde_json::to_string(request)?;
-        let status = match &request.status {
-            ApprovalStatus::Pending => "pending",
-            ApprovalStatus::Approved { .. } => "approved",
-            ApprovalStatus::Rejected { .. } => "rejected",
-            ApprovalStatus::EscalatedToManager { .. } => "escalated",
-            ApprovalStatus::AutoDenied { .. } => "auto_denied",
-        };
-        conn.execute(
-            "UPDATE approval_queue SET data = ?1, status = ?2 WHERE id = ?3",
-            rusqlite::params![data, status, request.id],
-        )?;
-        Ok(())
-    }
-
-    /// Delete a finalized request from SQLite.
-    #[cfg(feature = "backend-sqlite")]
-    fn delete_from_sqlite(
-        db_path: &str,
-        id: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conn = rusqlite::Connection::open(db_path)?;
-        conn.execute(
-            "DELETE FROM approval_queue WHERE id = ?1",
-            rusqlite::params![id],
-        )?;
-        Ok(())
     }
 
     /// Attach an approval preference learner to record decisions.
     pub fn with_learner(mut self, learner: Arc<StdRwLock<ApprovalPreferenceLearner>>) -> Self {
         self.learner = Some(learner);
         self
-    }
-
-    /// Attach a SecurityGovernor for audit logging.
-    pub fn with_security_governor(mut self, governor: Arc<SecurityGovernor>) -> Self {
-        self.security_governor = Some(governor);
-        self
-    }
-
-    /// Set the approval preference learner (mutating variant for already-constructed engines).
-    pub fn set_learner(&mut self, learner: Arc<StdRwLock<ApprovalPreferenceLearner>>) {
-        self.learner = Some(learner);
-    }
-
-    /// Register an approver ID resolver.
-    ///
-    /// The resolver receives an `ApprovalRequest` reference and should return
-    /// the corresponding approver identity, or `None` if unknown.
-    ///
-    /// Example:
-    /// ```text
-    /// use std::collections::HashMap;
-    /// struct MyResolver { mapping: HashMap<String, String> }
-    /// impl ApproverResolver for MyResolver {
-    ///     fn resolve_approver_id(&self, request: &ApprovalRequest) -> Option<String> {
-    ///         self.mapping.get(&request.user).cloned()
-    ///     }
-    /// }
-    /// engine.register_approver_resolver(Box::new(MyResolver { mapping: HashMap::new() }));
-    /// ```
-    pub fn register_approver_resolver(&mut self, resolver: Box<dyn ApproverResolver>) {
-        self.approver_registry.register(resolver);
     }
 
     // ── Submission ──────────────────────────────────────────────────────────
@@ -489,27 +259,19 @@ impl ApprovalEngine {
             EscalationStep {
                 level: 1,
                 approver_role: "manager".to_string(),
-                approver_id: self.approver_registry.resolve(&request),
+                approver_id: None,
                 comment: None,
             },
             EscalationStep {
                 level: 2,
                 approver_role: "director".to_string(),
-                approver_id: self.approver_registry.resolve(&request),
+                approver_id: None,
                 comment: None,
             },
         ];
         self.escalation_chains
             .insert(id.clone(), EscalationChain::new(steps));
         self.queue.push(request.clone());
-
-        // Persist to SQLite if configured.
-        if let Some(ref _db_path) = self.db_path {
-            #[cfg(feature = "backend-sqlite")]
-            if let Err(e) = Self::upsert_sqlite(_db_path, &request) {
-                tracing::warn!(error = %e, id = %id, "Failed to persist approval request to SQLite");
-            }
-        }
 
         id
     }
@@ -548,28 +310,8 @@ impl ApprovalEngine {
 
         info!(%id, approver = %approver, "Approval request approved");
 
-        // Record audit entry for this approval.
-        if let Some(ref governor) = self.security_governor {
-            let audit_entry = AuditEntry::new(
-                format!("approval-{}", id),
-                PolicyVerdict::allow(),
-                format!("approval:{}:{}", status.user, status.action),
-                approver.to_string(),
-                format!("Approved by {}: {}", approver, comment),
-            );
-            governor.record_audit(audit_entry);
-        }
-
         self.feedback_to_pua(&status);
         self.feedback_to_learner(&status);
-
-        // Update SQLite if configured.
-        if let Some(ref _db_path) = self.db_path {
-            #[cfg(feature = "backend-sqlite")]
-            if let Err(e) = Self::update_status_sqlite(_db_path, &status) {
-                tracing::warn!(error = %e, id = %id, "Failed to update approval in SQLite");
-            }
-        }
 
         Ok(())
     }
@@ -601,28 +343,8 @@ impl ApprovalEngine {
 
         warn!(%id, approver = %approver, reason = %reason, "Approval request rejected");
 
-        // Record audit entry for this rejection.
-        if let Some(ref governor) = self.security_governor {
-            let audit_entry = AuditEntry::new(
-                format!("approval-{}", id),
-                PolicyVerdict::deny("approval-engine", "Rejected by approver"),
-                format!("approval:{}:{}", request_clone.user, request_clone.action),
-                approver.to_string(),
-                format!("Rejected by {}: {}", approver, reason),
-            );
-            governor.record_audit(audit_entry);
-        }
-
         self.feedback_to_pua(&request_clone);
         self.feedback_to_learner(&request_clone);
-
-        // Update SQLite if configured.
-        if let Some(ref _db_path) = self.db_path {
-            #[cfg(feature = "backend-sqlite")]
-            if let Err(e) = Self::update_status_sqlite(_db_path, &request_clone) {
-                tracing::warn!(error = %e, id = %id, "Failed to update rejection in SQLite");
-            }
-        }
 
         Ok(())
     }
@@ -717,35 +439,11 @@ impl ApprovalEngine {
             self.queue[*idx].escalated_from = updated_request.escalated_from.clone();
         }
 
-        // ── G8: Concurrent feedback & persistence ────────────────────────
-        // Fire feedback (already async via tokio::spawn) and persistence
-        // calls concurrently so that multiple escalation notifications are
-        // not serialised.  The feedback_to_pua method already spawns a
-        // tokio task internally; for persistence we spawn per-request
-        // threads to achieve parallel SQLite writes.
+        // ── G8: Concurrent feedback ──────────────────────────────────────
+        // Fire feedback concurrently so that multiple escalation notifications
+        // are not serialised. The feedback_to_pua method already spawns a
+        // tokio task internally.
         let snapshots: Vec<ApprovalRequest> = actions.iter().map(|(_, r)| r.clone()).collect();
-        let db_path = self.db_path.clone();
-        // Persist to SQLite via spawn_blocking to avoid blocking the tokio runtime.
-        if let Some(db_path) = db_path {
-            let mut handles = Vec::with_capacity(snapshots.len());
-            for req in &snapshots {
-                let _db_path = db_path.clone();
-                let _req = req.clone();
-                handles.push(tokio::task::spawn_blocking(move || {
-                    #[cfg(feature = "backend-sqlite")]
-                    if let Err(e) = Self::update_status_sqlite(&_db_path, &_req) {
-                        tracing::warn!(
-                            error = %e,
-                            id = %_req.id,
-                            "Failed to persist timeout status to SQLite"
-                        );
-                    }
-                }));
-            }
-            for handle in handles {
-                let _ = handle.await;
-            }
-        }
         // Serial feedback calls — each `feedback_to_pua()` internally spawns
         // a tokio task, so they are effectively fire-and-forget.
         for req in &snapshots {
@@ -779,39 +477,6 @@ impl ApprovalEngine {
     /// Get the escalation chain for a request.
     pub fn get_escalation_chain(&self, id: &str) -> Option<&EscalationChain> {
         self.escalation_chains.get(id)
-    }
-
-    /// Remove finalized requests older than the specified duration.
-    pub fn purge_old(&mut self, max_age: Duration) {
-        let cutoff = current_timestamp_ms().saturating_sub(max_age.as_millis() as u64);
-        let old_ids: Vec<String> = self
-            .queue
-            .iter()
-            .filter(|r| r.created_at_ms < cutoff && r.status.is_finalized())
-            .map(|r| r.id.clone())
-            .collect();
-        // G9: Use swap_remove for O(1) removal when order doesn't matter.
-        // Iterate from the end so that swap_remove indices are stable.
-        let mut i = self.queue.len();
-        while i > 0 {
-            i -= 1;
-            let remove =
-                self.queue[i].created_at_ms < cutoff && self.queue[i].status.is_finalized();
-            if remove {
-                self.escalation_chains.remove(&self.queue[i].id);
-                self.queue.swap_remove(i);
-            }
-        }
-
-        // Remove from SQLite if configured.
-        if let Some(ref _db_path) = self.db_path {
-            for _id in &old_ids {
-                #[cfg(feature = "backend-sqlite")]
-                if let Err(e) = Self::delete_from_sqlite(_db_path, _id) {
-                    tracing::warn!(error = %e, id = %_id, "Failed to remove purged approval from SQLite");
-                }
-            }
-        }
     }
 
     // ── Feedback ─────────────────────────────────────────────────────────────

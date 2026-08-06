@@ -91,3 +91,20 @@ pub struct WorldEvent {
     /// Unix timestamp (milliseconds) when this event occurred.
     pub timestamp_ms: u64,
 }
+
+/// A read-only snapshot of the world model state, surfaced via the
+/// capability-bus profile / status endpoints so the accumulated world state
+/// is observable instead of write-only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldModelProfile {
+    /// Number of tracked entities.
+    pub entities: usize,
+    /// Number of recorded events.
+    pub events: usize,
+    /// Unix millis of the last state update.
+    pub last_update_ms: u64,
+    /// Entity count grouped by entity type (debug-name → count).
+    pub entities_by_type: HashMap<String, usize>,
+    /// Most recent event types, most recent first (bounded).
+    pub recent_event_types: Vec<String>,
+}

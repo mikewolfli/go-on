@@ -333,27 +333,6 @@ pub enum PolicyVerdict {
     AllowWithConstraints(Vec<Constraint>),
 }
 
-/// Slimmed-down decision enum for HTTP response mapping.
-/// Deny → 403, RequireReview → 449, Escalate → 402, Allow → 200.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Decision {
-    Allow,
-    Deny(String),
-    RequireReview(String),
-    Escalate(String, u8),
-}
-
-impl From<PolicyVerdict> for Decision {
-    fn from(v: PolicyVerdict) -> Self {
-        match v {
-            PolicyVerdict::Allow | PolicyVerdict::AllowWithConstraints(_) => Decision::Allow,
-            PolicyVerdict::Deny(v) => Decision::Deny(format!("{}: {}", v.kind, v.detail)),
-            PolicyVerdict::Review(r) => Decision::RequireReview(r.reason),
-            PolicyVerdict::Escalate(e) => Decision::Escalate(e.reason, e.suggested_level),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyViolation {
     pub kind: String,

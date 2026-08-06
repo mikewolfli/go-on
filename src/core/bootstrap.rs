@@ -63,6 +63,17 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
             let _ = crate::i18n::runtime::init_i18n(&lang_dir);
         }
         info!("I18n initialized");
+        // Wire the language hot-reload watcher (i18n::watcher) so edits to the
+        // on-disk language files (en-US.json / zh-CN.json / zh-TW.json) are
+        // picked up at runtime without a restart. Best-effort: failures are
+        // logged, not fatal.
+        let watcher_started =
+            crate::i18n::watcher::start_watcher(&lang_dir, std::time::Duration::from_secs(5));
+        if let Ok(true) = watcher_started {
+            info!("I18n hot-reload watcher started");
+        } else if let Err(e) = watcher_started {
+            tracing::warn!("I18n hot-reload watcher failed to start: {e}");
+        }
     }
 
     // 3. Orchestration provider trait is available for architecture boundary verification.

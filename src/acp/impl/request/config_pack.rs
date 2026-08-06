@@ -1,6 +1,10 @@
 use super::*;
 use crate::config::RuntimeConfig;
 // RuntimeConfig import removed after unsafe code removal in handle_config_reload
+use crate::core::config::defaults::{
+    default_runtime_entry_auth_api_key_env, default_runtime_entry_rate_limit_burst,
+    default_runtime_entry_rate_limit_rpm,
+};
 use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
 use crate::shared::secret_override::get_secret;
 use std::sync::OnceLock;
@@ -98,10 +102,10 @@ pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
             "loaded": false,
             "production_strict": false,
             "entry_auth_enabled": false,
-            "entry_auth_api_key_env": "GO_ON_ENTRY_API_KEY",
+            "entry_auth_api_key_env": default_runtime_entry_auth_api_key_env(),
             "entry_auth_key_configured": false,
-            "entry_rate_limit_rpm": 240,
-            "entry_rate_limit_burst": 60,
+            "entry_rate_limit_rpm": default_runtime_entry_rate_limit_rpm(),
+            "entry_rate_limit_burst": default_runtime_entry_rate_limit_burst(),
             "strict_violation_count": 0,
             "strict_violations": [],
             "warning_count": 0,
@@ -117,10 +121,10 @@ pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
                 "loaded": false,
                 "production_strict": false,
                 "entry_auth_enabled": false,
-                "entry_auth_api_key_env": "GO_ON_ENTRY_API_KEY",
+                "entry_auth_api_key_env": default_runtime_entry_auth_api_key_env(),
                 "entry_auth_key_configured": false,
-                "entry_rate_limit_rpm": 240,
-                "entry_rate_limit_burst": 60,
+                "entry_rate_limit_rpm": default_runtime_entry_rate_limit_rpm(),
+                "entry_rate_limit_burst": default_runtime_entry_rate_limit_burst(),
                 "strict_violation_count": 1,
                 "strict_violations": [format!("failed_to_load_config:{}", err)],
                 "warning_count": 1,
@@ -144,7 +148,7 @@ pub(super) fn governance_config_summary(config_path: Option<&str>) -> Value {
         .runtime
         .as_ref()
         .map(|runtime| runtime.entry_auth_api_key_env.clone())
-        .unwrap_or_else(|| "GO_ON_ENTRY_API_KEY".to_string());
+        .unwrap_or_else(default_runtime_entry_auth_api_key_env);
     let entry_auth_key_configured = get_secret(&entry_auth_api_key_env)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);

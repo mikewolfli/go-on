@@ -730,13 +730,13 @@ mode = "acp_stdio"
 
 [cache]
 enabled = true
-path = "acp_cache.sqlite3"
+path = "sqlite3/acp_cache.sqlite3"
 default_ttl_seconds = 3600
 max_entries = 5000
 
 [vector]
 enabled = true
-path = "acp_vector.sqlite3"
+path = "sqlite3/acp_vector.sqlite3"
 dimensions = 192
 top_k = 2
 

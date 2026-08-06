@@ -17,8 +17,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
-
 use crate::core::config::RuntimeConfig;
 use crate::i18n::runtime::tf;
 
@@ -423,18 +421,6 @@ impl PolicyBundle {
             enable_code_execution: false,
             sandbox_level: SandboxLevel::Isolated,
         }
-    }
-}
-
-pub struct Idempotency;
-impl Idempotency {
-    /// Generate idempotency key from task parameters
-    pub fn key(task_id: &str, phase: &str, objective: &str) -> String {
-        // Real hash-based idempotency key generation using SHA-256
-        hex::encode(Sha256::digest(format!(
-            "{}-{}-{}",
-            task_id, phase, objective
-        )))
     }
 }
 

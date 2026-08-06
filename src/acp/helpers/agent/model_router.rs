@@ -17,6 +17,7 @@ use tracing::{debug, warn};
 
 use crate::acp::r#impl::chat::{RiskAssessment, RiskVotePolicy};
 use crate::agent::Agent;
+use crate::shared::{option_bool, option_usize};
 
 /// Result of filtering agents by model option.
 #[derive(Debug)]
@@ -40,22 +41,6 @@ pub(crate) struct HighRiskVoteConfig {
     pub(crate) escalation_models_per_agent: usize,
     /// Maximum number of agents for escalation (clamped 1..=max_vote_agents).
     pub(crate) escalation_max_agents: usize,
-}
-
-// ---------------------------------------------------------------------------
-// Helper option readers (mirrored from chat.rs for self-containment)
-// ---------------------------------------------------------------------------
-
-fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
-    options.get(key).and_then(Value::as_bool).unwrap_or(default)
-}
-
-fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize) -> usize {
-    options
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|v| v as usize)
-        .unwrap_or(default)
 }
 
 // ---------------------------------------------------------------------------

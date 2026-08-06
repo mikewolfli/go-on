@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 use crate::agent::{Agent, AgentRegistry, Message};
+use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 use crate::orchestration::tool::ToolInput;
 
 // ---------------------------------------------------------------------------
@@ -335,7 +336,7 @@ If unsure, reply DENY (fail closed).
     fn sanitize_response(response: &str) -> String {
         // Remove __thinking__ blocks (matching TOKEN_THINKING_PREFIX in agent runtime)
         // These are inserted for streaming display but must be stripped for parsing.
-        response.replace("__thinking__", "")
+        response.replace(TOKEN_THINKING_PREFIX, "")
     }
 
     /// Parse the review agent's response into a GuardianDecision.

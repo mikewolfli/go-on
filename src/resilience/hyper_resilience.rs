@@ -18,7 +18,6 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 #[cfg(feature = "chaos-testing")]
-#[cfg(feature = "chaos-testing")]
 use super::chaos::ChaosEngine;
 
 // ---------------------------------------------------------------------------
@@ -302,12 +301,6 @@ pub struct HyperResilienceEngine {
     /// Optional ChaosEngine for fault injection testing.
     #[cfg(feature = "chaos-testing")]
     chaos_engine: Option<Arc<ChaosEngine>>,
-    /// Optional path for persisting circuit breaker state.
-    persist_path: Option<String>,
-    /// Optional fault consensus for distributed fault detection.
-    fault_consensus: Option<Mutex<FaultConsensus>>,
-    /// Optional recovery plan store for persisting recovery plans.
-    plan_store: Option<RecoveryPlanStore>,
 }
 
 impl std::fmt::Debug for HyperResilienceEngine {
@@ -317,15 +310,6 @@ impl std::fmt::Debug for HyperResilienceEngine {
             .field("healing_actions_taken", &self.healing_actions_taken)
             .field("cancel_tx", &"watch::Sender")
             .field("health_check_handle", &"Mutex<Option<JoinHandle>>")
-            .field("persist_path", &self.persist_path)
-            .field("plan_store", &self.plan_store)
-            .field(
-                "fault_consensus",
-                &self
-                    .fault_consensus
-                    .as_ref()
-                    .map(|_| "Mutex<FaultConsensus>"),
-            )
             .finish()
     }
 }
@@ -351,9 +335,6 @@ impl HyperResilienceEngine {
             health_check_handle: Mutex::new(None),
             #[cfg(feature = "chaos-testing")]
             chaos_engine: None,
-            persist_path: None,
-            fault_consensus: None,
-            plan_store: None,
         }
     }
 
@@ -369,24 +350,6 @@ impl HyperResilienceEngine {
     #[cfg(feature = "chaos-testing")]
     pub fn with_chaos_engine(mut self, chaos: Arc<crate::resilience::chaos::ChaosEngine>) -> Self {
         self.chaos_engine = Some(chaos);
-        self
-    }
-
-    /// Attach a FaultConsensus for quorum-based fault detection (P3-7).
-    pub fn with_fault_consensus(mut self, consensus: FaultConsensus) -> Self {
-        self.fault_consensus = Some(Mutex::new(consensus));
-        self
-    }
-
-    /// Attach a persistence path for circuit breaker state (P3-2).
-    pub fn with_persist_path(mut self, path: impl Into<String>) -> Self {
-        self.persist_path = Some(path.into());
-        self
-    }
-
-    /// Attach a RecoveryPlanStore for persisting healing plans (P3-8).
-    pub fn with_plan_store(mut self, store: RecoveryPlanStore) -> Self {
-        self.plan_store = Some(store);
         self
     }
 
@@ -547,9 +510,7 @@ impl HyperResilienceEngine {
             }
         }
 
-        // Drive the breaker from the same outcome (sync inline update — the
-        // async record_success/record_failure_with_mode additionally persist
-        // state when `persist_path` is configured, which production never is).
+        // Drive the breaker from the same outcome (sync inline update).
         let mut cbs = lock_mutex(&self.circuit_breakers);
         if let Some(cb) = cbs.get_mut(name) {
             apply_breaker_outcome(cb, success, max_failure_threshold);
@@ -751,12 +712,7 @@ impl HyperResilienceEngine {
             }
 
             state = cb.state;
-        } // drop circuit_breakers lock before persisting
-
-        // Persist state after transition (P3-2)
-        if let Some(ref path) = self.persist_path {
-            let _ = self.persist_to_db(path).await;
-        }
+        } // drop circuit_breakers lock
 
         Ok(state)
     }
@@ -788,12 +744,7 @@ impl HyperResilienceEngine {
                     // it must transition through half-open first.
                 }
             }
-        } // drop circuit_breakers lock before persisting
-
-        // Persist state after transition (P3-2)
-        if let Some(ref path) = self.persist_path {
-            let _ = self.persist_to_db(path).await;
-        }
+        } // drop circuit_breakers lock
 
         Ok(())
     }
@@ -1248,35 +1199,6 @@ impl HyperResilienceEngine {
             result,
         };
 
-        // Persist a recovery plan to the store (P3-8)
-        // Build plan (cheap data construction), then save via spawn_blocking
-        // to avoid blocking tokio worker with std::fs::write.
-        let plan = RecoveryPlan::new(
-            format!("{}-{}", report.target, report.initiated_ms),
-            format!("Auto-healing {:?} on {}", report.action, report.target),
-            "auto".to_string(),
-            vec![RecoveryStep {
-                description: format!("{:?} execution", report.action),
-                action: report.action.clone(),
-                target: report.target.clone(),
-                timeout_ms: test_duration_ms,
-                reversible: false,
-            }],
-        );
-        if let Some(store) = self.plan_store.clone() {
-            let plan = plan.clone();
-            if let Err(e) = tokio::task::spawn_blocking(move || store.save(&plan))
-                .await
-                .unwrap_or_else(|_| Err(std::io::Error::other("spawn_blocking failed")))
-            {
-                tracing::warn!(
-                    target: "resilience",
-                    "failed to save recovery plan: {}",
-                    e
-                );
-            }
-        }
-
         Ok(report)
     }
 
@@ -1399,47 +1321,7 @@ impl HyperResilienceEngine {
             self.probe(name).await;
         }
 
-        // Record fault votes based on breaker states after probing (P3-7)
-        if let Some(ref consensus_mutex) = self.fault_consensus {
-            let mut consensus = consensus_mutex.lock().expect("consensus poisoned");
-            let cbs = lock_mutex(&self.circuit_breakers);
-            for (name, cb) in cbs.iter() {
-                let healthy = matches!(cb.state, CircuitState::Closed);
-                consensus.record_vote(FaultVote {
-                    voter_id: "local-engine".to_string(),
-                    target_id: name.clone(),
-                    healthy: healthy || matches!(cb.state, CircuitState::HalfOpen),
-                    timestamp_ms: now_millis(),
-                    evidence: if healthy {
-                        None
-                    } else {
-                        Some(format!("state={:?}", cb.state))
-                    },
-                });
-            }
-            drop(cbs);
-
-            // ── Phase 2: Fault consensus evaluation for active failover groups ─
-            consensus.evict_stale();
-            let fg_ids: Vec<String> = {
-                let fgs = lock_mutex(&self.failover_groups);
-                fgs.keys().cloned().collect()
-            };
-            for group_id in &fg_ids {
-                let (declared, unhealthy, total) = consensus.evaluate(group_id);
-                if declared {
-                    tracing::warn!(
-                        target: "resilience",
-                        "fault consensus: fault DECLARED for failover group '{}' (unhealthy {}/{})",
-                        group_id,
-                        unhealthy,
-                        total
-                    );
-                }
-            }
-        }
-
-        // ── Phase 3: Assess system health ──────────────────────────────────
+        // ── Phase 2: Assess system health ──────────────────────────────────
         let health = self.system_health().await;
 
         // Update real operational metrics (only circuit_breakers + test metrics locks)
@@ -1506,69 +1388,6 @@ impl HyperResilienceEngine {
                 }
             }
         }
-
-        // Persist state after self-healing actions (P3-2)
-        if let Some(ref path) = self.persist_path {
-            let _ = self.persist_to_db(path).await;
-        }
-    }
-
-    /// Persist current circuit breaker state to a JSON file via tokio::fs.
-    ///
-    /// Stores the circuit_breakers HashMap as a JSON blob, enabling recovery
-    /// across process restarts. Uses the provided `path` for the output file.
-    pub async fn persist_to_db(&self, path: &str) -> Result<()> {
-        let json = {
-            let cbs = lock_mutex(&self.circuit_breakers);
-            serde_json::to_string_pretty(&*cbs)
-                .context("failed to serialize circuit breakers for persistence")?
-        };
-        tokio::fs::write(path, &json)
-            .await
-            .context("failed to write resilience state to disk")?;
-        Ok(())
-    }
-
-    /// Load circuit breaker state from a JSON file and populate the engine.
-    ///
-    /// Reads the JSON blob written by `persist_to_db` and reconstructs the
-    /// `circuit_breakers` HashMap. Returns a new engine with the loaded state.
-    /// If the file does not exist, returns a fresh engine with default config.
-    pub async fn load_from_db(path: &str, config: ResilienceConfig) -> Result<Self> {
-        let json = match tokio::fs::read_to_string(path).await {
-            Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::new(config));
-            }
-            Err(e) => {
-                return Err(e).context("failed to read resilience state file");
-            }
-        };
-        let circuit_breakers: HashMap<String, CircuitBreaker> =
-            serde_json::from_str(&json).context("failed to deserialize circuit breakers")?;
-
-        let now_ms = now_millis();
-        let (cancel_tx, _) = watch::channel(false);
-        Ok(Self {
-            config: RwLock::new(config),
-            circuit_breakers: Mutex::new(circuit_breakers),
-            failover_groups: Mutex::new(HashMap::new()),
-            service_health: Mutex::new(HashMap::new()),
-            service_counters: Mutex::new(HashMap::new()),
-            healing_actions_taken: AtomicU64::new(0),
-            started_ms: now_ms,
-            test_metrics: Mutex::new(TestMetrics {
-                avg_latency_ms: 10.0,
-                error_rate: 0.001,
-            }),
-            cancel_tx,
-            health_check_handle: Mutex::new(None),
-            #[cfg(feature = "chaos-testing")]
-            chaos_engine: None,
-            persist_path: None,
-            fault_consensus: None,
-            plan_store: None,
-        })
     }
 
     /// Record an execution outcome (success or failure) against the named
@@ -1610,9 +1429,8 @@ impl HyperResilienceEngine {
         }
 
         // Phase 2: Lock only circuit_breakers for the auto-register + state transition.
-        // The block scopes the MutexGuard so it is dropped before the persist await
-        // below (std::sync::MutexGuard is not Send, so it cannot cross an await).
-        let persist = {
+        // The block scopes the MutexGuard so it is dropped before any await.
+        {
             let mut cbs = lock_mutex(&self.circuit_breakers);
 
             let cb_ref = cbs
@@ -1679,154 +1497,12 @@ impl HyperResilienceEngine {
                     }
                 }
             }
-
-            self.persist_path.clone()
-        };
-
-        // Persist state after transition (P3-2) — outside the lock scope.
-        if let Some(ref path) = persist {
-            let _ = self.persist_to_db(path).await;
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// RS3: Fault detection with distributed consensus
-// ---------------------------------------------------------------------------
-
-/// A vote from a single node in the fault detection consensus.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FaultVote {
-    /// Node identifier casting the vote.
-    pub voter_id: String,
-    /// Target node being voted on.
-    pub target_id: String,
-    /// Whether the voter considers the target healthy.
-    pub healthy: bool,
-    /// Unix millis when the vote was cast.
-    pub timestamp_ms: u64,
-    /// Optional evidence (e.g. probe latency, error message).
-    pub evidence: Option<String>,
-}
-
-/// Quorum-based fault detection consensus.
-///
-/// Nodes cast votes on whether a target is healthy. A fault is declared
-/// when a majority of voters agree the target is unhealthy within a
-/// configurable window. This prevents a single faulty probe from
-/// triggering an unnecessary failover.
-#[derive(Debug, Clone)]
-pub struct FaultConsensus {
-    /// Minimum votes required to reach a decision.
-    quorum_size: usize,
-    /// Votes are considered stale after this duration (ms).
-    vote_window_ms: u64,
-    /// In-memory vote log (bounded to avoid unbounded growth).
-    votes: Vec<FaultVote>,
-    /// Maximum number of votes to retain per target.
-    max_votes_per_target: usize,
-}
-
-impl Default for FaultConsensus {
-    fn default() -> Self {
-        Self {
-            quorum_size: 3,
-            vote_window_ms: 10_000, // 10 seconds
-            votes: Vec::with_capacity(128),
-            max_votes_per_target: 100,
-        }
-    }
-}
-
-impl FaultConsensus {
-    /// Create a new fault consensus with the given quorum size and vote window.
-    pub fn new(quorum_size: usize, vote_window_ms: u64) -> Self {
-        Self {
-            quorum_size,
-            vote_window_ms,
-            votes: Vec::with_capacity(128),
-            max_votes_per_target: 100,
-        }
-    }
-
-    /// Record a vote from a peer node.
-    /// Automatically prunes stale votes and enforces the per-target cap.
-    pub fn record_vote(&mut self, vote: FaultVote) {
-        // Prune stale votes before inserting.
-        let now = now_millis();
-        self.votes
-            .retain(|v| now.saturating_sub(v.timestamp_ms) < self.vote_window_ms);
-
-        // Enforce per-target cap: keep the most recent votes.
-        let target_count = self
-            .votes
-            .iter()
-            .filter(|v| v.target_id == vote.target_id)
-            .count();
-        if target_count >= self.max_votes_per_target {
-            // Remove the oldest vote for this target.
-            if let Some(pos) = self
-                .votes
-                .iter()
-                .position(|v| v.target_id == vote.target_id)
-            {
-                self.votes.remove(pos);
-            }
-        }
-
-        self.votes.push(vote);
-    }
-
-    /// Determine if a fault is declared for the target based on quorum.
-    ///
-    /// Returns `(declared_fault, unhealthy_votes, total_votes)`.
-    pub fn evaluate(&self, target_id: &str) -> (bool, usize, usize) {
-        let now = now_millis();
-        let relevant: Vec<&FaultVote> = self
-            .votes
-            .iter()
-            .filter(|v| {
-                v.target_id == target_id && now.saturating_sub(v.timestamp_ms) < self.vote_window_ms
-            })
-            .collect();
-
-        let total = relevant.len();
-        let unhealthy = relevant.iter().filter(|v| !v.healthy).count();
-
-        // Declare fault when a quorum of voters report unhealthy AND
-        // at least half of all voters agree.
-        // Cap effective quorum to the number of active voters to avoid
-        // deadlock when fewer voters exist than the configured quorum_size.
-        let effective_quorum = self.quorum_size.min(total.max(1));
-        let declared = unhealthy >= effective_quorum && unhealthy > total / 2;
-
-        (declared, unhealthy, total)
-    }
-
-    /// Prune stale votes (call periodically or on each record_vote).
-    pub fn evict_stale(&mut self) {
-        let now = now_millis();
-        self.votes
-            .retain(|v| now.saturating_sub(v.timestamp_ms) < self.vote_window_ms);
-    }
-
-    /// Number of unique targets being tracked.
-    pub fn tracked_targets(&self) -> usize {
-        let mut targets: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for v in &self.votes {
-            targets.insert(v.target_id.as_str());
-        }
-        targets.len()
-    }
-
-    /// Total number of votes stored.
-    pub fn total_votes(&self) -> usize {
-        self.votes.len()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// RS5: Recovery plan persistence
+// Helpers
 // ---------------------------------------------------------------------------
 
 /// Consolidated test metrics (latency + error rate under one Mutex).
@@ -1837,126 +1513,6 @@ struct TestMetrics {
     /// Error rate estimate (0.0 – 1.0).
     error_rate: f64,
 }
-
-/// A recovery plan step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecoveryStep {
-    /// Step description.
-    pub description: String,
-    /// Action to take.
-    pub action: SelfHealingAction,
-    /// Target node or component.
-    pub target: String,
-    /// Step timeout in milliseconds.
-    pub timeout_ms: u64,
-    /// Whether this step is reversible.
-    #[allow(dead_code, reason = "reserved for future rollback support")]
-    pub reversible: bool,
-}
-
-/// A persisted recovery plan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecoveryPlan {
-    /// Unique plan identifier.
-    pub plan_id: String,
-    /// Human-readable description of the recovery.
-    pub description: String,
-    /// Ordered steps to execute.
-    pub steps: Vec<RecoveryStep>,
-    /// Unix millis when the plan was created.
-    pub created_at_ms: u64,
-    /// Source of the plan (e.g. "auto", "operator").
-    pub source: String,
-}
-
-impl RecoveryPlan {
-    /// Create a new recovery plan.
-    pub fn new(
-        plan_id: String,
-        description: String,
-        source: String,
-        steps: Vec<RecoveryStep>,
-    ) -> Self {
-        Self {
-            plan_id,
-            description,
-            steps,
-            created_at_ms: now_millis(),
-            source,
-        }
-    }
-}
-
-/// Persistence for recovery plans.
-///
-/// Saves plans to a configurable directory in NDJSON format so they
-/// survive process restarts and can be audited.
-#[derive(Debug, Clone)]
-pub struct RecoveryPlanStore {
-    /// Directory where plans are persisted.
-    store_dir: std::path::PathBuf,
-}
-
-impl RecoveryPlanStore {
-    /// Create a new store rooted at the given directory.
-    /// Creates the directory if it does not exist.
-    pub fn new(store_dir: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
-        let store_dir = store_dir.into();
-        std::fs::create_dir_all(&store_dir)?;
-        Ok(Self { store_dir })
-    }
-
-    /// Create a store with a default path (`./.goon/recovery-plans/`).
-    pub fn with_default_path() -> std::io::Result<Self> {
-        Self::new(std::path::PathBuf::from("./.goon/recovery-plans"))
-    }
-
-    /// Save a recovery plan to disk.
-    pub fn save(&self, plan: &RecoveryPlan) -> std::io::Result<()> {
-        let path = self.store_dir.join(format!("{}.json", plan.plan_id));
-        let json = serde_json::to_string_pretty(plan).map_err(std::io::Error::other)?;
-        std::fs::write(&path, json)?;
-        Ok(())
-    }
-
-    /// Load a specific recovery plan by ID.
-    pub fn load(&self, plan_id: &str) -> std::io::Result<Option<RecoveryPlan>> {
-        let path = self.store_dir.join(format!("{}.json", plan_id));
-        if !path.exists() {
-            return Ok(None);
-        }
-        let json = std::fs::read_to_string(&path)?;
-        let plan: RecoveryPlan = serde_json::from_str(&json).map_err(std::io::Error::other)?;
-        Ok(Some(plan))
-    }
-
-    /// List all stored plan IDs.
-    pub fn list(&self) -> std::io::Result<Vec<String>> {
-        let mut plans = Vec::new();
-        for entry in std::fs::read_dir(&self.store_dir)? {
-            let entry = entry?;
-            if entry.path().extension().is_some_and(|e| e == "json") {
-                if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
-                    plans.push(stem.to_string());
-                }
-            }
-        }
-        Ok(plans)
-    }
-
-    /// Delete a persisted plan.
-    pub fn delete(&self, plan_id: &str) -> std::io::Result<()> {
-        let path = self.store_dir.join(format!("{}.json", plan_id));
-        if path.exists() {
-            std::fs::remove_file(path)?;
-        }
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Return the current time in milliseconds since the Unix epoch.
 #[inline(always)]

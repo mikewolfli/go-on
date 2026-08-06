@@ -12,8 +12,8 @@
 //!
 //! The live part is [`plan_construction`]: the `Planner` task-decomposition
 //! engine (embedding-based classification + keyword heuristics), which is
-//! wired into `OrchestrationServerDeps.planner`, `response_finalizer`,
-//! `planner_execution_graph`, `planner_embedding` and `planner_executor`.
+//! used by `response_finalizer`, `planner_execution_graph`, `planner_embedding`
+//! and `planner_executor`.
 
 // ---------------------------------------------------------------------------
 // Sub-modules

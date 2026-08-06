@@ -41,7 +41,8 @@ use crate::governance::status::quick_check_tool as governance_gate;
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
-    REASONING_END, REASONING_START,
+    REASONING_END, REASONING_START, TOKEN_FINISH_REASON_PREFIX, TOKEN_THINKING_PREFIX,
+    TOKEN_USAGE_PREFIX,
 };
 use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
 use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry};
@@ -2070,14 +2071,16 @@ async fn run_agent_streaming_phase(
                         }
 
                         // __thinking__ prefixed tokens
-                        if let Some(think) = token.strip_prefix("__thinking__") {
+                        if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                             eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
                             _thinking_buffer.push_str(think);
                             continue;
                         }
 
                         // Skip finish_reason and usage telemetry tokens
-                        if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+                        if token.starts_with(TOKEN_FINISH_REASON_PREFIX)
+                            || token.starts_with(TOKEN_USAGE_PREFIX)
+                        {
                             continue;
                         }
 
@@ -2545,12 +2548,14 @@ async fn run_followup_phase(
                                 eprintln!("{}🔧 [Tool call: {tool_name}]{}", ansi!("33"), ansi!("0"));
                                 continue;
                             }
-                            if let Some(think) = token.strip_prefix("__thinking__") {
+                            if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                                 eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
                                 continue;
                             }
                             // Skip finish_reason and usage telemetry tokens
-                            if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+                            if token.starts_with(TOKEN_FINISH_REASON_PREFIX)
+                                || token.starts_with(TOKEN_USAGE_PREFIX)
+                            {
                                 continue;
                             }
                             if in_reasoning2 {
@@ -3030,12 +3035,12 @@ async fn chat_simple(
             continue;
         }
         // Strip __thinking__ prefix from reasoning tokens
-        if let Some(think) = token.strip_prefix("__thinking__") {
+        if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
             eprintln!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
             continue;
         }
         // Skip finish_reason and usage telemetry tokens
-        if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+        if token.starts_with(TOKEN_FINISH_REASON_PREFIX) || token.starts_with(TOKEN_USAGE_PREFIX) {
             continue;
         }
         response.push_str(&token);

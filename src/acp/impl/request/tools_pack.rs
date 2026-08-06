@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::Instrument;
 
 use super::config_handlers::build_trace_payload;
@@ -11,16 +11,6 @@ use crate::acp::helpers::tool_governance::{
 use crate::governance::hardening::{task_budget_for_target, BudgetTracker, GovernanceAction};
 use crate::orchestration::skill::discovery_cache::SkillDiscovery;
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
-
-/// Shared HTTP client reused across all tool calls to avoid creating
-/// a new TLS session and connection pool on every request.
-pub(crate) static SHARED_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent("go-on/1.0")
-        .build()
-        .expect("failed to build shared reqwest::Client for tool calls")
-});
 
 /// Global `SkillDiscovery` engine, lazily initialized on first `skill-finder` call.
 static SKILL_DISCOVERY: OnceLock<Mutex<SkillDiscovery>> = OnceLock::new();
@@ -704,8 +694,11 @@ pub(crate) async fn execute_mcp_tool_call(
                 .unwrap_or(10)
                 .clamp(1, 20) as usize;
 
-            // Try GitHub API first, with a short timeout
-            let client = &SHARED_HTTP_CLIENT;
+            // Try GitHub API first, with a short timeout. The process-global
+            // client (shared/http_client.rs) is used so all HTTP callers share
+            // one connection pool.
+            let client = crate::shared::http_client::http_client()
+                .map_err(|e| anyhow::anyhow!("shared HTTP client unavailable: {e}"))?;
 
             let encoded_query = query.replace(" ", "+");
 

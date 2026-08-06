@@ -9,7 +9,6 @@ use anyhow::{bail, Result};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing;
 
 use crate::i18n::runtime::tf;
@@ -474,56 +473,6 @@ impl DriftProtectionEngine {
         }
     }
 
-    /// Analyze drift metrics over time to detect rising trends.
-    /// Returns a list of drift types that show a statistically significant upward trend.
-    pub fn detect_trends(&self) -> Vec<(DriftType, f64, String)> {
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
-        let mut trends = Vec::new();
-
-        for (drift_type, metrics) in &inner.metric_history {
-            if metrics.len() >= 5 {
-                // Simple linear regression slope
-                let n = metrics.len() as f64;
-                let indices: Vec<f64> = (0..metrics.len()).map(|i| i as f64).collect();
-                let values: Vec<f64> = metrics.iter().map(|m| m.deviation).collect();
-
-                let sum_x: f64 = indices.iter().sum();
-                let sum_y: f64 = values.iter().sum();
-                let sum_xy: f64 = indices.iter().zip(values.iter()).map(|(x, y)| x * y).sum();
-                let sum_xx: f64 = indices.iter().map(|x| x * x).sum();
-
-                let denominator = n * sum_xx - sum_x * sum_x;
-                if denominator.abs() < f64::EPSILON {
-                    continue;
-                }
-                let slope = (n * sum_xy - sum_x * sum_y) / denominator;
-
-                if slope > 0.05 {
-                    let severity = if slope > 0.2 {
-                        "critical"
-                    } else if slope > 0.1 {
-                        "warning"
-                    } else {
-                        "notice"
-                    };
-                    trends.push((
-                        drift_type.clone(),
-                        slope,
-                        format!(
-                            "Rising trend detected in {:?} (slope: {:.4}, severity: {})",
-                            drift_type, slope, severity
-                        ),
-                    ));
-                }
-            }
-        }
-
-        trends
-    }
-
     /// Generate auto-remediation suggestions for detected drifts.
     pub fn suggest_remediation(&self) -> Vec<String> {
         let inner = self.inner.lock().unwrap_or_else(|poisoned| {
@@ -584,10 +533,7 @@ fn compute_deviation(current: f64, baseline: f64) -> f64 {
 
 /// Returns the current time in milliseconds since the Unix epoch.
 fn current_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 #[cfg(test)]

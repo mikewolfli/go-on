@@ -20,6 +20,7 @@ use crate::acp::helpers::autonomy_metrics::record_fallback_reason;
 use crate::agent::Agent;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::orchestration::council::{CouncilMember, CouncilProposal, CouncilVote, ProposalStatus};
+use crate::shared::option_bool;
 
 // ---------------------------------------------------------------------------
 // Public entry-point
@@ -230,14 +231,6 @@ fn run_council_route_deliberation(
             "candidate_count": candidate_agents.len(),
         }),
     ))
-}
-
-/// Reads a boolean option from the agent-options map with a default fallback.
-fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
-    options
-        .get(key)
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default)
 }
 
 // NOTE: `reorder_agents_with_priority` lives once in crate::acp::r#impl::chat

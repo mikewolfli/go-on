@@ -43,7 +43,6 @@ acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 120 # Less frequent maintenance
 health_interval_seconds = 300
 shutdown_drain_seconds = 15
-sqlite_vacuum_interval_cycles = 120 # Less frequent VACUUM
 entry_auth_enabled = false
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 120          # Lower rate limit

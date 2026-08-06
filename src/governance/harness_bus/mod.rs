@@ -39,11 +39,11 @@ pub use audit::PuaGovernanceProfile;
 pub use evaluator::{PolicyEvaluator, PolicyFn};
 pub use types::{
     AgentExecutionPolicy, AuditConfig, AuditEntry, AuditLevel, CodeExecutionPolicy, Constraint,
-    Decision, DegradationStrategy, DispatchPolicy, EscalationPolicy, EscalationReason,
-    ExecutionMode, ExecutionPolicy, FailureStrategy, FallbackStrategy, FileWritePolicy,
-    GovernancePolicy, IdempotencyPolicy, OutputVerdict, PolicyVerdict, PolicyViolation,
-    QualityCompassConfig, ReviewLevel, ReviewReason, RoutingStrategy, TimeoutPolicy,
-    ToolUsagePolicy, ToolVerdict, VersionCompatPolicy,
+    DegradationStrategy, DispatchPolicy, EscalationPolicy, EscalationReason, ExecutionMode,
+    ExecutionPolicy, FailureStrategy, FallbackStrategy, FileWritePolicy, GovernancePolicy,
+    IdempotencyPolicy, OutputVerdict, PolicyVerdict, PolicyViolation, QualityCompassConfig,
+    ReviewLevel, ReviewReason, RoutingStrategy, TimeoutPolicy, ToolUsagePolicy, ToolVerdict,
+    VersionCompatPolicy,
 };
 
 use crate::fault_tolerance::{FaultToleranceConfig, FaultToleranceEngine, FaultToleranceProfile};

@@ -195,8 +195,8 @@ async fn run() -> Result<()> {
                 return cli::handle_skill_command(command).await;
             }
             #[cfg(feature = "sub-bus-distributed-memory")]
-            cli::CliCommand::Hub { port: _port } => {
-                let mut hub = crate::hub::server::HubServer::new()?;
+            cli::CliCommand::Hub { port } => {
+                let mut hub = crate::hub::server::HubServer::with_port(port)?;
                 hub.start().await?;
                 tokio::signal::ctrl_c().await?;
                 return Ok(());

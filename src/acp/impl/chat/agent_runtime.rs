@@ -18,7 +18,8 @@ use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
-    REASONING_END, REASONING_START, TOKEN_THINKING_PREFIX,
+    REASONING_END, REASONING_START, TOKEN_FINISH_REASON_PREFIX, TOKEN_MODEL_USED_PREFIX,
+    TOKEN_THINKING_PREFIX, TOKEN_USAGE_PREFIX,
 };
 use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
 
@@ -50,7 +51,7 @@ pub(crate) async fn collect_agent_responses(
 
     while let Some(token) = receiver.recv().await {
         // Check for model-used token (prefixed with __model_used__)
-        if token.strip_prefix("__model_used__:").is_some() {
+        if token.strip_prefix(TOKEN_MODEL_USED_PREFIX).is_some() {
             continue;
         }
 
@@ -72,7 +73,7 @@ pub(crate) async fn collect_agent_responses(
         }
 
         // Skip finish_reason and usage telemetry control tokens
-        if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+        if token.starts_with(TOKEN_FINISH_REASON_PREFIX) || token.starts_with(TOKEN_USAGE_PREFIX) {
             continue;
         }
 
@@ -155,7 +156,7 @@ pub(crate) async fn run_agent_collecting(
             };
             // ── Token classification ──
             // Model-used token
-            if let Some(model_id) = token.strip_prefix("__model_used__:") {
+            if let Some(model_id) = token.strip_prefix(TOKEN_MODEL_USED_PREFIX) {
                 selected_model = Some(model_id.trim().to_string());
                 continue;
             }
@@ -182,7 +183,9 @@ pub(crate) async fn run_agent_collecting(
                 reasoning_buffer.push_str(reasoning_token);
                 // Fall through to emit_stream_chunk — it will split
                 // the token into display_token="" and reasoning_token.
-            } else if token.starts_with("__finish_reason__:") || token.starts_with("__usage__:") {
+            } else if token.starts_with(TOKEN_FINISH_REASON_PREFIX)
+                || token.starts_with(TOKEN_USAGE_PREFIX)
+            {
                 // Skip finish_reason and usage telemetry tokens.
                 // They should not be appended to the response text
                 // nor emitted as display tokens in the SSE stream.

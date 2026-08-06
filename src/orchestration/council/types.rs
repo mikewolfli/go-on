@@ -122,13 +122,6 @@ pub struct CouncilConfig {
     /// Interval in seconds between auto-ejection background checks (default: 300).
     /// Set to 0 or None to use the default of 300 seconds (5 minutes).
     pub ejection_check_interval_s: Option<u64>,
-
-    /// Minimum number of active members to trigger multi-round deliberation.
-    /// When active members >= this threshold, proposals automatically use
-    /// multi-round deliberation instead of single-round voting.
-    /// Set to 0 to disable multi-round deliberation entirely.
-    #[serde(default = "default_deliberation_member_threshold")]
-    pub deliberation_member_threshold: usize,
 }
 
 fn default_enable_reputation() -> bool {
@@ -137,10 +130,6 @@ fn default_enable_reputation() -> bool {
 
 fn default_reputation_warmup_rounds() -> u32 {
     5
-}
-
-fn default_deliberation_member_threshold() -> usize {
-    0
 }
 
 impl Default for CouncilConfig {
@@ -156,116 +145,6 @@ impl Default for CouncilConfig {
             ejection_window: None,
             ejection_warmup_rounds: None,
             ejection_check_interval_s: None,
-            deliberation_member_threshold: default_deliberation_member_threshold(),
-        }
-    }
-}
-
-/// Wrapper for deliberation identifiers.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct DeliberationId(pub String);
-
-impl std::fmt::Display for DeliberationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// Position a council member can take during deliberation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum CouncilPosition {
-    Support,
-    Oppose,
-    Amend,
-    Abstain,
-}
-
-/// A statement made by a council member during a deliberation round.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeliberationStatement {
-    /// ID of the member making the statement.
-    pub member_id: String,
-    /// The member's position on the proposal.
-    pub position: CouncilPosition,
-    /// Detailed reasoning for the position.
-    pub reasoning: String,
-    /// Proposed amendments to the proposal (if position is Amend).
-    pub amendments: Vec<String>,
-    /// Unix timestamp (milliseconds) when the statement was submitted.
-    pub submitted_at: u64,
-}
-
-/// A single round of deliberation within a multi-round debate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeliberationRound {
-    /// Round number (1-based).
-    pub round_number: usize,
-    /// Statements submitted by members in this round.
-    pub statements: Vec<DeliberationStatement>,
-    /// Votes cast by members in this round.
-    pub votes: Vec<CouncilVote>,
-    /// Whether this round has been concluded.
-    pub concluded: bool,
-}
-
-/// A multi-round deliberation process for a proposal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Deliberation {
-    /// Unique deliberation identifier.
-    pub id: DeliberationId,
-    /// ID of the proposal under deliberation.
-    pub proposal_id: String,
-    /// Rounds of debate that have occurred.
-    pub rounds: Vec<DeliberationRound>,
-    /// Maximum number of rounds allowed.
-    pub max_rounds: usize,
-    /// Whether consensus has been reached.
-    pub consensus_reached: bool,
-    /// Final decision, if the deliberation has concluded.
-    pub final_decision: Option<CouncilDecision>,
-    /// Unix timestamp (milliseconds) when deliberation started.
-    pub started_at: u64,
-}
-
-/// Decision reached by the council after deliberation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CouncilDecision {
-    /// The final position adopted.
-    pub position: CouncilPosition,
-    /// Amended proposal text, if any amendments were adopted.
-    pub amended_text: Option<String>,
-    /// Round number at which the decision was reached.
-    pub decided_at_round: usize,
-}
-
-/// Configuration for deliberation processes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeliberationConfig {
-    /// Maximum number of rounds (default: 3).
-    #[serde(default = "default_max_rounds")]
-    pub max_rounds: usize,
-    /// Whether consensus is required for a decision (default: false).
-    #[serde(default)]
-    pub require_consensus: bool,
-    /// Timeout in seconds for debate within a round (default: 60).
-    #[serde(default = "default_debate_timeout_secs")]
-    pub debate_timeout_secs: u64,
-}
-
-fn default_max_rounds() -> usize {
-    3
-}
-
-fn default_debate_timeout_secs() -> u64 {
-    60
-}
-
-impl Default for DeliberationConfig {
-    fn default() -> Self {
-        Self {
-            max_rounds: 3,
-            require_consensus: false,
-            debate_timeout_secs: 60,
         }
     }
 }

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -87,28 +87,29 @@ pub fn default_alert_rules() -> Vec<AlertRule> {
             cooldown_seconds: 300,
         },
         // ── O6: Memory health rules ─────────────────────────────────────
+        // Thresholds are the single source of truth in memory_health (MB).
         AlertRule {
             name: "memory_critical",
-            description: "Free memory below critical threshold (256 MB)",
+            description: "Free memory below critical threshold",
             severity: AlertSeverity::Critical,
             check: |value, threshold| value < threshold,
-            threshold: 256.0,
+            threshold: crate::observability::memory_health::MEMORY_CRITICAL_MB as f64,
             cooldown_seconds: 60,
         },
         AlertRule {
             name: "memory_low",
-            description: "Free memory below warning threshold (512 MB)",
+            description: "Free memory below warning threshold",
             severity: AlertSeverity::Warning,
             check: |value, threshold| value < threshold,
-            threshold: 512.0,
+            threshold: crate::observability::memory_health::MEMORY_WARN_MB as f64,
             cooldown_seconds: 120,
         },
         AlertRule {
             name: "memory_jetsam_risk",
-            description: "Free memory below jetsam risk threshold (128 MB)",
+            description: "Free memory below jetsam risk threshold",
             severity: AlertSeverity::Critical,
             check: |value, threshold| value < threshold,
-            threshold: 128.0,
+            threshold: crate::observability::memory_health::MEMORY_JETSAM_RISK_MB as f64,
             cooldown_seconds: 30,
         },
     ]
@@ -315,12 +316,26 @@ pub struct AlertManagerStats {
     pub active_webhook: bool,
 }
 
-/// Global alert manager instance
-static ALERT_MANAGER: std::sync::OnceLock<Mutex<AlertManager>> = std::sync::OnceLock::new();
+/// Global alert manager instance — single authoritative AlertManager shared by
+/// the memory monitor (write side) and the server consumers (read side).
+static ALERT_MANAGER: std::sync::OnceLock<Arc<StdMutex<AlertManager>>> = std::sync::OnceLock::new();
 
-/// Get or initialize the global AlertManager
-pub fn alert_manager() -> &'static Mutex<AlertManager> {
-    ALERT_MANAGER.get_or_init(|| Mutex::new(AlertManager::new(default_alert_rules())))
+/// Get or initialize the global AlertManager.
+pub fn alert_manager() -> &'static StdMutex<AlertManager> {
+    ALERT_MANAGER
+        .get_or_init(|| Arc::new(StdMutex::new(AlertManager::new(default_alert_rules()))))
+        .as_ref()
+}
+
+/// Get an `Arc` handle to the process-global AlertManager.
+///
+/// `ServerBuilder::build` uses this so memory-monitor writes and server-side
+/// alert consumption hit the same instance (previously two separate instances
+/// meant memory alerts were written to a manager nobody read).
+pub fn shared_alert_manager() -> Arc<StdMutex<AlertManager>> {
+    ALERT_MANAGER
+        .get_or_init(|| Arc::new(StdMutex::new(AlertManager::new(default_alert_rules()))))
+        .clone()
 }
 
 #[cfg(test)]

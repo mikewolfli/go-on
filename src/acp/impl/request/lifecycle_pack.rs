@@ -145,7 +145,7 @@ pub(super) async fn data_lifecycle_payload(server: &AcpServer, params: Value) ->
         storage_target_report(
             &base_dir,
             "cache",
-            &base_dir.join("acp_cache.sqlite3"),
+            &base_dir.join("sqlite3/acp_cache.sqlite3"),
             false,
             512 * 1024 * 1024,
             1024 * 1024 * 1024,
@@ -153,7 +153,7 @@ pub(super) async fn data_lifecycle_payload(server: &AcpServer, params: Value) ->
         storage_target_report(
             &base_dir,
             "vector",
-            &base_dir.join("acp_vector.sqlite3"),
+            &base_dir.join("sqlite3/acp_vector.sqlite3"),
             false,
             1024 * 1024 * 1024,
             4 * 1024 * 1024 * 1024,

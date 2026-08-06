@@ -14,7 +14,6 @@
 //! # Dead-code note
 //! This module is a design reserve for future multi-process architecture.
 //! See parent `hub/mod.rs` for the full rationale.
-#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -42,8 +41,8 @@ pub struct HubServer {
 }
 
 impl HubServer {
-    /// Create a new Hub server with a random ID and API token.
-    pub fn new() -> Result<Self> {
+    /// Create a new Hub server bound to `127.0.0.1:<port>` (0 = auto-assign).
+    pub fn with_port(port: u16) -> Result<Self> {
         let mut seed = [0u8; 8];
         use rand::Rng;
         rand::rng().fill_bytes(&mut seed);
@@ -53,7 +52,11 @@ impl HubServer {
         Ok(Self {
             hub_id,
             api_token,
-            bind_addr: String::new(),
+            bind_addr: if port == 0 {
+                String::new()
+            } else {
+                format!("127.0.0.1:{}", port)
+            },
             discovery_path: HubDiscovery::default_path(),
             vault: Arc::new(Mutex::new(HashMap::new())),
             start_time: Instant::now(),
@@ -63,7 +66,12 @@ impl HubServer {
 
     /// Start the Hub server. Returns the bound address.
     pub async fn start(&mut self) -> Result<String> {
-        let listener = TcpListener::bind("127.0.0.1:0").context("bind loopback port")?;
+        let bind = if self.bind_addr.is_empty() {
+            "127.0.0.1:0".to_string()
+        } else {
+            self.bind_addr.clone()
+        };
+        let listener = TcpListener::bind(&bind).context("bind loopback port")?;
         let addr = listener.local_addr()?;
         self.bind_addr = format!("http://{}", addr);
         info!("Hub {} starting on {}", self.hub_id, self.bind_addr);
@@ -125,18 +133,6 @@ impl HubServer {
             &self.api_token[..8]
         );
         Ok(self.bind_addr.clone())
-    }
-
-    pub fn api_token(&self) -> &str {
-        &self.api_token
-    }
-    pub fn hub_id(&self) -> &str {
-        &self.hub_id
-    }
-
-    pub fn with_discovery_path(mut self, path: PathBuf) -> Self {
-        self.discovery_path = path;
-        self
     }
 }
 

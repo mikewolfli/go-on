@@ -11,7 +11,6 @@
 //! # Dead-code note
 //! This module is a design reserve for future multi-process architecture.
 //! See parent `hub/mod.rs` for the full rationale.
-#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -53,15 +52,6 @@ impl HubDiscovery {
             .join("discovery.json")
     }
 
-    /// Read and parse the discovery file at `path`.
-    pub fn read(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("read hub discovery: {}", path.display()))?;
-        let discovery: HubDiscovery = serde_json::from_str(&content)
-            .with_context(|| format!("parse hub discovery: {}", path.display()))?;
-        Ok(discovery)
-    }
-
     /// Write this discovery info to `path`.
     pub fn write(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
@@ -72,37 +62,5 @@ impl HubDiscovery {
         std::fs::write(path, &content)
             .with_context(|| format!("write hub discovery: {}", path.display()))?;
         Ok(())
-    }
-
-    /// Check whether the hub process is still alive using /proc (Linux) or kill -0.
-    /// Check whether the hub process is still alive.
-    pub fn is_alive(&self) -> bool {
-        if self.pid == 0 {
-            return false;
-        }
-        #[cfg(unix)]
-        {
-            let output = std::process::Command::new("kill")
-                .args(["-0", &self.pid.to_string()])
-                .output();
-            match output {
-                Ok(o) => o.status.success(),
-                Err(_) => true, // assume alive if kill command unavailable
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            // Windows: use tasklist /FI "PID eq {pid}"
-            let output = std::process::Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {}", self.pid)])
-                .output();
-            match output {
-                Ok(o) => {
-                    let out = String::from_utf8_lossy(&o.stdout);
-                    out.contains(&self.pid.to_string())
-                }
-                Err(_) => true,
-            }
-        }
     }
 }
