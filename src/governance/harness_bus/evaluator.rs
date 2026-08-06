@@ -6,9 +6,6 @@
 //! evaluate/validate/verify suite.
 
 use crate::acp::r#impl::agent::ReviewGateOutcome;
-use crate::governance::approval_engine::ApprovalEngine;
-use crate::governance::approval_learning::ApprovalPreferenceLearner;
-use crate::governance::drift::drift_protection::DriftProtectionEngine;
 use crate::governance::hardening::{
     rbac_fallback_allows_action, BudgetTracker, GovernanceAction, IdempotencyCache, SandboxLevel,
     SandboxPolicy,
@@ -20,7 +17,6 @@ use crate::governance::harness_bus::types::{
 use crate::governance::pua::{PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
 use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
-use crate::governance::reloadable_policy::PolicyReloader;
 use crate::governance::review_controls::{review_verdict, verdict_as_str, verdict_is_approved};
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{
@@ -39,10 +35,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
-/// Runtime-registerable policy: takes a TaskContext and returns None if no opinion,
-/// or Some(PolicyVerdict) to short-circuit the normal evaluation flow.
-pub type PolicyFn = Box<dyn Fn(&TaskContext) -> Option<PolicyVerdict> + Send + Sync>;
-
 /// PolicyEvaluator composites all governance components into a single
 /// evaluate/validate/verify suite.
 pub struct PolicyEvaluator {
@@ -57,25 +49,9 @@ pub struct PolicyEvaluator {
     pub guard: Arc<Mutex<SelfRationalizationGuard>>,
     pub security_governor: Arc<SecurityGovernor>,
     pub rbac_enforcer: RwLock<Option<Arc<RwLock<RbacEnforcer>>>>,
-    /// Approval engine for structured review/approval workflows.
-    pub approval_engine: Option<Arc<ApprovalEngine>>,
-    /// Drift protection engine for detecting config/metric drift.
-    pub drift_protection: Option<Arc<Mutex<DriftProtectionEngine>>>,
-    /// Approval preference learner for auto-approval decisions.
-    pub approval_learner: Option<Arc<Mutex<ApprovalPreferenceLearner>>>,
-    /// Policy reloader for hot-reloadable policy files.
-    pub policy_reloader: Option<Arc<Mutex<PolicyReloader>>>,
-    /// Thread-safe, runtime-registerable policies keyed by name.
-    /// Evaluated after the built-in checks; the first matching policy short-circuits.
-    pub policies: Arc<RwLock<HashMap<String, PolicyFn>>>,
 
     /// Tools that the user has explicitly approved (bypasses require_review).
     pub user_approved_tools: Mutex<std::collections::HashSet<String>>,
-
-    /// Protected invariants — file patterns that block write/destructive operations.
-    /// Once set, these are checked before every write tool call and cannot be
-    /// bypassed by mode or posture changes (Constitution-level enforcement).
-    pub protected_invariants: RwLock<Vec<String>>,
 
     /// Set to true when the most recent `evaluate()` call was blocked by
     /// the self-rationalization guard. Consumed by `HarnessBus::evaluate()`
@@ -96,7 +72,6 @@ pub struct PolicyEvaluator {
 }
 
 impl PolicyEvaluator {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rule_engine: Arc<Mutex<PuaRuleEngine>>,
         sandbox_level: Arc<Mutex<SandboxLevel>>,
@@ -104,15 +79,7 @@ impl PolicyEvaluator {
         idempotency: Arc<Mutex<IdempotencyCache>>,
         runtime_control: Arc<Mutex<OnlineControllerState>>,
         guard: Arc<Mutex<SelfRationalizationGuard>>,
-        policy_reloader: Option<Arc<Mutex<PolicyReloader>>>,
     ) -> Self {
-        // Use default policies only when no policy_reloader is provided.
-        let default_policies = if policy_reloader.is_some() {
-            vec![]
-        } else {
-            Self::default_security_policies()
-        };
-
         Self {
             dispatch: DispatchPolicy::default(),
             execution: ExecutionPolicy::default(),
@@ -124,18 +91,12 @@ impl PolicyEvaluator {
             runtime_control,
             guard,
             rbac_enforcer: RwLock::new(None),
-            approval_engine: None,
-            drift_protection: None,
-            approval_learner: None,
-            policy_reloader,
-            policies: Arc::new(RwLock::new(HashMap::new())),
             security_governor: Arc::new(SecurityGovernor::new(SecurityGovernorConfig {
                 default_action: PolicyAction::Deny,
-                default_policies,
+                default_policies: Self::default_security_policies(),
                 ..Default::default()
             })),
             user_approved_tools: Mutex::new(std::collections::HashSet::new()),
-            protected_invariants: RwLock::new(Vec::new()),
             rationalization_block_occurred: AtomicBool::new(false),
             review_override_occurred: AtomicBool::new(false),
             safety_checker: None,
@@ -143,8 +104,7 @@ impl PolicyEvaluator {
         }
     }
 
-    /// Return the built-in default security policies used when no
-    /// [`PolicyReloader`] is configured.
+    /// Return the built-in default security policies.
     pub fn default_security_policies() -> Vec<SecurityPolicy> {
         vec![
             // 1. read_allow — allow low-risk, read-only tasks
@@ -205,88 +165,24 @@ impl PolicyEvaluator {
         ]
     }
 
-    /// Register a runtime policy. The closure is invoked during evaluate();
-    /// if it returns Some(verdict) the evaluation short-circuits.
-    pub fn register_policy(&self, name: &str, policy: PolicyFn) {
-        if let Ok(mut guard) = self.policies.write() {
-            guard.insert(name.to_string(), policy);
-            tracing::debug!(policy = %name, "Runtime policy registered");
-        }
-    }
-
-    /// Deregister a previously registered runtime policy.
-    pub fn deregister_policy(&self, name: &str) {
-        if let Ok(mut guard) = self.policies.write() {
-            guard.remove(name);
-            tracing::debug!(policy = %name, "Runtime policy deregistered");
-        }
-    }
-
-    /// Reload + merge hot-reloadable policies (RULES/ directory) into the
-    /// runtime policy map. Called from the background policy-reload task so
-    /// the request hot path stays read-only. No-ops when no reloader is
-    /// wired (production currently passes None; embedding a reloader here is
-    /// an operator decision because the default RedLine policy denies
-    /// risk_score >= 0.5).
-    pub fn merge_reloadable_policies(&self) {
-        if let Some(ref reloader) = self.policy_reloader {
-            if let Ok(mut guard) = reloader.lock() {
-                guard.reload_all();
-                if let Ok(mut policies) = self.policies.write() {
-                    let count = guard.policies().len();
-                    for (i, policy) in guard.policies().iter().enumerate() {
-                        let key = format!("reloadable_{}", i);
-                        if !policies.contains_key(&key) {
-                            if let Some(evaluator) = policy.as_evaluator_fn() {
-                                tracing::debug!(
-                                    "Registered reloadable policy '{}' with evaluator",
-                                    key
-                                );
-                                policies.insert(key, evaluator);
-                            } else {
-                                policies.insert(
-                                    key.clone(),
-                                    Box::new(|_: &TaskContext| -> Option<PolicyVerdict> { None }),
-                                );
-                                tracing::debug!(
-                                    "Registered reloadable policy '{}' (no evaluator — tracking only)",
-                                    key
-                                );
-                            }
-                        }
-                    }
-                    if count > 0 {
-                        tracing::debug!(
-                            count = %count,
-                            "Merged reloadable policies into runtime policy map"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
     /// Pre-route composite evaluation.
     /// Returns a PolicyVerdict that the caller (CapabilityBus) should respect.
     ///
     /// # Lock acquisition sequence
     ///
-    /// This method acquires up to **9 locks sequentially** (worst-case path):
+    /// This method acquires up to **6 locks sequentially** (worst-case path):
     ///
     /// | # | Lock | Kind | Scope |
     /// |---|------|------|-------|
-    /// | 1 | `self.policies` | `RwLock::read` | Step 0 — quick scan for runtime-registered policies |
-    /// | 2 | `reloader` | `Mutex` | P1-1 — hot-reload policies from `RULES/` (conditional, only when `policy_reloader` is set) |
-    /// | 3 | `self.policies` | `RwLock::write` | P1-1 — merge reloaded policies (nested inside reloader lock) |
-    /// | 4 | `self.rule_engine` | `Mutex` | Steps 1–2 — red-line check + stage validation |
-    /// | 5 | `self.budget` | `Mutex` | Step 3 — wall-clock budget check |
-    /// | 6 | `self.runtime_control` | `Mutex` | Step 4 — adaptive sliding window / P95 / UCB escalate check (scoped, re-acquired at step 8) |
-    /// | 7 | `self.guard` | `Mutex` | Step 6 — self-rationalization low-confidence guard (scoped) |
-    /// | 8–9 | `security_governor` | internal | Step 7 — security policy `evaluate()` + `record_audit()` |
+    /// | 1 | `self.rule_engine` | `Mutex` | Steps 1–2 — red-line check + stage validation |
+    /// | 2 | `self.budget` | `Mutex` | Step 3 — wall-clock budget check |
+    /// | 3 | `self.runtime_control` | `Mutex` | Step 4 — adaptive sliding window / P95 / UCB escalate check (scoped, re-acquired at step 8) |
+    /// | 4 | `self.guard` | `Mutex` | Step 6 — self-rationalization low-confidence guard (scoped) |
+    /// | 5–6 | `security_governor` | internal | Step 7 — security policy `evaluate()` + `record_audit()` |
     ///
-    /// **Deferred scoping**: Locks 6 and 7 are scoped to the narrowest possible
+    /// **Deferred scoping**: Locks 3 and 4 are scoped to the narrowest possible
     /// block so they do not overlap with unrelated work (review gate at step 5,
-    /// security governor at step 7). Lock 6 is re-acquired briefly at step 8
+    /// security governor at step 7). Lock 3 is re-acquired briefly at step 8
     /// to record the success outcome. All other locks are held for exactly one
     /// step and released before the next.
     ///
@@ -295,24 +191,6 @@ impl PolicyEvaluator {
     /// with no benefit since no critical section is held across an `.await` point.
     pub fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
         let _start = Instant::now();
-
-        // 0. Check runtime-registerable policies first (short-circuit on match).
-        if let Ok(guard) = self.policies.read() {
-            for (name, policy) in guard.iter() {
-                if let Some(verdict) = policy(ctx) {
-                    tracing::debug!(policy = %name, verdict = ?verdict, "Runtime policy matched");
-                    return verdict;
-                }
-            }
-        }
-
-        // P1-1: Reloadable policies (RULES/ directory) are loaded and merged
-        // by `merge_reloadable_policies()`, invoked from the background policy
-        // reload task — NOT on the per-request hot path. Keeping this out of
-        // evaluate() avoids a per-request reloader Mutex + policies write lock
-        // (the old inline block never even ran in production because the
-        // evaluator's policy_reloader is wired to None; the hot path stays
-        // read-only here).
 
         // 1. Red-line check (hard block)
         let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
@@ -531,42 +409,6 @@ impl PolicyEvaluator {
         PolicyVerdict::Allow
     }
 
-    /// Register a protected file pattern. Write/destructive operations that
-    /// touch files matching this pattern will be blocked regardless of mode.
-    /// Uses simple substring matching on tool arguments (e.g. "Cargo.lock").
-    pub fn register_protected_invariant(&self, pattern: &str) {
-        if let Ok(mut invariants) = self.protected_invariants.write() {
-            if !invariants.iter().any(|p| p == pattern) {
-                invariants.push(pattern.to_string());
-                tracing::info!(pattern = %pattern, "protected_invariant registered");
-            }
-        }
-    }
-
-    /// Check if any argument value matches a protected invariant pattern.
-    fn protected_path_blocked(&self, args: &Value) -> Option<String> {
-        let invariants = match self.protected_invariants.read() {
-            Ok(g) => g.clone(),
-            Err(_) => return None,
-        };
-        if invariants.is_empty() {
-            return None;
-        }
-        let mut values: Vec<String> = Vec::new();
-        collect_string_values(args, &mut values);
-        for pattern in &invariants {
-            for value in &values {
-                if value.contains(pattern.as_str()) {
-                    return Some(format!(
-                        "protected invariant '{}' blocks operation on '{}'",
-                        pattern, value
-                    ));
-                }
-            }
-        }
-        None
-    }
-
     /// Pre-tool-call validation.
     /// Approve a tool for the current session — bypasses sandbox require_review.
     pub fn approve_tool(&self, tool: &str) {
@@ -682,23 +524,6 @@ impl PolicyEvaluator {
             })
             .record_tool_call()
             .is_ok();
-
-        // Check protected invariants before allowing any operation.
-        // This is a mechanical write-hold — it cannot be bypassed by mode/posture.
-        if let Some(reason) = self.protected_path_blocked(args) {
-            tracing::warn!(
-                target: "harness_bus",
-                reason = %reason,
-                "protected invariant blocked tool call"
-            );
-            return ToolVerdict {
-                allowed: false,
-                require_review: false,
-                idempotent,
-                budget_ok,
-                permitted: false,
-            };
-        }
 
         let permitted = self.check_permission(tool, args);
         ToolVerdict {
@@ -935,63 +760,6 @@ impl PolicyEvaluator {
         }
     }
 
-    /// Determine whether a re-examination is needed (self-rationalization helper).
-    ///
-    /// Checks three conditions:
-    /// 1. Security governor has denied recent requests
-    /// 2. Drift protection has active alerts
-    /// 3. Self-rationalization guard has flagged weak evidence
-    pub fn needs_reexamine(&self, _ctx: &TaskContext) -> bool {
-        // 1. Check security governor for recent denials
-        let gov_profile = self.security_governor.profile();
-        if gov_profile.total_denials > 0 {
-            tracing::info!(
-                total_denials = gov_profile.total_denials,
-                total_evaluations = gov_profile.total_evaluations,
-                "needs_reexamine: security governor has recent denials"
-            );
-            return true;
-        }
-        if gov_profile.active_escalations > 0 {
-            tracing::info!(
-                active_escalations = gov_profile.active_escalations,
-                "needs_reexamine: security governor has active escalations"
-            );
-            return true;
-        }
-
-        // 2. Check drift protection for active alerts
-        if let Some(ref drift) = self.drift_protection {
-            if let Ok(guard) = drift.lock() {
-                let active = guard.get_active_alerts();
-                if !active.is_empty() {
-                    tracing::info!(
-                        active_alerts = active.len(),
-                        "needs_reexamine: drift protection has active alerts"
-                    );
-                    return true;
-                }
-            }
-        }
-
-        // 3. Check self-rationalization guard for low-confidence flags
-        {
-            let guard = self.guard.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            if guard.counters.weak_evidence_blocked_count > 0 {
-                tracing::info!(
-                    blocked = guard.counters.weak_evidence_blocked_count,
-                    "needs_reexamine: guard flagged low confidence"
-                );
-                return true;
-            }
-        }
-
-        false
-    }
-
     /// Inject a shared Arc RBAC enforcer for multi-tenant permission checks.
     pub fn set_rbac_enforcer(&self, enforcer: Arc<RwLock<RbacEnforcer>>) {
         match self.rbac_enforcer.write() {
@@ -1024,25 +792,5 @@ impl PolicyEvaluator {
     /// Resolve a raw response string into a governance-level review verdict.
     fn resolve_review_policy(response: &str, min_response_chars: usize) -> QualityVerdict {
         review_verdict(response, min_response_chars)
-    }
-}
-
-/// Recursively collect all string values from a JSON Value tree.
-/// Used by `PolicyEvaluator::protected_path_blocked` to scan tool arguments
-/// for protected file patterns.
-fn collect_string_values(value: &Value, output: &mut Vec<String>) {
-    match value {
-        Value::String(s) => output.push(s.clone()),
-        Value::Object(map) => {
-            for v in map.values() {
-                collect_string_values(v, output);
-            }
-        }
-        Value::Array(arr) => {
-            for v in arr {
-                collect_string_values(v, output);
-            }
-        }
-        _ => {}
     }
 }

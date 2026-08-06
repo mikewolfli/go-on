@@ -73,14 +73,9 @@ pub async fn new_acp_server(
     // PromotionRegistry with sensible defaults.
     // Create HarnessBus and CapabilityBus to wire into the server
     let harness_bus = {
-        let config_path_ref = config_path.as_deref().map(Path::new);
-        let storage_path = config_path_ref
-            .and_then(|p| p.parent())
-            .map(|p| p.join("governance"));
         if let Some(ref cfg) = app_config {
             Arc::new(crate::governance::harness_bus::config_aware_harness_bus(
                 cfg.as_ref(),
-                storage_path,
             ))
         } else {
             // When app_config is not provided, try to load it from disk.
@@ -91,12 +86,9 @@ pub async fn new_acp_server(
             if let Some(ref cfg) = loaded_config {
                 Arc::new(crate::governance::harness_bus::config_aware_harness_bus(
                     cfg,
-                    storage_path,
                 ))
             } else {
-                Arc::new(crate::governance::harness_bus::default_harness_bus(
-                    storage_path,
-                ))
+                Arc::new(crate::governance::harness_bus::default_harness_bus())
             }
         }
     };

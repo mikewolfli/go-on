@@ -28,6 +28,17 @@ pub struct TaskBudget {
     pub max_api_calls: usize,
 }
 
+impl Default for TaskBudget {
+    fn default() -> Self {
+        Self {
+            max_tokens: 120_000,
+            max_wall_clock_seconds: 3600,
+            max_tool_calls: 256,
+            max_api_calls: 256,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TenantResourceQuota {
     pub tenant_id: String,

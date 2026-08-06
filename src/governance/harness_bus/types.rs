@@ -168,7 +168,7 @@ pub enum ReviewLevel {
 // ---------------------------------------------------------------------------
 
 /// ExecutionPolicy — "how should the selected agent execute this task"
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExecutionPolicy {
     pub execution_mode: ExecutionMode,
     pub tool_usage: ToolUsagePolicy,
@@ -177,25 +177,6 @@ pub struct ExecutionPolicy {
     pub review_requirement: ReviewLevel,
     pub budget: TaskBudget,
     pub audit_level: AuditLevel,
-}
-
-impl Default for ExecutionPolicy {
-    fn default() -> Self {
-        Self {
-            execution_mode: ExecutionMode::default(),
-            tool_usage: ToolUsagePolicy::default(),
-            file_write: FileWritePolicy::default(),
-            code_execution: CodeExecutionPolicy::default(),
-            review_requirement: ReviewLevel::default(),
-            budget: TaskBudget {
-                max_tokens: 120_000,
-                max_wall_clock_seconds: 3600,
-                max_tool_calls: 256,
-                max_api_calls: 256,
-            },
-            audit_level: AuditLevel::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

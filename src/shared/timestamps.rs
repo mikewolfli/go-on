@@ -23,3 +23,12 @@ pub fn now_ts_ms() -> i64 {
         .unwrap_or_default()
         .as_millis() as i64
 }
+
+/// Get current timestamp in milliseconds since Unix epoch as `u64`.
+///
+/// Single source for modules that need an unsigned millis timestamp
+/// (previously each module re-declared its own `now_millis()` /
+/// `current_timestamp_ms()` alias).
+pub fn now_ts_ms_u64() -> u64 {
+    now_ts_ms() as u64
+}

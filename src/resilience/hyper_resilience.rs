@@ -109,7 +109,7 @@ const HEALTH_SUCCESS_RATE_THRESHOLD: f64 = 0.8;
 /// (threshold open, success resets while closed, half-open re-trip) so the sync
 /// `record_outcome` path and the async breaker methods cannot drift.
 fn apply_breaker_outcome(cb: &mut CircuitBreaker, success: bool, threshold: u64) {
-    let now = now_millis();
+    let now = crate::shared::timestamps::now_ts_ms_u64();
     if success {
         match cb.state {
             CircuitState::HalfOpen => {
@@ -317,7 +317,7 @@ impl std::fmt::Debug for HyperResilienceEngine {
 impl HyperResilienceEngine {
     /// Create a new hyper-resilience engine with the given configuration.
     pub fn new(config: ResilienceConfig) -> Self {
-        let now_ms = now_millis();
+        let now_ms = crate::shared::timestamps::now_ts_ms_u64();
         let (cancel_tx, _) = watch::channel(false);
         Self {
             config: RwLock::new(config),
@@ -407,7 +407,7 @@ impl HyperResilienceEngine {
                 success_rate: 1.0,
                 error_rate: 0.0,
                 avg_latency_ms: 100.0,
-                last_check_timestamp: now_millis() / 1000,
+                last_check_timestamp: crate::shared::timestamps::now_ts_ms_u64() / 1000,
             });
         }
         {
@@ -506,7 +506,7 @@ impl HyperResilienceEngine {
                 h.error_rate = error_rate;
                 h.avg_latency_ms = avg_latency_ms;
                 h.status = status;
-                h.last_check_timestamp = now_millis() / 1000;
+                h.last_check_timestamp = crate::shared::timestamps::now_ts_ms_u64() / 1000;
             }
         }
 
@@ -609,7 +609,7 @@ impl HyperResilienceEngine {
                 h.status = HealthStatus::Healthy;
                 h.success_rate = 1.0;
                 h.error_rate = 0.0;
-                h.last_check_timestamp = now_millis() / 1000;
+                h.last_check_timestamp = crate::shared::timestamps::now_ts_ms_u64() / 1000;
             }
         }
         true
@@ -681,7 +681,7 @@ impl HyperResilienceEngine {
                 tf("error.circuit_breaker_not_found", &[("name", breaker_name)])
             })?;
 
-            let now = now_millis();
+            let now = crate::shared::timestamps::now_ts_ms_u64();
 
             // Track failure mode
             cb.last_failure_mode = Some(failure_mode);
@@ -779,7 +779,7 @@ impl HyperResilienceEngine {
             CircuitState::Open => {
                 // Acquire config RwLock only in the Open branch (not in the fast path).
                 let probe_interval = read_lock(&self.config).half_open_probe_interval_ms;
-                let now = now_millis();
+                let now = crate::shared::timestamps::now_ts_ms_u64();
                 if now >= cb.last_failure_ms + probe_interval {
                     cb.state = CircuitState::HalfOpen;
                     cb.half_open_attempts = 0;
@@ -806,7 +806,7 @@ impl HyperResilienceEngine {
         match cb.state {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
-                let now = now_millis();
+                let now = crate::shared::timestamps::now_ts_ms_u64();
                 if now >= cb.last_failure_ms + cb.recovery_timeout_ms {
                     cb.state = CircuitState::HalfOpen;
                     cb.half_open_attempts = 0;
@@ -887,7 +887,7 @@ impl HyperResilienceEngine {
         };
 
         group.current_leader = next_replica.clone();
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         group.last_failover_ms = now;
         group.failover_count += 1;
         group.health_score = f64::max(0.0, group.health_score - 10.0);
@@ -931,7 +931,7 @@ impl HyperResilienceEngine {
             active_failovers,
             avg_latency_ms,
             error_rate,
-            timestamp_ms: now_millis(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms_u64(),
         }
     }
 
@@ -991,7 +991,7 @@ impl HyperResilienceEngine {
         action: SelfHealingAction,
         target: &str,
     ) -> Result<HealingReport> {
-        let started_ms = now_millis();
+        let started_ms = crate::shared::timestamps::now_ts_ms_u64();
         self.healing_actions_taken.fetch_add(1, Ordering::Release);
 
         // Perform a real TCP health check to determine if the target is reachable.
@@ -1070,7 +1070,7 @@ impl HyperResilienceEngine {
                     };
                     group.current_leader = new_leader.clone();
                     group.failover_count += 1;
-                    group.last_failover_ms = now_millis();
+                    group.last_failover_ms = crate::shared::timestamps::now_ts_ms_u64();
                     (
                         true,
                         tf(
@@ -1185,7 +1185,7 @@ impl HyperResilienceEngine {
             }
         };
 
-        let completed_ms = now_millis();
+        let completed_ms = crate::shared::timestamps::now_ts_ms_u64();
         let duration_ms = completed_ms
             .saturating_sub(started_ms)
             .max(test_duration_ms);
@@ -1236,7 +1236,7 @@ impl HyperResilienceEngine {
             DegradationLevel::Normal
         };
 
-        let uptime_ms = now_millis().saturating_sub(self.started_ms);
+        let uptime_ms = crate::shared::timestamps::now_ts_ms_u64().saturating_sub(self.started_ms);
         let healing_actions_taken = self.healing_actions_taken.load(Ordering::Acquire);
 
         ResilienceProfile {
@@ -1447,7 +1447,7 @@ impl HyperResilienceEngine {
                     failure_history: Vec::new(),
                 });
 
-            let now = now_millis();
+            let now = crate::shared::timestamps::now_ts_ms_u64();
 
             if success {
                 match cb_ref.state {
@@ -1512,12 +1512,6 @@ struct TestMetrics {
     avg_latency_ms: f64,
     /// Error rate estimate (0.0 – 1.0).
     error_rate: f64,
-}
-
-/// Return the current time in milliseconds since the Unix epoch.
-#[inline(always)]
-fn now_millis() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ---------------------------------------------------------------------------

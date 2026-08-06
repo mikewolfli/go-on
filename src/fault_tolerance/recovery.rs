@@ -6,8 +6,8 @@
 use anyhow::{anyhow, Result};
 
 use crate::fault_tolerance::{
-    now_millis, ConsistencyCheckEvent, FaultEvent, FaultToleranceEngine, FaultType, NodeStatus,
-    RecoveryAction, RecoveryPlan, RecoveryState, MAX_RECOVERY_PLANS,
+    ConsistencyCheckEvent, FaultEvent, FaultToleranceEngine, FaultType, NodeStatus, RecoveryAction,
+    RecoveryPlan, RecoveryState, MAX_RECOVERY_PLANS,
 };
 
 impl FaultToleranceEngine {
@@ -51,7 +51,7 @@ impl FaultToleranceEngine {
             .filter(|f| f.node_id == node_id && !f.recovered)
             .map(|f| f.id.clone())
             .collect();
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         for fault_id in fault_ids {
             if let Some(event) = inner.faults.get_mut(&fault_id) {
                 event.resolved_ms = Some(now);
@@ -153,7 +153,7 @@ impl FaultToleranceEngine {
 
         inner.plan_counter += 1;
         let plan_id = format!("plan-{}", inner.plan_counter);
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         let plan = RecoveryPlan {
             plan_id: plan_id.clone(),
             node_id: node_id.clone(),
@@ -210,7 +210,7 @@ impl FaultToleranceEngine {
         let inner = self.inner.read().await;
         let plan = inner.recovery_plans.get(plan_id);
 
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         let check_id = format!("cc-{}-{}", plan_id, now);
 
         let (passed, details) = if let Some(p) = plan {
@@ -286,7 +286,7 @@ impl FaultToleranceEngine {
         }
         let node_id_clone = plan.node_id.clone();
         plan.state = RecoveryState::Completed;
-        plan.completed_ms = Some(now_millis());
+        plan.completed_ms = Some(crate::shared::timestamps::now_ts_ms_u64());
         plan.result = Some(result.to_string());
 
         // Restore the node status if completing a recovery plan
@@ -315,7 +315,7 @@ impl FaultToleranceEngine {
             .get_mut(plan_id)
             .ok_or_else(|| anyhow!("recovery plan '{}' not found", plan_id))?;
         plan.state = RecoveryState::Failed;
-        plan.completed_ms = Some(now_millis());
+        plan.completed_ms = Some(crate::shared::timestamps::now_ts_ms_u64());
         plan.result = Some(format!("failed: {}", error));
         Ok(())
     }

@@ -41,10 +41,41 @@ where
         .map_err(|e| anyhow::anyhow!("postgres init join error: {e}"))?
 }
 
+/// Resolve an optional-service init result by build profile: server builds
+/// propagate errors; `local`-only builds downgrade failures to `None` with a
+/// warning so the server can start without cache/vector.
+#[cfg(not(feature = "backend-postgres"))]
+fn downgrade_optional<T>(_label: &str, result: Result<Option<Arc<T>>>) -> Result<Option<Arc<T>>> {
+    #[cfg(all(
+        feature = "local",
+        not(feature = "simple-server"),
+        not(feature = "multi-users-server"),
+        not(feature = "full"),
+    ))]
+    {
+        match result {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                tracing::warn!("{_label} init failed: {e}; continuing without {_label}");
+                Ok(None)
+            }
+        }
+    }
+
+    #[cfg(any(
+        feature = "simple-server",
+        feature = "multi-users-server",
+        feature = "full",
+    ))]
+    {
+        result
+    }
+}
+
 /// Initialize response cache.
-#[cfg_attr(not(feature = "backend-postgres"), allow(unused_variables))] // config_path unused in backend-postgres code path
+#[allow(unused_variables)] // config_path unused in backend-postgres code path
 pub async fn initialize_cache(
-    _config_path: &Path,
+    config_path: &Path,
     cache_cfg: Option<CacheConfig>,
 ) -> Result<Option<Arc<ResponseCache>>> {
     let Some(cfg) = cache_cfg else {
@@ -71,7 +102,7 @@ pub async fn initialize_cache(
 
     #[cfg(not(feature = "backend-postgres"))]
     {
-        let cp = resolve_path(_config_path, &cfg.path);
+        let cp = resolve_path(config_path, &cfg.path);
         let r = tokio::task::spawn_blocking(move || {
             ResponseCache::new(&cp, cfg.default_ttl_seconds, cfg.max_entries)
                 .map(Arc::new)
@@ -79,29 +110,7 @@ pub async fn initialize_cache(
         })
         .await
         .map_err(|e| anyhow::anyhow!("cache init: {e}"))?;
-        #[cfg(any(
-            feature = "simple-server",
-            feature = "multi-users-server",
-            feature = "full",
-        ))]
-        {
-            r
-        }
-        #[cfg(all(
-            feature = "local",
-            not(feature = "simple-server"),
-            not(feature = "multi-users-server"),
-            not(feature = "full"),
-        ))]
-        {
-            match r {
-                Ok(c) => Ok(c),
-                Err(e) => {
-                    tracing::warn!("cache init failed: {e}; continuing without cache");
-                    Ok(None)
-                }
-            }
-        }
+        downgrade_optional("cache", r)
     }
 }
 
@@ -151,29 +160,7 @@ pub async fn initialize_vector_store(
         })
         .await
         .map_err(|e| anyhow::anyhow!("vector init: {e}"))?;
-        #[cfg(all(
-            feature = "local",
-            not(feature = "simple-server"),
-            not(feature = "multi-users-server"),
-            not(feature = "full"),
-        ))]
-        {
-            match r {
-                Ok(v) => Ok(v),
-                Err(e) => {
-                    tracing::warn!("vector init failed: {e}; continuing without vector");
-                    Ok(None)
-                }
-            }
-        }
-        #[cfg(any(
-            feature = "simple-server",
-            feature = "multi-users-server",
-            feature = "full",
-        ))]
-        {
-            r
-        }
+        downgrade_optional("vector", r)
     }
 }
 

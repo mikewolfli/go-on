@@ -289,7 +289,6 @@ async fn tool_governance_pre_check() {
         Arc::new(Mutex::new(IdempotencyCache::new(Duration::from_secs(3600)))),
         Arc::new(Mutex::new(OnlineControllerState::default())),
         Arc::new(Mutex::new(SelfRationalizationGuard::new(0.95))),
-        None,
     );
 
     // Verify the evaluator can be constructed and called without panic

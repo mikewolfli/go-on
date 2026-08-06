@@ -1140,7 +1140,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn multi_factor_selection_beats_reputation_only_for_security_task() {
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         {
@@ -1214,7 +1214,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn discovery_knowledge_boosts_agent_selection() {
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         {
@@ -1290,7 +1290,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn multi_factor_vs_reputation_only_different_results_across_task_types() {
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         {
@@ -1353,7 +1353,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn select_best_agent_returns_empty_when_no_candidates() {
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         let task = TaskContext {
@@ -1369,7 +1369,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn candidate_score_breakdown_contains_all_expected_fields() {
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         {
@@ -1411,7 +1411,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn recent_outcome_score_prefers_recent_successes_for_same_task_type() {
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         let task = TaskContext {
@@ -1482,7 +1482,7 @@ pub(crate) mod tests {
     async fn select_best_agent_single_candidate_returns_that_candidate() {
         // Edge case: only one candidate available — should still be selected
         // and produce a valid breakdown.
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         {
@@ -1523,7 +1523,7 @@ pub(crate) mod tests {
     async fn select_best_agent_tiebreaker_is_alphabetical() {
         // Edge case: when all scores are equal, alphabetical order should
         // be the tiebreaker. Use fresh agents with no reputation/events.
-        let harness = Arc::new(default_harness_bus(None));
+        let harness = Arc::new(default_harness_bus());
         let bus = CapabilityBus::new_default(harness, None);
 
         // Register agents but do NOT add any reputation events so all scores

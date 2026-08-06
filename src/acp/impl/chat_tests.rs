@@ -393,7 +393,7 @@ mod unit_tests {
         let config = Arc::new(config);
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
-        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus(None));
+        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus());
         let workflow_registry = Arc::new(std::sync::Mutex::new(
             crate::orchestration::workflow_registry::WorkflowRegistry::new(),
         ));
@@ -750,7 +750,7 @@ mod unit_tests {
         let config = Arc::new(config);
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
-        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus(None));
+        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus());
         harness_bus.set_sandbox_level(crate::governance::hardening::SandboxLevel::Strict);
         let workflow_registry = Arc::new(std::sync::Mutex::new(
             crate::orchestration::workflow_registry::WorkflowRegistry::new(),

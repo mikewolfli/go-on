@@ -43,7 +43,6 @@ pub mod metacognition;
 pub mod observability_bus;
 #[cfg(feature = "sub-bus-optimization")]
 pub mod optimization_bus;
-pub mod orchestration;
 #[cfg(feature = "sub-bus-orchestration")]
 pub mod orchestration_bus;
 #[cfg(feature = "sub-bus-protocol")]

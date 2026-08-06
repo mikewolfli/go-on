@@ -90,7 +90,7 @@ pub fn verify_request(
     signature: &RequestSignature,
 ) -> Result<bool, SigningError> {
     // 1. Replay protection: check timestamp clock skew
-    let now_ms = current_timestamp_ms();
+    let now_ms = crate::shared::timestamps::now_ts_ms_u64();
     let skew_ms = if now_ms > signature.timestamp_ms {
         (now_ms - signature.timestamp_ms) as i64
     } else {
@@ -167,10 +167,6 @@ fn sha256(data: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-fn current_timestamp_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -206,7 +202,7 @@ mod tests {
         let b64_engine = base64::engine::general_purpose::STANDARD;
 
         // Construct a valid signature for original body
-        let to_sign = signing_payload(body, current_timestamp_ms());
+        let to_sign = signing_payload(body, crate::shared::timestamps::now_ts_ms_u64());
         let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret).unwrap();
         mac.update(&to_sign);
         let sig_bytes = mac.finalize().into_bytes().to_vec();
@@ -215,7 +211,7 @@ mod tests {
             signature: b64_engine.encode(&sig_bytes),
             algorithm: SigningAlgorithm::HmacSha256,
             key_id: "k2".to_string(),
-            timestamp_ms: current_timestamp_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms_u64(),
             body_hash: b64_engine.encode(sha256(body)),
         };
 
@@ -230,7 +226,7 @@ mod tests {
         let b64_engine = base64::engine::general_purpose::STANDARD;
 
         // Construct a signature with corrupted body hash
-        let to_sign = signing_payload(body, current_timestamp_ms());
+        let to_sign = signing_payload(body, crate::shared::timestamps::now_ts_ms_u64());
         let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret).unwrap();
         mac.update(&to_sign);
         let sig_bytes = mac.finalize().into_bytes().to_vec();
@@ -239,7 +235,7 @@ mod tests {
             signature: b64_engine.encode(&sig_bytes),
             algorithm: SigningAlgorithm::HmacSha256,
             key_id: "k3".to_string(),
-            timestamp_ms: current_timestamp_ms(),
+            timestamp_ms: crate::shared::timestamps::now_ts_ms_u64(),
             body_hash: b64_engine.encode(sha256(body)),
         };
 

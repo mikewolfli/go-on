@@ -54,54 +54,16 @@ impl CacheStrategy {
         EXECUTION_HINTS.iter().any(|hint| text_lower.contains(hint))
     }
 
-    /// Handle a cache hit: record short-circuit refusal for execution-like requests.
-    pub fn handle_hit(level: &str, confidence: f64, is_execution_like: bool) -> CacheDecision {
-        if confidence > 0.95 && !is_execution_like {
-            CacheDecision::Hit {
-                response: String::new(),
-            }
-        } else if confidence > 0.95 && is_execution_like {
-            CacheDecision::Refused {
-                level: level.to_string(),
-                reason: "execution_like_request".to_string(),
-            }
-        } else {
-            CacheDecision::Miss
-        }
-    }
-
-    /// Convert a cache lookup into a structured decision with the cached response.
-    /// Clones the response string ONLY when returning a Hit (avoids allocating
-    /// for Refused or Miss paths).
-    pub fn lookup_decision(
-        level: &str,
-        confidence: f64,
-        is_execution_like: bool,
-        response: &str,
-    ) -> CacheDecision {
-        if should_serve_cache_hit(confidence as f32, is_execution_like) {
-            CacheDecision::Hit {
-                response: response.to_string(),
-            }
-        } else if should_refuse_cache_hit(confidence as f32, is_execution_like) {
-            CacheDecision::Refused {
-                level: level.to_string(),
-                reason: "execution_like_request".to_string(),
-            }
-        } else {
-            CacheDecision::Miss
-        }
-    }
-
     /// Convert a concrete cache entry into a decision using the stored and
-    /// current inputs.
+    /// current inputs. Single decision path: confidence > 0.95 serves a Hit
+    /// unless the request is execution-like (Refused) — otherwise Miss.
     pub fn decide_from_entry(
         level: &str,
         entry: &CacheEntry,
         input_text: &str,
         is_execution_like: bool,
     ) -> CacheDecision {
-        let confidence = match level {
+        let confidence: f32 = match level {
             "L1" => 1.0,
             "L2" => {
                 let input_vec = crate::intelligence::token_cache::simple_embedding(input_text);
@@ -111,7 +73,20 @@ impl CacheStrategy {
             _ => 0.0,
         };
 
-        Self::lookup_decision(level, confidence as f64, is_execution_like, &entry.output)
+        if confidence > 0.95 && !is_execution_like {
+            // Clone the response string ONLY on the Hit path (avoids
+            // allocating for Refused or Miss).
+            CacheDecision::Hit {
+                response: entry.output.clone(),
+            }
+        } else if confidence > 0.95 && is_execution_like {
+            CacheDecision::Refused {
+                level: level.to_string(),
+                reason: "execution_like_request".to_string(),
+            }
+        } else {
+            CacheDecision::Miss
+        }
     }
 }
 
@@ -124,17 +99,6 @@ pub(crate) fn should_bypass_for_execution(mode: &str, messages: &[Message]) -> b
         .collect::<Vec<_>>()
         .join(" ");
     CacheStrategy::should_bypass(mode, &text)
-}
-
-pub(crate) fn should_serve_cache_hit(confidence: f32, bypass_for_execution: bool) -> bool {
-    matches!(
-        CacheStrategy::handle_hit("", confidence as f64, false),
-        CacheDecision::Hit { .. }
-    ) && !bypass_for_execution
-}
-
-pub(crate) fn should_refuse_cache_hit(confidence: f32, bypass_for_execution: bool) -> bool {
-    confidence > 0.95_f32 && bypass_for_execution
 }
 
 pub(crate) fn store_async(
@@ -177,24 +141,25 @@ mod tests {
     }
 
     #[test]
-    fn handle_hit_returns_correct_decision() {
-        let hit = CacheStrategy::handle_hit("L1", 1.0, false);
-        assert!(matches!(hit, CacheDecision::Hit { .. }));
-        let refused = CacheStrategy::handle_hit("L1", 1.0, true);
-        assert!(matches!(refused, CacheDecision::Refused { .. }));
-        let miss = CacheStrategy::handle_hit("L1", 0.5, false);
-        assert!(matches!(miss, CacheDecision::Miss));
-    }
-
-    #[test]
-    fn lookup_decision_preserves_cached_response() {
-        let decision = CacheStrategy::lookup_decision("L1", 1.0, false, "cached");
-        match decision {
-            CacheDecision::Hit { response } => {
-                assert_eq!(response, "cached");
-            }
+    fn decide_from_entry_hit_refused_miss_matrix() {
+        let entry = CacheEntry::new(
+            "k".to_string(),
+            "input".to_string(),
+            "cached-output".to_string(),
+            10,
+        );
+        // High confidence, non-execution-like → Hit carrying the cached response.
+        let hit = CacheStrategy::decide_from_entry("L1", &entry, "anything", false);
+        match hit {
+            CacheDecision::Hit { response } => assert_eq!(response, "cached-output"),
             _ => panic!("expected hit"),
         }
+        // High confidence, execution-like → Refused.
+        let refused = CacheStrategy::decide_from_entry("L1", &entry, "anything", true);
+        assert!(matches!(refused, CacheDecision::Refused { .. }));
+        // Unknown level → zero confidence → Miss.
+        let miss = CacheStrategy::decide_from_entry("L3", &entry, "anything", false);
+        assert!(matches!(miss, CacheDecision::Miss));
     }
 
     #[test]

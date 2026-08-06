@@ -263,6 +263,9 @@ pub struct GovernanceServerDeps {
     /// The live loop is built and run inside start_background_tasks(); this
     /// field is reserved for embedding a loop in the server struct without
     /// starting a duplicate (the old injected+spawned instance was a no-op).
+    /// Its type reference also anchors the evolution subsystem's extension
+    /// API in the fat-binary build (removing it dead-code-prunes unused leaf
+    /// API surface such as fix_compile_errors / commit / cycle_id).
     pub evolution_loop: Option<
         Arc<
             tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,

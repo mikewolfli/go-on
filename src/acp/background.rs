@@ -298,16 +298,10 @@ pub async fn start_background_tasks(
         advisor.start_digest_schedule();
     }
 
-    // BLUE56-D01: Policy reloader is NOT wired as a background task.
-    // The framework (PolicyReloader + reloadable_policy module) stays as a
-    // designed operator API, but no reload loop runs and the evaluator's
-    // policy_reloader is None, so the reloadable .goon/policies/*.toml files
-    // are never loaded into the runtime policy map. Auto-activating them is
-    // unsafe: the default RedLine policy is action=deny at risk_score>=0.5,
-    // which would hard-block task.execute (0.6), mcp.tools.call (0.7) and
-    // SecurityPatch (0.9) requests. Wiring merge_reloadable_policies() to a
-    // background loop is an explicit operator decision.
-    // See log-20260730-18 for the risk analysis.
+    // Policy hot-reload (BLUE56-D01) was removed in the 2026-08-06 cleanup:
+    // `PolicyReloader`/`reloadable_policy` had no production caller — no reload
+    // loop ran and the evaluator's `policy_reloader` was always None. See
+    // log-20260730-18 for the original risk analysis.
 
     // BLUE56-D02: Process timeouts — spawn the approval timeout loop
     {

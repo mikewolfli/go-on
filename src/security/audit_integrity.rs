@@ -259,7 +259,7 @@ impl HashChainAuditor {
     /// Append a new audit entry to the chain.
     pub fn append(&mut self, payload: serde_json::Value) -> Result<AuditEntry, AuditError> {
         let entry_id = uuid::Uuid::new_v4().to_string();
-        let timestamp_ms = current_timestamp_ms();
+        let timestamp_ms = crate::shared::timestamps::now_ts_ms_u64();
 
         let mut entry = AuditEntry::new(entry_id, self.current_hash.clone(), payload, timestamp_ms);
 
@@ -455,10 +455,6 @@ fn sha256(data: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-fn current_timestamp_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -534,10 +530,10 @@ mod tests {
     fn test_export_report() {
         let (_dir, mut auditor) = setup_auditor();
 
-        let now = current_timestamp_ms();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         auditor.append(serde_json::json!({"event": "old"})).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let later = current_timestamp_ms();
+        let later = crate::shared::timestamps::now_ts_ms_u64();
 
         let report = auditor.export_audit_report(now, later, None).unwrap();
         // At minimum, the "old" event should be within range

@@ -138,13 +138,13 @@ impl ApprovalRequest {
             context,
             status: ApprovalStatus::Pending,
             escalated_from: None,
-            created_at_ms: current_timestamp_ms(),
+            created_at_ms: crate::shared::timestamps::now_ts_ms_u64(),
         }
     }
 
     /// Returns how long this request has been pending (in milliseconds).
     pub fn pending_duration_ms(&self) -> u64 {
-        current_timestamp_ms().saturating_sub(self.created_at_ms)
+        crate::shared::timestamps::now_ts_ms_u64().saturating_sub(self.created_at_ms)
     }
 }
 
@@ -299,7 +299,7 @@ impl ApprovalEngine {
                 ));
             }
 
-            let now = current_timestamp_ms();
+            let now = crate::shared::timestamps::now_ts_ms_u64();
             request.status = ApprovalStatus::Approved {
                 approver: approver.to_string(),
                 comment: comment.to_string(),
@@ -332,7 +332,7 @@ impl ApprovalEngine {
                 ));
             }
 
-            let now = current_timestamp_ms();
+            let now = crate::shared::timestamps::now_ts_ms_u64();
             request.status = ApprovalStatus::Rejected {
                 approver: approver.to_string(),
                 reason: reason.to_string(),
@@ -356,7 +356,7 @@ impl ApprovalEngine {
     /// Returns a list of request IDs whose status changed.
     pub async fn process_timeouts(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
-        let now = current_timestamp_ms();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
 
         // Collect indices of requests needing processing (cannot mutate while iterating)
         let pending_indices: Vec<usize> = self
@@ -547,10 +547,6 @@ impl ApprovalEngine {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn current_timestamp_ms() -> u64 {
-    crate::shared::timestamps::now_ts_ms() as u64
-}
 
 fn apply_multiplier(base: Duration, multiplier: f64) -> Duration {
     if multiplier <= 0.0 {

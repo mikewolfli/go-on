@@ -27,7 +27,7 @@
 //! This file was split from a 2096-line GOD into 4 submodules:
 //! - `types` — all policy type definitions (enums, structs, Default impls)
 //! - `audit` — HarnessAuditTrail, PuaGovernanceProfile
-//! - `evaluator` — PolicyEvaluator, PolicyFn
+//! - `evaluator` — PolicyEvaluator
 //! - `mod` — HarnessBus struct + impl + factory functions + re-exports
 
 pub mod audit;
@@ -36,7 +36,7 @@ pub mod types;
 
 // Re-export all public types from submodules for backward compatibility.
 pub use audit::PuaGovernanceProfile;
-pub use evaluator::{PolicyEvaluator, PolicyFn};
+pub use evaluator::PolicyEvaluator;
 pub use types::{
     AgentExecutionPolicy, AuditConfig, AuditEntry, AuditLevel, CodeExecutionPolicy, Constraint,
     DegradationStrategy, DispatchPolicy, EscalationPolicy, EscalationReason, ExecutionMode,
@@ -54,10 +54,9 @@ use crate::governance::drift::drift_protection::{
 use crate::governance::hardening::{
     BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle, SandboxLevel, TaskBudget,
 };
-use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext};
+use crate::governance::pua::{PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::governance::rbac::RbacEnforcer;
-use crate::governance::reloadable_policy::PolicyReloader;
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::i18n::runtime::tf;
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
@@ -66,7 +65,6 @@ use crate::resilience::hyper_resilience::{
 };
 
 use serde_json::Value;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
@@ -79,7 +77,6 @@ use std::time::Instant;
 /// PolicyEvaluator as its primary interface.
 pub struct HarnessBus {
     pub evaluator: Arc<PolicyEvaluator>,
-    pub feedback_collector: Option<PuaFeedbackCollector>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
     pub drift_engine: Arc<DriftProtectionEngine>,
     pub artifact_layer: Arc<ArtifactLayer>,
@@ -103,12 +100,9 @@ impl HarnessBus {
         idempotency: Arc<Mutex<IdempotencyCache>>,
         runtime_control: Arc<Mutex<OnlineControllerState>>,
         guard: Arc<Mutex<SelfRationalizationGuard>>,
-        storage_path: Option<PathBuf>,
         audit_log: Arc<ThreadSafeAuditLog>,
         external_resilience_engine: Option<Arc<HyperResilienceEngine>>,
-        policy_reloader: Option<Arc<Mutex<PolicyReloader>>>,
     ) -> Self {
-        let feedback_collector = storage_path.map(PuaFeedbackCollector::new);
         let bus = HarnessBus {
             evaluator: Arc::new(PolicyEvaluator::new(
                 rule_engine,
@@ -117,9 +111,7 @@ impl HarnessBus {
                 idempotency,
                 runtime_control,
                 guard,
-                policy_reloader,
             )),
-            feedback_collector,
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
             drift_engine: Arc::new(DriftProtectionEngine::new(DriftProtectionConfig::default())),
             artifact_layer: Arc::new(ArtifactLayer::new()),
@@ -140,7 +132,7 @@ impl HarnessBus {
 
     /// Pre-route evaluation — primary entry point called by CapabilityBus.
     ///
-    /// The actual PolicyEvaluator::evaluate() call (which acquires up to 7 locks
+    /// The actual PolicyEvaluator::evaluate() call (which acquires up to 6 locks
     /// sequentially) is moved to spawn_blocking to avoid blocking the tokio
     /// runtime thread — BLUE69 principle #23.
     pub async fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
@@ -443,12 +435,10 @@ impl HarnessBus {
 
         let sandbox_idx = self.evaluator.governance.sandbox_level.level_index() as usize;
 
-        // Admin/planner agents get slightly longer timeouts
+        // Admin/planner agents get slightly longer timeouts; everyone else
+        // gets the default timeout (security tasks included).
         let timeout = if is_admin {
             self.evaluator.dispatch.timeout_policy.max_timeout
-        } else if is_security {
-            // Security tasks get the default timeout
-            self.evaluator.dispatch.timeout_policy.default_timeout
         } else {
             self.evaluator.dispatch.timeout_policy.default_timeout
         };
@@ -763,18 +753,13 @@ impl HarnessBus {
 // ---------------------------------------------------------------------------
 
 /// Build a default HarnessBus with basic policy defaults for local-dev profile.
-pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
+pub fn default_harness_bus() -> HarnessBus {
     let pua_plan = Arc::new(Mutex::new(
         crate::governance::pua::PuaEnforcementPlan::default(),
     ));
     let rule_engine = Arc::new(Mutex::new(PuaRuleEngine::new(pua_plan)));
     let sandbox_level = Arc::new(Mutex::new(SandboxLevel::None));
-    let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget {
-        max_tokens: 120_000,
-        max_wall_clock_seconds: 3600,
-        max_tool_calls: 256,
-        max_api_calls: 256,
-    })));
+    let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget::default())));
     let idempotency = Arc::new(Mutex::new(IdempotencyCache::new(Duration::from_secs(3600))));
     let runtime_control = Arc::new(Mutex::new(OnlineControllerState::default()));
     let guard = Arc::new(Mutex::new(SelfRationalizationGuard::new(0.6)));
@@ -788,18 +773,13 @@ pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
         idempotency,
         runtime_control,
         guard,
-        storage_path,
         audit_log,
-        None,
         None,
     )
 }
 
 /// Build a HarnessBus with policies derived from `AppConfig` sections.
-pub fn config_aware_harness_bus(
-    config: &crate::config::AppConfig,
-    storage_path: Option<PathBuf>,
-) -> HarnessBus {
+pub fn config_aware_harness_bus(config: &crate::config::AppConfig) -> HarnessBus {
     let pua_plan = Arc::new(Mutex::new(
         crate::governance::pua::PuaEnforcementPlan::default(),
     ));
@@ -829,14 +809,7 @@ pub fn config_aware_harness_bus(
     // Worker factor: the dual-level scheduler (which scaled the budget) was
     // removed as a production no-op; budgets default to the single-worker
     // factor (1).
-    let worker_factor = 1u64;
-
-    let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget {
-        max_tokens: (120_000 * worker_factor) as usize,
-        max_wall_clock_seconds: 3600 * worker_factor,
-        max_tool_calls: (256 * worker_factor) as usize,
-        max_api_calls: (256 * worker_factor) as usize,
-    })));
+    let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget::default())));
 
     let idempotency = Arc::new(Mutex::new(IdempotencyCache::new(Duration::from_secs(3600))));
 
@@ -852,9 +825,7 @@ pub fn config_aware_harness_bus(
         idempotency,
         runtime_control,
         guard,
-        storage_path,
         audit_log,
-        None,
         None,
     )
 }

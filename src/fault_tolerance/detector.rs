@@ -6,9 +6,8 @@
 use anyhow::{anyhow, Result};
 
 use crate::fault_tolerance::{
-    cluster_health_from_counts, now_millis, ClusterHealth, EscalationLevel, FaultEvent,
-    FaultToleranceEngine, FaultType, IsolationLevel, NodeStatus, RecoveryState, MAX_FAULTS,
-    MAX_GROUPS, MAX_HEARTBEATS,
+    cluster_health_from_counts, ClusterHealth, EscalationLevel, FaultEvent, FaultToleranceEngine,
+    FaultType, IsolationLevel, NodeStatus, RecoveryState, MAX_FAULTS, MAX_GROUPS, MAX_HEARTBEATS,
 };
 
 impl FaultToleranceEngine {
@@ -19,7 +18,7 @@ impl FaultToleranceEngine {
         if inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is already registered", node_id));
         }
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         let record = crate::fault_tolerance::HeartbeatRecord {
             node_id: node_id.clone(),
             last_heartbeat_ms: now,
@@ -83,7 +82,7 @@ impl FaultToleranceEngine {
             .heartbeats
             .get_mut(&node_id)
             .ok_or_else(|| anyhow!("node '{}' is not registered", node_id))?;
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         record.last_heartbeat_ms = now;
         record.missed_beats = 0;
         if record.status == NodeStatus::Offline || record.status == NodeStatus::Recovering {
@@ -105,7 +104,7 @@ impl FaultToleranceEngine {
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
         }
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         inner.fault_counter += 1;
         let fault_id = format!("fault-{}", inner.fault_counter);
         let event = FaultEvent {
@@ -160,7 +159,7 @@ impl FaultToleranceEngine {
         if event.recovered {
             return Err(anyhow!("fault '{}' is already resolved", fault_id));
         }
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         event.resolved_ms = Some(now);
         event.recovered = true;
         Ok(())
@@ -197,7 +196,7 @@ impl FaultToleranceEngine {
         // Create a new isolation group
         inner.group_counter += 1;
         let group_id = format!("group-{}", inner.group_counter);
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         let group = crate::fault_tolerance::IsolationGroup {
             group_id: group_id.clone(),
             nodes: vec![node_id],
@@ -225,7 +224,7 @@ impl FaultToleranceEngine {
     /// too many heartbeats (exceeded max_missed_beats).
     pub async fn check_heartbeats(&self) -> Vec<String> {
         let mut inner = self.inner.write().await;
-        let now = now_millis();
+        let now = crate::shared::timestamps::now_ts_ms_u64();
         let timeout = inner.config.heartbeat_timeout_ms;
         let max_missed = inner.config.max_missed_beats;
 

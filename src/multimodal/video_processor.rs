@@ -283,7 +283,7 @@ impl VideoProcessor {
 
         // Fallback: return error with actionable message
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        Err(VideoProcessorError::AudioExtractionFailed(format!(
+        Err(VideoProcessorError::FrameExtractionFailed(format!(
             "ffmpeg not available for frame extraction from '{}' files. Install ffmpeg to enable video processing.",
             ext
         )))
@@ -304,12 +304,12 @@ impl VideoProcessor {
             .output()
             .await
             .map_err(|e| {
-                VideoProcessorError::AudioExtractionFailed(format!("ffprobe not found: {e}"))
+                VideoProcessorError::FrameExtractionFailed(format!("ffprobe not found: {e}"))
             })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         stdout.trim().parse::<f64>().map_err(|_| {
-            VideoProcessorError::AudioExtractionFailed("could not parse duration".into())
+            VideoProcessorError::FrameExtractionFailed("could not parse duration".into())
         })
     }
 
@@ -320,7 +320,7 @@ impl VideoProcessor {
         interval_secs: f64,
     ) -> Result<Vec<Frame>, VideoProcessorError> {
         let tmp_dir = tempfile::tempdir()
-            .map_err(|e| VideoProcessorError::AudioExtractionFailed(format!("tempdir: {e}")))?;
+            .map_err(|e| VideoProcessorError::FrameExtractionFailed(format!("tempdir: {e}")))?;
         let pattern = tmp_dir.path().join("frame_%04d.png");
 
         let status = tokio::process::Command::new("ffmpeg")
@@ -338,11 +338,11 @@ impl VideoProcessor {
             .status()
             .await
             .map_err(|e| {
-                VideoProcessorError::AudioExtractionFailed(format!("ffmpeg failed: {e}"))
+                VideoProcessorError::FrameExtractionFailed(format!("ffmpeg failed: {e}"))
             })?;
 
         if !status.success() {
-            return Err(VideoProcessorError::AudioExtractionFailed(
+            return Err(VideoProcessorError::FrameExtractionFailed(
                 "ffmpeg exited with error".into(),
             ));
         }
@@ -350,7 +350,7 @@ impl VideoProcessor {
         let mut frames = Vec::new();
         let mut entries = tokio::fs::read_dir(tmp_dir.path())
             .await
-            .map_err(|e| VideoProcessorError::AudioExtractionFailed(format!("read_dir: {e}")))?;
+            .map_err(|e| VideoProcessorError::FrameExtractionFailed(format!("read_dir: {e}")))?;
 
         // Use blocking reads for frame files
         let mut paths = Vec::new();
@@ -635,7 +635,7 @@ mod tests {
                 // With ffmpeg, expect empty frames for a corrupt/empty file
                 assert!(frames.is_empty() || frames.len() <= 1);
             }
-            Err(VideoProcessorError::AudioExtractionFailed(msg)) => {
+            Err(VideoProcessorError::FrameExtractionFailed(msg)) => {
                 // Without ffmpeg (or if ffmpeg can't handle mp4), expect actionable error
                 assert!(
                     msg.contains("ffmpeg not available") || msg.contains("ffmpeg"),
