@@ -621,8 +621,18 @@ impl MultimodalProcessor {
     /// configured.
     async fn process_document(&self, data: &[u8], ext: &str) -> ProcessedContent {
         if let Some(ref parser) = self.document_parser {
-            match parser.parse_bytes(data, ext) {
-                Ok(parsed) => {
+            // Document parsing (PDF/DOCX/HTML/…) is blocking CPU work — offload
+            // via spawn_blocking so the tokio worker isn't stalled, mirroring
+            // the audio transcription path above.
+            let data_owned = data.to_vec();
+            let ext_owned = ext.to_string();
+            let parser_clone = parser.clone();
+            match tokio::task::spawn_blocking(move || {
+                parser_clone.parse_bytes(&data_owned, &ext_owned)
+            })
+            .await
+            {
+                Ok(Ok(parsed)) => {
                     let images: Vec<String> = parsed
                         .images
                         .iter()
@@ -637,10 +647,16 @@ impl MultimodalProcessor {
                         audio_transcriptions: Vec::new(),
                     };
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(
                         error = %e,
                         "MultimodalProcessor: DocumentParser failed to parse"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MultimodalProcessor: spawn_blocking for document parsing failed"
                     );
                 }
             }

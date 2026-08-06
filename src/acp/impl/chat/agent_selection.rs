@@ -123,37 +123,54 @@ pub(crate) async fn select_and_score_agents(
             .and_then(|v| v.as_str()),
     );
 
-    // ── CapabilityBus agent selection ──────────────────────────────────
-    // SKIP when a specific model was chosen by the user.
-    let mut capability_selected_agent: Option<String> = None;
-    let mut capability_recommended_mode: Option<String> = None;
-    let mut capability_candidate_count: Option<u64> = None;
-    let mut capability_decision_confidence: Option<f64> = None;
-    let mut capability_selection_reason: Option<String> = None;
-    let mut capability_optimization_hint: Option<Value> = None;
-    if !user_model_specific {
-        if let Some(ref cb) = server.governance_deps.capability_bus {
-            let result = crate::acp::helpers::capability_selector::apply_capability_bus_selection(
-                cb,
-                phase_name,
-                &params.messages,
-                &params.mode,
-                &mut resolved.agents,
-                &capability_risk,
-                &trace.request_id,
-                routing_provenance,
-            )
-            .await;
-            capability_selected_agent = result.capability_selected_agent;
-            capability_recommended_mode = result.recommended_mode;
-            capability_candidate_count = Some(result.candidate_count as u64);
-            capability_decision_confidence = Some(result.confidence);
-            capability_selection_reason = Some(result.capability_selection_reason);
-            capability_optimization_hint = result.optimization_hint;
+    // ── CapabilityBus agent selection + vector context ───────────────
+    // SKIP capability bus selection when a specific model was chosen by the
+    // user. The selection (mutates `resolved.agents`) and the vector context
+    // load (reads only `server` / `phase` / `params`) are independent, so run
+    // them concurrently instead of serially.
+    let capability_bus_future = async {
+        if !user_model_specific {
+            if let Some(ref cb) = server.governance_deps.capability_bus {
+                let result =
+                    crate::acp::helpers::capability_selector::apply_capability_bus_selection(
+                        cb,
+                        phase_name,
+                        &params.messages,
+                        &params.mode,
+                        &mut resolved.agents,
+                        &capability_risk,
+                        &trace.request_id,
+                        routing_provenance,
+                    )
+                    .await;
+                (
+                    result.capability_selected_agent,
+                    result.recommended_mode,
+                    Some(result.candidate_count as u64),
+                    Some(result.confidence),
+                    Some(result.capability_selection_reason),
+                    result.optimization_hint,
+                )
+            } else {
+                (None, None, None, None, None, None)
+            }
+        } else {
+            routing_provenance.push("capability_bus_skipped_model_selected".to_string());
+            (None, None, None, None, None, None)
         }
-    } else {
-        routing_provenance.push("capability_bus_skipped_model_selected".to_string());
-    }
+    };
+    let vector_context_future =
+        load_vector_context(server, phase_name, phase.options.as_ref(), params);
+    let (capability_bus_result, vector_context) =
+        tokio::join!(capability_bus_future, vector_context_future);
+    let (
+        capability_selected_agent,
+        capability_recommended_mode,
+        capability_candidate_count,
+        capability_decision_confidence,
+        capability_selection_reason,
+        capability_optimization_hint,
+    ) = capability_bus_result;
 
     // ── Agent Switch State & Preferred Agent Resolution ──────────────
     let agent_prefs = crate::acp::helpers::agent_preference::resolve_agent_preferences(
@@ -164,9 +181,6 @@ pub(crate) async fn select_and_score_agents(
     let conversation_id = agent_prefs.conversation_id;
     let branch_id = agent_prefs.branch_id;
 
-    // ── Vector context & message assembly ─────────────────────────────
-    let vector_context =
-        load_vector_context(server, phase_name, phase.options.as_ref(), params).await;
     let agent_messages = merge_context_into_messages(
         &params.messages,
         build_vector_context_message(

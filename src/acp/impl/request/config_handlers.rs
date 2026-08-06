@@ -55,13 +55,8 @@ pub(super) async fn build_debug_panel_payload_impl(server: &AcpServer) -> Value 
         .get("orchestration_node_unmapped_total")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let behavior_backed = autonomy_loop_completion_ratio > 0.0
-        || repair_cycle_effective_ratio > 0.0
-        || autonomy_runtime_metrics
-            .get("idempotency_hit_total")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            > 0;
+    let behavior_backed =
+        autonomy_loop_completion_ratio > 0.0 || repair_cycle_effective_ratio > 0.0;
 
     json!({
         "ok": true,

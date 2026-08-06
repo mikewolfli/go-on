@@ -39,9 +39,9 @@ pub(super) async fn send_error(
     data: Option<Value>,
 ) -> Result<()> {
     mark_error_response(id.as_ref());
-    let error_data =
-        inject_platform_profiles_if_absent(data.unwrap_or_else(|| json!({})), "acp.error");
-    let data = Some(error_data);
+    // NOTE: platform-context injection happens once in `io::send_error`
+    // (idempotent); the pua/error-contract enrichment below is applied first
+    // so the final payload carries both the contract data and the context.
     let data = match take_pua_report(id.as_ref()) {
         Some(encoded) => Some(inject_pua_report_into_error_data(data, encoded)),
         None => data,

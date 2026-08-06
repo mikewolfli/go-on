@@ -67,7 +67,7 @@ export function registerAgentRpcCommands(
       });
       try {
         const result = asRecord(
-          await deps.sendRequest("skill.import_local", {
+          await deps.sendRequest("skill.import", {
             source: {
               kind: "local",
               path: manifestPath,
@@ -78,7 +78,7 @@ export function registerAgentRpcCommands(
         const skill = result.skill as Record<string, unknown> | undefined;
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
-            "skill.import_local",
+            "skill.import",
             skill?.name
               ? `imported "${String(skill.name)}"`
               : "import succeeded",
@@ -87,7 +87,7 @@ export function registerAgentRpcCommands(
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
           i18n.getMessage(MessageKeys.rpcCommandFailed, [
-            "skill.import_local",
+            "skill.import",
             getErrorMessage(error),
           ]),
         );

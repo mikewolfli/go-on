@@ -5,14 +5,14 @@
 //! time. All state is guarded behind `Arc<Mutex<>>`.
 //!
 //! The production surface is deliberately small: entity registration/updates,
-//! event recording, and `brain_loop` planning lookups. The former Bayesian
-//! causal-graph scoring consumed by `CapabilityBus::decide()`
-//! (`causal_agent_insight` / `counterfactual_probability`) was removed because
-//! the write side only ever registered `action_*` entities while the query
-//! side looked up agent names — the scores were constant (0.5 / 0.0) and the
-//! per-candidate MCTS runs were wasted work. Agent-success learning is served
-//! by the working `discovery` channel (`state_{agent}` pattern consumed by
-//! `decide()`).
+//! event recording, and observability (`profile()` feeds the capability-bus
+//! status payload). The former Bayesian causal-graph scoring consumed by
+//! `CapabilityBus::decide()` (`causal_agent_insight` /
+//! `counterfactual_probability`) was removed because the write side only ever
+//! registered `action_*` entities while the query side looked up agent names —
+//! the scores were constant (0.5 / 0.0) and the per-candidate MCTS runs were
+//! wasted work. Agent-success learning is served by the working `discovery`
+//! channel (`state_{agent}` pattern consumed by `decide()`).
 
 mod types;
 

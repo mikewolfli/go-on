@@ -22,6 +22,8 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
   private readonly manager: RuntimeManagerLike;
   private pollTimer: NodeJS.Timeout | undefined;
   private _disposed = false;
+  private pendingRequests: ApprovalRequest[] = [];
+  private warnedPendingUnsupported = false;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -101,11 +103,19 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
   private async _fetchPendingRequests(): Promise<void> {
     if (!this._view || !this.manager.isRunning()) return;
 
-    try {
-      const result = (await this.manager.sendRequest(
-        "approval.pending",
-      )) as Record<string, unknown>;
+    // `approval.pending` is not a backend ACP method — there is no handler
+    // that lists pending permission requests. Do not send a doomed request;
+    // warn once and show the empty state instead.
+    if (!this.warnedPendingUnsupported) {
+      this.warnedPendingUnsupported = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[go-on] approval.pending is not supported by this backend; no pending approval requests can be listed",
+      );
+    }
+    const result: Record<string, unknown> = { requests: [] };
 
+    try {
       const items = Array.isArray(result?.requests)
         ? (result.requests as Array<Record<string, unknown>>)
         : [];
@@ -123,6 +133,8 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
         details: item.details as Record<string, unknown> | undefined,
         timestamp: String(item.timestamp ?? new Date().toISOString()),
       }));
+
+      this.pendingRequests = requests;
 
       this._view.webview.postMessage({
         type: "requestsUpdate",
@@ -146,8 +158,12 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
     if (!this.manager.isRunning()) return;
 
     try {
-      await this.manager.sendRequest("approval.approve", {
-        request_id: requestId,
+      // The backend replies to permission requests via session/request_permission
+      // with the session id and the chosen option ("approve"/"deny"). There is
+      // no approval.approve / tool.reject backend handler.
+      await this.manager.sendRequest("session/request_permission", {
+        sessionId: requestId,
+        optionId: "approve",
       });
 
       this._view?.webview.postMessage({
@@ -172,8 +188,11 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
     if (!this.manager.isRunning()) return;
 
     try {
-      await this.manager.sendRequest("approval.reject", {
-        request_id: requestId,
+      // A non-"approve" optionId ("deny") revokes the tool approval in the
+      // backend's session/request_permission handler.
+      await this.manager.sendRequest("session/request_permission", {
+        sessionId: requestId,
+        optionId: "deny",
       });
 
       this._view?.webview.postMessage({
@@ -197,7 +216,15 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
     if (!this.manager.isRunning()) return;
 
     try {
-      await this.manager.sendRequest("approval.approve_all", {});
+      // No backend "approve_all" method exists — approve each queued request
+      // individually via session/request_permission.
+      const ids = this.pendingRequests.map((r) => r.id);
+      for (const requestId of ids) {
+        await this.manager.sendRequest("session/request_permission", {
+          sessionId: requestId,
+          optionId: "approve",
+        });
+      }
 
       this._view?.webview.postMessage({
         type: "allResolved",

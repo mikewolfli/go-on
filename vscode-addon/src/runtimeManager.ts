@@ -1445,14 +1445,14 @@ export class GoOnManager {
       // without requiring a full restart.
       if (this.isRunning()) {
         try {
-          await this.sendRequest("runtime.reload_config");
+          await this.sendRequest("config.reload");
         } catch (reloadError: unknown) {
           const reloadMsg =
             reloadError instanceof Error
               ? reloadError.message
               : String(reloadError);
           this._outputChannel?.appendLine(
-            `[setup] runtime.reload_config failed: ${reloadMsg}`,
+            `[setup] config.reload failed: ${reloadMsg}`,
           );
         }
       }

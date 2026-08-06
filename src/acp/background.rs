@@ -444,6 +444,43 @@ pub async fn start_background_tasks(
         "HyperResilienceEngine health checks started"
     );
 
+    // ── Fault-tolerance recovery cycle (heartbeat check + auto-recovery) ──
+    // Schedule the engine's full recovery cycle on an interval so node
+    // heartbeats, recovery plans, and auto-recovery are exercised in
+    // production (previously the cycle only ran in tests). Nodes register
+    // via CapabilityBus::evolve_fault_tolerance; this loop makes the
+    // detection/recovery path live.
+    if let Some(ref harness) = server.governance_deps.harness_bus {
+        let ft = Arc::clone(&harness.fault_tolerance);
+        let shutdown = shutdown_notify.clone();
+        spawn_background_task(
+            async move {
+                // Skip the first tick to let the server start accepting requests.
+                let mut interval = tokio::time::interval(Duration::from_secs(30));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = interval.tick() => {}
+                    }
+                    let summary = ft.run_recovery_cycle().await;
+                    if summary.offenders.is_empty() && summary.plans_created == 0 {
+                        continue;
+                    }
+                    tracing::info!(
+                        target: "fault_tolerance",
+                        offenders = summary.offenders.len(),
+                        plans_created = summary.plans_created,
+                        plans_activated = summary.plans_activated,
+                        "Fault-tolerance recovery cycle executed"
+                    );
+                }
+            },
+            "fault_tolerance_recovery",
+        );
+    }
+
     // ── Memory bridge: auto-migrate every 5 minutes (PERF-FIX: moved from new_acp_server) ──
     // Uses the server's lazy MemoryPersistence (S1 startup optimization) instead of
     // creating a redundant third SQLite connection during the critical startup path.

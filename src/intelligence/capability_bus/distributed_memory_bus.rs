@@ -2,16 +2,23 @@
 //!
 //! DistributedMemoryBus enables agents on different server instances to share
 //! experience and knowledge by coordinating local memory entries with known
-//! remote peers.  This implementation is in-memory only — the actual network
-//! transport (gRPC, HTTP, etc.) is left to a later integration layer so that
-//! we avoid heavy dependency chains at this level.
+//! remote peers.
 //!
-//! # Protocol sketch (future)
+//! # Protocol
 //!
-//! 1. `share_with_peers` serialises the entry and queues it for transport.
-//! 2. The transport layer sends the entry to each registered peer.
-//! 3. On receipt, the peer calls an internal `ingest_shared` method.
+//! 1. `store_local` records an entry locally; `share_with_peers` copies it
+//!    into the local `shared_entries` view.
+//! 2. The transport loop (`start_transport` / `sync_now`) serialises local
+//!    entries and pushes them to each registered peer over real HTTP
+//!    (JSON-RPC `memory.ingest` against the peer's `/rpc` endpoint).
+//! 3. On receipt, the peer's hub stores the entries (`hub` `memory.ingest`
+//!    method); the node's own bus can ingest them via `ingest_shared`.
 //! 4. Expired entries are pruned periodically by `prune_expired`.
+//!
+//! The transport is only active when a deployment calls `start_transport`
+//! and registers peers via `register_peer`; until then the bus is purely
+//! local. Sync attempts fail loudly (never silently dropped or simulated)
+//! when a peer cannot be reached.
 //!
 //! # Feature gates
 //!
@@ -24,6 +31,8 @@
 use crate::i18n::runtime::tf;
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "multi-users-server")]
+use serde_json::json;
 use tracing;
 
 use std::collections::{HashMap, VecDeque};
@@ -58,6 +67,10 @@ pub struct MemoryTransportConfig {
     /// Maximum payload size in bytes for a single sync request.
     /// Default: 1_048_576 (1 MiB).
     pub max_payload_bytes: usize,
+    /// Optional bearer token for authenticating to peer hubs.
+    /// The receiving hub's `memory.ingest` method requires the same
+    /// `Authorization: Bearer <token>` as the other hub RPC methods.
+    pub auth_token: Option<String>,
 }
 
 impl Default for MemoryTransportConfig {
@@ -67,6 +80,7 @@ impl Default for MemoryTransportConfig {
             connect_timeout_ms: 5000,
             sync_interval_ms: 30000,
             max_payload_bytes: 1_048_576,
+            auth_token: None,
         }
     }
 }
@@ -415,9 +429,9 @@ impl DistributedMemoryBus {
 
     /// Mark a local entry (by `entry_id`) as shared with all known peers.
     ///
-    /// In the current in‑memory implementation this simply copies the entry
-    /// into `shared_entries`.  The future transport layer will fan‑out the
-    /// data to each peer's network address.
+    /// Copies the entry into the local `shared_entries` view; the transport
+    /// loop (`start_transport` / `sync_now`) fan‑outs the data to each
+    /// peer's network address over HTTP.
     ///
     /// Returns `true` if the entry was found and shared, `false` otherwise.
     pub fn share_with_peers(&self, entry_id: &str) -> bool {
@@ -621,7 +635,6 @@ impl DistributedMemoryBus {
         let transport_config = Arc::clone(&self.transport_config);
         let local_entries = Arc::clone(&self.local_entries);
         let remote_peers = Arc::clone(&self.remote_peers);
-        let shared_entries = Arc::clone(&self.shared_entries);
         let profile = Arc::clone(&self.profile);
         let stats = Arc::clone(&self.transport_stats);
 
@@ -641,13 +654,10 @@ impl DistributedMemoryBus {
                     }
 
                     // Perform sync
-                    let result = Self::do_sync(
-                        &local_entries,
-                        &remote_peers,
-                        &shared_entries,
-                        &profile,
-                        &stats,
-                    );
+                    let cfg = transport_config.lock().unwrap_or_else(|e| e.into_inner());
+                    let config = cfg.as_ref().cloned().unwrap_or_default();
+                    let result =
+                        Self::do_sync(&local_entries, &remote_peers, &profile, &stats, &config);
 
                     // Update profile with transport state
                     let mut p = profile.lock().unwrap_or_else(|poisoned| {
@@ -728,12 +738,18 @@ impl DistributedMemoryBus {
     /// Returns the [`SyncStatus`] of the operation.
     #[cfg(feature = "multi-users-server")]
     pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
+        let config = self
+            .transport_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_default();
         Self::do_sync(
             &self.local_entries,
             &self.remote_peers,
-            &self.shared_entries,
             &self.profile,
             &self.transport_stats,
+            &config,
         )?;
 
         let status = self
@@ -759,10 +775,10 @@ impl DistributedMemoryBus {
             .unwrap_or_default()
     }
 
-    /// Simulate receiving shared entries from a remote peer.
+    /// Ingest shared entries received from a remote peer (JSON payload).
     ///
     /// Deserialises the JSON payload and stores the entries as shared entries
-    /// on this node.
+    /// on this node. This is the receiving side of the HTTP transport.
     #[cfg(feature = "multi-users-server")]
     pub fn ingest_shared(&self, entries_json: &str) -> anyhow::Result<usize> {
         let entries: Vec<MemoryBusEntry> = serde_json::from_str(entries_json)?;
@@ -822,14 +838,15 @@ impl DistributedMemoryBus {
     // ------------------------------------------------------------------
 
     /// Perform a single sync cycle: collect local entries and push them
-    /// to all known peers via the transport.
+    /// to all known peers over real HTTP (JSON-RPC `memory.ingest` against
+    /// each peer's `/rpc` endpoint).
     #[cfg(feature = "multi-users-server")]
     fn do_sync(
         local_entries: &Arc<Mutex<VecDeque<MemoryBusEntry>>>,
         remote_peers: &Arc<RwLock<HashMap<String, String>>>,
-        shared_entries: &Arc<Mutex<VecDeque<SharedMemoryEntry>>>,
         profile: &Arc<Mutex<DistributedMemoryBusProfile>>,
         stats: &Arc<Mutex<TransportStats>>,
+        config: &MemoryTransportConfig,
     ) -> anyhow::Result<SyncStatus> {
         let start = Instant::now();
 
@@ -846,7 +863,7 @@ impl DistributedMemoryBus {
         }
 
         // Serialise all entries to JSON
-        let payload = serde_json::to_string(&entries_to_sync)?;
+        let payload = serde_json::to_string(&json!({ "entries": entries_to_sync }))?;
         let payload_bytes = payload.len();
 
         // Get current peers
@@ -854,7 +871,7 @@ impl DistributedMemoryBus {
             remote_peers.read().map(|r| r.clone()).unwrap_or_default();
 
         if peers.is_empty() {
-            // No peers to sync to — still track as completed
+            // No peers to sync to — still track as completed.
             let duration = start.elapsed().as_millis() as u64;
             let status = SyncStatus::Completed {
                 entries_synced: 0,
@@ -865,39 +882,65 @@ impl DistributedMemoryBus {
             return Ok(status);
         }
 
+        // Real HTTP transport: POST each batch to the peer's JSON-RPC endpoint.
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_millis(config.connect_timeout_ms.max(1000)))
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to build dmb transport client: {}", e))?;
+
         let mut total_entries_synced = 0usize;
         let mut total_bytes_sent = 0u64;
+        let mut failures: Vec<String> = Vec::new();
 
-        // Simulate sending to each peer
         for (node_id, address) in &peers {
-            // Simulated HTTP POST of JSON payload
-            tracing::info!(
-                "[dmb-transport] SYNC to peer {} @ {}: {} entries, {} bytes",
-                node_id,
-                address,
-                entries_to_sync.len(),
-                payload_bytes
-            );
-
-            // Simulate successful transmission: ingest the entries as if the
-            // peer received them. In a real implementation this would be an
-            // actual HTTP call. Here we simulate by storing locally as shared.
-            {
-                let mut guard = shared_entries.lock().unwrap_or_else(|e| e.into_inner());
-                let now = crate::shared::timestamps::now_ts_ms() as u64;
-                for entry in &entries_to_sync {
-                    let shared = SharedMemoryEntry {
-                        entry: entry.clone(),
-                        synced_ms: now,
-                        source_node: node_id.clone(),
-                        sync_count: 1,
-                    };
-                    guard.push_back(shared);
-                }
+            let endpoint = if address.contains("://") {
+                format!("{}/rpc", address.trim_end_matches('/'))
+            } else {
+                format!("http://{}/rpc", address)
+            };
+            let mut request = client.post(&endpoint).json(&json!({
+                "jsonrpc": "2.0",
+                "id": format!("dmb-sync-{}", node_id),
+                "method": "memory.ingest",
+                "params": {
+                    "source": node_id,
+                    "entries": entries_to_sync,
+                },
+            }));
+            if let Some(token) = &config.auth_token {
+                request = request.bearer_auth(token);
             }
+            match request.send() {
+                Ok(resp) if resp.status().is_success() => {
+                    total_entries_synced += entries_to_sync.len();
+                    total_bytes_sent += payload_bytes as u64;
+                    tracing::info!(
+                        "[dmb-transport] synced {} entries to peer {} @ {}",
+                        entries_to_sync.len(),
+                        node_id,
+                        address
+                    );
+                }
+                Ok(resp) => failures.push(format!(
+                    "peer {} @ {}: HTTP {}",
+                    node_id,
+                    address,
+                    resp.status()
+                )),
+                Err(e) => failures.push(format!("peer {} @ {}: {}", node_id, address, e)),
+            }
+        }
 
-            total_entries_synced += entries_to_sync.len();
-            total_bytes_sent += payload_bytes as u64;
+        if total_entries_synced == 0 && !failures.is_empty() {
+            // No peer acknowledged the batch — report the failure instead of
+            // pretending the entries were delivered.
+            let message = failures.join("; ");
+            {
+                let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
+                s.total_errors = s.total_errors.wrapping_add(1);
+                s.last_sync_status = SyncStatus::Failed(message.clone());
+            }
+            return Err(anyhow::anyhow!("dmb sync failed: {}", message));
         }
 
         let duration = start.elapsed().as_millis() as u64;

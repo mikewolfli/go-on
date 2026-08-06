@@ -5,7 +5,6 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -16,10 +15,10 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 use crate::acp::helpers::context::{review_timeout, run_with_optional_timeout};
+use crate::acp::r#impl::runtime::routing_handles;
 use crate::acp::server::{AcpServer, OutcomeEvent};
 use crate::agent::Message;
 use crate::config::PhaseOptions;
-use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
 use crate::intelligence::quality_models::QualityVerdict;
 use crate::rpc_protocol::RequestTraceContext;
@@ -145,10 +144,11 @@ fn build_review_context(
     phase_options: Option<&PhaseOptions>,
 ) -> Result<DualReviewContext> {
     let timeout_policy = ReviewTimeoutPolicy::from_options(phase_options);
-    let gate_timeout = extra_u64(phase_options, "review_gate_timeout_seconds")
-        .or_else(|| phase_options.and_then(|opts| opts.review_timeout_seconds))
-        .or_else(|| phase_options.and_then(|opts| opts.request_timeout_seconds))
-        .map(Duration::from_secs);
+    let gate_timeout =
+        crate::acp::helpers::misc::extra_u64(phase_options, "review_gate_timeout_seconds")
+            .or_else(|| phase_options.and_then(|opts| opts.review_timeout_seconds))
+            .or_else(|| phase_options.and_then(|opts| opts.request_timeout_seconds))
+            .map(Duration::from_secs);
     let gate_deadline = gate_timeout.map(|limit| Instant::now() + limit);
     let reviewer_deadline = review_timeout(phase_options).map(|limit| Instant::now() + limit);
 
@@ -510,28 +510,4 @@ async fn run_single_review(
             QualityVerdict::Reject
         },
     })
-}
-
-/// Get routing handles (flow manager and agent registry)
-fn routing_handles(
-    server: &AcpServer,
-) -> Result<(Arc<FlowManager>, Arc<crate::agent::AgentRegistry>)> {
-    let flow = server
-        .model_deps
-        .flow_manager
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Flow manager not available"))?;
-
-    let registry = server
-        .model_deps
-        .agent_registry
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Agent registry not available"))?;
-
-    Ok((flow.clone(), registry.clone()))
-}
-
-/// Extract extra u64 value from phase options
-fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
-    crate::acp::helpers::misc::extra_u64(options, key)
 }

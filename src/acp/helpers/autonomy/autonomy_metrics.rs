@@ -6,7 +6,6 @@ static REQUIREMENT_AUTO_RECOVERY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REQUIREMENT_HUMAN_CONFIRMATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ORCHESTRATION_ALIGNMENT_HIGH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ORCHESTRATION_ALIGNMENT_LOW_TOTAL: AtomicU64 = AtomicU64::new(0);
-static IDEMPOTENCY_HIT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REPAIR_CYCLE_RESOLVED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REPAIR_CYCLE_IMPROVED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REPAIR_CYCLE_UNRESOLVED_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -179,7 +178,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let human_confirmation = REQUIREMENT_HUMAN_CONFIRMATION_TOTAL.load(Ordering::Relaxed);
     let alignment_high = ORCHESTRATION_ALIGNMENT_HIGH_TOTAL.load(Ordering::Relaxed);
     let alignment_low = ORCHESTRATION_ALIGNMENT_LOW_TOTAL.load(Ordering::Relaxed);
-    let idempotency_hits = IDEMPOTENCY_HIT_TOTAL.load(Ordering::Relaxed);
     let repair_resolved = REPAIR_CYCLE_RESOLVED_TOTAL.load(Ordering::Relaxed);
     let repair_improved = REPAIR_CYCLE_IMPROVED_TOTAL.load(Ordering::Relaxed);
     let repair_unresolved = REPAIR_CYCLE_UNRESOLVED_TOTAL.load(Ordering::Relaxed);
@@ -283,7 +281,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         "orchestration_alignment_high_total": alignment_high,
         "orchestration_alignment_low_total": alignment_low,
         "orchestration_alignment_high_ratio": orchestration_alignment_high_ratio,
-        "idempotency_hit_total": idempotency_hits,
         "repair_cycle_resolved_total": repair_resolved,
         "repair_cycle_improved_total": repair_improved,
         "repair_cycle_unresolved_total": repair_unresolved,

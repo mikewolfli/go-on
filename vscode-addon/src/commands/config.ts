@@ -352,14 +352,14 @@ export function registerConfigRpcCommands(
 
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
-            "quality.baseline",
+            "config.baseline",
             `healthy=${Boolean(lifecycle.is_healthy)}, total=${Number(metrics.total_requests ?? 0)}, success=${Number(metrics.successful_requests ?? 0)}, failed=${Number(metrics.failed_requests ?? 0)}, avg_ms=${Number(metrics.avg_request_duration_ms ?? 0).toFixed(1)}, buffered=${Number(trace.buffered_events ?? 0)}, scenarios=${scenarioCount}, agent_timeout=${Number(timeouts.agent_request_total ?? 0)}, review_timeout=${Number(timeouts.review_gate_total ?? 0)}, probe_timeout=${Number(timeouts.runtime_probe_total ?? 0)}`,
           ]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
           i18n.getMessage(MessageKeys.rpcCommandFailed, [
-            "quality.baseline",
+            "config.baseline",
             getErrorMessage(error),
           ]),
         );

@@ -10,6 +10,8 @@
 //! - hub.store      — persist a value
 //! - hub.retrieve   — read a persisted value
 //! - hub.list       — list persisted keys
+//! - memory.ingest  — store shared memory entries synced from another node
+//!   (used by the DistributedMemoryBus HTTP transport)
 //!
 //! # Dead-code note
 //! This module is a design reserve for future multi-process architecture.
@@ -260,6 +262,21 @@ async fn handle_rpc(
         "hub.list" => {
             let keys: Vec<String> = vault.lock().await.keys().cloned().collect();
             json!({"ok": true, "keys": keys})
+        }
+        "memory.ingest" => {
+            // Receiving side of the DistributedMemoryBus HTTP transport: store
+            // the synced entries under a per-source key so they are observable
+            // via hub.list / hub.retrieve.
+            let entries = params.get("entries").cloned().unwrap_or(json!([]));
+            let source = params
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("remote")
+                .to_string();
+            let count = entries.as_array().map(|a| a.len()).unwrap_or(0);
+            let key = format!("memory.entries.{}", source);
+            vault.lock().await.insert(key.clone(), entries);
+            json!({"ok": true, "stored": count, "key": key})
         }
         _ => json_rpc_error(
             Some(req_id.clone()),

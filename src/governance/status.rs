@@ -119,21 +119,6 @@ impl GovernanceStatus {
             && self.subsystems.audit
             && self.subsystems.voting;
     }
-
-    /// Return a JSON summary for health endpoints.
-    pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "healthy": self.healthy,
-            "subsystems": {
-                "rationalization": self.subsystems.rationalization,
-                "security_governor": self.subsystems.security_governor,
-                "rbac": self.subsystems.rbac,
-                "runtime_controls": self.subsystems.runtime_controls,
-                "audit": self.subsystems.audit,
-                "voting": self.subsystems.voting,
-            },
-        })
-    }
 }
 
 use crate::governance::harness_bus::PuaGovernanceProfile;

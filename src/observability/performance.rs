@@ -154,12 +154,12 @@ impl PerformanceMonitor {
             0.0
         };
 
-        // Get memory usage (simplified - in real implementation, use system APIs)
-        let memory_usage = get_memory_usage();
-        // O8: Read CPU usage from /proc/stat + /proc/stat on Linux, or
-        // use `ps -o %cpu=` on macOS.  The default 0.0 is returned when
-        // no platform-specific backend is available.
-        let cpu_usage = get_cpu_usage();
+        // Get memory + CPU usage through a short-TTL cache instead of reading
+        // /proc/self/status and /proc/stat on every call.
+        let MemCpuSnapshot {
+            memory_usage_bytes: memory_usage,
+            cpu_usage_percent: cpu_usage,
+        } = cached_memory_and_cpu();
 
         PerformanceMetrics {
             total_ops,
@@ -173,6 +173,42 @@ impl PerformanceMonitor {
             cpu_usage_percent: cpu_usage,
         }
     }
+}
+
+/// Snapshot of the process memory + CPU values, refreshed at most every
+/// [`MEM_CPU_CACHE_TTL`].
+#[derive(Debug, Clone, Copy)]
+struct MemCpuSnapshot {
+    memory_usage_bytes: u64,
+    cpu_usage_percent: f64,
+}
+
+/// Memory + CPU reads hit `/proc` on Linux (or spawn `ps` on macOS) and run on
+/// every /health, /metrics, metrics.get, governance.status, … request — cache
+/// them briefly so hot paths stay off the filesystem.
+const MEM_CPU_CACHE_TTL: Duration = Duration::from_secs(5);
+
+fn cached_memory_and_cpu() -> MemCpuSnapshot {
+    static MEM_CPU_CACHE: OnceLock<Mutex<Option<(Instant, MemCpuSnapshot)>>> = OnceLock::new();
+    let cache = MEM_CPU_CACHE.get_or_init(|| Mutex::new(None));
+
+    let now = Instant::now();
+    if let Ok(guard) = cache.lock() {
+        if let Some((fetched_at, snapshot)) = guard.as_ref() {
+            if now.duration_since(*fetched_at) < MEM_CPU_CACHE_TTL {
+                return *snapshot;
+            }
+        }
+    }
+
+    let snapshot = MemCpuSnapshot {
+        memory_usage_bytes: get_memory_usage(),
+        cpu_usage_percent: get_cpu_usage(),
+    };
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((now, snapshot));
+    }
+    snapshot
 }
 
 /// Get memory usage in bytes for the current process.

@@ -2643,13 +2643,21 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
     // Aliases must be resolved before the governance gate so that
     // names like "bash", "grep", "run" are checked under their
     // canonical form and not rejected by the gate's allowlist.
-    let canonical_name = match name {
-        "read" => "read_file",
-        "write" | "create" => "write_file",
-        "search" | "grep" => "search_files",
-        "ls" => "list_directory",
-        "bash" | "execute_command" | "run" => "shell_exec",
-        other => other,
+    // Registered names (including registry aliases like "bash") are used
+    // as-is; the CLI-specific aliases below only apply to unregistered names
+    // so the registered content `grep` tool is not shadowed by the filename
+    // `search_files` alias.
+    let canonical_name = if tool_registry().get(name).is_some() {
+        name
+    } else {
+        match name {
+            "read" => "read_file",
+            "write" | "create" => "write_file",
+            "search" | "grep" => "search_files",
+            "ls" => "list_directory",
+            "run" => "shell_exec",
+            other => other,
+        }
     };
 
     // ── Governance gate: validate canonicalized tool + arguments ──

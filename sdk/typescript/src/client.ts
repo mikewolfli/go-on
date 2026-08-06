@@ -429,9 +429,9 @@ export class GoOnClient {
     return this.jsonRpc("workflow.execute", {});
   }
 
-  /** workflow.plan — generate a task plan. */
-  async workflowPlan(task: string): Promise<TaskPlanResponse> {
-    return this.jsonRpc("workflow.plan", { task });
+  /** task.plan — generate a task plan. */
+  async taskPlan(task: string): Promise<TaskPlanResponse> {
+    return this.jsonRpc("task.plan", { task });
   }
 
   /** task.execute — execute a specific task. */
@@ -441,9 +441,9 @@ export class GoOnClient {
 
   // ── Learning / Intelligence ────────────────────────────────────────
 
-  /** summary.get — get learning summary. */
-  async summaryGet(): Promise<LearningSummaryResponse> {
-    return this.jsonRpc("summary.get", {});
+  /** learning.summary — get learning summary. */
+  async learningSummary(): Promise<LearningSummaryResponse> {
+    return this.jsonRpc("learning.summary", {});
   }
 
   /** selector.status — get selector/router status. */
@@ -451,14 +451,14 @@ export class GoOnClient {
     return this.jsonRpc("selector.status", {});
   }
 
-  /** knowledge.search — search knowledge base. */
-  async knowledgeSearch(query: string): Promise<Record<string, unknown>> {
-    return this.jsonRpc("knowledge.search", { query });
+  /** knowledge.distill — run knowledge distillation. */
+  async knowledgeDistill(query: string): Promise<Record<string, unknown>> {
+    return this.jsonRpc("knowledge.distill", { query });
   }
 
-  /** rl.optimize — trigger reinforcement learning optimization. */
-  async rlOptimize(): Promise<Record<string, unknown>> {
-    return this.jsonRpc("rl.optimize", {});
+  /** rl.alignment.offline_eval — trigger RL alignment offline evaluation. */
+  async rlAlignmentOfflineEval(): Promise<Record<string, unknown>> {
+    return this.jsonRpc("rl.alignment.offline_eval", {});
   }
 
   // ── Optimization / Operations ──────────────────────────────────────

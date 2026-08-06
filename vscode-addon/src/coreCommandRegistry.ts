@@ -253,18 +253,37 @@ export function registerCoreCommands(
         return;
       }
 
+      // Methods that used to be listed as destructive but have NO backend
+      // handler (they would always return -32601 MethodNotFound). Map the
+      // ones with a real equivalent; reject the rest instead of sending a
+      // doomed request.
+      const DESTRUCTIVE_METHOD_ALIASES: Record<string, string> = {
+        "chat.delete": "session/delete",
+        "session.clear": "session/delete",
+        "memory.clear": "vector.clear",
+      };
+      const UNSUPPORTED_DESTRUCTIVE_METHODS = ["config.reset", "agent.remove"];
+      if (UNSUPPORTED_DESTRUCTIVE_METHODS.includes(method)) {
+        // eslint-disable-next-line no-console
+        console.warn(`[go-on] ${method} is not supported by this backend`);
+        vscode.window.showWarningMessage(
+          `'${method}' is not supported by this backend.`,
+        );
+        return;
+      }
+      const resolvedMethod = DESTRUCTIVE_METHOD_ALIASES[method] ?? method;
+      if (resolvedMethod !== method) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[go-on] ${method} is not a backend method; using ${resolvedMethod} instead`,
+        );
+      }
+
       // Confirm destructive operations before executing
-      const DESTRUCTIVE_METHODS = [
-        "chat.delete",
-        "config.reset",
-        "session.clear",
-        "memory.clear",
-        "agent.remove",
-        "shutdown",
-      ];
-      if (DESTRUCTIVE_METHODS.includes(method)) {
+      const DESTRUCTIVE_METHODS = ["session/delete", "vector.clear", "shutdown"];
+      if (DESTRUCTIVE_METHODS.includes(resolvedMethod)) {
         const confirmed = await vscode.window.showWarningMessage(
-          `Confirm executing '${method}'?`,
+          `Confirm executing '${resolvedMethod}'?`,
           { modal: true },
           "Confirm",
         );
@@ -292,7 +311,7 @@ export function registerCoreCommands(
       }
 
       try {
-        const result = await deps.sendRequest(method, params);
+        const result = await deps.sendRequest(resolvedMethod, params);
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.responseLabel, [JSON.stringify(result)]),
         );

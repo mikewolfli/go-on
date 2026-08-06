@@ -194,12 +194,12 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     // B51-23: After each assistant response, sync checkpoint to backend
     if (message.role === "assistant" && this.manager.isRunning()) {
       try {
-        await this.manager.sendRequest("checkpoint.create", {
-          session: this._currentSession,
+        await this.manager.sendRequest("conversation.checkpoint.create", {
+          conversation_id: this._currentSession,
           messages: [message],
         });
       } catch (err) {
-        log.warn("checkpoint.create failed:", err);
+        log.warn("conversation.checkpoint.create failed:", err);
       }
     }
   }
@@ -963,16 +963,33 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     this._currentSession = sessionName;
     let messages = this._getCurrentSessionMessages();
 
-    // B51-23: Try to load messages from backend checkpoint and merge
+    // B51-23: Try to load messages from backend checkpoint and merge.
+    // `checkpoint.load` is not a backend ACP method — use `checkpoint.list`
+    // (which returns the most recent checkpoint first) instead.
     if (this.manager.isRunning()) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[go-on] checkpoint.load is not supported by this backend; falling back to checkpoint.list",
+      );
       try {
-        const remote = await this.manager.sendRequest("checkpoint.load", {
-          session: sessionName,
-        });
-        if (remote && Array.isArray(remote)) {
-          const remoteMessages = remote as ChatMessage[];
-          // Merge: prefer local messages not yet on the backend
-          // If remote has more messages, extend local state
+        const remote = (await this.manager.sendRequest("checkpoint.list", {
+          conversation_id: sessionName,
+        })) as { checkpoints?: Array<{ messages?: ChatMessage[] }> } | null;
+        if (
+          remote &&
+          Array.isArray(remote.checkpoints) &&
+          remote.checkpoints.length > 0
+        ) {
+          // Most recent checkpoint is listed first; merge its messages.
+          // Backend checkpoint messages carry { role, content } — fill in a
+          // timestamp so persisted session data stays well-formed.
+          const remoteMessages = (remote.checkpoints[0].messages ?? []).map(
+            (m) => ({
+              role: m.role,
+              content: m.content,
+              timestamp: m.timestamp ?? new Date().toISOString(),
+            }),
+          );
           if (remoteMessages.length > messages.length) {
             messages = remoteMessages;
             this._sessions.set(sessionName, messages);

@@ -268,7 +268,7 @@ export function registerWorkflowRpcCommands(
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
           i18n.getMessage(MessageKeys.rpcCommandFailed, [
-            "checkpoint.create",
+            "conversation.checkpoint.create",
             getErrorMessage(error),
           ]),
         );

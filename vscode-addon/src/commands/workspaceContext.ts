@@ -180,7 +180,7 @@ export function registerWorkspaceContextCommands(
         return;
       }
 
-      await deps.sendRequest("tool", {
+      await deps.sendRequest("tools/call", {
         name: "code_index_search",
         arguments: {
           operation: "build",
@@ -189,7 +189,7 @@ export function registerWorkspaceContextCommands(
       });
 
       // Then search
-      const result = await deps.sendRequest("tool", {
+      const result = await deps.sendRequest("tools/call", {
         name: "code_index_search",
         arguments: {
           operation: "search",

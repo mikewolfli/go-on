@@ -6,15 +6,8 @@
 use crate::governance::pua::tool_execution_report;
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 use anyhow::{Context, Result};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 use tracing::debug;
-
-/// Compute the Unix timestamp (seconds since epoch) from a SystemTime.
-fn unix_timestamp(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
 
 /// Format a `Duration` into a human-friendly string.
 fn format_duration(d: Duration) -> String {
@@ -62,12 +55,9 @@ impl Tool for DateTimeTool {
 
 impl DateTimeTool {
     fn op_now(&self, _input: &ToolInput) -> Result<ToolOutput> {
-        let now = SystemTime::now();
-        let unix_secs = unix_timestamp(now);
-        let unix_millis = now
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        // Single-source timestamps (shared::timestamps) instead of a local copy.
+        let unix_secs = crate::shared::timestamps::now_ts().max(0) as u64;
+        let unix_millis = crate::shared::timestamps::now_ts_ms().max(0) as u64;
 
         // Build ISO 8601 string manually (no chrono dependency)
         let iso_8601 = iso_from_unix(unix_secs);

@@ -32,7 +32,6 @@ impl AcpMethodNames {
     pub const SESSION_SET_CONFIG_OPTION: &'static str = "session/set_config_option";
     pub const SESSION_CONFIG_SET: &'static str = "session/config/set";
     pub const SESSION_CONFIG_GET: &'static str = "session/config/get";
-    pub const SESSION_UPDATE: &'static str = "session/update";
     pub const SESSION_REQUEST_PERMISSION: &'static str = "session/request_permission";
     pub const TERMINAL_CREATE: &'static str = "terminal/create";
     pub const TERMINAL_OUTPUT: &'static str = "terminal/output";
@@ -62,7 +61,6 @@ impl AcpMethodNames {
         Self::SESSION_SET_CONFIG_OPTION,
         Self::SESSION_CONFIG_SET,
         Self::SESSION_CONFIG_GET,
-        Self::SESSION_UPDATE,
         Self::SESSION_REQUEST_PERMISSION,
         Self::TERMINAL_CREATE,
         Self::TERMINAL_OUTPUT,

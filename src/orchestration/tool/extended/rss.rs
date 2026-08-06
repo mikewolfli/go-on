@@ -25,6 +25,9 @@ impl Tool for RssReadTool {
         let max_items = input.payload["max_items"].as_u64().unwrap_or(20) as usize;
         let timeout_ms = input.payload["timeout_ms"].as_u64().unwrap_or(15_000);
 
+        // Enforce the same SSRF / private-IP sandbox as http_request.
+        super::http::validate_url(url)?;
+
         info!(url = %url, "rss_read: fetching feed");
 
         let client = reqwest::blocking::Client::builder()

@@ -38,7 +38,7 @@ pub mod types;
 pub use audit::PuaGovernanceProfile;
 pub use evaluator::PolicyEvaluator;
 pub use types::{
-    AgentExecutionPolicy, AuditConfig, AuditEntry, AuditLevel, CodeExecutionPolicy, Constraint,
+    AgentExecutionPolicy, AuditConfig, AuditLevel, CodeExecutionPolicy, Constraint,
     DegradationStrategy, DispatchPolicy, EscalationPolicy, EscalationReason, ExecutionMode,
     ExecutionPolicy, FailureStrategy, FallbackStrategy, FileWritePolicy, GovernancePolicy,
     IdempotencyPolicy, OutputVerdict, PolicyVerdict, PolicyViolation, QualityCompassConfig,
@@ -49,7 +49,7 @@ pub use types::{
 use crate::fault_tolerance::{FaultToleranceConfig, FaultToleranceEngine, FaultToleranceProfile};
 use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::drift::drift_protection::{
-    DriftProfile, DriftProtectionConfig, DriftProtectionEngine,
+    DriftPolicy, DriftProfile, DriftProtectionConfig, DriftProtectionEngine, DriftType,
 };
 use crate::governance::hardening::{
     BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle, SandboxLevel, TaskBudget,
@@ -126,6 +126,19 @@ impl HarnessBus {
 
         // GAP-B58-C16: Start drift monitor (checks for metric drift every 60 seconds).
         bus.start_drift_monitor(60);
+
+        // Wire a real drift policy so the monitor has thresholds to evaluate.
+        // Metrics are fed from the hot validation paths (see validate_action /
+        // verify_output): latency regressions are Performance drift.
+        let _ = bus.drift_engine.register_policy(DriftPolicy {
+            name: "harness_validation_latency".to_string(),
+            drift_types: vec![DriftType::Performance],
+            warning_threshold: 0.5,
+            critical_threshold: 0.8,
+            breach_threshold: 0.95,
+            cooldown_ms: 60_000,
+            auto_remediate: false,
+        });
 
         bus
     }
@@ -288,12 +301,8 @@ impl HarnessBus {
         }
 
         // Parallelize resilience recording and audit logging (they are independent).
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
         let audit_entry = AuditLogEntry {
-            timestamp: format!("{}", now_ms),
+            timestamp: crate::governance::audit::chrono_now(),
             task_id: format!("{:?}", ctx.task_type),
             phase: "pre_route".to_string(),
             agent: None,
@@ -312,13 +321,13 @@ impl HarnessBus {
             retention_policy: None,
             correlation_id: None,
         };
-        let resilience = self
-            .resilience_engine
-            .record_execution("harness-main", success);
-        let audit = async {
-            self.audit_log.record(audit_entry);
-        };
-        tokio::join!(resilience, audit);
+        // Record resilience outcome and audit entry synchronously: both are
+        // cheap in-memory operations (the audit's disk I/O is offloaded to its
+        // dedicated writer thread), so no tokio::join is needed here.
+        self.resilience_engine
+            .record_execution("harness-main", success)
+            .await;
+        self.audit_log.record(audit_entry);
 
         verdict
     }
@@ -329,7 +338,17 @@ impl HarnessBus {
     /// metrics. This is the single validation entry point used by
     /// `observe_phase()` and other callers.
     pub async fn validate_action(&self, tool: &str, args: &Value) -> ToolVerdict {
+        let start = Instant::now();
         let verdict = self.evaluator.check_tool_call(tool, args);
+
+        // Feed real latency telemetry into the drift engine (Performance drift).
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let _ = self.drift_engine.record_metric(
+            "harness.validate_action.latency_ms",
+            elapsed_ms,
+            0.0,
+            DriftType::Performance,
+        );
 
         // Sync profile update (scope ensures MutexGuard is dropped before any await)
         {
@@ -350,28 +369,45 @@ impl HarnessBus {
 
     /// Post-execution output verification with audit recording.
     pub fn verify_output(&self, output: &Value) -> OutputVerdict {
+        let start = Instant::now();
         let verdict = self.evaluator.verify_output(output);
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-        let audit_entry = AuditEntry {
-            timestamp: now_ms,
-            request_id: String::new(),
-            stage: "verify_output".to_string(),
-            verdict: if verdict.quality { "allow" } else { "deny" }.to_string(),
-            dispatch_policy: String::new(),
-            execution_policy: String::new(),
-            governance_policy: String::new(),
-            violations: if verdict.quality {
-                vec![]
-            } else {
-                vec!["output_verification_failed".to_string()]
-            },
-            context_snapshot: serde_json::json!({
-                "risk_score": verdict.risk_score,
-                "evidence_count": verdict.evidence.len(),
+
+        // Feed real latency telemetry into the drift engine (Performance drift).
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let _ = self.drift_engine.record_metric(
+            "harness.verify_output.latency_ms",
+            elapsed_ms,
+            0.0,
+            DriftType::Performance,
+        );
+        let audit_entry = AuditLogEntry {
+            timestamp: crate::governance::audit::chrono_now(),
+            task_id: String::new(),
+            phase: "harness_audit:verify_output".to_string(),
+            agent: None,
+            tool: None,
+            decision: if verdict.quality { "allow" } else { "deny" }.to_string(),
+            inputs: serde_json::json!({
+                "dispatch_policy": "",
+                "execution_policy": "",
+                "governance_policy": "",
+                "violations": if verdict.quality {
+                    vec![]
+                } else {
+                    vec!["output_verification_failed"]
+                },
+                "context_snapshot": {
+                    "risk_score": verdict.risk_score,
+                    "evidence_count": verdict.evidence.len(),
+                },
             }),
+            outputs: None,
+            error: None,
+            confidence: None,
+            data_classification: None,
+            compliance_tags: vec![],
+            retention_policy: None,
+            correlation_id: None,
         };
         self.audit(audit_entry);
         verdict
@@ -383,33 +419,8 @@ impl HarnessBus {
     /// The duplicate writes to `audit_trail` and `structured_audit_trail`
     /// were removed — they recorded the same data in different formats.
     /// The profile counter is still updated for metrics reporting.
-    pub fn audit(&self, entry: AuditEntry) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        self.audit_log.record(AuditLogEntry {
-            timestamp: format!("{}", now_ms),
-            task_id: entry.request_id.clone(),
-            phase: format!("harness_audit:{}", entry.stage),
-            agent: None,
-            tool: None,
-            decision: entry.verdict.clone(),
-            inputs: serde_json::json!({
-                "dispatch_policy": &entry.dispatch_policy,
-                "execution_policy": &entry.execution_policy,
-                "governance_policy": &entry.governance_policy,
-                "violations": &entry.violations,
-                "context_snapshot": &entry.context_snapshot,
-            }),
-            outputs: None,
-            error: None,
-            confidence: None,
-            data_classification: None,
-            compliance_tags: vec![],
-            retention_policy: None,
-            correlation_id: None,
-        });
+    pub fn audit(&self, entry: AuditLogEntry) {
+        self.audit_log.record(entry);
 
         let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");

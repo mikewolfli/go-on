@@ -652,8 +652,10 @@ impl Tool for GameMonitorTool {
             memory_bytes / 1024
         };
 
-        // Check if process window is active (crude check via PID existence)
-        let window_active = true; // Process exists, so it's "running"
+        // Window activity is derived from the real process state read from
+        // /proc/<pid>/stat: running (R), sleeping (S), or disk-wait (D) means
+        // the process is actively executing; stopped (T) or zombie (Z) does not.
+        let window_active = matches!(state.as_str(), "R" | "S" | "D");
 
         let report = tool_execution_report("game_monitor", Some("process_monitored"));
 
@@ -738,18 +740,21 @@ impl Tool for GameScreenCaptureTool {
                 pua_report: Some(report),
             })
         } else {
+            // No capture binary available — report failure honestly instead
+            // of returning success with a "note".
+            let note = "No screen capture tool found (tried: import, maim, scrot). Install imagemagick ('import') or maim.";
             Ok(ToolOutput {
-                success: true,
+                success: false,
                 result: Some(json!({
                     "window_title": window,
                     "output_path": output_path,
-                    "note": "No screen capture tool found (tried: import, maim, scrot). Install imagemagick ('import') or maim.",
+                    "note": note,
                     "suggestion": "sudo apt install imagemagick  # or: brew install imagemagick"
                 })),
-                error: None,
-                verification: Some("screen_captured".to_string()),
+                error: Some(note.to_string()),
+                verification: None,
                 audit_log: Some(format!(
-                    "game_screen_capture: no tool available for '{}'",
+                    "game_screen_capture: failed, no tool available for '{}'",
                     window
                 )),
                 pua_report: Some(report),
@@ -846,29 +851,97 @@ impl Tool for GameReplayRecorderTool {
 
         let report = tool_execution_report("game_replay_recorder", Some("replay_recorded"));
 
-        if ffmpeg_check.is_some() {
-            Ok(ToolOutput {
-                success: true,
-                result: Some(json!({
-                    "duration_secs": duration_secs,
-                    "output_path": output_path,
-                    "fps": fps,
-                    "format": "mp4",
-                    "status": "ready",
-                    "note": "ffmpeg is available. Use: ffmpeg -f x11grab -framerate {fps} -video_size 1920x1080 -i {display}.0 -t {duration_secs} {output_path}",
-                    "command_hint": format!("ffmpeg -f x11grab -framerate {} -t {} -i {}.0+0,0 -c:v libx264 -preset ultrafast -pix_fmt yuv420p {}", fps, duration_secs, display, output_path),
-                })),
-                error: None,
-                verification: Some("replay_recorded".to_string()),
-                audit_log: Some(format!(
-                    "game_replay_recorder: ready to record {}s to {}",
-                    duration_secs, output_path
-                )),
-                pua_report: Some(report),
-            })
+        if let Some(_check) = ffmpeg_check {
+            // Actually record the screen with ffmpeg x11grab instead of only
+            // reporting that recording is "ready".
+            let duration = duration_secs.to_string();
+            let fps_str = fps.to_string();
+            let display_input = display.to_string();
+            let result = std::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-f",
+                    "x11grab",
+                    "-framerate",
+                    &fps_str,
+                    "-i",
+                    &display_input,
+                    "-t",
+                    &duration,
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-pix_fmt",
+                    "yuv420p",
+                    output_path,
+                ])
+                .output();
+            match result {
+                Ok(out) if out.status.success() && output.exists() => {
+                    let file_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+                    Ok(ToolOutput {
+                        success: true,
+                        result: Some(json!({
+                            "duration_secs": duration_secs,
+                            "output_path": output_path,
+                            "fps": fps,
+                            "format": "mp4",
+                            "status": "recorded",
+                            "file_size_bytes": file_size,
+                        })),
+                        error: None,
+                        verification: Some("replay_recorded".to_string()),
+                        audit_log: Some(format!(
+                            "game_replay_recorder: recorded {}s to {} ({} bytes)",
+                            duration_secs, output_path, file_size
+                        )),
+                        pua_report: Some(report),
+                    })
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let tail: String = stderr.lines().rev().take(5).collect::<Vec<_>>().join("\n");
+                    let err_msg =
+                        format!("ffmpeg recording failed for '{}': {}", output_path, tail);
+                    Ok(ToolOutput {
+                        success: false,
+                        result: Some(json!({
+                            "duration_secs": duration_secs,
+                            "output_path": output_path,
+                            "fps": fps,
+                            "format": "mp4",
+                            "status": "failed",
+                        })),
+                        error: Some(err_msg.clone()),
+                        verification: None,
+                        audit_log: Some(format!(
+                            "game_replay_recorder: recording failed for '{}'",
+                            output_path
+                        )),
+                        pua_report: Some(report),
+                    })
+                }
+                Err(e) => Ok(ToolOutput {
+                    success: false,
+                    result: Some(json!({
+                        "duration_secs": duration_secs,
+                        "output_path": output_path,
+                        "fps": fps,
+                        "status": "failed",
+                    })),
+                    error: Some(format!("ffmpeg failed to start: {}", e)),
+                    verification: None,
+                    audit_log: Some(format!(
+                        "game_replay_recorder: ffmpeg failed to start for '{}'",
+                        output_path
+                    )),
+                    pua_report: Some(report),
+                }),
+            }
         } else {
             Ok(ToolOutput {
-                success: true,
+                success: false,
                 result: Some(json!({
                     "duration_secs": duration_secs,
                     "output_path": output_path,
@@ -878,8 +951,8 @@ impl Tool for GameReplayRecorderTool {
                     "note": "ffmpeg is not installed. Install it to enable screen recording.",
                     "suggestion": "sudo apt install ffmpeg  # or: brew install ffmpeg"
                 })),
-                error: None,
-                verification: Some("replay_recorded".to_string()),
+                error: Some("ffmpeg is not installed; cannot record screen replay".to_string()),
+                verification: None,
                 audit_log: Some("game_replay_recorder: ffmpeg unavailable".to_string()),
                 pua_report: Some(report),
             })

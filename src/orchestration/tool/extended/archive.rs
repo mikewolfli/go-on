@@ -428,11 +428,8 @@ fn extract_gzip_single(path: &Path, output_dir: &Path, _filter: Option<&str>) ->
     let input_data =
         fs::read(path).with_context(|| format!("failed to read gzip file: {}", path.display()))?;
 
-    let mut decoder = flate2::read::GzDecoder::new(&input_data[..]);
-    let mut decompressed = Vec::new();
-    decoder
-        .read_to_end(&mut decompressed)
-        .with_context(|| format!("failed to decompress gzip: {}", path.display()))?;
+    // Shared gzip decompression (single implementation with the `decompress` tool).
+    let decompressed = super::compress::decompress_gzip_bytes(&input_data)?;
 
     // Output filename: strip .gz extension
     let out_name = path

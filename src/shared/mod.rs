@@ -34,3 +34,21 @@ pub fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize)
         .map(|v| v as usize)
         .unwrap_or(default)
 }
+
+/// Raw SHA-256 digest of `data` (single source; per-module copies removed).
+pub fn sha256_bytes(data: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().to_vec()
+}
+
+/// Hex-encoded SHA-256 digest of `data`.
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(data);
+    hash.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .concat()
+}

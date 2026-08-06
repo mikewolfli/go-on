@@ -2066,13 +2066,25 @@ pub async fn handle_request(
                     )
                     .await
                 }
-                "health.check" => {
-                    if let Err(e) = run_health_check(server).await {
-                        tracing::warn!("health.check: run_health_check failed: {}", e);
-                    }
-                    crate::acp::r#impl::io::respond(server, request_id, Ok(json!({ "ok": true })))
+                "health.check" => match run_health_check(server).await {
+                    Ok(_) => {
+                        crate::acp::r#impl::io::respond(
+                            server,
+                            request_id,
+                            Ok(json!({ "ok": true })),
+                        )
                         .await
-                }
+                    }
+                    Err(e) => {
+                        tracing::warn!("health.check: run_health_check failed: {}", e);
+                        crate::acp::r#impl::io::respond(
+                            server,
+                            request_id,
+                            Ok(json!({ "ok": false, "error": e.to_string() })),
+                        )
+                        .await
+                    }
+                },
                 "governance.remediate" => {
                     crate::acp::r#impl::io::respond(
                         server,

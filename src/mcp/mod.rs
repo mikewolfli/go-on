@@ -9,7 +9,6 @@ use crate::tool::ToolRegistry;
 
 mod handlers;
 mod schema;
-mod tools;
 
 #[cfg(test)]
 mod tests;
@@ -19,7 +18,26 @@ pub use schema::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
     McpListResourcesResult, McpListToolsResult, McpResource, McpTool, ServerInfo, JSONRPC_VERSION,
 };
-pub use tools::error_codes;
+
+/// JSON-RPC error codes shared by the MCP layer.
+pub mod error_codes {
+    /// JSON-RPC Parse error
+    pub const PARSE_ERROR: i32 = -32700;
+    /// JSON-RPC Invalid Request
+    pub const INVALID_REQUEST: i32 = -32600;
+    /// JSON-RPC Method not found
+    pub const METHOD_NOT_FOUND: i32 = -32601;
+    /// JSON-RPC Invalid params
+    pub const INVALID_PARAMS: i32 = -32602;
+    /// JSON-RPC Internal error
+    pub const INTERNAL_ERROR: i32 = -32603;
+    /// Request cancelled by client notification.
+    pub const REQUEST_CANCELLED: i32 = -32800;
+    /// Request timed out before producing a result.
+    pub const REQUEST_TIMEOUT: i32 = -32801;
+    /// Server has not been initialized yet (MCP spec -32002).
+    pub const SERVER_NOT_INITIALIZED: i32 = -32002;
+}
 
 /// MCP Protocol Version — latest stable spec
 pub const MCP_VERSION: &str = "2024-11-05";
@@ -38,8 +56,6 @@ pub struct McpServer {
     /// and shutdown notification.
     pub acp_server: Option<Arc<AcpServer>>,
 
-    /// Current logging level, set via logging/setLevel.
-    pub logging_level: Arc<Mutex<Option<String>>>,
     /// Request IDs flagged by `notifications/cancelled`.
     pub(crate) cancelled_requests: Arc<Mutex<HashSet<String>>>,
 
@@ -81,7 +97,6 @@ impl McpServer {
                 name: server_name,
                 version: server_version,
             },
-            logging_level: Arc::new(Mutex::new(None)),
             cancelled_requests: Arc::new(Mutex::new(HashSet::new())),
             acp_server,
             initialized: AtomicBool::new(false),

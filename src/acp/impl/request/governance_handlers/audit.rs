@@ -1,13 +1,11 @@
 //! Governance audit event types and persistence.
 
 use super::*;
+use crate::governance::audit::AuditLogEntry;
 
 // ---------------------------------------------------------------------------
 // Governance audit event types
 // ---------------------------------------------------------------------------
-
-const GOVERNANCE_AUDIT_DIR: &str = ".goon/governance";
-const GOVERNANCE_AUDIT_FILE: &str = "audit.ndjson";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GovernanceAuditEvent {
@@ -18,45 +16,107 @@ pub(crate) struct GovernanceAuditEvent {
     pub(super) detail: Value,
 }
 
+/// Record a governance audit event through the process-wide canonical audit
+/// sink (`governance::audit::global_audit_log`). This replaced the separate
+/// `.goon/governance/audit.ndjson` file, which was un-chained, non-rotating,
+/// and excluded from the main audit stream / `governance.audit.verify`.
 pub(crate) fn append_governance_audit_event(event: &GovernanceAuditEvent) -> Result<()> {
-    let dir = std::path::Path::new(GOVERNANCE_AUDIT_DIR);
-    fs::create_dir_all(dir)?;
-    let path = dir.join(GOVERNANCE_AUDIT_FILE);
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    let line = serde_json::to_string(event)?;
-    writeln!(file, "{}", line)?;
+    crate::governance::audit::global_audit_log().record(AuditLogEntry {
+        timestamp: crate::governance::audit::chrono_now(),
+        task_id: event.action.clone(),
+        phase: "governance".to_string(),
+        agent: Some(event.actor.clone()),
+        tool: None,
+        decision: event.result.clone(),
+        inputs: event.detail.clone(),
+        outputs: None,
+        error: None,
+        confidence: None,
+        data_classification: None,
+        compliance_tags: vec![],
+        retention_policy: None,
+        correlation_id: None,
+    });
     Ok(())
 }
 
+/// Load the most recent governance audit events from the canonical sink's
+/// in-memory buffer (no per-request file I/O; the sink owns persistence).
 pub(crate) fn load_governance_audit_events(limit: usize) -> Result<Vec<GovernanceAuditEvent>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
 
-    let path = std::path::Path::new(GOVERNANCE_AUDIT_DIR).join(GOVERNANCE_AUDIT_FILE);
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e.into()),
-    };
-    let mut events = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let event: GovernanceAuditEvent = serde_json::from_str(trimmed)?;
-        events.push(event);
-    }
+    let mut events: Vec<GovernanceAuditEvent> = crate::governance::audit::global_audit_log()
+        .entries()
+        .into_iter()
+        .filter(|entry| entry.phase == "governance")
+        .map(|entry| GovernanceAuditEvent {
+            timestamp: iso_to_ms(&entry.timestamp)
+                .unwrap_or_else(|| crate::shared::timestamps::now_ts_ms().max(0) as u64),
+            action: entry.task_id.clone(),
+            actor: entry.agent.clone().unwrap_or_default(),
+            result: entry.decision.clone(),
+            detail: entry.inputs.clone(),
+        })
+        .collect();
 
-    if events.len() > limit {
-        Ok(events.split_off(events.len() - limit))
-    } else {
-        Ok(events)
+    let len = events.len();
+    if len > limit {
+        events.drain(0..len - limit);
     }
+    Ok(events)
+}
+
+/// Parse the canonical sink's ISO-8601 timestamp (`YYYY-MM-DDTHH:MM:SSZ`,
+/// seconds precision) into milliseconds since epoch.
+fn iso_to_ms(iso: &str) -> Option<u64> {
+    let digits: Vec<&str> = iso
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if digits.len() < 6 {
+        return None;
+    }
+    let year: u64 = digits[0].parse().ok()?;
+    let month: u64 = digits[1].parse().ok()?;
+    let day: u64 = digits[2].parse().ok()?;
+    let hour: u64 = digits[3].parse().ok()?;
+    let minute: u64 = digits[4].parse().ok()?;
+    let second: u64 = digits[5].parse().ok()?;
+    if !(1970..=2100).contains(&year) || !(1..=12).contains(&month) {
+        return None;
+    }
+    fn days_in_year(y: u64) -> u64 {
+        if y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400)) {
+            366
+        } else {
+            365
+        }
+    }
+    fn days_in_month(y: u64, m: u64) -> u64 {
+        match m {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => {
+                if y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400)) {
+                    29
+                } else {
+                    28
+                }
+            }
+            _ => 0,
+        }
+    }
+    let mut total_days = 0u64;
+    for y in 1970..year {
+        total_days += days_in_year(y);
+    }
+    for m in 1..month {
+        total_days += days_in_month(year, m);
+    }
+    total_days += day.saturating_sub(1);
+    Some((total_days * 86400 + hour * 3600 + minute * 60 + second) * 1000)
 }
 
 // ---------------------------------------------------------------------------

@@ -381,12 +381,7 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             .get("repair_cycle_effective_ratio")
             .and_then(Value::as_f64)
             .unwrap_or(0.0)
-            > 0.0
-        || autonomy_runtime_metrics
-            .get("idempotency_hit_total")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            > 0;
+            > 0.0;
     let autonomy_perf = json!({
         "p95_latency_ms": super::runtime_pack::estimate_p95_from_buckets(
             &runtime_snapshot.request_latency_bucket_counts,

@@ -10,6 +10,7 @@ use crate::acp::helpers::tool_governance::{
 };
 use crate::governance::hardening::{task_budget_for_target, BudgetTracker, GovernanceAction};
 use crate::orchestration::skill::discovery_cache::SkillDiscovery;
+use crate::orchestration::skill::Skill as _;
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
 
 /// Global `SkillDiscovery` engine, lazily initialized on first `skill-finder` call.
@@ -756,7 +757,7 @@ pub(crate) async fn execute_mcp_tool_call(
         _ => {
             let registry = global_tool_registry();
             if let Some(tool) = registry.get(name) {
-                validate_tool_arguments(name, arguments)?;
+                crate::shared::tool_descriptors::validate_required_arguments(name, arguments)?;
                 // Use spawn_blocking to avoid blocking the tokio runtime thread
                 // with synchronous tool execution (e.g. shell_exec may take 60s).
                 let input = ToolInput {
@@ -820,33 +821,65 @@ pub(crate) async fn execute_mcp_tool_call(
                 None => {
                     if let Some(imported) = find_enabled_imported_skill(server, name)? {
                         if let Some(manifest) = load_imported_skill_manifest(&imported) {
-                            return Ok(json!({
-                                "ok": true,
-                                "executed": false,
-                                "mode": "imported_manifest",
-                                "code": "NOT_IMPLEMENTED_EXECUTOR",
-                                "name": manifest.name,
-                                "version": manifest.version,
-                                "source": imported.source,
-                                "source_ref": imported.source_ref,
-                                "sha256": imported.sha256,
-                                "input": arguments,
-                                "note": "Imported skill is manifest-backed in this release; execution returns structured passthrough until runtime plugin executor is enabled."
-                            }));
+                            // Real execution: prompt-based imported skills run through the
+                            // same LLM executor as registry prompt skills (PromptBasedSkill).
+                            // If no LLM agent is wired, execute() returns a clear error.
+                            if let Some(prompt_template) = &manifest.prompt_template {
+                                // Convert the manifest's JSON-schema `properties`
+                                // map into the `{name -> type}` shape that
+                                // PromptBasedSkill expects.
+                                let input_schema: std::collections::HashMap<String, String> =
+                                    manifest
+                                        .input_schema
+                                        .get("properties")
+                                        .and_then(Value::as_object)
+                                        .map(|props| {
+                                            props
+                                                .iter()
+                                                .filter_map(|(k, v)| {
+                                                    v.get("type")
+                                                        .and_then(Value::as_str)
+                                                        .map(|t| (k.clone(), t.to_string()))
+                                                })
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                let skill =
+                                    crate::orchestration::skill::PromptBasedSkill {
+                                        name: manifest.name.clone(),
+                                        description: manifest.description.clone(),
+                                        prompt_template: prompt_template.clone(),
+                                        input_schema,
+                                        timeout_secs: 120,
+                                        max_retries: 2,
+                                        disable_model_invocation: manifest.disable_model_invocation,
+                                        policy: None,
+                                    };
+                                let result = skill.execute(arguments).await?;
+                                return Ok(json!({
+                                    "ok": true,
+                                    "executed": true,
+                                    "mode": "imported_manifest",
+                                    "name": manifest.name,
+                                    "version": manifest.version,
+                                    "source": imported.source,
+                                    "source_ref": imported.source_ref,
+                                    "sha256": imported.sha256,
+                                    "result": result,
+                                }));
+                            }
+                            anyhow::bail!(
+                                "imported skill '{}' has no executable content (no \
+                                 prompt_template in manifest {}); cannot execute",
+                                manifest.name,
+                                imported.manifest_path
+                            );
                         }
-                        return Ok(json!({
-                            "ok": true,
-                            "executed": false,
-                            "mode": "imported_manifest",
-                            "code": "NOT_IMPLEMENTED_EXECUTOR",
-                            "name": imported.name,
-                            "version": imported.version,
-                            "source": imported.source,
-                            "source_ref": imported.source_ref,
-                            "sha256": imported.sha256,
-                            "input": arguments,
-                            "note": "Imported skill manifest is unavailable; returned metadata passthrough response."
-                        }));
+                        anyhow::bail!(
+                            "imported skill '{}' manifest is unavailable at {}; cannot execute",
+                            imported.name,
+                            imported.manifest_path
+                        );
                     }
                     anyhow::bail!("unknown tool or skill: {name}")
                 }
@@ -910,10 +943,6 @@ pub(super) fn governance_action_for_tool(name: &str) -> GovernanceAction {
 
 pub(super) fn local_tool_descriptor(name: &'static str) -> Value {
     crate::shared::tool_descriptors::tool_descriptor_value(name)
-}
-
-pub(super) fn validate_tool_arguments(tool_name: &str, tool_input: &Value) -> Result<()> {
-    crate::shared::tool_descriptors::validate_required_arguments(tool_name, tool_input)
 }
 
 #[cfg(test)]

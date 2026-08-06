@@ -799,24 +799,34 @@ impl CapabilityBus {
         success: bool,
         quality_score: f64,
     ) {
-        use crate::governance::harness_bus::AuditEntry;
-        let now_for_audit = crate::shared::timestamps::now_ts_ms() as u64;
-        let entry = AuditEntry {
-            timestamp: now_for_audit as i64,
-            request_id: format!("evolve_{}_{}", state.0, action),
-            stage: "evolve".to_string(),
-            verdict: if success { "allowed" } else { "failed" }.to_string(),
-            dispatch_policy: "capability_bus".to_string(),
-            execution_policy: "evolve".to_string(),
-            governance_policy: "learn".to_string(),
-            violations: vec![],
-            context_snapshot: serde_json::json!({
-                "state": state,
-                "action": action,
-                "reward": reward,
-                "success": success,
-                "quality": quality_score,
+        use crate::governance::audit::AuditLogEntry;
+        let entry = AuditLogEntry {
+            timestamp: crate::governance::audit::chrono_now(),
+            task_id: format!("evolve_{}_{}", state.0, action),
+            phase: "harness_audit:evolve".to_string(),
+            agent: None,
+            tool: None,
+            decision: if success { "allowed" } else { "failed" }.to_string(),
+            inputs: serde_json::json!({
+                "dispatch_policy": "capability_bus",
+                "execution_policy": "evolve",
+                "governance_policy": "learn",
+                "violations": [],
+                "context_snapshot": {
+                    "state": state,
+                    "action": action,
+                    "reward": reward,
+                    "success": success,
+                    "quality": quality_score,
+                },
             }),
+            outputs: None,
+            error: None,
+            confidence: None,
+            data_classification: None,
+            compliance_tags: vec![],
+            retention_policy: None,
+            correlation_id: None,
         };
         self.harness.audit(entry);
     }

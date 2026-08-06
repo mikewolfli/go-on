@@ -520,6 +520,8 @@ fn audit_signing_key_from_env() -> Option<(String, Vec<u8>)> {
 ///
 /// The archive (`<chain>.1.gz`) keeps the completed chain intact, and the
 /// in-memory auditor is replaced with a fresh genesis chain for the new file.
+/// The signing key (if `GOON_AUDIT_SIGNING_KEY` is set) is re-read via
+/// [`open_chain`] so signature verification stays intact across rotation.
 /// Returns `Ok(true)` when a rotation happened.
 fn rotate_chain_if_needed(
     chain: &mut Option<HashChainAuditor>,
@@ -533,7 +535,7 @@ fn rotate_chain_if_needed(
         return Ok(false);
     }
     rotate_file(chain_path)?;
-    *chain = Some(HashChainAuditor::new(chain_path.to_path_buf())?);
+    *chain = open_chain(chain_path);
     Ok(true)
 }
 
@@ -545,46 +547,6 @@ pub(crate) fn audit_chain_path() -> PathBuf {
         .parent()
         .map(|p| p.join("audit_chain.ndjson"))
         .unwrap_or_else(|| PathBuf::from("audit_chain.ndjson"))
-}
-
-/// Convenience wrapper that creates an [`AuditLogEntry`] from simple arguments
-/// and records it into the given [`ThreadSafeAuditLog`].
-///
-/// ## Example
-///
-/// ```text
-/// // This example uses crate-internal paths not accessible from doctests.
-/// use go_on::governance::audit::record_audit_threadsafe;
-/// use go_on::governance::audit::ThreadSafeAuditLog;
-///
-/// let log = ThreadSafeAuditLog::new(100);
-/// record_audit_threadsafe(&log, "task-001", "verification", "high_risk_detected", None, None);
-/// ```
-pub fn record_audit_threadsafe(
-    log: &ThreadSafeAuditLog,
-    task_id: &str,
-    phase: &str,
-    decision: &str,
-    error: Option<String>,
-    correlation_id: Option<String>,
-) {
-    let entry = AuditLogEntry {
-        timestamp: chrono_now(),
-        task_id: task_id.to_string(),
-        phase: phase.to_string(),
-        agent: None,
-        tool: None,
-        decision: decision.to_string(),
-        inputs: serde_json::Value::Null,
-        outputs: None,
-        error,
-        confidence: None,
-        data_classification: None,
-        compliance_tags: vec![],
-        retention_policy: None,
-        correlation_id,
-    };
-    log.record(entry);
 }
 
 /// Get the current UTC time as an ISO-8601 string.

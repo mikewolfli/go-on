@@ -124,7 +124,10 @@ fn is_private_ipv6(ip: Ipv6Addr) -> bool {
 }
 
 /// Validate URL scheme and block private IPs (LAYER 2 runtime sandbox).
-fn validate_url(url: &str) -> Result<()> {
+///
+/// Shared by `http_request`, `web_scrape`, and `rss_read` so the SSRF /
+/// private-IP protection applies to every URL-fetching tool.
+pub(crate) fn validate_url(url: &str) -> Result<()> {
     let parsed = url::Url::parse(url).map_err(|e| {
         anyhow::anyhow!("{}", tf("error.invalid_url", &[("error", &e.to_string())]))
     })?;

@@ -30,6 +30,9 @@ impl Tool for WebScrapeTool {
         let selector = input.payload["selector"].as_str();
         let timeout_ms = input.payload["timeout_ms"].as_u64().unwrap_or(15_000);
 
+        // Enforce the same SSRF / private-IP sandbox as http_request.
+        super::http::validate_url(url)?;
+
         info!(url = %url, "web_scrape: fetching page");
 
         let client = reqwest::blocking::Client::builder()

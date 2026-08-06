@@ -366,20 +366,3 @@ pub struct OutputVerdict {
     pub evidence: Vec<String>,
     pub risk_score: f64,
 }
-
-// ---------------------------------------------------------------------------
-// Audit entry
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditEntry {
-    pub timestamp: i64,
-    pub request_id: String,
-    pub stage: String,
-    pub verdict: String,
-    pub dispatch_policy: String,
-    pub execution_policy: String,
-    pub governance_policy: String,
-    pub violations: Vec<String>,
-    pub context_snapshot: serde_json::Value,
-}

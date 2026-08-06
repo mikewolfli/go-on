@@ -272,7 +272,6 @@ pub(crate) async fn start_server(
         autotune_state,
         autotune_config,
         autotune_state_path,
-        http_client,
         skill_registry,
         Some(Arc::clone(&config)),
         persist_cache,
@@ -397,8 +396,10 @@ pub(crate) async fn handle_validation_mode(
     info!("loading config from {}", config_path.display());
     let config = Arc::new(AppConfig::load(config_path)?);
 
-    // Perform enhanced configuration validation
-    let validation_result = config_validation::validate_config_file(config_path)?;
+    // Perform enhanced configuration validation (reuses the already-loaded
+    // config — avoids a second AppConfig::load from disk on every startup).
+    let validation_result =
+        config_validation::validate_config_with(config_path, config.as_ref().clone())?;
 
     // Also run legacy validation for compatibility
     let health_report = validate_runtime_readiness(config_path, &config)?;

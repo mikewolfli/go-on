@@ -13,15 +13,14 @@ use crate::acp::r#impl::request::{
 use crate::acp::server::AcpServer;
 use crate::governance::pua::PuaRuleEngine;
 
-use crate::protocol::rpc_protocol::RequestTraceContext;
-use crate::tool::ToolInput;
-
-use super::tools::validate_required_arguments;
 use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
     McpListResourcesResult, McpListToolsResult, McpResource, McpServer, JSONRPC_VERSION,
     MCP_VERSION, SUPPORTED_MCP_VERSIONS,
 };
+use crate::protocol::rpc_protocol::RequestTraceContext;
+use crate::shared::tool_descriptors::validate_required_arguments;
+use crate::tool::ToolInput;
 
 /// Signals an invalid / missing parameter in an MCP request.
 /// Dispatched as JSON-RPC INVALID_PARAMS (-32602).
@@ -356,12 +355,6 @@ impl McpServer {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 if let Some(ref lvl) = level {
-                    let mut guard = self.logging_level.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
-                    *guard = Some(lvl.clone());
-
                     // Map MCP log levels to RUST_LOG-compatible directives.
                     // MCP: debug info notice warning error critical alert emergency
                     // RUST_LOG: trace debug info  warn  error
@@ -1382,7 +1375,7 @@ fn filter_tools_by_exposure(tools: &mut Vec<Value>, _server: &AcpServer) {
     // Deferred tool name prefixes — niche domains not needed in everyday use.
     const DEFERRED_PREFIXES: &[&str] = &[
         "stl_", "obj_", "dxf_", "step_", "ply_", "iges_", "gltf_", "gcode_", "gpx_", "geo_",
-        "svg_", "barcode_", "qrcode_", "game_", "cad_", "image_",
+        "svg_", "barcode_", "game_", "cad_", "image_",
     ];
     // Deferred exact tool names.
     const DEFERRED_NAMES: &[&str] = &[
@@ -1408,9 +1401,8 @@ fn filter_tools_by_exposure(tools: &mut Vec<Value>, _server: &AcpServer) {
         "toml_write",
         "yaml_write",
         "web_scrape",
-        "container_build",
-        "container_run",
-        "container_stop",
+        "docker_build",
+        "docker_push",
         "lint_run",
         "template_render",
         "search_packages",
@@ -1424,7 +1416,6 @@ fn filter_tools_by_exposure(tools: &mut Vec<Value>, _server: &AcpServer) {
         "read_file_lines",
         "code_metrics",
         "code_index_search",
-        "compile_and_run",
     ];
 
     tools.retain(|tool| {

@@ -12,12 +12,74 @@ const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/toke
 const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
 const COPILOT_MODELS_CACHE_TTL_SECS: u64 = 300;
 
+/// Snapshot of the proxy environment variables that determine which
+/// [`reqwest::Client`] configuration [`build_github_client`] produces. Used to
+/// decide whether a cached client can be reused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProxyEnvSnapshot {
+    https_proxy: Option<String>,
+    https_proxy_lower: Option<String>,
+    all_proxy: Option<String>,
+    all_proxy_lower: Option<String>,
+}
+
+impl ProxyEnvSnapshot {
+    fn capture() -> Self {
+        Self {
+            https_proxy: std::env::var("HTTPS_PROXY").ok(),
+            https_proxy_lower: std::env::var("https_proxy").ok(),
+            all_proxy: std::env::var("ALL_PROXY").ok(),
+            all_proxy_lower: std::env::var("all_proxy").ok(),
+        }
+    }
+}
+
+/// Last successfully built Copilot HTTP client, keyed on the proxy env
+/// snapshot it was built from. Rebuilt only when the env vars change.
+type GithubClientCacheEntry = (ProxyEnvSnapshot, reqwest::Client);
+static GITHUB_CLIENT_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<GithubClientCacheEntry>>> =
+    std::sync::OnceLock::new();
+
 /// Try to build a [`reqwest::Client`] with proxy autodetection.
 ///
 /// Checks `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` / `all_proxy` environment
 /// variables first.  If none are set, probes a list of well-known local proxy ports.
 /// Falls back to a plain (direct) client if nothing works.
+///
+/// The auto-detect probe performs up to 7 serial TCP connects with a 100 ms
+/// timeout each (~700 ms worst case) — far too expensive to repeat for every
+/// request. The built client is cached keyed on the proxy env snapshot and
+/// reused until the env vars change.
 fn build_github_client() -> reqwest::Client {
+    let env_snapshot = ProxyEnvSnapshot::capture();
+    let cache = GITHUB_CLIENT_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+
+    // Fast path: reuse the cached client when the proxy env is unchanged.
+    if let Ok(guard) = cache.lock() {
+        if let Some((cached_env, client)) = guard.as_ref() {
+            if *cached_env == env_snapshot {
+                return client.clone();
+            }
+        }
+    }
+
+    // Slow path: (re)build the client from scratch (probe logic unchanged).
+    let client = build_github_client_uncached();
+    if let Ok(mut guard) = cache.lock() {
+        // A concurrent caller may have built with the same env while we were
+        // probing — prefer its result so the cache is not thrashed.
+        if let Some((cached_env, cached_client)) = guard.as_ref() {
+            if *cached_env == env_snapshot {
+                return cached_client.clone();
+            }
+        }
+        *guard = Some((env_snapshot, client.clone()));
+    }
+    client
+}
+
+/// The uncached probe/selection logic. See [`build_github_client`].
+fn build_github_client_uncached() -> reqwest::Client {
     // 1. Check explicitly-configured env vars
     let proxy_env = std::env::var("HTTPS_PROXY")
         .or_else(|_| std::env::var("https_proxy"))
@@ -1547,6 +1609,7 @@ pub(super) async fn handle_copilot_device_code_poll(
 #[cfg(test)]
 mod tests {
     use super::estimate_p95_from_buckets;
+    use super::{build_github_client, ProxyEnvSnapshot, GITHUB_CLIENT_CACHE};
 
     #[test]
     fn estimate_p95_from_buckets_skewed_samples_differ_from_average() {
@@ -1571,6 +1634,51 @@ mod tests {
         assert!(
             p95 > 500.0,
             "p95 should be in the higher bucket for skewed distribution"
+        );
+    }
+
+    #[test]
+    fn github_client_cache_rebuilds_only_when_proxy_env_changes() {
+        use temp_env::with_vars;
+
+        // Both proxy URLs point at closed ports, so building the client is
+        // fast and never touches the network.
+        with_vars(
+            [
+                ("HTTPS_PROXY", Some("http://127.0.0.1:1")),
+                ("https_proxy", None),
+                ("ALL_PROXY", None),
+                ("all_proxy", None),
+            ],
+            || {
+                let _first = build_github_client();
+                // Unchanged env: the second call must take the fast path and
+                // reuse the cached client instead of re-probing proxy ports.
+                let _second = build_github_client();
+
+                let cache = GITHUB_CLIENT_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+                let guard = cache.lock().unwrap();
+                let (cached_env, _client) = guard.as_ref().expect("client must be cached");
+                assert_eq!(*cached_env, ProxyEnvSnapshot::capture());
+            },
+        );
+
+        // Changing the proxy env must trigger a rebuild and refresh the cache
+        // with the new snapshot.
+        with_vars(
+            [
+                ("HTTPS_PROXY", Some("http://127.0.0.1:2")),
+                ("https_proxy", None),
+                ("ALL_PROXY", None),
+                ("all_proxy", None),
+            ],
+            || {
+                let _rebuilt = build_github_client();
+                let cache = GITHUB_CLIENT_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+                let guard = cache.lock().unwrap();
+                let (cached_env, _client) = guard.as_ref().expect("client must be cached");
+                assert_eq!(*cached_env, ProxyEnvSnapshot::capture());
+            },
         );
     }
 }

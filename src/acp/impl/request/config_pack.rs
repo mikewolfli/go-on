@@ -359,12 +359,54 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
     }
 
     // Notify connected clients that configuration was reloaded so they can
-    // refresh their settings views without polling.
-    crate::protocol::state_sync::publish_event(
-        crate::protocol::state_sync::StateSyncEvent::ConfigReloaded {
-            changed_keys: vec!["runtime".to_string()],
-        },
-    );
+    // refresh their settings views without polling. When the reload changed
+    // the agent set or the configured agent models, publish the dedicated
+    // AgentsChanged / ModelsChanged events the clients subscribe to.
+    use crate::protocol::state_sync::StateSyncEvent;
+    use std::collections::HashSet;
+
+    let old_agents: HashSet<String> = server
+        .agent_registry()
+        .map(|registry| registry.names().into_iter().collect())
+        .unwrap_or_default();
+    let new_agents: HashSet<String> = config.provider.agents.keys().cloned().collect();
+    let added_agents: Vec<String> = new_agents.difference(&old_agents).cloned().collect();
+    let removed_agents: Vec<String> = old_agents.difference(&new_agents).cloned().collect();
+    if !added_agents.is_empty() || !removed_agents.is_empty() {
+        crate::protocol::state_sync::publish_event(StateSyncEvent::AgentsChanged {
+            added: added_agents,
+            removed: removed_agents,
+        });
+    }
+
+    // Models are derived from the per-agent `model` configuration. Diff against
+    // the last published set so clients learn about model changes on reload.
+    static LAST_CONFIG_MODELS: std::sync::OnceLock<std::sync::Mutex<Option<HashSet<String>>>> =
+        std::sync::OnceLock::new();
+    let new_models: HashSet<String> = config
+        .provider
+        .agents
+        .values()
+        .filter_map(|agent| agent.model.clone())
+        .collect();
+    let models_changed = LAST_CONFIG_MODELS
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .map(|mut last| {
+            let changed = last.as_ref() != Some(&new_models);
+            *last = Some(new_models.clone());
+            changed
+        })
+        .unwrap_or(false);
+    if models_changed {
+        let mut models: Vec<String> = new_models.into_iter().collect();
+        models.sort();
+        crate::protocol::state_sync::publish_event(StateSyncEvent::ModelsChanged { models });
+    }
+
+    crate::protocol::state_sync::publish_event(StateSyncEvent::ConfigReloaded {
+        changed_keys: vec!["runtime".to_string()],
+    });
 
     let report = validate_runtime_readiness(&config_path, &config)?;
     let warnings = report.warning_messages();

@@ -35,8 +35,6 @@ pub static INTEL_HUB_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 pub static CONSENSUS_ROUNDS: AtomicU64 = AtomicU64::new(0);
 /// How many rationalization evaluations were performed.
 pub static RATIONALIZATION_COUNT: AtomicU64 = AtomicU64::new(0);
-/// How many audit entries were recorded.
-pub static AUDIT_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Whether Delphi-method debate voting is enabled in rationalize_decision.
 static USE_DELPHI_DEBATE: AtomicBool = AtomicBool::new(true);
@@ -71,7 +69,7 @@ pub fn hub_metrics() -> serde_json::Value {
         "intel_hub_activations": INTEL_HUB_ACTIVATIONS.load(Ordering::Relaxed),
         "consensus_rounds": CONSENSUS_ROUNDS.load(Ordering::Relaxed),
         "rationalization_count": RATIONALIZATION_COUNT.load(Ordering::Relaxed),
-        "audit_entry_count": AUDIT_ENTRY_COUNT.load(Ordering::Relaxed),
+        "audit_entry_count": crate::governance::audit::global_audit_log().len() as u64,
     })
 }
 
@@ -558,7 +556,6 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
 pub fn record_audit_entry(entry: AuditLogEntry) {
     // Single process-wide audit sink (governance::audit::global_audit_log).
     crate::governance::audit::global_audit_log().record(entry);
-    AUDIT_ENTRY_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 // ── AuditEntryBuilder ──────────────────────────────────────────────────────
@@ -711,6 +708,9 @@ mod tests {
             .confidence(0.95)
             .build();
         record_audit_entry(entry);
-        assert!(AUDIT_ENTRY_COUNT.load(Ordering::Relaxed) > 0);
+        assert!(
+            !crate::governance::audit::global_audit_log().is_empty(),
+            "audit entry must reach the canonical sink"
+        );
     }
 }

@@ -928,6 +928,17 @@ pub fn validate_config_file(config_path: &Path) -> Result<ValidationResult> {
     let config = crate::config::AppConfig::load(config_path)
         .with_context(|| format!("failed to load config from {}", config_path.display()))?;
 
+    validate_config_with(config_path, config)
+}
+
+/// Validate an already-loaded configuration (avoids a second `AppConfig::load`
+/// on startup paths that already have the config in memory).
+pub fn validate_config_with(
+    config_path: &Path,
+    config: crate::config::AppConfig,
+) -> Result<ValidationResult> {
+    info!("Validating configuration: {}", config_path.display());
+
     // Create validator and validate
     let validator = ConfigValidator::new(config_path, config);
     let result = validator.validate();

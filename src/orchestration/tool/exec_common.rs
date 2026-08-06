@@ -1,8 +1,8 @@
 //! Shared execution infrastructure for tool implementations.
 //!
 //! Centralizes timeout handling, output truncation, result building, and
-//! blocked-command filtering so individual tools (shell_exec, compile_and_run,
-//! etc.) don't duplicate these patterns.
+//! blocked-command filtering so individual tools (shell_exec, build,
+//! git, docker, etc.) don't duplicate these patterns.
 //!
 //! ## Rationale
 //!
@@ -46,7 +46,7 @@ pub fn truncate_output(s: &mut String) {
 
 /// Build a standard `ToolOutput` for shell command execution results.
 ///
-/// Used by `shell_exec`, `compile_and_run`, and any tool that runs an
+/// Used by `shell_exec` and any tool that runs an
 /// external command and wants consistent output formatting.
 pub fn build_shell_tool_output(
     success: bool,

@@ -129,6 +129,17 @@ impl Tool for CompressTool {
 
 // ── DecompressTool ──────────────────────────────────────────────────────────
 
+/// Shared gzip decompression helper used by both `decompress` and the archive
+/// extraction path so the two entry points cannot drift.
+pub(crate) fn decompress_gzip_bytes(input_data: &[u8]) -> Result<Vec<u8>> {
+    let mut decoder = flate2::read::GzDecoder::new(input_data);
+    let mut decompressed_data = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed_data)
+        .context("failed to decompress gzip data")?;
+    Ok(decompressed_data)
+}
+
 pub struct DecompressTool;
 
 impl Tool for DecompressTool {
@@ -177,11 +188,7 @@ impl Tool for DecompressTool {
 
         let input_len = input_data.len();
 
-        let mut decoder = flate2::read::GzDecoder::new(&input_data[..]);
-        let mut decompressed_data = Vec::new();
-        decoder
-            .read_to_end(&mut decompressed_data)
-            .context("failed to decompress gzip data")?;
+        let decompressed_data = decompress_gzip_bytes(&input_data)?;
 
         std::fs::write(&validated_output, &decompressed_data).with_context(|| {
             format!(

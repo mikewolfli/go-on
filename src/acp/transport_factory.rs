@@ -28,17 +28,34 @@ fn resolve_path(config_path: &Path, raw_path: &str) -> PathBuf {
 ///
 /// Retries the `factory` closure up to 3 times with exponential backoff
 /// (1s, 2s, 4s). The `factory` receives the connection URL string and should
-/// perform connection + migration + health check internally.
+/// perform connection + migration + health check internally. The whole retry
+/// loop runs on the blocking pool (the retry sleep is a blocking sleep).
 #[cfg(feature = "backend-postgres")]
 async fn initialize_postgres_backend<T, F>(url: &str, factory: F) -> Result<T>
 where
     T: Send + 'static,
-    F: FnOnce(String) -> Result<T> + Send + 'static,
+    F: Fn(String) -> Result<T> + Send + 'static,
 {
     let url_owned = url.to_string();
-    tokio::task::spawn_blocking(move || factory(url_owned))
-        .await
-        .map_err(|e| anyhow::anyhow!("postgres init join error: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        let mut last_error: Option<anyhow::Error> = None;
+        for attempt in 0..3 {
+            let backoff_secs = 1u64 << attempt; // 1s, 2s, 4s
+            match factory(url_owned.clone()) {
+                Ok(value) => return Ok(value),
+                Err(e) => {
+                    tracing::warn!("postgres init attempt {}/3 failed: {}", attempt + 1, e);
+                    last_error = Some(e);
+                }
+            }
+            if attempt < 2 {
+                std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("postgres init failed after 3 attempts")))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("postgres init join error: {e}"))?
 }
 
 /// Resolve an optional-service init result by build profile: server builds
@@ -136,10 +153,12 @@ pub async fn initialize_vector_store(
         let url = cfg
             .connection_string
             .ok_or_else(|| anyhow::anyhow!("vector.connection_string required"))?;
-        let provider = embedding_provider;
         let dimensions = cfg.dimensions;
         let max_entries = cfg.max_entries;
         initialize_postgres_backend(&url, move |conn_str| {
+            // Provider is rebuilt per attempt (deterministic, env-based) so the
+            // retry loop can re-invoke the closure.
+            let provider = crate::memory::embedding_provider::embedding_provider_from_env();
             let store = VectorStore::new(&conn_str, dimensions, max_entries)?
                 .with_embedding_provider(provider);
             tracing::info!("vector store: embedding provider injected");
@@ -208,7 +227,6 @@ pub async fn dispatch_server(
     autotune_state: Option<Arc<tokio::sync::Mutex<AutoTuneState>>>,
     autotune_config: Option<AutoTuneConfig>,
     autotune_state_path: Option<String>,
-    _client: reqwest::Client,
     skill_registry: Option<Arc<RwLock<SkillRegistry>>>,
     app_config: Option<Arc<crate::config::AppConfig>>,
     // Whether to wire the durable response cache as the token cache's L3 layer.
@@ -378,7 +396,6 @@ mod tests {
                 let config_path = cache_dir.path().join("config.toml");
 
                 let registry = Arc::new(AgentRegistry::new());
-                let client = reqwest::Client::new();
 
                 let outcome = dispatch_server(
                     registry,
@@ -391,7 +408,6 @@ mod tests {
                     None,
                     None,
                     None,
-                    client,
                     None,
                     None, // app_config
                     true, // persist_cache

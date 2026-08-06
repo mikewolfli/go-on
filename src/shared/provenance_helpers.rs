@@ -63,11 +63,6 @@ pub fn make_entry(
 /// This is the standalone version used by both `acp` and `intelligence`
 /// without needing to import `ProvenanceLedger`.
 pub fn digest(value: &serde_json::Value) -> String {
-    use sha2::{Digest, Sha256};
     let s = value.to_string();
-    let hash = Sha256::digest(s.as_bytes());
-    hash.iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .concat()
+    crate::shared::sha256_hex(s.as_bytes())
 }

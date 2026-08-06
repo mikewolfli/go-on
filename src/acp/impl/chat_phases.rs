@@ -365,7 +365,10 @@ pub(crate) async fn observe_phase(
 
                     let result = match tokio::time::timeout(
                         std::time::Duration::from_secs(3),
-                        reqwest::get(&fetch_url),
+                        crate::shared::http_client::http_client()
+                            .expect("shared HTTP client must build")
+                            .get(&fetch_url)
+                            .send(),
                     )
                     .await
                     {
@@ -654,6 +657,11 @@ async fn extract_data_uris(
     contexts: &mut Vec<String>,
 ) {
     use crate::multimodal::MultimodalInput;
+    // First pass: locate and decode every inline `data:` URI. The base64
+    // payload runs until the first character outside the base64 alphabet
+    // (whitespace, `)`, newline, etc.), so multiple URIs in one message are
+    // handled independently.
+    let mut inputs: Vec<MultimodalInput> = Vec::new();
     let mut rest = content;
     while let Some(start) = rest.find("data:") {
         let after = &rest[start + 5..];
@@ -683,7 +691,20 @@ async fn extract_data_uris(
         } else {
             MultimodalInput::Document(bytes, crate::multimodal::mime_to_extension(&ml))
         };
-        let processed = mp.process_input(&input).await;
+        inputs.push(input);
+    }
+
+    // Second pass: process all URIs concurrently (image/audio/document
+    // decoding is independent per URI). join_all preserves input order, so the
+    // resulting contexts keep the original document order.
+    let processed_all = join_all(
+        inputs
+            .into_iter()
+            .map(|input| async move { mp.process_input(&input).await }),
+    )
+    .await;
+
+    for processed in processed_all {
         if !processed.is_empty() {
             let mut e = String::from("[Processed content]:");
             if !processed.text.is_empty() {
@@ -2184,7 +2205,6 @@ async fn run_multi_agent_pipeline(
             "multi-agent ({} succeeded)",
             pipeline_result.succeeded_count
         );
-        exec_out.cache_hit = true;
     }
 }
 

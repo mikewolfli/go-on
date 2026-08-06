@@ -6,7 +6,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ pub fn verify_request(
 
     // 2. Verify body hash matches (body integrity)
     let b64_engine = base64::engine::general_purpose::STANDARD;
-    let computed_hash = b64_engine.encode(sha256(body));
+    let computed_hash = b64_engine.encode(crate::shared::sha256_bytes(body));
     if computed_hash != signature.body_hash {
         return Err(SigningError::BodyHashMismatch);
     }
@@ -156,15 +156,9 @@ pub fn verify_request(
 /// Build the payload that is actually signed: timestamp || body_hash.
 fn signing_payload(body: &[u8], timestamp_ms: u64) -> Vec<u8> {
     let b64_engine = base64::engine::general_purpose::STANDARD;
-    let body_hash = b64_engine.encode(sha256(body));
+    let body_hash = b64_engine.encode(crate::shared::sha256_bytes(body));
     let payload = format!("{}:{}", timestamp_ms, body_hash);
     payload.into_bytes()
-}
-
-fn sha256(data: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher.finalize().to_vec()
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +182,7 @@ mod tests {
             algorithm: SigningAlgorithm::HmacSha256,
             key_id: "k1".to_string(),
             timestamp_ms: 1, // way in the past
-            body_hash: b64_engine.encode(sha256(body)),
+            body_hash: b64_engine.encode(crate::shared::sha256_bytes(body)),
         };
 
         let err = verify_request(secret, body, &sig).unwrap_err();
@@ -212,7 +206,7 @@ mod tests {
             algorithm: SigningAlgorithm::HmacSha256,
             key_id: "k2".to_string(),
             timestamp_ms: crate::shared::timestamps::now_ts_ms_u64(),
-            body_hash: b64_engine.encode(sha256(body)),
+            body_hash: b64_engine.encode(crate::shared::sha256_bytes(body)),
         };
 
         let result = verify_request(secret, b"tampered body", &sig);
@@ -236,7 +230,7 @@ mod tests {
             algorithm: SigningAlgorithm::HmacSha256,
             key_id: "k3".to_string(),
             timestamp_ms: crate::shared::timestamps::now_ts_ms_u64(),
-            body_hash: b64_engine.encode(sha256(body)),
+            body_hash: b64_engine.encode(crate::shared::sha256_bytes(body)),
         };
 
         // Corrupt the body hash

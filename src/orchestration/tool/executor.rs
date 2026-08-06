@@ -28,6 +28,38 @@ use tokio::sync::Semaphore;
 use crate::acp::r#impl::chat::streaming::{emit_tool_approval_event, StreamFrame};
 use crate::orchestration::tool::{RetryPolicy, ToolInput, ToolOutput, ToolRegistry};
 
+/// Execute a tool, consulting the registry's fallback chain when the primary
+/// reports failure (`success=false`). Hooks, SSE, metrics, and retries are
+/// handled by the caller; this only adds the fallback semantics that
+/// `ToolRegistry::run_with_fallback_async` provides (without re-running hooks).
+async fn run_tool_with_fallback(
+    registry: &ToolRegistry,
+    name: &str,
+    input: &ToolInput,
+) -> anyhow::Result<ToolOutput> {
+    let Some(primary) = registry.get_arc(name) else {
+        anyhow::bail!("tool not found: {name}");
+    };
+    let mut last = primary.run_async(input.clone()).await?;
+    if last.success {
+        return Ok(last);
+    }
+    for fallback_name in registry
+        .profile(name)
+        .map(|p| p.fallback_chain.clone())
+        .unwrap_or_default()
+    {
+        if let Some(fb_tool) = registry.get_arc(&fallback_name) {
+            let fb_result = fb_tool.run_async(input.clone()).await?;
+            if fb_result.success {
+                return Ok(fb_result);
+            }
+            last = fb_result;
+        }
+    }
+    Ok(last)
+}
+
 /// Configuration for concurrent tool execution.
 #[derive(Clone)]
 pub(crate) struct ToolExecConfig {
@@ -291,7 +323,7 @@ async fn execute_single_tool(
     }
 
     // ── Execute tool via registry ──────────────────────────────────
-    if let Some(tool) = tool_registry.get_arc(&tool_name) {
+    if tool_registry.get_arc(&tool_name).is_some() {
         // ── Emit ToolCallUpdate::InProgress ────────────────────────
         if let Some(ref sid) = config.acp_session_id {
             if let Some(srv) = crate::acp::server::current_acp_server() {
@@ -326,7 +358,7 @@ async fn execute_single_tool(
             let mut last_error: Option<String> = None;
             let mut attempt: usize = 0;
             loop {
-                match Arc::clone(&tool).run_async(input.clone()).await {
+                match run_tool_with_fallback(tool_registry, &tool_name, &input).await {
                     Ok(out) => {
                         tool_result = Some(out);
                         break;
@@ -589,17 +621,16 @@ mod tests {
             "list_directory",
             "grep",
             "environment_info",
-            "time_util",
             "uuid_gen",
             "random_token",
             "encode_decode",
             "hash_file",
             "diagnostics",
-            "diff",
+            "file_diff",
             "format_code",
             "code_metrics",
             "svg_export",
-            "rss_feed",
+            "rss_read",
             "date_time",
             "dns_lookup",
         ];

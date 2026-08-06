@@ -68,13 +68,15 @@ fn build_runtime_execute_autonomy_contract(
     total_rounds: usize,
     total_tools: usize,
     stop_reason: &str,
+    corrective_actions_applied: usize,
+    corrective_action_effectiveness_ratio: f64,
 ) -> Value {
     json!({
         "total_rounds": total_rounds,
         "total_tools": total_tools,
         "stop_reason": stop_reason,
-        "corrective_actions_applied_total": 0,
-        "corrective_action_effectiveness_ratio": 0.0,
+        "corrective_actions_applied_total": corrective_actions_applied,
+        "corrective_action_effectiveness_ratio": corrective_action_effectiveness_ratio,
     })
 }
 
@@ -641,9 +643,52 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         execution_context.secondary_agents.clone()
     };
-    let reviews = (0..review_policy.required_reviews)
-        .map(|i| json!({"reviewer": format!("reviewer_{}", i + 1), "verdict": "APPROVE", "response": "approved"}))
-        .collect::<Vec<_>>();
+
+    // ── Real review: deterministic verification of the actual execution
+    // summary. Verdicts reflect the execution outcome and the verification
+    // signals; previously this fabricated `APPROVE` entries without review.
+    let review_summary = format!(
+        "workflow.execute completed {} subtasks ({} failed, {} skipped) for task '{}'; \
+         failure_strategy={}; failover_count={}",
+        execution_report.subtasks_completed,
+        execution_report.subtasks_failed,
+        execution_report.subtasks_skipped,
+        task_text,
+        execution_report.failure_strategy,
+        execution_report.failover_count,
+    );
+    let reviews: Vec<Value> = if review_policy.required_reviews > 0 {
+        let verification =
+            crate::acp::helpers::review_gate::run_enhanced_verification(&review_summary);
+        let verification_passed = verification
+            .get("enhanced_verification")
+            .and_then(|v| v.get("verdict"))
+            .and_then(Value::as_str)
+            .map(|v| v == "Approve")
+            .unwrap_or(false);
+        let execution_passed = execution_report.subtasks_failed == 0;
+        let approved = verification_passed && execution_passed;
+        (0..review_policy.required_reviews)
+            .map(|i| {
+                json!({
+                    "reviewer": format!("reviewer_{}", i + 1),
+                    "verdict": if approved { "APPROVE" } else { "REJECT" },
+                    "response": format!(
+                        "{}: {} (execution: {} subtasks failed)",
+                        if approved { "approved" } else { "rejected" },
+                        verification["enhanced_verification"]["rationale"]
+                            .as_str()
+                            .unwrap_or("deterministic verification"),
+                        execution_report.subtasks_failed,
+                    ),
+                    "subtasks_failed": execution_report.subtasks_failed,
+                    "verification_signal": verification["enhanced_verification"].clone(),
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let policy_artifact = PrimarySecondaryPolicyArtifact {
         generated_at: crate::acp::prelude::now_ts(),
@@ -768,7 +813,11 @@ pub(crate) async fn handle_workflow_execute(
     );
     let repair_history = build_repair_history_response(&repair_context);
     let review_status = if review_policy.required_reviews > 0 {
-        "passed"
+        if execution_report.subtasks_failed == 0 {
+            "passed"
+        } else {
+            "rejected"
+        }
     } else {
         "not_required"
     };
@@ -843,12 +892,28 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         "failed"
     };
+    // Corrective actions are the real repair cycles that ran during execution:
+    // each cycle is a corrective action, and effectiveness is the ratio of
+    // resolved/improved cycles to total cycles (mirrors repair history).
+    let corrective_actions_applied = repair_context.cycle_reports.len();
+    let corrective_effective = repair_context
+        .cycle_reports
+        .iter()
+        .filter(|cycle| cycle.result == "resolved" || cycle.result == "improved")
+        .count();
+    let corrective_action_effectiveness_ratio = if corrective_actions_applied == 0 {
+        0.0
+    } else {
+        corrective_effective as f64 / corrective_actions_applied as f64
+    };
     let autonomy_contract = build_runtime_execute_autonomy_contract(
-        1 + repair_context.cycle_reports.len(),
+        1 + corrective_actions_applied,
         execution_report.subtasks_completed
             + execution_report.subtasks_failed
             + execution_report.subtasks_skipped,
         stop_reason,
+        corrective_actions_applied,
+        corrective_action_effectiveness_ratio,
     );
     crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(stop_reason);
     crate::acp::helpers::agent_router::record_task_agent_outcome(

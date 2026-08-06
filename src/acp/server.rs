@@ -605,7 +605,8 @@ impl AcpServer {
         let mut failed_requests = self.observability.metrics.failed_requests();
         let mut avg_request_duration_ms = self.observability.metrics.avg_request_duration_ms();
 
-        if let Some(snapshot) = crate::observability::performance::global_metrics_snapshot() {
+        let perf_snapshot = crate::observability::performance::global_metrics_snapshot();
+        if let Some(snapshot) = perf_snapshot.as_ref() {
             total_requests = total_requests.max(snapshot.total_ops);
             successful_requests = successful_requests.max(snapshot.successful_ops);
             failed_requests = failed_requests.max(snapshot.failed_ops);
@@ -625,7 +626,12 @@ impl AcpServer {
                 self.resilience.circuit_breakers.as_ref(),
                 |guard| guard.open_count(),
             ),
-            memory_usage_bytes: crate::observability::performance::get_memory_usage(),
+            // Reuse the snapshot's memory read (taken above) instead of
+            // re-reading /proc/self/status a second time per status request.
+            memory_usage_bytes: perf_snapshot
+                .as_ref()
+                .map(|s| s.memory_usage_bytes)
+                .unwrap_or(0),
             cpu_usage_percent: 0.0,
             ..MetricsSnapshot::default()
         };

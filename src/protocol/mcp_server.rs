@@ -4,6 +4,7 @@
 //! implementing the Model Context Protocol specification.
 
 use anyhow::Result;
+use futures_util::future::join_all;
 use serde_json::json;
 use std::io;
 use std::pin::Pin;
@@ -838,11 +839,12 @@ async fn handle_http_connection(
             }
         };
 
-        // Process each request in the batch and collect responses.
-        let mut responses: Vec<JsonRpcResponse> = Vec::with_capacity(requests.len());
-        for req in requests {
+        // Process each request in the batch concurrently. JSON-RPC 2.0 allows
+        // batch responses in any order; join_all preserves input order, so the
+        // response array stays deterministic.
+        let responses = join_all(requests.into_iter().map(|req| async {
             let req_id = req.id.clone();
-            let resp = match mcp_server.handle_request(req).await {
+            match mcp_server.handle_request(req).await {
                 Ok(resp) => resp,
                 Err(e) => {
                     warn!(
@@ -860,13 +862,14 @@ async fn handle_http_connection(
                         id: req_id,
                     }
                 }
-            };
-            // Per JSON-RPC 2.0, notifications (id=null) in a batch do not
-            // produce a response entry.
-            if resp.id.is_some() {
-                responses.push(resp);
             }
-        }
+        }))
+        .await
+        .into_iter()
+        // Per JSON-RPC 2.0, notifications (id=null) in a batch do not
+        // produce a response entry.
+        .filter(|resp| resp.id.is_some())
+        .collect::<Vec<_>>();
 
         debug!(
             "MCP HTTP: dispatched {} {} -> {} batch responses",

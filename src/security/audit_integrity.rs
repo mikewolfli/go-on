@@ -103,7 +103,7 @@ impl AuditEntry {
         timestamp_ms: u64,
     ) -> Self {
         let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
-        let payload_hash = hex::encode(sha256(&payload_bytes));
+        let payload_hash = crate::shared::sha256_hex(&payload_bytes);
 
         Self {
             entry_id,
@@ -323,7 +323,7 @@ impl HashChainAuditor {
 
             // Verify payload_hash matches the actual payload
             let payload_bytes = serde_json::to_vec(&entry.payload).unwrap_or_default();
-            let computed_payload_hash = hex::encode(sha256(&payload_bytes));
+            let computed_payload_hash = crate::shared::sha256_hex(&payload_bytes);
             if computed_payload_hash != entry.payload_hash {
                 violations.push(IntegrityViolation {
                     entry_id: entry.entry_id.clone(),
@@ -443,16 +443,6 @@ pub struct AuditReport {
     pub entries: Vec<AuditEntry>,
     pub integrity_violations: Vec<IntegrityViolation>,
     pub is_chain_intact: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn sha256(data: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher.finalize().to_vec()
 }
 
 // ---------------------------------------------------------------------------
@@ -590,7 +580,7 @@ mod tests {
         entry.payload = serde_json::json!({"event": "deploy_tampered"});
         // Also update payload_hash to reflect the tampered payload
         let tampered_bytes = serde_json::to_vec(&entry.payload).unwrap_or_default();
-        entry.payload_hash = hex::encode(sha256(&tampered_bytes));
+        entry.payload_hash = crate::shared::sha256_hex(&tampered_bytes);
 
         // Signature should now fail (different compute_hash)
         assert!(entry.verify_signature(&verifying_key.to_bytes()).is_err());
