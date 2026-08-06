@@ -24,10 +24,7 @@ use tokio::sync::mpsc;
 
 use crate::acp::r#impl::chat::streaming::StreamFrame;
 use crate::agent::{Agent, Message, StreamingSender};
-use crate::orchestration::autonomy_runtime::{
-    parse_tool_call_token, TOKEN_FINISH_REASON_PREFIX, TOKEN_MODEL_USED_PREFIX,
-    TOKEN_THINKING_PREFIX, TOKEN_USAGE_PREFIX,
-};
+use crate::orchestration::autonomy_runtime::{classify_agent_token, AgentToken};
 use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
 use crate::orchestration::tool::{ToolOutput, ToolRegistry};
 
@@ -244,7 +241,6 @@ pub async fn run_autonomy_loop(
         });
 
         // ── Stream tokens ────────────────────────────────────────────
-        let mut round_response = String::new();
         let timeout_fut = async move {
             if let Some(dur) = timeout_duration {
                 tokio::time::sleep(dur).await;
@@ -259,64 +255,64 @@ pub async fn run_autonomy_loop(
                 token = receiver.recv() => {
                     match token {
                         Some(t) => {
-                            // Model used detection (detected but not currently consumed)
-                            if t.strip_prefix(TOKEN_MODEL_USED_PREFIX).is_some() {
-                                continue;
-                            }
-                            // Finish reason — metadata, not displayed content
-                            if t.starts_with(TOKEN_FINISH_REASON_PREFIX) {
-                                continue;
-                            }
-                            // Token usage — metadata, not displayed content
-                            if t.starts_with(TOKEN_USAGE_PREFIX) {
-                                continue;
-                            }
-                            // Tool call detection
-                            if let Some((tool_name, tool_args)) = parse_tool_call_token(&t) {
-                                tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-                                // Also append a visible marker to round_response so the
-                                // context fed back to the model on the next iteration
-                                // includes what tool it decided to call and with what args.
-                                let tool_call_text = format!(
-                                    "\n[Calling tool: {} with arguments: {}]\n",
-                                    tool_name, tool_args
-                                );
-                                round_response.push_str(&tool_call_text);
-                                response.push_str(&tool_call_text);
-                                continue;
-                            }
-                            // Reasoning content — forward to SSE as chunk token
-                            // so the GUI shows it inline (same as Zed chat).
-                            if let Some(rt) = t.strip_prefix(TOKEN_THINKING_PREFIX) {
-                                reasoning.push_str(rt);
-                                if let Some(ref tx) = config.progress_tx {
-                                    if tx.send(StreamFrame {
-                                        event: "chunk",
-                                        payload: serde_json::json!({
-                                            "token": "",
-                                            "reasoning": rt,
-                                        }),
-                                        status: None,
-                                    }).is_err() {
-                                        tracing::warn!(
-                                            "autonomy_loop: progress_tx send failed: receiver dropped"
-                                        );
+                            // Single shared token classifier — the same vocabulary
+                            // as the CLI and agent-runtime collection loops, so the
+                            // stream protocol has exactly one parser.
+                            match classify_agent_token(&t) {
+                                // Model-used announcement / finish-reason / usage
+                                // telemetry / reasoning start-end markers —
+                                // metadata, not displayed content. (No agent
+                                // currently emits reasoning markers, but the
+                                // classifier keeps them out of response and SSE
+                                // if one ever does.)
+                                AgentToken::ModelUsed(_)
+                                | AgentToken::Telemetry
+                                | AgentToken::ReasoningMarker => continue,
+                                // Tool call — record for execution and append a
+                                // visible marker to response so the context fed
+                                // back to the model on the next iteration includes
+                                // what tool it decided to call and with what args.
+                                AgentToken::ToolCall(tool_name, tool_args) => {
+                                    let tool_call_text = format!(
+                                        "\n[Calling tool: {} with arguments: {}]\n",
+                                        tool_name, tool_args
+                                    );
+                                    tool_calls.push((tool_name, tool_args));
+                                    response.push_str(&tool_call_text);
+                                }
+                                // Reasoning content — forward to SSE as a reasoning
+                                // frame so the GUI shows it inline (same as Zed chat).
+                                AgentToken::Reasoning(reasoning_token) => {
+                                    reasoning.push_str(&reasoning_token);
+                                    if let Some(ref tx) = config.progress_tx {
+                                        if tx.send(StreamFrame {
+                                            event: "chunk",
+                                            payload: serde_json::json!({
+                                                "token": "",
+                                                "reasoning": reasoning_token,
+                                            }),
+                                            status: None,
+                                        }).is_err() {
+                                            tracing::warn!(
+                                                "autonomy_loop: progress_tx send failed: receiver dropped"
+                                            );
+                                        }
                                     }
                                 }
-                                continue;
-                            }
-                            // Regular token — forward to SSE as chunk token
-                            // so the GUI displays it inline.
-                            round_response.push_str(&t);
-                            response.push_str(&t);
-                            if let Some(ref tx) = config.progress_tx {
-                                let _ = tx.send(StreamFrame {
-                                    event: "chunk",
-                                    payload: serde_json::json!({
-                                        "token": t,
-                                    }),
-                                    status: None,
-                                });
+                                // Regular token — forward to SSE as chunk token
+                                // so the GUI displays it inline.
+                                AgentToken::Content(token) => {
+                                    response.push_str(&token);
+                                    if let Some(ref tx) = config.progress_tx {
+                                        let _ = tx.send(StreamFrame {
+                                            event: "chunk",
+                                            payload: serde_json::json!({
+                                                "token": token,
+                                            }),
+                                            status: None,
+                                        });
+                                    }
+                                }
                             }
                         }
                         None => break,
@@ -399,11 +395,10 @@ pub async fn run_autonomy_loop(
         )
         .await;
 
-        // ── Write tool results back to round_response and response ──
+        // ── Write tool results back to response ──
         for item in &exec_result.tool_results {
             if item.success {
                 let (summary, body) = format_tool_output(&item.tool_name, &item.output);
-                round_response.push_str(&body);
                 response.push_str(&body);
                 any_tool_executed_successfully = true;
 
@@ -419,7 +414,6 @@ pub async fn run_autonomy_loop(
                     });
                 }
             } else {
-                round_response.push_str(&item.formatted);
                 response.push_str(&item.formatted);
 
                 // ── Send failure notification ──
@@ -441,7 +435,6 @@ pub async fn run_autonomy_loop(
                 "\n[Circuit breaker: stopped after {} consecutive tool call failures]",
                 exec_result.failure_count
             );
-            round_response.push_str(&breaker_msg);
             response.push_str(&breaker_msg);
         }
 

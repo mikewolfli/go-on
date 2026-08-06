@@ -25,6 +25,12 @@ The 7 items left open by Round 37 (`docs/log/log-20260806-6.md`) are all complet
 - `cargo clippy --all-targets -- -D warnings` (local/simple-server/multi-users-server/full): zero warnings.
 - `cargo test --all-targets`: **3478 passed / 0 failed**.
 
+#### Follow-up re-review of the three "keep" decisions (user question)
+
+- **`run_autonomy_loop` now uses the shared `classify_agent_token`**: the reasoning start/end markers are never emitted by any agent (only consumed by the CLI/classifier), so the conversion is behavior-neutral — and it removes a latent control-character leak into `response`/SSE if an agent ever emits them. Also deleted the write-only `round_response` accumulator (5 pushes, 0 reads).
+- **`pdf_split` no longer parses the file twice** (page count and page deletion share a single load); merge/split share new `load_pdf_document`/`save_pdf_document` helpers. Object-level page-tree manipulation still correctly stays outside `DocumentParser` (text extraction only).
+- **The three word-tokenizers remain separate** (`signature_similarity`, `semantic_matcher::tokenize`, `execution::tokenize_text`): different min-length/unicode/set/scoring (Jaccard vs Dice vs TF+tag) — domain tuning, not duplication.
+
 ### Rounds 32–37 Deep Scan & Cleanup (2026-08-06)
 
 Seven more super-deep + super-broad scan rounds (see `docs/log/log-20260806-{1..6}.md`), converging on the same principles: no dead code, no placeholders, no fake fixes, unified three-end architecture.

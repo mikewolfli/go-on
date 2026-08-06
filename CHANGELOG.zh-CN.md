@@ -25,6 +25,12 @@
 - `cargo clippy --all-targets -- -D warnings`（local/simple-server/multi-users-server/full）：零警告。
 - `cargo test --all-targets`：**3478 passed / 0 failed**。
 
+#### 三处"保留"决定补充复核（用户追问）
+
+- **`run_autonomy_loop` 改用共用 `classify_agent_token`**：reasoning 起始/结束标记全仓无任何 agent 发射（仅 CLI/classifier 消费），转换行为中性，且顺带消除"未来若发射则控制符泄漏进 response/SSE"的隐患；同时删除只写不读的死累加器 `round_response`（5 处 push、0 处读取）。
+- **`pdf_split` 不再解析同一文件两次**（页数统计与页面删除共用单次加载）；merge/split 共享新增 `load_pdf_document`/`save_pdf_document` 助手。对象级页树操作仍正确地留在 `DocumentParser`（纯文本提取）之外。
+- **三处词 tokenizer 仍各自保留**（`signature_similarity`/`semantic_matcher::tokenize`/`execution::tokenize_text`）：min_len/大小写/集合类型/评分公式（Jaccard vs Dice vs TF+tag）各不相同——属领域调优，非重复。
+
 ### 第 32–37 轮深度+广度扫描与清理（2026-08-06）
 
 七轮超级深度+超级广度扫描收口（见 `docs/log/log-20260806-{1..6}.md`），继续遵循同一原则：零死代码、零占位、零假修复、三端统一架构。

@@ -123,10 +123,7 @@ impl Tool for PdfMergeTool {
         let mut documents: Vec<lopdf::Document> = Vec::new();
         let mut pages_per_source: Vec<usize> = Vec::new();
         for p in &validated_paths {
-            let content =
-                fs::read(p).with_context(|| format!("failed to read PDF: {}", p.display()))?;
-            let doc = lopdf::Document::load_mem(&content)
-                .with_context(|| format!("failed to parse PDF: {}", p.display()))?;
+            let doc = load_pdf_document(p)?;
             pages_per_source.push(doc.get_pages().len());
             documents.push(doc);
         }
@@ -135,9 +132,7 @@ impl Tool for PdfMergeTool {
         // and constructing a combined page tree
         let mut merged = merge_pdf_documents(&documents)?;
 
-        merged.save(&validated_output).with_context(|| {
-            format!("failed to save merged PDF: {}", validated_output.display())
-        })?;
+        save_pdf_document(&mut merged, &validated_output)?;
 
         let total_pages = merged.get_pages().len();
 
@@ -237,6 +232,23 @@ fn merge_pdf_documents(docs: &[lopdf::Document]) -> Result<lopdf::Document> {
     Ok(merged)
 }
 
+/// Load a PDF document from disk (shared by merge/split — single read+parse).
+#[cfg(feature = "document-pdf")]
+fn load_pdf_document(path: &std::path::Path) -> Result<lopdf::Document> {
+    let content =
+        fs::read(path).with_context(|| format!("failed to read PDF: {}", path.display()))?;
+    lopdf::Document::load_mem(&content)
+        .with_context(|| format!("failed to parse PDF: {}", path.display()))
+}
+
+/// Save a PDF document to disk (shared by merge/split).
+#[cfg(feature = "document-pdf")]
+fn save_pdf_document(doc: &mut lopdf::Document, path: &std::path::Path) -> Result<()> {
+    doc.save(path)
+        .map(|_| ())
+        .with_context(|| format!("failed to save PDF: {}", path.display()))
+}
+
 // ── PdfSplitTool ────────────────────────────────────────────────────────────
 
 #[cfg(feature = "document-pdf")]
@@ -267,11 +279,9 @@ impl Tool for PdfSplitTool {
             }
         }
 
-        let content = fs::read(&validated)
-            .with_context(|| format!("failed to read PDF: {}", validated.display()))?;
-
-        let doc = lopdf::Document::load_mem(&content)
-            .with_context(|| format!("failed to parse PDF: {}", validated.display()))?;
+        // Single read+parse: page count is derived from the same document that
+        // gets the page deletions (previously the file was parsed twice).
+        let mut doc = load_pdf_document(&validated)?;
 
         let total_pages = doc.get_pages().len() as u32;
 
@@ -303,14 +313,9 @@ impl Tool for PdfSplitTool {
         }
         pages_to_delete.sort();
 
-        let mut split_doc = lopdf::Document::load_mem(&content)
-            .with_context(|| format!("failed to re-parse PDF: {}", validated.display()))?;
+        doc.delete_pages(&pages_to_delete);
 
-        split_doc.delete_pages(&pages_to_delete);
-
-        split_doc
-            .save(&validated_output)
-            .with_context(|| format!("failed to save split PDF: {}", validated_output.display()))?;
+        save_pdf_document(&mut doc, &validated_output)?;
 
         let output_page_count = (end - start_page + 1) as usize;
 
