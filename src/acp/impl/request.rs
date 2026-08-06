@@ -89,7 +89,7 @@ mod lifecycle_pack;
 mod metrics_pack;
 pub mod prompts_pack;
 mod protocol;
-mod protocol_pack;
+pub(crate) mod protocol_pack;
 pub(crate) use self::trace_pack::tool_budget_trackers;
 mod pua_pack;
 mod repro_handlers;

@@ -14,7 +14,7 @@ use crate::schema::{ModelsListResponse, PhaseResponse, ProtocolVersion};
 mod audit;
 mod auth;
 mod core;
-mod mcp;
+pub(crate) mod mcp;
 mod session;
 mod skill;
 mod terminal;
@@ -83,7 +83,7 @@ pub(super) struct AcpSessionState {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct PendingPermissionRequest {
+pub(crate) struct PendingPermissionRequest {
     pub(super) tool_name: String,
     pub(super) tool_args: Value,
     pub(super) mode: String,

@@ -17,9 +17,8 @@ use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::i18n::runtime::{t, tf};
 use crate::orchestration::autonomy_runtime::{
-    build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
-    REASONING_END, REASONING_START, TOKEN_FINISH_REASON_PREFIX, TOKEN_MODEL_USED_PREFIX,
-    TOKEN_THINKING_PREFIX, TOKEN_USAGE_PREFIX,
+    build_tool_execution_followup_message, build_tool_result_block, classify_agent_token,
+    AgentToken,
 };
 use crate::orchestration::tool::executor::{execute_tools_concurrent, ToolExecConfig};
 
@@ -50,34 +49,19 @@ pub(crate) async fn collect_agent_responses(
     let mut tool_calls = Vec::new();
 
     while let Some(token) = receiver.recv().await {
-        // Check for model-used token (prefixed with __model_used__)
-        if token.strip_prefix(TOKEN_MODEL_USED_PREFIX).is_some() {
-            continue;
+        match classify_agent_token(&token) {
+            AgentToken::ModelUsed(_) => continue,
+            AgentToken::ToolCall(tool_name, tool_args) => {
+                tool_calls.push((tool_name, tool_args));
+                continue;
+            }
+            AgentToken::ReasoningMarker | AgentToken::Telemetry => continue,
+            AgentToken::Reasoning(reasoning_token) => {
+                reasoning_buffer.push_str(&reasoning_token);
+                continue;
+            }
+            AgentToken::Content(text) => response.push_str(&text),
         }
-
-        // Check for tool call tokens using shared parser
-        if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
-            tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-            continue;
-        }
-
-        // Check for structured reasoning markers (control chars)
-        if token == REASONING_START || token == REASONING_END {
-            continue;
-        }
-
-        // Check for reasoning tokens (prefixed with __thinking__)
-        if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
-            reasoning_buffer.push_str(reasoning_token);
-            continue;
-        }
-
-        // Skip finish_reason and usage telemetry control tokens
-        if token.starts_with(TOKEN_FINISH_REASON_PREFIX) || token.starts_with(TOKEN_USAGE_PREFIX) {
-            continue;
-        }
-
-        response.push_str(&token);
     }
 
     // If the agent produced only reasoning (no content), use the
@@ -154,16 +138,18 @@ pub(crate) async fn run_agent_collecting(
                     break;
                 }
             };
-            // ── Token classification ──
-            // Model-used token
-            if let Some(model_id) = token.strip_prefix(TOKEN_MODEL_USED_PREFIX) {
-                selected_model = Some(model_id.trim().to_string());
-                continue;
-            }
-            // Tool call token
-            if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
-                tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-                continue;
+            // ── Token classification (single shared classifier) ──
+            let classified = classify_agent_token(&token);
+            match &classified {
+                AgentToken::ModelUsed(model_id) => {
+                    selected_model = Some(model_id.clone());
+                    continue;
+                }
+                AgentToken::ToolCall(tool_name, tool_args) => {
+                    tool_calls.push((tool_name.clone(), tool_args.clone()));
+                    continue;
+                }
+                _ => {}
             }
             // Stream limits check
             let next_chars = token.chars().count();
@@ -174,24 +160,17 @@ pub(crate) async fn run_agent_collecting(
             ) {
                 anyhow::bail!(t("error.chat.stream_output_limits"));
             }
-            // Reasoning markers
-            if token == REASONING_START || token == REASONING_END {
-                continue;
-            }
-            // Thinking tokens (prefixed with __thinking__)
-            if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
-                reasoning_buffer.push_str(reasoning_token);
-                // Fall through to emit_stream_chunk — it will split
-                // the token into display_token="" and reasoning_token.
-            } else if token.starts_with(TOKEN_FINISH_REASON_PREFIX)
-                || token.starts_with(TOKEN_USAGE_PREFIX)
-            {
-                // Skip finish_reason and usage telemetry tokens.
-                // They should not be appended to the response text
-                // nor emitted as display tokens in the SSE stream.
-                continue;
-            } else {
-                response.push_str(&token);
+            match classified {
+                // Reasoning tokens accumulate and fall through to emission
+                // (emit_stream_chunk splits display vs reasoning itself).
+                AgentToken::Reasoning(reasoning_token) => {
+                    reasoning_buffer.push_str(&reasoning_token);
+                }
+                AgentToken::ReasoningMarker | AgentToken::Telemetry => continue,
+                AgentToken::Content(text) => response.push_str(&text),
+                AgentToken::ModelUsed(_) | AgentToken::ToolCall(..) => {
+                    unreachable!("model-used / tool-call tokens were handled above")
+                }
             }
 
             chunk_index += 1;

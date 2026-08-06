@@ -31,42 +31,37 @@ impl Tool for ReadDocxTool {
         let content = fs::read(&validated)
             .with_context(|| format!("failed to read DOCX: {}", validated.display()))?;
 
-        let docx = docx_rs::read_docx(&content)
-            .map_err(|e| anyhow::anyhow!("failed to parse DOCX: {e}"))?;
+        // Single DOCX extraction implementation (shared with the multimodal
+        // pipeline — the previous inline docx-rs copy was removed).
+        let parser = crate::multimodal::document_parser::DocumentParser::default();
+        let parsed = parser
+            .parse_bytes(&content, "docx")
+            .map_err(|e| anyhow::anyhow!("DOCX parse error: {}", e))?;
 
-        let mut text = String::new();
-        let mut paragraph_count = 0u32;
-
-        // docx-rs 0.4 API: read document structure
-        for child in &docx.document.children {
-            if let docx_rs::DocumentChild::Paragraph(p) = child {
-                paragraph_count += 1;
-                for run_child in &p.children {
-                    if let docx_rs::ParagraphChild::Run(r) = run_child {
-                        for rc in &r.children {
-                            if let docx_rs::RunChild::Text(t) = rc {
-                                text.push_str(&t.text);
-                                text.push(' ');
-                            }
-                        }
-                    }
-                }
-                text.push('\n');
-            }
-        }
-
+        let paragraph_count = parsed
+            .metadata
+            .get("paragraph_count")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
         let byte_size = content.len();
 
-        info!(path = %validated.display(), paragraphs = paragraph_count, "DOCX text extracted");
+        info!(
+            path = %validated.display(),
+            paragraphs = paragraph_count,
+            tables = parsed.tables.len(),
+            "DOCX text extracted"
+        );
 
         let report = tool_execution_report("read_docx", Some("read"));
 
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({
-                "text": text,
+                "text": parsed.text_content,
                 "paragraph_count": paragraph_count,
                 "byte_size": byte_size,
+                "tables": parsed.tables,
+                "metadata": parsed.metadata,
                 "path": validated.to_string_lossy(),
             })),
             error: None,

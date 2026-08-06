@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 2018+ tests · zero clippy warnings</em>
+  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety · 3478+ tests · zero clippy warnings</em>
 </p>
 
 ---
@@ -19,11 +19,11 @@
 [![Rust](https://img.shields.io/badge/rust-1.5.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/mikewolfli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikewolfli/go-on/actions/workflows/build.yml)
-[![Tests](https://img.shields.io/badge/tests-2018-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-3478-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-238K-blue)]()
+[![LOC](https://img.shields.io/badge/code-251K-blue)]()
 
 ## What is go-on?
 
@@ -278,14 +278,14 @@ npm run compile
 
 | Metric | Value |
 |:-------|:------|
-| Rust backend LOC | ~234K (490+ modules) |
-| GUI (EGUI) LOC | ~22K |
+| Rust backend LOC | ~206K (451 modules) |
+| GUI (EGUI) LOC | ~24K |
 | VS Code addon (TypeScript) LOC | ~17K |
-| SDK (Rust + Python + TypeScript) LOC | ~3K |
+| SDK (Rust + Python + TypeScript) LOC | ~4K |
 | Built-in tools | 60+ |
-| AI providers | 38 |
-| Skills in marketplace | 18 |
-| Unit tests | 1946 (all pass, zero fail) |
+| AI providers | 37 |
+| Skills in marketplace | 37 |
+| Unit tests | 3478 (all pass, zero fail) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -309,12 +309,12 @@ cargo build --no-default-features --features full
 
 | Profile | `cargo clippy -D warnings` | Test Status |
 |:--------|:--------------------------:|:-----------:|
-| `local` | ✅ **Zero warnings** | ✅ **1946 pass, 0 fail, 0 ignored** |
+| `local` | ✅ **Zero warnings** | ✅ **3478 pass, 0 fail, 0 ignored** |
 | `simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `full` | ✅ **Zero warnings** | ✅ **all pass** |
 
-All 4 build profiles compile with zero clippy warnings. Unit tests (1946) all pass with zero failures and zero ignored tests. The GUI and VS Code addon also compile cleanly with zero errors.
+All 4 build profiles compile with zero clippy warnings. Unit tests (3478) all pass with zero failures and zero ignored tests. The GUI and VS Code addon also compile cleanly with zero errors.
 
 ---
 

@@ -198,7 +198,8 @@ pub struct SelfEvolutionAgent {
     /// Available model characteristics for selection.
     available_models: Vec<ModelCharacteristics>,
     /// Optional LLM agent for AI-driven code analysis and patch generation (BLUE56-B03).
-    llm_agent: Option<Arc<dyn crate::agent::Agent + Send + Sync>>,
+    /// (`dyn Agent` already carries the `Send + Sync` supertrait bounds.)
+    llm_agent: Option<Arc<dyn crate::agent::Agent>>,
 }
 
 impl std::fmt::Debug for SelfEvolutionAgent {
@@ -231,12 +232,14 @@ impl SelfEvolutionAgent {
 
     /// Create a new SelfEvolutionAgent with an optional LLM agent (BLUE56-B03).
     ///
-    /// When `llm_agent` is provided, `generate_patch()` and `analyze_code()`
-    /// use the LLM for AI-driven code generation and analysis.
+    /// When `llm_agent` is provided, `generate_patch()` uses the LLM for
+    /// AI-driven patch generation. `analyze_code()` is deterministic static
+    /// analysis (it never calls the LLM); the doc previously claimed
+    /// otherwise (principle §18 — fixed).
     pub async fn with_llm(
         project_root: PathBuf,
         available_models: Vec<ModelCharacteristics>,
-        llm_agent: Option<Arc<dyn crate::agent::Agent + Send + Sync>>,
+        llm_agent: Option<Arc<dyn crate::agent::Agent>>,
     ) -> Self {
         let rules_prompts = Self::load_rules(&project_root).await;
 

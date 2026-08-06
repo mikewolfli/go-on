@@ -1,5 +1,81 @@
 # 更新日志
 
+## [1.5.0] - 2026-08-06
+
+### 第 38 轮 — 遗留 7 项收口（2026-08-06）
+
+第37轮遗留的 7 项（见 `docs/log/log-20260806-6.md`）全部完成并一次验证：重复逻辑唯一收敛、隐藏重复栈统一、自进化子系统接线真实 LLM。
+
+#### 重复功能合并（原则 #8）
+
+- **requirement 自动恢复 3×→1×**：`evaluate_requirement_gate_facade` 改为纯求值；synthesize→inject→re-evaluate 序列唯一收敛到 `try_auto_recover_requirement_gate`（唯一指标记录点）；删除死变体 `RequirementContinuationKind::ClarificationInProgress`；**修复双计数/误计数**：删除 `workflow_pack.rs` 两处手动 `record_requirement_auto_recovery()`（该指标已在恢复成功处记录一次，纯 `Confirmed` 续流不再被误记为自动恢复）。
+- **agent token 分类 3×→1×**：新增 `AgentToken` enum + `classify_agent_token()`；三个收集循环（`collect_agent_responses`/`run_agent_collecting`/`run_followup_after_tool_observation`）共用；`autonomy_loop.rs` 的 SSE 转发循环保留内联处理（需区分 finish_reason/usage、回填工具调用文本、SSE 帧语义，非重复）。
+- **ACP bridge 与原生 MCP resources/prompts 去重**：五个共享函数成为唯一实现，bridge `mcp.*` 负载与原生 `handle_*` 全部委托；删除原生侧 3 个重复构造方法。
+- **文档解析统一**：`read_pdf`/`read_docx` 改委托 `DocumentParser::parse_bytes`（删除内联 lopdf/docx-rs 文本提取副本）；保留 `page_count`/`paragraph_count` 兼容字段并新增 `images`/`tables`/`metadata`（纯增量 key）。对象级 PDF 合并/拆分与 DOCX 生成不属于文本提取，保留。
+- **TokenCache 主路径写入 + 消除 3× embedding**：`lookup`/`peek_similar` 返回预计算置信度（L1/L3=1.0，L2=cosine 得分），`decide_from_entry` 不再每次 L2 命中重新 embedding；主路径（非 fallback）新增 `store_async` 填充 token cache；`CachedAgentWrapper::chat` 命中同样套用执行类 bypass 门。
+- **三套 embedding/similarity 栈统一（大重构）**：全部收敛到 `local_hash_embed` + `shared::math::cosine_similarity_f32`。token cache `simple_embedding`（256 维）、语义响应缓存（bigram/Jaccard 改为预计算 embedding + cosine，128 维）、skill 语义匹配（f64/DefaultHasher 桶实现，96 维）均委托权威实现；删除已无调用者的 f64 `cosine_similarity` 及 4 个死代码测试。
+
+#### 链路接线激活（原则 #14）
+
+- **自进化子系统 LLM 接线**：后台任务从 `agent_registry` 解析（assistant→summarizer→首个）注入 `SelfEvolutionAgent::with_llm`，`generate_patch` 走真实 LLM 路径；`MemorySummarizer` 加 `Clone` 与 `Option<Arc<dyn Agent>>`（`server_builder` 构造并复用，`get_or_init_memory_persistence` 不再新建无 LLM 默认实例）；`summarize_hot_entries` 改 async（快照→await 真实 `summarize`→重锁替换，跨 await 不持 Mutex），`auto_migrate` 唯一调用点 `.await`；`analyze_code` 文档修正（确定性静态分析，不调用 LLM，原则 #18）。
+
+#### 验证
+
+- `cargo check` 4 profile：零警告。
+- `cargo clippy --all-targets -- -D warnings`（local/simple-server/multi-users-server/full）：零警告。
+- `cargo test --all-targets`：**3478 passed / 0 failed**。
+
+### 第 32–37 轮深度+广度扫描与清理（2026-08-06）
+
+七轮超级深度+超级广度扫描收口（见 `docs/log/log-20260806-{1..6}.md`），继续遵循同一原则：零死代码、零占位、零假修复、三端统一架构。
+
+#### 反假修复与诚实性（原则 #13/#15）
+
+- **导入技能真实执行**：`mcp.tools.call` 调用导入技能此前返回假的 `NOT_IMPLEMENTED_EXECUTOR` 成功；现改走真实 `PromptBasedSkill` LLM 执行器（未接 LLM agent 或 manifest 无执行内容时明确报错）。
+- **`health.check` 传播真实失败**：健康探针失败时不再恒返回 `{"ok": true}`。
+- **`workflow.execute` 真实评审**：伪造的 `APPROVE` 评审项改为对执行摘要的真实确定性校验；`review_status` 反映真实结果；自治契约上报真实修复轮次与有效性。
+- **游戏工具诚实化**：`game_monitor` 的 `window_active` 改由真实进程状态推导；无截屏工具时如实失败；`game_replay_recorder` 真正调用 ffmpeg（x11grab）录制而非返回"ready"提示。
+- **审计链轮换保留签名**：`GOON_AUDIT_SIGNING_KEY` 签名的链在 100 MB 轮换后不再变为未签名。
+- **分布式记忆传输改为真实 HTTP**：multi-users-server 的 `do_sync` 不再模拟向 peer 发送（此前本地自吞并报 Completed）；现向各 peer 的 `/rpc` 端点 POST JSON-RPC `memory.ingest`，hub server 新增对应 `memory.ingest` 处理器；失败如实上报。
+- **PostgreSQL 初始化重试落地**：`initialize_postgres_backend` 文档声称 3 次指数退避重试但从未重试；现按文档在阻塞池上实现（1s/2s/4s）。
+
+#### 死代码清理（原则 #11）
+
+- 删除无生产者的 `IDEMPOTENCY_HIT_TOTAL` 计数器、无调用者的 `GovernanceStatus::to_json`、`record_audit_threadsafe`、`McpServer.logging_level` 字段、`SESSION_UPDATE` 快速路径表项、`mcp/tools.rs` 转发壳（error_codes 移入 `mcp/mod.rs`）、`dispatch_server` 死参数 `_client`。
+- 删除 harness_bus `AuditEntry` 中间类型（两处调用点直接构造 canonical `AuditLogEntry`）；intelligence hub 的 `AUDIT_ENTRY_COUNT` 静态改读 canonical sink 长度。
+- 三处私有 SHA-256 包装统一为 `shared::sha256_bytes`/`sha256_hex`；`time.rs` 改用 `shared::timestamps`。
+
+#### 链路激活（原则 #14）
+
+- **工具回退链接入执行器**：自治循环与 ACP agent runtime 现在按各工具的 fallback_chain（`read_file→search_files`、`grep→search_files` 等）执行回退，与 CLI 路径一致。
+- **故障容忍恢复周期定时调度**：`FaultToleranceEngine::run_recovery_cycle` 以 30s 间隔在 `start_background_tasks` 中运行（此前仅在测试中被调用）。
+- **`state_sync` 模型/agent 事件发布**：`config.reload` 对比 agent 集合与配置模型集合，发布 `AgentsChanged`/`ModelsChanged`，激活 GUI/VS Code 的 `onModelsChanged`/`onAgentsChanged`。
+- **治理审计并入 canonical sink**：`governance.plan.update` 事件改经 `global_audit_log()`（哈希链+轮转）落盘，删除第二条非链式 `.goon/governance/audit.ndjson`；`governance.audit.recent` 读内存 sink（无逐请求文件 I/O）。
+- **漂移监控接入真实指标**：`validate_action`/`verify_output` 向 `DriftProtectionEngine` 上报延迟指标并注册性能漂移策略，60s 监控开始评估真实数据。
+
+#### 重复统一与正确性
+
+- `web_scrape`/`rss_read` 强制走 `http_request` 同一 URL 沙箱（`validate_url`），闭合 SSRF/内网 IP 绕过。
+- `is_low_risk_tool` 过期工具名修正（`time_util`/`diff`/`rss_feed` → `date_time`/`file_diff`/`rss_read`）；CLI `/grep` 改命中注册的内容 `grep` 工具（不再被 `search_files` 别名遮蔽）。
+- MCP `filter_tools_by_exposure` 过期名修正（`container_*`→`docker_*`，删除 `compile_and_run`/`qrcode_`）；gzip 解压逻辑在 `decompress` 与归档解压间共享。
+
+#### 性能优化
+
+- 启动：配置校验不再二次读取 TOML；Copilot 代理探测+客户端构建按 env 快照缓存（`provider.list_models`/设备码路径每次最多省 ~700ms）；`/proc` 内存/CPU 读取 5s TTL 缓存（status/health/metrics 端点共享）。
+- 请求路径：data-URI 附件 `join_all` 并行；`observe_phase` 复用进程级 HTTP 客户端；文档解析改 `spawn_blocking`；MCP HTTP JSON-RPC batch 改 `join_all` 并行分发；能力总线选择与向量上下文加载并行；多代理安全网不再把全新执行标记为缓存命中。
+
+#### 三端对齐
+
+- **VS Code 插件幻影 RPC 映射到真实方法**：`approval.approve/reject` → `session/request_permission`、`checkpoint.create` → `conversation.checkpoint.create`、`skill.import_local` → `skill.import`、`runtime.reload_config` → `config.reload`、`checkpoint.load` → `checkpoint.list`（带 warn）；破坏性命令（`chat.delete`/`session.clear`/`memory.clear`）→ `session/delete`/`vector.clear`；`config.reset`/`agent.remove` 改为明确失败并 warn，不再发送注定失败的空请求。
+- **TypeScript SDK 幻影方法改名**：与其余三端 SDK 对齐后端方法名：`workflow.plan`→`task.plan`、`summary.get`→`learning.summary`、`knowledge.search`→`knowledge.distill`、`rl.optimize`→`rl.alignment.offline_eval`。
+
+#### 验证
+
+- `cargo check` 4 profile + `--workspace`：零警告。
+- `cargo clippy --all-targets -- -D warnings`（local/simple-server/multi-users-server/full）：零警告。
+- `cargo test --all-targets`：**3486 passed / 0 failed**。
+- `scripts/gen-provider-catalog.py --check`：双输出 OK（37 providers）。
+
 ## [1.5.0] - 2026-08-05
 
 ### 24 轮深度+广度扫描与统一优化（2026-07-24 → 2026-08-05）

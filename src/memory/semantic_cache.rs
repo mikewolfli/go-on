@@ -1,22 +1,25 @@
-//! Semantic response cache — cache LLM responses by request hash + bigram similarity
+//! Semantic response cache — cache LLM responses by request hash + similarity
 //!
 //! Provides:
 //! - TTL-based entry expiration
 //! - LRU eviction when max entries exceeded
-//! - Bigram Jaccard similarity matching for near-duplicate requests
+//! - Semantic similarity matching for near-duplicate requests using the
+//!   canonical minhash embedding (`embedding_provider::local_hash_embed`) and
+//!   shared cosine similarity — the same embedding the vector store, token
+//!   cache L2, and memory summarization use.
 //! - Cache warm-up on startup
 //!
 //! F-GAP-49: Module now wired into production chat pipeline.
 
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-// ── Existing bigram-based cache (kept as fast path <1ms lookup) ──────────────
+// ── Semantic cache (canonical minhash embedding + cosine similarity) ─────────
 
 /// Cache entry with metadata
 #[derive(Debug, Clone)]
@@ -31,8 +34,8 @@ struct CacheEntry {
     ttl: Duration,
     /// When this entry was last accessed (for LRU eviction)
     last_accessed: Instant,
-    /// Precomputed bigram set for Jaccard similarity (avoids recomputing on every get)
-    bigram_set: Option<HashSet<Vec<u8>>>,
+    /// Precomputed canonical embedding (avoids re-embedding on every get).
+    embedding: Option<Vec<f32>>,
 }
 
 /// Semantic response cache configuration
@@ -76,35 +79,10 @@ fn simple_request_hash(request: &str, max_len: usize) -> u64 {
     hasher.finish()
 }
 
-/// Compute the set of bigrams for a string (owned, so it can be cached)
-fn bigrams_set(s: &str) -> HashSet<Vec<u8>> {
-    s.as_bytes().windows(2).map(|w| w.to_vec()).collect()
-}
-
-/// Jaccard similarity with one side's bigram set precomputed.
-/// Only computes bigrams for `a`; reuses `b_bigrams` from cache.
-fn jaccard_with_precomputed(a: &str, b_bigrams: &HashSet<Vec<u8>>) -> f64 {
-    let a_bigrams: Vec<&[u8]> = a.as_bytes().windows(2).collect();
-
-    if a_bigrams.is_empty() && b_bigrams.is_empty() {
-        return 1.0;
-    }
-    if a_bigrams.is_empty() || b_bigrams.is_empty() {
-        return 0.0;
-    }
-
-    let set_a: HashSet<&[u8]> = a_bigrams.iter().copied().collect();
-    // Convert b_bigrams (HashSet<Vec<u8>>) to HashSet<&[u8]> for intersection
-    let set_b: HashSet<&[u8]> = b_bigrams.iter().map(|v| v.as_slice()).collect();
-
-    let intersection = set_a.intersection(&set_b).count();
-    let union = set_a.union(&set_b).count();
-
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f64 / union as f64
-    }
+/// Embed a request with the canonical minhash embedding (single source shared
+/// with the vector store, token cache L2, and memory summarization).
+fn request_embedding(request: &str) -> Vec<f32> {
+    crate::memory::embedding_provider::local_hash_embed(request, 128)
 }
 
 /// Semantic response cache
@@ -136,7 +114,8 @@ impl SemanticResponseCache {
         let now = Instant::now();
 
         // Find the matching entry index under a read lock; the lock is dropped
-        // before the best-effort LRU touch below.
+        // before the best-effort LRU touch below. The query embedding is
+        // computed lazily — only when a similarity scan is actually needed.
         let match_idx = {
             let guard = self.entries.read().expect("SemanticCache entries poisoned");
             guard.get(&hash).and_then(|bucket| {
@@ -150,16 +129,21 @@ impl SemanticResponseCache {
                             && now.duration_since(entry.created_at) < entry.ttl
                     })
                     .or_else(|| {
+                        // Similarity lookup must respect TTL. Uses the same
+                        // canonical embedding + cosine similarity as every
+                        // other similarity consumer.
+                        let query_vec = request_embedding(request);
                         bucket.iter().position(|entry| {
-                            // Similarity lookup must respect TTL. `bigram_set`
-                            // is always populated by `put_inner`, so the
-                            // precomputed path is the only reachable one.
                             now.duration_since(entry.created_at) < entry.ttl
                                 && entry
-                                    .bigram_set
+                                    .embedding
                                     .as_ref()
-                                    .map(|pre| jaccard_with_precomputed(request, pre))
-                                    .map(|s| s >= self.config.similarity_threshold)
+                                    .map(|stored| {
+                                        crate::shared::math::cosine_similarity_f32(
+                                            &query_vec, stored,
+                                        )
+                                    })
+                                    .map(|s| s >= self.config.similarity_threshold as f32)
                                     .unwrap_or(false)
                         })
                     })
@@ -245,7 +229,7 @@ impl SemanticResponseCache {
             created_at: now,
             ttl: Duration::from_secs(ttl_seconds),
             last_accessed: now,
-            bigram_set: Some(bigrams_set(request)),
+            embedding: Some(request_embedding(request)),
         };
 
         guard.entry(hash).or_default().push(entry);

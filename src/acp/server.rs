@@ -541,14 +541,12 @@ impl AcpServer {
             ) {
                 Ok(mp) => {
                     let mut mp = mp;
-                    if params.summarizer.is_some() {
-                        // Note: we don't reuse params.summarizer directly since
-                        // MemorySummarizer is not Clone. We create a fresh one
-                        // with the same default config.
-                        let s = crate::memory::summarization::MemorySummarizer::new(
-                            crate::memory::summarization::SummarizationConfig::default(),
-                        );
-                        mp = mp.with_summarizer(s);
+                    // Reuse the configured summarizer (built with the real LLM
+                    // agent in server_builder) — it is Clone, so the LLM-backed
+                    // instance survives the lazy init instead of being replaced
+                    // by a fresh default with `llm_agent: None`.
+                    if let Some(ref summarizer) = params.summarizer {
+                        mp = mp.with_summarizer(summarizer.clone());
                     }
                     Arc::new(mp)
                 }

@@ -15,8 +15,7 @@ use crate::governance::pua::PuaRuleEngine;
 
 use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
-    McpListResourcesResult, McpListToolsResult, McpResource, McpServer, JSONRPC_VERSION,
-    MCP_VERSION, SUPPORTED_MCP_VERSIONS,
+    McpListToolsResult, McpServer, JSONRPC_VERSION, MCP_VERSION, SUPPORTED_MCP_VERSIONS,
 };
 use crate::protocol::rpc_protocol::RequestTraceContext;
 use crate::shared::tool_descriptors::validate_required_arguments;
@@ -974,33 +973,14 @@ impl McpServer {
     }
 
     async fn handle_list_resources(&self, _request: &JsonRpcRequest) -> Value {
-        let resources: Vec<Value> = vec![
-            serde_json::to_value(McpResource {
-                uri: "go-on://agents".to_string(),
-                name: "Available Agents".to_string(),
-                description: Some("List of deployed agents".to_string()),
-                mime_type: "application/json".to_string(),
-            })
-            .unwrap_or_else(|e| {
-                warn!("MCP: failed to serialize resource 'go-on://agents': {e}");
+        // Shared with the ACP bridge (single source).
+        match crate::acp::r#impl::request::protocol_pack::mcp::mcp_resources_list_value() {
+            Ok(value) => value,
+            Err(e) => {
+                warn!("MCP: failed to build resources list: {e}");
                 json!({})
-            }),
-            serde_json::to_value(McpResource {
-                uri: "go-on://tools".to_string(),
-                name: "Available Tools".to_string(),
-                description: Some("List of available tools".to_string()),
-                mime_type: "application/json".to_string(),
-            })
-            .unwrap_or_else(|e| {
-                warn!("MCP: failed to serialize resource 'go-on://tools': {e}");
-                json!({})
-            }),
-        ];
-
-        serde_json::to_value(McpListResourcesResult::new(resources)).unwrap_or_else(|e| {
-            warn!("MCP: failed to serialize list_resources result: {e}");
-            json!({})
-        })
+            }
+        }
     }
 
     async fn handle_read_resource(&self, request: &JsonRpcRequest) -> Result<Value> {
@@ -1013,26 +993,21 @@ impl McpServer {
             .as_str()
             .ok_or_else(|| invalid_params("Missing URI"))?;
 
-        match uri {
-            "go-on://agents" => Ok(json!({
-                "contents": [{
-                    "uri": "go-on://agents",
-                    "mimeType": "application/json",
-                    "text": serde_json::to_string(&json!({"agents": self.agent_registry.names()}))?
-                }]
-            })),
-            "go-on://tools" => Ok(json!({
-                "contents": [{
-                    "uri": "go-on://tools",
-                    "mimeType": "application/json",
-                    "text": serde_json::to_string(&json!({"tools": self.tool_registry.names()}))?
-                }]
-            })),
-            _ => {
-                warn!("MCP: unknown resource '{}'", uri);
-                Err(invalid_params(format!("Unknown resource: {}", uri)))
-            }
-        }
+        let agents: Vec<String> = self.agent_registry.names();
+        let tools: Vec<String> = self
+            .tool_registry
+            .names()
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
+        // Shared with the ACP bridge (single source).
+        crate::acp::r#impl::request::protocol_pack::mcp::mcp_resources_read_value(
+            &agents, &tools, uri,
+        )
+        .map_err(|e| {
+            warn!("MCP: unknown resource '{}': {}", uri, e);
+            invalid_params(format!("Unknown resource: {}", uri))
+        })
     }
 
     async fn handle_list_agents(&self, _request: &JsonRpcRequest) -> Value {
@@ -1202,13 +1177,20 @@ impl McpServer {
     /// - system prompts derived from agent configurations
     /// - phase-specific task prompts
     ///
+    /// Handler for `prompts/list`.
+    ///
     /// This is a lightweight implementation that surfaces the agent system prompts
     /// as discoverable prompt templates.  Full template parameterisation is a
     /// future enhancement.
     async fn handle_list_prompts(&self, request: &JsonRpcRequest) -> Value {
         let lang = self.resolve_prompt_lang(request);
-        let prompts = self.build_prompt_list(&lang);
-        json!({ "prompts": prompts })
+        let agents: Vec<String> = self.agent_registry.names();
+        // Shared with the ACP bridge (single source).
+        crate::acp::r#impl::request::protocol_pack::mcp::mcp_prompts_list_value(
+            self.acp_server.as_deref(),
+            &agents,
+            &lang,
+        )
     }
 
     /// Handler for `prompts/get`.
@@ -1225,12 +1207,25 @@ impl McpServer {
 
         let lang = self.resolve_prompt_lang(request);
 
-        if let Some(resolved) = self.resolve_template_prompt(name, &lang, request.params.as_ref()) {
+        // Shared resolvers (single source with the ACP bridge).
+        if let Some(resolved) =
+            crate::acp::r#impl::request::protocol_pack::mcp::mcp_prompts_get_template_value(
+                self.acp_server.as_deref(),
+                name,
+                &lang,
+                request.params.as_ref(),
+            )
+        {
             return Ok(resolved);
         }
 
         // Try to resolve as an agent system prompt
-        if let Some(messages) = self.resolve_agent_prompt(name) {
+        if let Some(messages) =
+            crate::acp::r#impl::request::protocol_pack::mcp::mcp_prompts_get_agent_value(
+                Some(&self.agent_registry),
+                name,
+            )
+        {
             return Ok(json!({
                 "description": format!("Agent system prompt for '{}'", name),
                 "messages": messages
@@ -1241,126 +1236,6 @@ impl McpServer {
             super::error_codes::INVALID_REQUEST,
             format!("Prompt '{}' not found", name),
         ))
-    }
-
-    /// Build a list of discoverable prompt templates from agent configurations
-    /// and registered skills.
-    fn build_prompt_list(&self, lang: &str) -> Vec<Value> {
-        let mut prompts = Vec::new();
-
-        // Prompt templates from ACP prompt manager
-        if let Some(acp) = &self.acp_server {
-            if let Ok(collection) = acp.prompt_manager.get_all_templates(lang) {
-                for category in collection.categories {
-                    for template in category.templates {
-                        prompts.push(json!({
-                            "name": format!("template://{}.{}", category.id, template.id),
-                            "description": template.description,
-                            "arguments": [
-                                {
-                                    "name": "input",
-                                    "description": "Optional input for replacing {{input}} placeholder",
-                                    "required": false
-                                }
-                            ]
-                        }));
-                    }
-                }
-            }
-        }
-
-        // Agent system prompts
-        for name in self.agent_registry.names() {
-            prompts.push(json!({
-                "name": format!("agent://{}", name),
-                "description": format!("System prompt for '{}' agent", name),
-                "arguments": []
-            }));
-        }
-
-        prompts
-    }
-
-    fn resolve_template_prompt(
-        &self,
-        name: &str,
-        lang: &str,
-        params: Option<&Value>,
-    ) -> Option<Value> {
-        let acp = self.acp_server.as_ref()?;
-
-        let normalized = name
-            .strip_prefix("template://")
-            .unwrap_or(name)
-            .trim()
-            .trim_start_matches('/');
-
-        let (cat_id, cat_name, tpl) = acp.prompt_manager.get_template(lang, normalized)?;
-
-        let input = params
-            .and_then(|p| p.get("arguments"))
-            .and_then(|a| a.get("input"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
-
-        let content = if tpl.content.contains("{{input}}") {
-            tpl.content.replace("{{input}}", input)
-        } else if input.is_empty() {
-            tpl.content
-        } else {
-            format!("{}\n\n{}", tpl.content, input)
-        };
-
-        Some(json!({
-            "description": format!("Template prompt '{}.{}'", cat_id, tpl.id),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": content
-                }
-            ],
-            "template": {
-                "category_id": cat_id,
-                "category_name": cat_name,
-                "id": tpl.id,
-                "title": tpl.title,
-            }
-        }))
-    }
-
-    /// Resolve an agent prompt by name.
-    /// Returns `None` if no matching agent is found.
-    fn resolve_agent_prompt(&self, name: &str) -> Option<Vec<Value>> {
-        let agent_name = name.strip_prefix("agent://").unwrap_or(name);
-        // Check agent exists and resolve available models.
-        let models = self.agent_registry.get(agent_name).map(|agent| {
-            agent
-                .available_models()
-                .into_iter()
-                .map(|m| m.id)
-                .collect::<Vec<_>>()
-                .join(", ")
-        });
-
-        let model_hint = models
-            .filter(|m| !m.is_empty())
-            .map(|m| format!(" Available models: {}.", m))
-            .unwrap_or_default();
-
-        Some(vec![
-            json!({
-                "role": "system",
-                "content": format!(
-                    "You are a '{}' agent providing AI assistance.{}",
-                    agent_name, model_hint
-                )
-            }),
-            json!({
-                "role": "user",
-                "content": "Hello!"
-            }),
-        ])
     }
 }
 

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::Result;
@@ -396,28 +395,16 @@ fn tokenize_text(text: &str) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
+/// Embedding-based similarity over the canonical minhash embedding
+/// (`embedding_provider::local_hash_embed`) shared by the vector store, token
+/// cache L2, and semantic response cache — so scores are comparable across
+/// every similarity consumer.
 fn embedding_cosine_similarity(left: &str, right: &str) -> f64 {
-    let left_vec = hashed_embedding(left, 96);
-    let right_vec = hashed_embedding(right, 96);
-    crate::shared::math::cosine_similarity(&left_vec, &right_vec)
-}
-
-fn hashed_embedding(text: &str, dim: usize) -> Vec<f64> {
-    let mut vec = vec![0.0_f64; dim.max(8)];
-    for token in tokenize_text(text) {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        token.hash(&mut hasher);
-        let hash = hasher.finish() as usize;
-        let index = hash % vec.len();
-        vec[index] += 1.0;
-    }
-    let norm = vec.iter().map(|x| x * x).sum::<f64>().sqrt();
-    if norm > f64::EPSILON {
-        for item in &mut vec {
-            *item /= norm;
-        }
-    }
-    vec
+    let left_vec = crate::memory::embedding_provider::local_hash_embed(left, 96);
+    let right_vec = crate::memory::embedding_provider::local_hash_embed(right, 96);
+    f64::from(crate::shared::math::cosine_similarity_f32(
+        &left_vec, &right_vec,
+    ))
 }
 
 /// Built-in echo skill.

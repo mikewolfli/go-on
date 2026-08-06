@@ -54,25 +54,18 @@ impl CacheStrategy {
         EXECUTION_HINTS.iter().any(|hint| text_lower.contains(hint))
     }
 
-    /// Convert a concrete cache entry into a decision using the stored and
-    /// current inputs. Single decision path: confidence > 0.95 serves a Hit
-    /// unless the request is execution-like (Refused) — otherwise Miss.
+    /// Convert a concrete cache entry into a decision using the match
+    /// confidence computed by the cache lookup (callers pass the score from
+    /// [`TokenMultiLevelCache::lookup`] — 1.0 for exact/durable hits, the L2
+    /// cosine score otherwise — so the input is embedded exactly once).
+    /// Single decision path: confidence > 0.95 serves a Hit unless the request
+    /// is execution-like (Refused) — otherwise Miss.
     pub fn decide_from_entry(
         level: &str,
         entry: &CacheEntry,
-        input_text: &str,
+        confidence: f32,
         is_execution_like: bool,
     ) -> CacheDecision {
-        let confidence: f32 = match level {
-            "L1" => 1.0,
-            "L2" => {
-                let input_vec = crate::intelligence::token_cache::simple_embedding(input_text);
-                let cached_vec = crate::intelligence::token_cache::simple_embedding(&entry.input);
-                crate::shared::math::cosine_similarity_f32(&input_vec, &cached_vec)
-            }
-            _ => 0.0,
-        };
-
         if confidence > 0.95 && !is_execution_like {
             // Clone the response string ONLY on the Hit path (avoids
             // allocating for Refused or Miss).
@@ -149,16 +142,16 @@ mod tests {
             10,
         );
         // High confidence, non-execution-like → Hit carrying the cached response.
-        let hit = CacheStrategy::decide_from_entry("L1", &entry, "anything", false);
+        let hit = CacheStrategy::decide_from_entry("L1", &entry, 1.0, false);
         match hit {
             CacheDecision::Hit { response } => assert_eq!(response, "cached-output"),
             _ => panic!("expected hit"),
         }
         // High confidence, execution-like → Refused.
-        let refused = CacheStrategy::decide_from_entry("L1", &entry, "anything", true);
+        let refused = CacheStrategy::decide_from_entry("L1", &entry, 1.0, true);
         assert!(matches!(refused, CacheDecision::Refused { .. }));
-        // Unknown level → zero confidence → Miss.
-        let miss = CacheStrategy::decide_from_entry("L3", &entry, "anything", false);
+        // Zero confidence (unknown/miss level) → Miss.
+        let miss = CacheStrategy::decide_from_entry("L3", &entry, 0.0, false);
         assert!(matches!(miss, CacheDecision::Miss));
     }
 
@@ -172,7 +165,7 @@ mod tests {
             "a very long cached output".to_string(),
             20,
         );
-        let decision = CacheStrategy::decide_from_entry("L3", &entry, "input", false);
+        let decision = CacheStrategy::decide_from_entry("L3", &entry, 0.0, false);
         assert!(matches!(decision, CacheDecision::Miss));
     }
 
@@ -223,14 +216,13 @@ mod tests {
             "response".to_string(),
             10,
         );
-        let decision = CacheStrategy::decide_from_entry("L2", &entry, "hello world", false);
-        // L2 with identical input should produce high cosine similarity
-        // The confidence may be high enough for a Hit
-        let is_hit_or_refused = matches!(
-            decision,
-            CacheDecision::Hit { .. } | CacheDecision::Refused { .. }
-        );
-        assert!(is_hit_or_refused || matches!(decision, CacheDecision::Miss));
+        // The confidence is supplied by the cache lookup (here: a near-identical
+        // L2 match above the 0.95 Hit threshold).
+        let decision = CacheStrategy::decide_from_entry("L2", &entry, 0.98, false);
+        assert!(matches!(decision, CacheDecision::Hit { .. }));
+        // A weak match below the threshold is a Miss regardless of level.
+        let weak = CacheStrategy::decide_from_entry("L2", &entry, 0.9, false);
+        assert!(matches!(weak, CacheDecision::Miss));
     }
 
     #[test]
@@ -241,21 +233,21 @@ mod tests {
             "output".to_string(),
             5,
         );
-        let decision = CacheStrategy::decide_from_entry("L1", &entry, "anything", false);
+        let decision = CacheStrategy::decide_from_entry("L1", &entry, 1.0, false);
         assert!(matches!(decision, CacheDecision::Hit { .. }));
     }
 
     #[test]
     fn decide_from_entry_unknown_level_short_output_is_miss() {
         let entry = CacheEntry::new("k".to_string(), "in".to_string(), "ab".to_string(), 2);
-        let decision = CacheStrategy::decide_from_entry("L3", &entry, "in", false);
+        let decision = CacheStrategy::decide_from_entry("L3", &entry, 0.0, false);
         assert!(matches!(decision, CacheDecision::Miss));
     }
 
     #[test]
     fn decide_from_entry_unknown_level_is_miss() {
         let entry = CacheEntry::new("k".to_string(), "i".to_string(), "o".to_string(), 1);
-        let decision = CacheStrategy::decide_from_entry("L99", &entry, "i", false);
+        let decision = CacheStrategy::decide_from_entry("L99", &entry, 0.0, false);
         assert!(matches!(decision, CacheDecision::Miss));
     }
 }

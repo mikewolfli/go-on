@@ -3,7 +3,7 @@
 This book documents the current `1.5.0` architecture and usage model of `go-on`.
 
 The runtime implements a **13-sub-bus capability architecture** with **37 AI provider integrations**,
-**2018 unit tests** (zero failures), and **zero clippy warnings across all build profiles**.
+**3478 unit tests** (zero failures), and **zero clippy warnings across all build profiles**.
 
 All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum, with the dispatch layer
 handling serialization for JSON-RPC, SSE streaming, text/plain, and silent responses.

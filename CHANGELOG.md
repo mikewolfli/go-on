@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.5.0] - 2026-08-06
+
+### Round 38 — Legacy 7-Item Closeout (2026-08-06)
+
+The 7 items left open by Round 37 (`docs/log/log-20260806-6.md`) are all completed and verified in one pass: duplicate logic collapsed to a single source, hidden duplicate stacks unified, and the self-evolution subsystem finally wired to a real LLM.
+
+#### Duplicate Unification (principle #8)
+
+- **Requirement auto-recovery merged 3× → 1×**: `evaluate_requirement_gate_facade` is now pure evaluation; the synthesize→inject→re-evaluate sequence lives only in `try_auto_recover_requirement_gate` (the single metric-recording point). Removed the dead `RequirementContinuationKind::ClarificationInProgress` variant, and **fixed a double/mis-count**: two manual `record_requirement_auto_recovery()` calls in `workflow_pack.rs` were removed — the metric is recorded once on successful recovery, and plain `Confirmed` continuations are no longer miscounted as auto-recoveries.
+- **Agent token classification extracted 3× → 1×**: new `AgentToken` enum + `classify_agent_token()` in `autonomy_runtime.rs`; the three collection loops (`collect_agent_responses`, `run_agent_collecting`, `run_followup_after_tool_observation`) now share it. The SSE-forwarding loop in `autonomy_loop.rs` intentionally keeps its inline handling (distinct semantics: finish-reason/usage separation, tool-call text feedback, SSE frame shaping).
+- **ACP bridge ↔ native MCP resources/prompts deduped**: five shared functions (`mcp_resources_list_value`, `mcp_resources_read_value`, `mcp_prompts_list_value`, `mcp_prompts_get_template_value`, `mcp_prompts_get_agent_value`) are now the single source for both the ACP `mcp.*` bridge payloads and the native MCP handlers; the three duplicate native builders were deleted.
+- **Document parsing unified**: `read_pdf`/`read_docx` now delegate to `DocumentParser::parse_bytes` (the inline lopdf/docx-rs extraction copies were removed); `page_count`/`paragraph_count` compatibility fields are preserved and `images`/`tables`/`metadata` added (additive keys only). Object-level PDF merge/split and DOCX generation remain separate (not text extraction).
+- **Token cache main-path write + 3× embedding eliminated**: `lookup`/`peek_similar` return the precomputed confidence (1.0 for L1/L3, the cosine score for L2), so `decide_from_entry` no longer re-embeds on every L2 hit; the primary (non-fallback) path now fills the token cache via `store_async` (previously only fallback/secondary paths wrote it); `CachedAgentWrapper::chat` applies the same execution-like bypass gate on hits.
+- **Three embedding/similarity stacks unified (big refactor)**: `local_hash_embed` + `shared::math::cosine_similarity_f32` are now the only embedding/similarity implementation. The token cache `simple_embedding` (256-d), the semantic response cache (bigram/Jaccard replaced with precomputed embedding + cosine, 128-d), and the skill semantic matcher (f64/DefaultHasher bucket hashing replaced, 96-d) all delegate to it; the now-unused f64 `cosine_similarity` and its 4 dead-code tests were removed.
+
+#### Wiring Activation (principle #14)
+
+- **Self-evolution LLM wiring**: `SelfEvolutionAgent::with_llm` is fed a real agent resolved from `agent_registry` (assistant → summarizer → first) by the background task, so `generate_patch` uses the LLM path; `MemorySummarizer` is now `Clone` with an `Option<Arc<dyn Agent>>` LLM agent (built in `server_builder` and reused — no more default no-LLM instance in `get_or_init_memory_persistence`); `summarize_hot_entries` is async (snapshot → await real `summarize` → re-lock, no Mutex held across await) and `auto_migrate` awaits it. `analyze_code` docs corrected: it is deterministic static analysis and never calls the LLM (principle #18).
+
+#### Verification
+
+- `cargo check` all 4 profiles: zero warnings.
+- `cargo clippy --all-targets -- -D warnings` (local/simple-server/multi-users-server/full): zero warnings.
+- `cargo test --all-targets`: **3478 passed / 0 failed**.
+
+### Rounds 32–37 Deep Scan & Cleanup (2026-08-06)
+
+Seven more super-deep + super-broad scan rounds (see `docs/log/log-20260806-{1..6}.md`), converging on the same principles: no dead code, no placeholders, no fake fixes, unified three-end architecture.
+
+#### Anti-Fake & Honesty Fixes (principle #13/#15)
+
+- **Imported-skill execution implemented**: `mcp.tools.call` on an imported skill previously returned a fake `NOT_IMPLEMENTED_EXECUTOR` success; it now executes through the real `PromptBasedSkill` LLM executor (and fails loudly when no LLM agent is wired or the manifest has no executable content).
+- **`health.check` propagates failures**: the RPC previously always returned `{"ok": true}` even when the health probe failed.
+- **`workflow.execute` real reviews**: the fabricated `APPROVE` reviewer entries were replaced with real deterministic verification of the execution summary; `review_status` now reflects the actual outcome, and the autonomy contract reports the real repair-cycle corrective-action counts and effectiveness.
+- **`game_monitor`/`game_screen_capture`/`game_replay_recorder` honesty**: `window_active` is derived from the real process state; screen capture reports failure when no capture binary exists; the replay recorder actually runs ffmpeg (x11grab) instead of returning a "ready" command hint.
+- **Audit-chain rotation preserves signing**: a signed chain (`GOON_AUDIT_SIGNING_KEY`) no longer becomes unsigned after the 100 MB rotation.
+- **Distributed-memory transport is real HTTP**: the multi-users-server `do_sync` no longer simulates peer transmission (it previously ingested entries locally and reported `Completed`); it now POSTs JSON-RPC `memory.ingest` to each peer's `/rpc` endpoint, and the hub server gained the matching `memory.ingest` handler. Failures are reported, never faked.
+- **PostgreSQL init retry implemented**: `initialize_postgres_backend` documented a 3-attempt exponential-backoff retry but never retried; the retry loop (1s/2s/4s) now runs on the blocking pool as documented.
+
+#### Dead Code Elimination (principle #11)
+
+- Removed the producer-less `IDEMPOTENCY_HIT_TOTAL` counter, the never-called `GovernanceStatus::to_json`, `record_audit_threadsafe`, `McpServer.logging_level` field, the `SESSION_UPDATE` fast-path entry, the `mcp/tools.rs` forwarding shell (error codes moved into `mcp/mod.rs`), and the dead `_client` parameter of `dispatch_server`.
+- Collapsed the harness_bus `AuditEntry` intermediate type (both call sites now build the canonical `AuditLogEntry` directly); the intelligence hub's `AUDIT_ENTRY_COUNT` static now reads the canonical sink length.
+- Unified the three private SHA-256 wrappers into `shared::sha256_bytes`/`sha256_hex`; `time.rs` now uses `shared::timestamps`.
+
+#### Wiring Activation (principle #14)
+
+- **Tool fallback chains live in the executor**: the autonomy loop and ACP agent runtime now consult each tool's configured fallback chain (`read_file→search_files`, `grep→search_files`, etc.) via a new hook-free fallback helper, matching the CLI path.
+- **Fault-tolerance recovery cycle scheduled**: `FaultToleranceEngine::run_recovery_cycle` now runs on a 30 s interval in `start_background_tasks` (previously only tests invoked it).
+- **`state_sync` model/agent events published**: `config.reload` now diffs the agent set and configured models and emits `AgentsChanged`/`ModelsChanged`, un-dead-ing the GUI/VS Code `onModelsChanged`/`onAgentsChanged` handlers.
+- **Governance audit unified into the canonical sink**: `governance.plan.update` events now flow through `global_audit_log()` (chained, rotated) instead of a second un-chained `.goon/governance/audit.ndjson` file; `governance.audit.recent` reads the in-memory sink (no per-request file I/O).
+- **Drift monitor got real producers**: `validate_action`/`verify_output` feed latency metrics into `DriftProtectionEngine` with a registered performance drift policy, so the 60 s monitor evaluates real data.
+
+#### Duplicate Unification & Correctness
+
+- `web_scrape` and `rss_read` now enforce the same `http_request` URL sandbox (`validate_url`), closing the SSRF/private-IP bypass.
+- `is_low_risk_tool` stale names fixed (`time_util`/`diff`/`rss_feed` → `date_time`/`file_diff`/`rss_read`); CLI `/grep` now hits the registered content `grep` tool instead of being shadowed by the `search_files` alias.
+- MCP `filter_tools_by_exposure` stale deferred names fixed (`container_*`→`docker_*`, removed `compile_and_run`/`qrcode_`); gzip decompression shared between `decompress` and archive extraction.
+
+#### Performance
+
+- Startup: config validation no longer loads the TOML twice; Copilot proxy probing + client construction cached per env snapshot (up to ~700 ms saved per `provider.list_models`/device-code call); `/proc` memory/CPU reads cached with a 5 s TTL across status/health/metrics endpoints.
+- Request path: data-URI attachments processed with `join_all`; `observe_phase` shares the process HTTP client; document parsing offloaded via `spawn_blocking`; MCP HTTP JSON-RPC batches dispatched with `join_all`; capability-bus selection and vector-context load run in parallel; the multi-agent safety net no longer marks fresh executions as cache hits.
+
+#### Three-End Alignment
+
+- **VS Code addon phantom RPCs mapped to real methods**: `approval.approve/reject` → `session/request_permission`, `checkpoint.create` → `conversation.checkpoint.create`, `skill.import_local` → `skill.import`, `runtime.reload_config` → `config.reload`, `checkpoint.load` → `checkpoint.list` (with warn), destructive commands (`chat.delete`/`session.clear`/`memory.clear`) → `session/delete`/`vector.clear`; `config.reset`/`agent.remove` now fail loudly with a warn instead of sending a doomed request.
+- **TypeScript SDK phantom methods renamed** to the backend names used by the other three SDKs: `workflow.plan`→`task.plan`, `summary.get`→`learning.summary`, `knowledge.search`→`knowledge.distill`, `rl.optimize`→`rl.alignment.offline_eval`.
+
+#### Validation
+
+- `cargo check` 4 profiles + `--workspace`: zero warnings.
+- `cargo clippy --all-targets -- -D warnings` on local / simple-server / multi-users-server / full: zero warnings.
+- `cargo test --all-targets`: **3486 passed / 0 failed**.
+- `scripts/gen-provider-catalog.py --check`: dual output OK (37 providers).
+
 ## [1.5.0] - 2026-08-05
 
 ### 24 Rounds of Deep Scan & Optimization (2026-07-24 → 2026-08-05)

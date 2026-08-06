@@ -56,6 +56,45 @@ pub fn parse_tool_call_token(token: &str) -> Option<(&str, &str)> {
     Some((tool_name, args))
 }
 
+/// Classification of a single streamed agent token against the shared
+/// token vocabulary (single source; the CLI/ACP collection loops previously
+/// re-implemented this chain three times).
+#[derive(Debug)]
+pub enum AgentToken {
+    /// Visible response content.
+    Content(String),
+    /// Reasoning text (the `__thinking__` prefix is stripped).
+    Reasoning(String),
+    /// A tool-call token `(tool_name, arguments_json)`.
+    ToolCall(String, String),
+    /// Model-used announcement (model id).
+    ModelUsed(String),
+    /// Finish-reason / usage telemetry control token.
+    Telemetry,
+    /// Structured reasoning start/end marker (control char).
+    ReasoningMarker,
+}
+
+/// Classify a streamed agent token.
+pub fn classify_agent_token(token: &str) -> AgentToken {
+    if let Some(model_id) = token.strip_prefix(TOKEN_MODEL_USED_PREFIX) {
+        return AgentToken::ModelUsed(model_id.trim().to_string());
+    }
+    if let Some((tool_name, tool_args)) = parse_tool_call_token(token) {
+        return AgentToken::ToolCall(tool_name.to_string(), tool_args.to_string());
+    }
+    if token == REASONING_START || token == REASONING_END {
+        return AgentToken::ReasoningMarker;
+    }
+    if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
+        return AgentToken::Reasoning(reasoning_token.to_string());
+    }
+    if token.starts_with(TOKEN_FINISH_REASON_PREFIX) || token.starts_with(TOKEN_USAGE_PREFIX) {
+        return AgentToken::Telemetry;
+    }
+    AgentToken::Content(token.to_string())
+}
+
 #[cfg(test)]
 pub fn parse_model_used_token(token: &str) -> Option<&str> {
     token

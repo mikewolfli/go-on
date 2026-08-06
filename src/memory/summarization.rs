@@ -34,9 +34,11 @@ impl Default for SummarizationConfig {
     }
 }
 
-/// A progressive memory summarizer that compresses groups of entries
-/// into a compact summary when the group size exceeds the configured
-/// threshold.
+/// Memory summarizer with an optional LLM agent.
+///
+/// Clone is cheap (the agent is an `Arc`), so the configured instance built at
+/// server startup can be shared with the lazily-created `MemoryPersistence`.
+#[derive(Clone)]
 pub struct MemorySummarizer {
     config: SummarizationConfig,
     /// Optional LLM agent for actual LLM-based summarization.

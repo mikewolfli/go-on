@@ -1336,7 +1336,7 @@ impl MemoryPersistence {
         let mut report = MigrationReport::default();
 
         // ── Step 0: Summarize hot entries if summarizer is configured ──
-        self.summarize_hot_entries()?;
+        self.summarize_hot_entries().await?;
 
         // ── Step 1: Process hot cache evictions ──
         let evicted: Vec<MemoryEntry> = {
@@ -1443,34 +1443,44 @@ impl MemoryPersistence {
     /// Summarize hot cache entries if the summarizer is configured and
     /// the entry count exceeds the threshold.
     ///
-    /// Uses the sync-only path (`summarizer.summarize_sync`) so this
-    /// can be called from `auto_migrate` without requiring an async
-    /// runtime.  When the LLM path is needed, call `summarize` directly
-    /// in an async context.
-    pub fn summarize_hot_entries(&self) -> Result<()> {
+    /// Routes through the async [`MemorySummarizer::summarize`] so the
+    /// configured LLM agent is actually used when `use_llm_summarization` is
+    /// enabled (previously this only ran the sync truncation path).
+    pub async fn summarize_hot_entries(&self) -> Result<()> {
         let Some(ref summarizer) = self.summarizer else {
             return Ok(());
         };
 
-        // Acquire the lock once for the entire read-check-summarize-replace
-        // operation to eliminate the TOCTOU race between hot_entries() and clear().
-        let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("hot cache mutex poisoned in 'summarize_hot_entries', recovering");
-            poisoned.into_inner()
-        });
-
-        let entries: Vec<MemoryEntry> = hot.entries.values().map(|he| he.entry.clone()).collect();
+        // Snapshot the hot entries under the lock, then drop it before the
+        // await so the LLM call never holds the std Mutex across an await
+        // point (and the summarize-replace window stays race-free because
+        // auto_migrate is the only writer of the hot cache).
+        let entries: Vec<MemoryEntry> = {
+            let hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("hot cache mutex poisoned in 'summarize_hot_entries', recovering");
+                poisoned.into_inner()
+            });
+            let entries: Vec<MemoryEntry> =
+                hot.entries.values().map(|he| he.entry.clone()).collect();
+            entries
+        };
         if !summarizer.should_summarize(entries.len()) {
             return Ok(());
         }
 
-        let result = summarizer.summarize_sync(&entries);
+        let result = summarizer.summarize(&entries).await;
         match result {
             SummarizedMemory::Full(_) => {
                 // Entry count is still manageable; nothing to do.
             }
             SummarizedMemory::Compressed(compressed) => {
                 let compressed_len = compressed.len();
+                let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!(
+                        "hot cache mutex poisoned in 'summarize_hot_entries', recovering"
+                    );
+                    poisoned.into_inner()
+                });
                 hot.clear();
                 for entry in compressed {
                     hot.insert(entry);

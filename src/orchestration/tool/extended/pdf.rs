@@ -37,27 +37,24 @@ impl Tool for ReadPdfTool {
         let content = fs::read(&validated)
             .with_context(|| format!("failed to read PDF: {}", validated.display()))?;
 
-        let doc = lopdf::Document::load_mem(&content)
-            .with_context(|| format!("failed to parse PDF: {}", validated.display()))?;
+        // Single PDF extraction implementation (shared with the multimodal
+        // pipeline — the previous inline lopdf copy was removed).
+        let parser = crate::multimodal::document_parser::DocumentParser::default();
+        let parsed = parser
+            .parse_bytes(&content, "pdf")
+            .map_err(|e| anyhow::anyhow!("PDF parse error: {}", e))?;
 
-        let mut text = String::new();
-        let pages = doc.get_pages();
-        let mut page_num = 0u32;
-        for (_, _page_id) in pages.iter() {
-            page_num += 1;
-            if let Ok(page_text) = doc.extract_text(&[page_num]) {
-                text.push_str(&format!("--- Page {page_num} ---\n"));
-                text.push_str(&page_text);
-                text.push('\n');
-            }
-        }
-
-        let page_count = pages.len();
+        let page_count = parsed
+            .metadata
+            .get("page_count")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
         let byte_size = content.len();
 
         info!(
             path = %validated.to_string_lossy(),
             pages = page_count,
+            images = parsed.images.len(),
             "PDF text extracted"
         );
 
@@ -66,9 +63,11 @@ impl Tool for ReadPdfTool {
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({
-                "text": text,
+                "text": parsed.text_content,
                 "page_count": page_count,
                 "byte_size": byte_size,
+                "images": parsed.images,
+                "metadata": parsed.metadata,
                 "path": validated.to_string_lossy(),
             })),
             error: None,

@@ -176,12 +176,14 @@ impl TokenMultiLevelCache {
     ///
     /// Routes: L1 (exact) → L2 (semantic) → L3 (persistent, optional).
     /// Uses **read** locks for the lookup path to avoid unnecessary contention.
-    /// Returns the best matching entry and which level it was found at.
+    /// Returns the best matching entry, which level it was found at, and the
+    /// match confidence (1.0 for exact/durable hits, the L2 cosine score
+    /// otherwise) so callers do not re-embed the input.
     pub async fn lookup(
         &self,
         input: &str,
         context_class: ContextLengthClass,
-    ) -> Option<(CacheLevel, CacheEntry)> {
+    ) -> Option<(CacheLevel, CacheEntry, f32)> {
         if !self.enabled.load(Ordering::Acquire) {
             return None;
         }
@@ -213,7 +215,7 @@ impl TokenMultiLevelCache {
                         .write()
                         .await
                         .record_hit(CacheLevel::L1, entry.token_count);
-                    return Some((CacheLevel::L1, entry));
+                    return Some((CacheLevel::L1, entry, 1.0));
                 }
             }
         }
@@ -226,7 +228,7 @@ impl TokenMultiLevelCache {
                 let guard = self.l2.read().await;
                 guard.peek_similar(&query_vec)
             };
-            if let Some((idx, entry)) = l2_hit {
+            if let Some((idx, entry, score)) = l2_hit {
                 if entry.output.len() > 10 {
                     if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
                         // Skip expired entry
@@ -238,7 +240,7 @@ impl TokenMultiLevelCache {
                             .write()
                             .await
                             .record_hit(CacheLevel::L2, entry.token_count);
-                        return Some((CacheLevel::L2, entry));
+                        return Some((CacheLevel::L2, entry, score));
                     }
                 }
             }
@@ -277,7 +279,7 @@ impl TokenMultiLevelCache {
                         .write()
                         .await
                         .record_hit(CacheLevel::L3, entry.token_count);
-                    return Some((CacheLevel::L3, entry));
+                    return Some((CacheLevel::L3, entry, 1.0));
                 }
             }
         }
@@ -555,71 +557,14 @@ impl L1ExactCache {
 // to find semantically similar past queries. Targets medium-length
 // contexts (500-2000 tokens).
 
-/// Simple bag-of-words embedding (256 dimensions).
+/// Embed text for the in-memory L2 semantic cache.
 ///
-/// This is a lightweight embedding that doesn't require an external model.
-/// It computes proper TF (term frequency) features over word tokens rather
-/// than the previous hash-based character approach, giving better semantic
-/// discrimination for short-to-medium texts.
-///
-/// The canonical embedding implementation lives in
-/// `crate::memory::embedding_provider` / `vector.rs` for persistent vectors;
-/// this inline fallback serves the in-memory L2 semantic cache.
+/// Thin adapter over the single canonical embedding implementation
+/// (`crate::memory::embedding_provider::local_hash_embed`), which is also used
+/// by the vector store, memory summarization, and the semantic response cache
+/// — so vectors are interchangeable across every similarity consumer.
 pub fn simple_embedding(text: &str) -> Vec<f32> {
-    const DIM: usize = 256;
-    let mut vec = vec![0.0f32; DIM];
-
-    let lower = text.to_ascii_lowercase();
-
-    // ── Term frequency features ──────────────────────────────────────
-    // Tokenize into words (2+ chars), count frequencies, and hash to
-    // dimension indices. This gives proper TF features rather than the
-    // earlier character-hash approach.
-    let mut term_freq: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
-    let mut total_terms = 0_usize;
-
-    for token in lower.split(|c: char| !c.is_alphanumeric()) {
-        if token.len() >= 2 {
-            *term_freq.entry(token.to_string()).or_insert(0.0) += 1.0;
-            total_terms += 1;
-        }
-    }
-
-    if total_terms == 0 {
-        return vec; // all-zero vector (no tokens)
-    }
-
-    // Project TF values into the embedding dimensions via hashing
-    for (term, freq) in &term_freq {
-        // Normalised TF: frequency / max frequency in document
-        let tf = freq / total_terms as f32;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(term, &mut hasher);
-        let hash = std::hash::Hasher::finish(&hasher);
-        let idx = (hash as usize) % DIM;
-        vec[idx] += tf;
-    }
-
-    // ── Bigram features (complementary signal) ───────────────────────
-    // Add a small contribution from character bigrams to capture
-    // substring-level similarity (e.g. common prefixes/suffixes).
-    for (c1, c2) in lower.chars().zip(lower.chars().skip(1)) {
-        if c1.is_alphanumeric() && c2.is_alphanumeric() {
-            let bigram_hash = (c1 as u64).wrapping_mul(31).wrapping_add(c2 as u64);
-            let idx = (bigram_hash as usize) % DIM;
-            vec[idx] += 0.25;
-        }
-    }
-
-    // Normalize to unit vector
-    let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for v in &mut vec {
-            *v /= norm;
-        }
-    }
-
-    vec
+    crate::memory::embedding_provider::local_hash_embed(text, 256)
 }
 
 /// L2 semantic-similarity cache.
@@ -642,9 +587,9 @@ impl L2SemanticCache {
     }
 
     /// Read-only peek for semantic similarity — finds similar entries without
-    /// updating hit counts. Returns the matched entry's index and a clone so
-    /// the caller can best-effort `touch` it under a write lock.
-    pub fn peek_similar(&self, query_vec: &[f32]) -> Option<(usize, CacheEntry)> {
+    /// updating hit counts. Returns the matched entry's index, a clone, and the
+    /// best similarity score so the caller avoids re-embedding the query.
+    pub fn peek_similar(&self, query_vec: &[f32]) -> Option<(usize, CacheEntry, f32)> {
         let mut best_score = 0.0f32;
         let mut best_entry = None;
 
@@ -652,7 +597,7 @@ impl L2SemanticCache {
             let score = crate::shared::math::cosine_similarity_f32(query_vec, vec);
             if score > best_score && score >= self.similarity_threshold {
                 best_score = score;
-                best_entry = Some((i, self.entries[i].clone()));
+                best_entry = Some((i, self.entries[i].clone(), score));
             }
         }
 
@@ -895,15 +840,35 @@ impl Agent for CachedAgentWrapper {
             .map(|s| s.to_string());
 
         // --- Cache lookup ---
-        if let Some((level, entry)) = self.cache.lookup(&input_text, context_class).await {
-            tracing::debug!(
-                target = "token_cache",
-                level = %level,
-                "CachedAgentWrapper: cache HIT, returning cached output"
-            );
-            // Cache hit – send the cached response through the stream sender.
-            let _ = sender.send(entry.output.clone());
-            return Ok(());
+        if let Some((level, entry, confidence)) =
+            self.cache.lookup(&input_text, context_class).await
+        {
+            // Apply the same execution-like gate as act_phase so secondary paths
+            // (phase summaries, review gates) never serve cached answers for
+            // requests that may have side effects.
+            let cache_bypassed =
+                crate::acp::helpers::cache_strategy::should_bypass_for_execution("chat", &messages);
+            match crate::acp::helpers::cache_strategy::CacheStrategy::decide_from_entry(
+                &format!("{level}"),
+                &entry,
+                confidence,
+                cache_bypassed,
+            ) {
+                crate::acp::helpers::cache_strategy::CacheDecision::Hit { response } => {
+                    tracing::debug!(
+                        target = "token_cache",
+                        level = %level,
+                        "CachedAgentWrapper: cache HIT, returning cached output"
+                    );
+                    // Cache hit – send the cached response through the stream sender.
+                    let _ = sender.send(response);
+                    return Ok(());
+                }
+                crate::acp::helpers::cache_strategy::CacheDecision::Refused { .. }
+                | crate::acp::helpers::cache_strategy::CacheDecision::Miss => {
+                    // Fall through to the inner agent for a fresh response.
+                }
+            }
         }
 
         // --- Cache miss – delegate to the inner agent ---

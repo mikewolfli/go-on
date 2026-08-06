@@ -9,9 +9,7 @@ use tokio::time::Duration;
 use crate::acp::helpers::autonomy_loop::{contract_snapshot, AutonomyLoopReport, AutonomyPhase};
 use crate::acp::helpers::context::run_with_optional_timeout;
 use crate::agent::{Agent, Message};
-use crate::orchestration::autonomy_runtime::{
-    TOKEN_MODEL_USED_PREFIX, TOKEN_THINKING_PREFIX, TOKEN_TOOL_CALL_PREFIX,
-};
+use crate::orchestration::autonomy_runtime::{classify_agent_token, AgentToken};
 
 pub(crate) async fn run_followup_after_tool_observation(
     agent: Arc<dyn Agent>,
@@ -30,19 +28,19 @@ pub(crate) async fn run_followup_after_tool_observation(
         let mut selected_model: Option<String> = None;
 
         while let Some(token) = receiver.recv().await {
-            if let Some(model_id) = token.strip_prefix(TOKEN_MODEL_USED_PREFIX) {
-                selected_model = Some(model_id.trim().to_string());
-                continue;
-            }
-
-            if token.starts_with(TOKEN_TOOL_CALL_PREFIX) {
-                continue;
-            }
-
-            if let Some(reasoning_token) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
-                reasoning.push_str(reasoning_token);
-            } else {
-                response.push_str(&token);
+            match classify_agent_token(&token) {
+                AgentToken::ModelUsed(model_id) => {
+                    selected_model = Some(model_id);
+                }
+                AgentToken::ToolCall(..) | AgentToken::ReasoningMarker | AgentToken::Telemetry => {
+                    continue;
+                }
+                AgentToken::Reasoning(reasoning_token) => {
+                    reasoning.push_str(&reasoning_token);
+                }
+                AgentToken::Content(text) => {
+                    response.push_str(&text);
+                }
             }
         }
 

@@ -499,9 +499,9 @@ pub(crate) async fn handle_workflow_execute(
         anyhow::bail!(err_msg);
     }
 
-    let _auto_clarification_in_progress = matches!(requirement_continuation.kind,
-        crate::acp::helpers::requirement_continuation::RequirementContinuationKind::AutoConfirmed
-        | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::ClarificationInProgress);
+    let _auto_clarification_in_progress =
+        matches!(requirement_continuation.kind,
+        crate::acp::helpers::requirement_continuation::RequirementContinuationKind::AutoConfirmed);
     let requirement_gate_payload =
         crate::acp::helpers::requirement_continuation::requirement_gate_payload_for_response(
             &requirement_continuation,

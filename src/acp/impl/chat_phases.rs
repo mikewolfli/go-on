@@ -949,7 +949,7 @@ pub(crate) async fn act_phase(
                     ),
                     ..Default::default()
                 }
-            } else if let Some((level, entry)) = server
+            } else if let Some((level, entry, confidence)) = server
                 .cache_deps
                 .cache
                 .token_cache
@@ -959,7 +959,7 @@ pub(crate) async fn act_phase(
                 let decision = CacheStrategy::decide_from_entry(
                     &format!("{level}"),
                     &entry,
-                    &input_text,
+                    confidence,
                     cache_bypassed_for_execution,
                 );
                 match decision {
@@ -1290,6 +1290,26 @@ pub(crate) async fn act_phase(
                 .write()
                 .unwrap_or_else(|p| p.into_inner())
                 .put(&input_text, cached_response);
+
+            // Token cache populate (multi-level: L1 exact + L2 semantic + L3
+            // durable). Previously only the fallback/secondary paths wrote to
+            // the token cache, so the primary execution path never filled the
+            // cache it reads on the next request.
+            let token_cache = server.cache_deps.cache.token_cache.clone();
+            let model_name = selected_model_name.clone();
+            let agent_for_cache = if selected_agent.is_empty() {
+                None
+            } else {
+                Some(selected_agent.clone())
+            };
+            crate::acp::helpers::cache_strategy::store_async(
+                token_cache,
+                input_text.clone(),
+                response_text.clone(),
+                crate::intelligence::token_cache::estimate_token_count(&response_text),
+                agent_for_cache,
+                model_name,
+            );
         }
 
         // Post-success cleanup

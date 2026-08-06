@@ -42,12 +42,12 @@ Four build profiles support different deployment scenarios:
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **local** | ✅ **Zero warnings** | **1946** |
+| **local** | ✅ **Zero warnings** | **3478** |
 | **simple-server** | ✅ **Zero warnings** | **all pass** |
 | **full** | ✅ **Zero warnings** | **all pass** |
 | **multi-users-server** | ✅ **Zero warnings** | **all pass** |
 
-All 1946 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
+All 3478 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
 
 ## Unified Handler Dispatch Pattern
 

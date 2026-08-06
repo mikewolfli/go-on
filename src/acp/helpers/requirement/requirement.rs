@@ -9,9 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    acp::helpers::autonomy_metrics::{
-        record_requirement_auto_recovery, record_requirement_human_confirmation,
-    },
+    acp::helpers::autonomy_metrics::record_requirement_auto_recovery,
     acp::prelude::now_ts,
     orchestration::task_router::TaskRouter,
     reinforcement::{
@@ -309,57 +307,17 @@ pub fn evaluate_requirement_gate(
 }
 
 /// Evaluate unified requirement gate facade for workflow/task main paths.
+///
+/// Pure evaluation: auto-recovery of low-risk gaps is the single responsibility
+/// of [`try_auto_recover_requirement_gate`] (used by the continuation flow), so
+/// the synthesize→inject→re-evaluate sequence exists exactly once.
 pub fn evaluate_requirement_gate_facade(
     ledger: &ArtifactLedger,
     task: &str,
     params: &Value,
     source: &str,
 ) -> anyhow::Result<RequirementGateFacadeDecision> {
-    let mut gate = evaluate_requirement_gate(ledger, task, params, source)?;
-
-    // Keep workflow/task main paths non-blocking for low-risk gaps by
-    // auto-synthesizing a minimal requirement contract and re-evaluating.
-    if gate.blocked && auto_clarification_enabled(params) {
-        let facade_gate = RequirementGateFacadeDecision {
-            kind: "requirement_contract".to_string(),
-            blocked: gate.blocked,
-            reason: gate.reason.clone(),
-            missing_fields: gate.missing_fields.clone(),
-            next_step: json!({
-                "method": "workflow.clarify",
-                "task": task,
-                "missing_fields": gate.missing_fields,
-            }),
-            clarification_artifact_path: gate.clarification_artifact_path.clone(),
-            governance_artifact_path: gate.governance_artifact_path.clone(),
-        };
-
-        if can_auto_recover_task(task, &facade_gate) {
-            let contract = synthesize_requirement_contract(task, params, source);
-            let mut recovered_params = params.clone();
-            if let Some(params_obj) = recovered_params.as_object_mut() {
-                params_obj.insert(
-                    "requirement_contract".to_string(),
-                    serde_json::to_value(&contract)?,
-                );
-                params_obj.insert("requirement_confirmed".to_string(), Value::Bool(true));
-                params_obj.insert(
-                    "auto_clarification_in_progress".to_string(),
-                    Value::Bool(true),
-                );
-
-                let recovered = evaluate_requirement_gate(ledger, task, &recovered_params, source)?;
-                if !recovered.blocked {
-                    record_requirement_auto_recovery();
-                    gate = recovered;
-                }
-            }
-        }
-    }
-
-    if gate.blocked {
-        record_requirement_human_confirmation();
-    }
+    let gate = evaluate_requirement_gate(ledger, task, params, source)?;
 
     let next_step = if gate.blocked {
         json!({
@@ -471,6 +429,10 @@ pub fn try_auto_recover_requirement_gate(
     if recovered_gate.blocked {
         return Ok(None);
     }
+
+    // Single observability point for successful auto-recovery (the facade no
+    // longer recovers internally; previously it recorded here-equivalent data).
+    record_requirement_auto_recovery();
 
     Ok(Some(RequirementGateAutoRecovery {
         gate: recovered_gate,

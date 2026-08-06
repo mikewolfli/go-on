@@ -14,11 +14,11 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.5.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2018-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-3478-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-238K-blue)]()
+[![LOC](https://img.shields.io/badge/code-251K-blue)]()
 
 ## go-on 是什么？
 
@@ -271,14 +271,14 @@ npm run compile
 
 | 指标 | 数值 |
 |:-----|:-----|
-| Rust 后端代码行数 | ~211K（490+ 个模块）|
-| GUI（EGUI）代码行数 | ~22K |
+| Rust 后端代码行数 | ~206K（451 个模块）|
+| GUI（EGUI）代码行数 | ~24K |
 | VS Code 插件（TypeScript）代码行数 | ~17K |
 | SDK（Rust + Python + TypeScript）代码行数 | ~4K |
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
 | 技能市场数量 | 37 |
-| 单元测试数量 | 2018（全部通过，零失败）|
+| 单元测试数量 | 3478（全部通过，零失败）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -302,7 +302,7 @@ cargo build --no-default-features --features full
 
 | 配置 | `cargo clippy -D warnings` | 测试状态 |
 |:-----|:--------------------------:|:--------:|
-| `local` | ✅ **零警告** | ✅ **1946 通过，0 失败，0 忽略** |
+| `local` | ✅ **零警告** | ✅ **3478 通过，0 失败，0 忽略** |
 | `simple-server` | ✅ **零警告** | ✅ **全部通过** |
 | `multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
 | `full` | ✅ **零警告** | ✅ **全部通过** |

@@ -1,7 +1,8 @@
 //! Shared math utilities.
 
-// The f32 cosine similarity variant is only used by the SQLite HNSW index.
-// In postgres mode, pgvector handles similarity natively via SQL.
+// The f32 cosine similarity variant is used by the token cache L2, semantic
+// response cache, SQLite HNSW index, and skill semantic matching. In postgres
+// mode, pgvector handles vector-store similarity natively via SQL.
 // Allow dead_code here to prevent warnings when only backend-postgres is enabled.
 #![cfg_attr(feature = "backend-postgres", allow(dead_code))]
 
@@ -27,35 +28,11 @@ macro_rules! define_cosine_similarity {
     };
 }
 
-define_cosine_similarity!(cosine_similarity, f64);
 define_cosine_similarity!(cosine_similarity_f32, f32);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_cosine_similarity_f64_identical() {
-        let v = vec![1.0, 0.0];
-        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn test_cosine_similarity_f64_orthogonal() {
-        let a = vec![1.0, 0.0];
-        let b = vec![0.0, 1.0];
-        assert!((cosine_similarity(&a, &b)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn test_cosine_similarity_f64_empty() {
-        assert_eq!(cosine_similarity(&[], &[]), 0.0);
-    }
-
-    #[test]
-    fn test_cosine_similarity_f64_mismatched_length() {
-        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
-    }
 
     #[test]
     fn test_cosine_similarity_f32_identical() {

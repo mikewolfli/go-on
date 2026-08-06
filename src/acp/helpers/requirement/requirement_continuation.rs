@@ -14,8 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::acp::helpers::requirement::{
-    auto_clarification_enabled, can_auto_recover_task, evaluate_requirement_gate_facade,
-    synthesize_requirement_contract, try_auto_recover_requirement_gate,
+    can_auto_recover_task, evaluate_requirement_gate_facade, try_auto_recover_requirement_gate,
     RequirementGateAutoRecovery, RequirementGateFacadeDecision,
 };
 use crate::reinforcement::ArtifactLedger;
@@ -27,8 +26,6 @@ pub enum RequirementContinuationKind {
     Confirmed,
     /// Gate auto-recovered with synthesized contract — task can proceed
     AutoConfirmed,
-    /// Clarification is in progress — caller should run workflow.clarify sub-flow
-    ClarificationInProgress,
     /// Clarification is required before execution, but human confirmation is not mandatory.
     ClarificationRequired,
     /// Human confirmation is required — caller should block
@@ -115,56 +112,13 @@ pub fn evaluate_with_continuation(
         };
     }
 
-    // Case 3: Gate blocked but can proceed with clarification
-    let missing_field_count = gate.missing_fields.len();
-    let is_low_risk = can_auto_recover_task(task, &gate);
-    let has_clarification_support = auto_clarification_enabled(params);
-
-    if is_low_risk && has_clarification_support && missing_field_count <= 3 {
-        // Minimal gaps — synthesize contract on the spot and mark as clarification-in-progress
-        let contract = synthesize_requirement_contract(task, params, source);
-        let mut recovered_params = params.clone();
-        if let Some(params_obj) = recovered_params.as_object_mut() {
-            params_obj.insert(
-                "requirement_contract".to_string(),
-                serde_json::to_value(&contract).unwrap_or_default(),
-            );
-            params_obj.insert("requirement_confirmed".to_string(), Value::Bool(true));
-            params_obj.insert(
-                "auto_clarification_in_progress".to_string(),
-                Value::Bool(true),
-            );
-            params_obj.insert(
-                "requires_human_confirmation".to_string(),
-                Value::Bool(false),
-            );
-        }
-
-        // Re-evaluate with the synthesized contract
-        if let Ok(recovered_gate) =
-            evaluate_requirement_gate_facade(ledger, task, &recovered_params, source)
-        {
-            if !recovered_gate.blocked {
-                return RequirementContinuation {
-                    kind: RequirementContinuationKind::ClarificationInProgress,
-                    can_proceed: true,
-                    gate: recovered_gate,
-                    auto_recovery: None,
-                    next_step: json!({
-                        "status": "clarification_in_progress",
-                        "auto_clarification_in_progress": true,
-                        "requires_human_confirmation": false,
-                        "missing_fields": gate.missing_fields,
-                        "note": "auto-synthesized minimal contract — results may need review",
-                    }),
-                };
-            }
-        }
-    }
-
-    // Case 4: Gate still blocked.
+    // Case 3: Gate still blocked.
     // Low-risk tasks should return clarification-required (soft block) rather than
     // forcing immediate human confirmation. Only high-risk paths remain hard blocked.
+    // (A third synthesize→re-evaluate copy previously lived here; it was dead code
+    // because its guard conditions and re-evaluation are identical to Case 2's
+    // `try_auto_recover_requirement_gate`, which already returned None here.)
+    let is_low_risk = can_auto_recover_task(task, &gate);
     let missing_fields = gate.missing_fields.clone();
     if is_low_risk {
         return RequirementContinuation {
@@ -182,6 +136,7 @@ pub fn evaluate_with_continuation(
         };
     }
 
+    crate::acp::helpers::autonomy_metrics::record_requirement_human_confirmation();
     RequirementContinuation {
         kind: RequirementContinuationKind::HumanConfirmationRequired,
         can_proceed: false,
@@ -206,9 +161,7 @@ pub fn can_proceed_with_continuation(continuation: &RequirementContinuation) -> 
 /// Extract the effective requirement gate payload for the response.
 pub fn requirement_gate_payload_for_response(continuation: &RequirementContinuation) -> Value {
     match &continuation.kind {
-        RequirementContinuationKind::Confirmed
-        | RequirementContinuationKind::AutoConfirmed
-        | RequirementContinuationKind::ClarificationInProgress => {
+        RequirementContinuationKind::Confirmed | RequirementContinuationKind::AutoConfirmed => {
             continuation.gate.success_payload()
         }
         RequirementContinuationKind::ClarificationRequired

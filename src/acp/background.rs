@@ -351,17 +351,32 @@ pub async fn start_background_tasks(
         // Clone the real AlertManager reference so the evolution loop can
         // poll active alerts as evolution triggers (GAP-B52-02 I11).
         let alert_manager = Arc::clone(&server.observability.alert_manager);
+        // Wire a real LLM agent (and registry handle) into the evolution agent
+        // so patch generation and analysis use the LLM path instead of pure
+        // heuristic synthesis (previously `llm_agent` was always None).
+        let evolution_registry = server.agent_registry();
         spawn_background_task(
             async move {
                 // S6: delay 500ms to let the server start accepting requests first
                 tokio::time::sleep(Duration::from_millis(500)).await;
 
+                let llm_agent = evolution_registry.as_ref().and_then(|registry| {
+                    registry
+                        .get("assistant")
+                        .or_else(|| registry.get("summarizer"))
+                        .or_else(|| {
+                            let names = registry.names();
+                            names.first().and_then(|n| registry.get(n))
+                        })
+                });
+
                 // The evolution_agent binding lives for the entire async block scope,
                 // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
                 let evolution_agent = Arc::new(
-                    crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
+                    crate::agents::self_evolution_agent::SelfEvolutionAgent::with_llm(
                         std::path::PathBuf::from("."),
                         Vec::new(),
+                        llm_agent,
                     )
                     .await,
                 );

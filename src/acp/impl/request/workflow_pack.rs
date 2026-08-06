@@ -209,7 +209,8 @@ async fn workflow_confirm_with_depth_payload(
                 if let Some(obj) = auto_recovered_params.as_object_mut() {
                     obj.insert("ready_to_confirm".to_string(), Value::Bool(true));
                 }
-                crate::acp::helpers::autonomy_metrics::record_requirement_auto_recovery();
+                // (Auto-recovery metric is recorded exactly once, inside
+                // `try_auto_recover_requirement_gate` — no duplicate call here.)
                 // Fall through to the confirmed path with auto-recovered params
                 return Box::pin(workflow_confirm_with_depth_payload(
                     server,
@@ -300,7 +301,8 @@ pub(super) async fn workflow_clarify_payload(server: &AcpServer, params: Value) 
         if crate::acp::helpers::requirement_continuation::can_proceed_with_continuation(
             &continuation,
         ) {
-            crate::acp::helpers::autonomy_metrics::record_requirement_auto_recovery();
+            // (Auto-recovery metric is recorded exactly once, inside
+            // `try_auto_recover_requirement_gate` — no duplicate call here.)
             return Ok(json!({
                 "ok": true,
                 "status": "auto_confirmed",
@@ -507,7 +509,6 @@ pub(super) async fn workflow_research_payload(server: &AcpServer, params: Value)
             "auto_clarification_in_progress": matches!(
                 requirement_continuation.kind,
                 crate::acp::helpers::requirement_continuation::RequirementContinuationKind::AutoConfirmed
-                    | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::ClarificationInProgress
             ),
         },
         "approval_checkpoint": approval_checkpoint,
@@ -650,7 +651,6 @@ pub(super) async fn workflow_consult_payload(server: &AcpServer, params: Value) 
             "auto_clarification_in_progress": matches!(
                 requirement_continuation.kind,
                 crate::acp::helpers::requirement_continuation::RequirementContinuationKind::AutoConfirmed
-                    | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::ClarificationInProgress
             ),
         },
         "approval_checkpoint": approval_checkpoint,
@@ -723,9 +723,7 @@ pub(crate) async fn workflow_generate_payload(
 
     let auto_clarification_in_progress = matches!(
         requirement_continuation.kind,
-        crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
-            AutoConfirmed | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
-            ClarificationInProgress
+        crate::acp::helpers::requirement_continuation::RequirementContinuationKind::AutoConfirmed
     );
 
     let mut plan = build_task_plan(task);
@@ -963,7 +961,6 @@ pub(super) async fn task_plan_payload(
             "auto_clarification_in_progress": matches!(
                 requirement_continuation.kind,
                 crate::acp::helpers::requirement_continuation::RequirementContinuationKind::AutoConfirmed
-                    | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::ClarificationInProgress
             ),
         },
         "approval_checkpoint": approval_checkpoint,
@@ -1280,7 +1277,6 @@ pub(crate) async fn handle_workflow_ask(
             "auto_clarification_in_progress": matches!(
                 requirement_continuation.kind,
                 crate::acp::helpers::requirement_continuation::RequirementContinuationKind::AutoConfirmed
-                    | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::ClarificationInProgress
             ),
         },
         "plan_artifact_path": plan_artifact_path.display().to_string(),
