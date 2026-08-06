@@ -34,7 +34,6 @@ Multi-Users Server Architecture:
 │   ├── ACP HTTP Server (port 8090): CORS → Entry Auth → User Auth → RBAC → Routing
 │   └── MCP HTTP Server (port 8090): CORS → Entry Auth → User Auth → RBAC → Dispatch
 ├── Database Layer: PostgreSQL with pgvector
-├── Cache Layer: Redis (optional)
 ├── Load Balancer: Traffic distribution
 ├── Monitoring: Prometheus, Grafana, ELK
 └── Backup: Automated backup system
@@ -52,10 +51,10 @@ Client → CORS headers → Entry Auth (API key) → User Session (HMAC token)
 ## Configuration
 
 ### Server Configuration
-Create `config/multi-users-server.toml`:
+Create `config/config.multi-users-server.toml`:
 
 ```toml
-# config/multi-users-server.toml
+# config/config.multi-users-server.toml
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
@@ -87,35 +86,34 @@ tenant_default_daily_token_limit = 1000000
 tenant_default_concurrent_tasks = 10
 tenant_default_daily_api_calls = 10000
 
-[database]
-type = "postgres"
-host = "localhost"
-port = 5432
-database = "go_on_production"
-username_env = "GO_ON_DB_USERNAME"
-password_env = "GO_ON_DB_PASSWORD"
-pool_size = 20
-connection_timeout_seconds = 30
-ssl_mode = "prefer"
-
-[cache]
-enabled = true
-type = "database"  # Uses PostgreSQL for cache
-
-[vector]
-enabled = true
-type = "pgvector"
-dimensions = 768
-top_k = 10
-min_similarity = 0.7
-
-[observability]
+# ── OpenTelemetry (inside [runtime]) ───────────────────────
 otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
-metrics_port = 9090
-tracing_sampling_rate = 0.1
+
+otel_sample_ratio = 0.1
+
+[cache]
+enabled = true
+# PostgreSQL connection (multi-users-server): set a postgres:// URL.
+# Example: "postgres://user:pass@host:5432/goon_cache?sslmode=verify-full"
+# connection_string = "postgres://..."
+# read_replica_connection_string = "postgres://..."
+
+[vector]
+enabled = true
+# pgvector connection (multi-users-server): set a postgres:// URL.
+# Example: "postgres://user:pass@host:5432/goon_vector?sslmode=verify-full"
+# connection_string = "postgres://..."
+dimensions = 768
+top_k = 10
+min_similarity = 0.7
 ```
+
+> There is no `[database]` or `[observability]` section. PostgreSQL connectivity
+> is configured via `cache.connection_string` / `vector.connection_string`, and
+> OpenTelemetry settings live inside `[runtime]`. Prometheus metrics are served
+> at `GET /metrics` on the ACP HTTP port (8090).
 
 ### Feature Flags
 Multi-Users Server mode requires:
@@ -185,33 +183,22 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-
   go-on:
     build:
       context: .
       dockerfile: Dockerfile.multi-users
     environment:
-      GO_ON_DB_USERNAME: go_on
-      GO_ON_DB_PASSWORD: ${DB_PASSWORD}
       GO_ON_ENTRY_API_KEY: ${ENTRY_API_KEY}
       RUST_LOG: info
     ports:
       - "8090:8090"
-      - "9090:9090"
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     volumes:
-      - ./config/multi-users-server.toml:/app/config.toml
+      # The mounted config must set cache.connection_string / vector.connection_string
+      # to the postgres URL (e.g. postgres://go_on:${DB_PASSWORD}@postgres:5432/go_on_production).
+      - ./config/config.multi-users-server.toml:/app/config.toml
       - ./logs:/app/logs
 
   prometheus:
@@ -234,7 +221,6 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   prometheus_data:
   grafana_data:
 ```
@@ -365,19 +351,7 @@ spec:
         ports:
         - containerPort: 8090
           name: http
-        - containerPort: 9090
-          name: metrics
         env:
-        - name: GO_ON_DB_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: go-on-secrets
-              key: db-username
-        - name: GO_ON_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: go-on-secrets
-              key: db-password
         - name: GO_ON_ENTRY_API_KEY
           valueFrom:
             secretKeyRef:
@@ -415,9 +389,6 @@ spec:
   - port: 80
     targetPort: 8090
     name: http
-  - port: 9090
-    targetPort: 9090
-    name: metrics
   type: LoadBalancer
 ```
 
@@ -585,7 +556,6 @@ let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot
 # Firewall rules
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
-sudo ufw allow 6379/tcp  # Redis
 sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # Enable firewall
@@ -595,12 +565,13 @@ sudo ufw --force enable
 ### Secrets Management
 ```bash
 # Set required environment variables
+# (used by GO_ON_ENTRY_API_KEY / GO_ON_USER_AUTH_TOKEN_SECRET env fields)
 export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
 export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# Optional: PostgreSQL credentials
-export GO_ON_DB_USERNAME="go_on"
-export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
+# PostgreSQL credentials are embedded in cache.connection_string /
+# vector.connection_string in the config file (e.g.
+# postgres://USER:PASS@HOST:5432/goon_cache?sslmode=verify-full).
 ```
 
 ## Monitoring and Observability
@@ -616,16 +587,12 @@ global:
 scrape_configs:
   - job_name: 'go-on'
     static_configs:
-      - targets: ['go-on:9090']
-    metrics_path: '/metrics/prometheus'
+      - targets: ['go-on:8090']
+    metrics_path: '/metrics'
     
   - job_name: 'postgres'
     static_configs:
       - targets: ['postgres-exporter:9187']
-      
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['redis-exporter:9121']
 
 alerting:
   alertmanagers:
@@ -646,19 +613,8 @@ Create `grafana/dashboards/go-on.json` with key metrics:
 - Resource utilization
 
 ### Log Aggregation
-```toml
-[logging]
-level = "info"
-format = "json"
-outputs = ["file", "stdout", "loki"]
-
-[logging.loki]
-enabled = true
-url = "http://loki:3100"
-labels = ["app=go-on", "environment=production"]
-batch_size = 1000
-batch_timeout_seconds = 5
-```
+Collect stderr/stdout (systemd, Docker, or a log shipper). The log level is set
+via the `RUST_LOG` environment variable; there is no `[logging]` config section.
 
 ## Backup and Disaster Recovery
 
@@ -675,7 +631,7 @@ pg_dump -h localhost -U go_on -d go_on_production \
   --file="$BACKUP_DIR/go-on-$DATE.dump"
 
 # Backup configuration
-cp /opt/go-on/config/multi-users-server.toml "$BACKUP_DIR/config-$DATE.toml"
+cp /opt/go-on/config/config.multi-users-server.toml "$BACKUP_DIR/config-$DATE.toml"
 
 # Upload to cloud storage
 aws s3 cp "$BACKUP_DIR/go-on-$DATE.dump" s3://go-on-backups/
@@ -746,22 +702,25 @@ CREATE TABLE cache_2024_q2 PARTITION OF cache_partitioned
 ## Migration
 
 ### From Simple Server Mode
+Simple-server uses SQLite (`cache.sqlite3`, `vector.sqlite3`); multi-users-server uses
+PostgreSQL. There is no `--export`/`--import` CLI — migrate the configuration and let
+the cache re-populate:
+
 ```bash
-# Export data from simple server
-pg_dump -h simple-server -U go_on -d go_on_simple \
-  --format=custom \
-  --file=simple-server-export.dump
+# 1. Copy the configuration (agents, phases, runtime settings)
+cp config/config.simple-server.toml config/config.multi-users-server.toml
 
-# Import to multi-users server
-pg_restore -h multi-users-server -U go_on -d go_on_production \
-  --clean \
-  --if-exists \
-  simple-server-export.dump
+# 2. Update the database connection strings in the new config
+#    cache.connection_string = "postgres://USER:PASS@HOST:5432/goon_cache?sslmode=verify-full"
+#    vector.connection_string = "postgres://USER:PASS@HOST:5432/goon_vector?sslmode=verify-full"
 
-# Update configuration
-cp config/simple-server.toml config/multi-users-server.toml
-# Update database settings in the new config
+# 3. Optional: carry over the SQLite cache files for a warm start
+cp /var/lib/go-on/cache.sqlite3  /var/lib/go-on/cache.sqlite3.simple-server.bak
+cp /var/lib/go-on/vector.sqlite3 /var/lib/go-on/vector.sqlite3.simple-server.bak
 ```
+
+Cached responses and vector indexes are best-effort caches; they will be
+rebuilt lazily against PostgreSQL after the first requests.
 
 ### Zero-Downtime Migration
 1. **Phase 1**: Set up new infrastructure alongside old
@@ -806,7 +765,6 @@ kubectl describe pods -l app=go-on
 
 # Check network connectivity
 kubectl exec go-on-pod -- curl http://postgres:5432
-kubectl exec go-on-pod -- curl http://redis:6379
 ```
 
 ### Security Issues
@@ -838,7 +796,7 @@ trivy image your-registry/go-on:multi-users-latest
 gitleaks detect --source . --verbose
 
 # Network security scan
-nmap -sV -p 80,443,5432,6379,8090,9090 go-on.example.com
+nmap -sV -p 80,443,5432,8090 go-on.example.com
 ```
 
 ## Maintenance
@@ -855,9 +813,7 @@ psql -h localhost -U go_on -d go_on_production -c "REINDEX DATABASE go_on_produc
 # 2. Log rotation
 find /var/log/go-on -name "*.log" -mtime +7 -delete
 
-# 3. Cache cleanup
-redis-cli FLUSHDB
-
+# 3. Verify data integrity (cache/vector SQLite or PostgreSQL)
 # 4. Backup verification
 # (Verify latest backup can be restored)
 ```

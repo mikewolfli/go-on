@@ -20,19 +20,19 @@ go-on 支援多種工作流程類型，適用於不同的使用場景。工作�
 
 ## 2. 快速開始
 
-在 `config/templates/` 中提供了兩個即用的配置範本：
+專案在 `config/` 中提供了開箱即用的配置預設。從其中一個開始：
 
-### 開發工作流程
+### 通用工作流（默認）
 ```bash
-cp config/templates/config.dev.toml config.toml
-# 編輯 config.toml 新增您的 API 金鑰
+cp config/config.toml config.toml
+# 編輯 config.toml 添加 API 金鑰
 go-on --config config.toml
 ```
 
-### 通用工作流程
+### 低記憶體工作流
 ```bash
-cp config/templates/config.general.toml config.toml
-# 編輯 config.toml 新增您的 API 金鑰
+cp config/config.low-memory.toml config.toml
+# 編輯 config.toml 添加 API 金鑰
 go-on --config config.toml
 ```
 

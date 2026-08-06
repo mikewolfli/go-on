@@ -11,8 +11,8 @@ use crate::governance::hardening::{
     SandboxPolicy,
 };
 use crate::governance::harness_bus::types::{
-    DispatchPolicy, EscalationReason, ExecutionPolicy, GovernancePolicy, OutputVerdict,
-    PolicyVerdict, PolicyViolation, ReviewReason, ToolVerdict,
+    DispatchPolicy, EscalationReason, ExecutionPolicy, GovernancePolicy, IdempotencyPolicy,
+    OutputVerdict, PolicyVerdict, PolicyViolation, ReviewReason, ToolVerdict,
 };
 use crate::governance::pua::{PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
@@ -33,7 +33,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// PolicyEvaluator composites all governance components into a single
 /// evaluate/validate/verify suite.
@@ -424,6 +424,61 @@ impl PolicyEvaluator {
         }
     }
 
+    /// Whether idempotency dedup is enabled by the governance policy.
+    fn idempotency_enabled(&self) -> bool {
+        matches!(
+            self.governance.idempotency,
+            IdempotencyPolicy::Enabled { .. }
+        )
+    }
+
+    /// Stable idempotency cache key for a (tool, arguments) pair.
+    ///
+    /// Uses the tenant-prefixed key format of [`IdempotencyCache`]
+    /// (`"{tenant}:{operation_key}"`); the tenant is `default` so all tool
+    /// entries share one per-tenant LRU quota. The argument JSON is hashed so
+    /// two calls with different arguments never dedupe against each other.
+    pub fn idempotency_key(tool: &str, args: &Value) -> String {
+        use std::hash::{Hash, Hasher};
+        let args_json = serde_json::to_string(args).unwrap_or_default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        args_json.hash(&mut hasher);
+        format!("default:{tool}:{:016x}", hasher.finish())
+    }
+
+    /// Retrieve the cached result for a repeated (tool, args) call, honoring
+    /// both the cache-internal TTL and the `IdempotencyPolicy` TTL. This is
+    /// the read point for `GovernancePolicy::idempotency` — previously the
+    /// policy had no consumer.
+    pub fn cached_idempotent_result(&self, tool: &str, args: &Value) -> Option<Value> {
+        let (enabled, policy_ttl) = match self.governance.idempotency {
+            IdempotencyPolicy::Enabled { ttl_seconds } => (true, Duration::from_secs(ttl_seconds)),
+            IdempotencyPolicy::Disabled => (false, Duration::ZERO),
+        };
+        if !enabled {
+            return None;
+        }
+        let key = Self::idempotency_key(tool, args);
+        let cache = self.idempotency.lock().ok()?;
+        let entry = cache.get(&key)?;
+        if entry.cached_at.elapsed() > policy_ttl {
+            return None;
+        }
+        Some(entry.response.clone())
+    }
+
+    /// Record a successful tool execution so a repeated (tool, args) call is
+    /// deduplicated (skip re-execution, return the cached result) within the
+    /// `IdempotencyPolicy` TTL.
+    pub fn record_tool_success(&self, tool: &str, args: &Value, response: &Value) {
+        if !self.idempotency_enabled() {
+            return;
+        }
+        if let Ok(mut cache) = self.idempotency.lock() {
+            cache.insert(Self::idempotency_key(tool, args), response.clone());
+        }
+    }
+
     pub fn check_tool_call(&self, tool: &str, args: &Value) -> ToolVerdict {
         let level = *self.sandbox_level.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
@@ -506,15 +561,21 @@ impl PolicyEvaluator {
                 }
             }
         };
-        let idempotent = self
-            .idempotency
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .get(tool)
-            .is_some();
+        let idempotent = match self.governance.idempotency {
+            IdempotencyPolicy::Disabled => false,
+            IdempotencyPolicy::Enabled { ttl_seconds } => {
+                let policy_ttl = Duration::from_secs(ttl_seconds);
+                self.idempotency
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("[harness_bus] lock poisoned, recovering");
+                        poisoned.into_inner()
+                    })
+                    .get(&Self::idempotency_key(tool, args))
+                    .map(|entry| entry.cached_at.elapsed() <= policy_ttl)
+                    .unwrap_or(false)
+            }
+        };
         let budget_ok = self
             .budget
             .lock()

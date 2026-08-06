@@ -34,6 +34,21 @@ use tracing::info;
 /// Marker prefix in chat input that triggers repository analysis.
 pub const REPO_PREFIX: &str = "repo:";
 
+/// File extensions whose content is scanned for import statements.
+const IMPORT_SCAN_EXTENSIONS: &[&str] = &["rs", "py", "js", "jsx", "ts", "tsx", "mjs", "cjs"];
+
+/// Module index files that act as a directory's entry point.
+const MODULE_INDEX_FILES: &[&str] = &[
+    "mod.rs",
+    "__init__.py",
+    "index.js",
+    "index.jsx",
+    "index.ts",
+    "index.tsx",
+    "index.mjs",
+    "index.cjs",
+];
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -459,8 +474,14 @@ impl RepoAnalyzer {
     pub async fn build_repo_map(&self, path: &Path) -> Result<RepoMap, RepoAnalyzerError> {
         info!("RepoAnalyzer::build_repo_map: scanning {:?}", path);
         let mut repo_map = RepoMap::empty();
+        let mut contents: Vec<Option<String>> = Vec::new();
 
-        self.walk_and_collect(path, path, &mut repo_map).await?;
+        self.walk_and_collect(path, path, &mut repo_map, &mut contents)
+            .await?;
+        // Resolve import statements between same-repo files into dependency
+        // edges. Targets that cannot be mapped to a repo file (external
+        // crates, npm packages, stdlib, ...) are skipped without error.
+        resolve_dependencies(&mut repo_map, &contents);
 
         info!(
             "RepoAnalyzer::build_repo_map: {} files, {} edges",
@@ -479,6 +500,7 @@ impl RepoAnalyzer {
         root: &Path,
         dir: &Path,
         repo_map: &mut RepoMap,
+        contents: &mut Vec<Option<String>>,
     ) -> Result<(), RepoAnalyzerError> {
         let mut entries = tokio::fs::read_dir(dir).await?;
         while let Some(entry) = entries.next_entry().await? {
@@ -488,7 +510,7 @@ impl RepoAnalyzer {
 
             if ft.is_dir() {
                 if !self.excluded_dirs.contains(&name) {
-                    Box::pin(self.walk_and_collect(root, &abs_path, repo_map)).await?;
+                    Box::pin(self.walk_and_collect(root, &abs_path, repo_map, contents)).await?;
                 }
             } else if ft.is_file() {
                 let rel_path = abs_path
@@ -512,16 +534,16 @@ impl RepoAnalyzer {
 
                 let file_id = repo_map.files.len();
                 repo_map.files.push(rel_path.clone());
-                // Count lines of code for this file (best effort; non-UTF8
-                // or unreadable files count as 0 lines).
-                let line_count = match tokio::fs::read_to_string(&abs_path).await {
-                    Ok(c) => c.lines().count(),
-                    Err(_) => 0,
-                };
+                // Read the content once: it is used both for the line count
+                // (best effort; non-UTF8 or unreadable files count as 0 lines)
+                // and later for import-based dependency edge detection.
+                let content = tokio::fs::read_to_string(&abs_path).await.ok();
+                let line_count = content.as_deref().map(|c| c.lines().count()).unwrap_or(0);
                 repo_map.loc.insert(file_id, line_count);
+                contents.push(content);
 
-                // In production, parse the file for imports to build edges.
-                // Here we record the file and note that edge detection would occur.
+                // Every file starts with an empty edge set; import resolution
+                // in `resolve_dependencies` fills them in afterwards.
                 repo_map.dependencies.insert(file_id, HashSet::new());
                 repo_map.dependents.insert(file_id, HashSet::new());
             }
@@ -856,6 +878,305 @@ impl RepoAnalyzer {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Dependency edge detection
+// ---------------------------------------------------------------------------
+
+/// Resolve import statements between same-repo files into dependency edges.
+///
+/// Each file's content is parsed for imports (Rust `use`, Python `import` /
+/// `from ... import`, JS/TS `import ... from` / `require`). Targets that
+/// resolve to another file in the repository produce a forward
+/// `dependencies` edge and a reverse `dependents` edge; targets that cannot
+/// be mapped to any repo file (external crates, npm packages, stdlib, ...)
+/// are skipped and are not treated as errors.
+fn resolve_dependencies(repo_map: &mut RepoMap, contents: &[Option<String>]) {
+    let lookup = build_dependency_lookup(repo_map);
+    let files: Vec<(usize, String)> = repo_map
+        .files
+        .iter()
+        .enumerate()
+        .map(|(id, path)| (id, path.clone()))
+        .collect();
+    for (file_id, rel_path) in files {
+        let Some(Some(content)) = contents.get(file_id) else {
+            continue; // binary / unreadable file — nothing to parse
+        };
+        for target in parse_imports(&rel_path, content) {
+            if let Some(dep_id) = resolve_dependency(&rel_path, &target, &lookup) {
+                if dep_id == file_id {
+                    continue; // self-import (e.g. `from . import x`)
+                }
+                repo_map
+                    .dependencies
+                    .entry(file_id)
+                    .or_default()
+                    .insert(dep_id);
+                repo_map
+                    .dependents
+                    .entry(dep_id)
+                    .or_default()
+                    .insert(file_id);
+            }
+        }
+    }
+}
+
+/// Build a lookup of module-path keys -> file IDs used to resolve import
+/// targets. Every file is registered under several canonical forms: its raw
+/// relative path, its extension-less path, its module-index directory form
+/// (e.g. `src/util/mod.rs` -> `src/util`), a Rust `::`-joined form, and
+/// crate-root-relative variants with a leading `src/` stripped, so that
+/// `use crate::...` and top-level module paths resolve.
+fn build_dependency_lookup(repo_map: &RepoMap) -> HashMap<String, usize> {
+    let mut lookup: HashMap<String, usize> = HashMap::new();
+    for (file_id, rel) in repo_map.files.iter().enumerate() {
+        for key in module_path_keys(rel) {
+            lookup.entry(key).or_insert(file_id);
+        }
+    }
+    lookup
+}
+
+/// All module-path keys a file is addressable under.
+fn module_path_keys(rel: &str) -> Vec<String> {
+    let no_ext = strip_module_extension(rel);
+    let mut keys = vec![rel.to_string(), no_ext.clone()];
+    if let Some(dir) = index_module_dir(rel) {
+        if !dir.is_empty() {
+            keys.push(dir);
+        }
+    }
+    keys.push(no_ext.replace('/', "::"));
+    if let Some(stripped) = no_ext.strip_prefix("src/") {
+        keys.push(stripped.to_string());
+        keys.push(stripped.replace('/', "::"));
+    }
+    keys
+}
+
+/// Strip the file extension from a relative path (e.g. `src/util/helper.rs`
+/// -> `src/util/helper`).
+fn strip_module_extension(rel: &str) -> String {
+    Path::new(rel)
+        .with_extension("")
+        .to_string_lossy()
+        .to_string()
+}
+
+/// If `rel` names a module index file (`mod.rs`, `__init__.py`, `index.*`),
+/// return the directory it represents; otherwise `None`.
+fn index_module_dir(rel: &str) -> Option<String> {
+    let path = Path::new(rel);
+    let file_name = path.file_name()?.to_str()?;
+    let is_index = file_name == "mod.rs"
+        || file_name == "__init__.py"
+        || matches!(
+            file_name,
+            "index.js" | "index.jsx" | "index.ts" | "index.tsx" | "index.mjs" | "index.cjs"
+        );
+    if is_index {
+        path.parent().map(|p| p.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+/// Parse import statements from `content`, returning normalized module
+/// targets.
+///
+/// Targets keep their relative (`./`, `../`) or absolute style; Rust
+/// `crate::` / `self::` / `super::` prefixes are normalized into the
+/// corresponding absolute or relative form. Supported languages:
+///
+/// - Rust: `use crate::a::b;` / `use self::a;` / `use super::a;` / `use a::b;`
+/// - Python: `import a.b` / `from a.b import c` / `from .a import b`
+/// - JS/TS: `import ... from 'x'` / `import 'x'` / `require('x')`
+fn parse_imports(rel_path: &str, content: &str) -> Vec<String> {
+    let ext = Path::new(rel_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let mut targets = Vec::new();
+    match ext {
+        "rs" => {
+            for line in content.lines() {
+                let path = line
+                    .trim()
+                    .strip_prefix("use ")
+                    .and_then(|rest| rest.split(';').next())
+                    .map(str::trim);
+                if let Some(path) = path.filter(|p| !p.is_empty()) {
+                    if let Some(target) = normalize_rust_use_path(path) {
+                        targets.push(target);
+                    }
+                }
+            }
+        }
+        "py" => {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("import ") {
+                    let module = rest.split_whitespace().next().unwrap_or("");
+                    let module = module.trim_end_matches(',');
+                    if !module.is_empty() {
+                        targets.push(module.replace('.', "/"));
+                    }
+                } else if let Some(rest) = trimmed.strip_prefix("from ") {
+                    let (module_part, names_part) =
+                        rest.split_once(" import ").unwrap_or((rest, ""));
+                    let (dots, dotted_path) = split_leading_dots(module_part.trim());
+                    if dotted_path.is_empty() {
+                        // `from . import x` — package self-import, no edge.
+                        continue;
+                    }
+                    let module = dotted_path.replace('.', "/");
+                    let prefix = if dots > 0 {
+                        format!("./{}", "../".repeat(dots.saturating_sub(2)))
+                    } else {
+                        String::new()
+                    };
+                    targets.push(format!("{prefix}{module}"));
+                    if let Some(first_name) = names_part.trim().split(',').next() {
+                        let name = first_name.split_whitespace().next().unwrap_or("");
+                        if !name.is_empty() && !name.starts_with('(') {
+                            // `from a.b import c` may also bind submodule `a.b.c`.
+                            targets.push(format!("{prefix}{module}/{name}"));
+                        }
+                    }
+                }
+            }
+        }
+        "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" => {
+            for line in content.lines() {
+                if let Some(spec) = extract_js_specifier(line) {
+                    let spec = spec.trim().trim_end_matches(';');
+                    if !spec.is_empty() {
+                        targets.push(spec.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    targets
+}
+
+/// Normalize a Rust `use` path (the part after the `use` keyword, before the
+/// terminating `;`) into a module target. `crate::` and `self::` resolve to
+/// the crate root / importer directory; `super::` segments map to `../`
+/// prefixes; `use foo::{a, b};` groups keep their base module path.
+fn normalize_rust_use_path(path: &str) -> Option<String> {
+    let path = path.split(" as ").next().unwrap_or(path);
+    let path = path.split("::{").next().unwrap_or(path).trim();
+    let path = path.trim_end_matches("::*").trim();
+    if path.is_empty() {
+        return None;
+    }
+    if let Some(rest) = path.strip_prefix("crate::") {
+        return (!rest.is_empty()).then(|| rest.replace("::", "/"));
+    }
+    if let Some(rest) = path.strip_prefix("self::") {
+        return Some(format!("./{}", rest.replace("::", "/")));
+    }
+    let mut ups = 0;
+    let mut remainder = path;
+    while let Some(rest) = remainder.strip_prefix("super::") {
+        ups += 1;
+        remainder = rest;
+    }
+    if ups > 0 {
+        Some(format!(
+            "{}{}",
+            "../".repeat(ups),
+            remainder.replace("::", "/")
+        ))
+    } else {
+        Some(path.replace("::", "/"))
+    }
+}
+
+/// Split a Python module name into a leading-dot count and the remaining
+/// dotted path (e.g. `..foo.bar` -> `(2, "foo.bar")`).
+fn split_leading_dots(module: &str) -> (usize, &str) {
+    let dots = module.bytes().take_while(|b| *b == b'.').count();
+    (dots, &module[dots..])
+}
+
+/// Extract the module specifier from a JS/TS import/require line: the first
+/// quoted string after `from`, after `require(`, or in a bare `import 'x'`.
+fn extract_js_specifier(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let is_import_statement =
+        trimmed.contains("from") || trimmed.contains("require(") || trimmed.starts_with("import ");
+    if !is_import_statement {
+        return None;
+    }
+    for quote in ['\'', '"'] {
+        if let Some(start) = line.find(quote) {
+            if let Some(rel_end) = line[start + 1..].find(quote) {
+                return Some(line[start + 1..start + 1 + rel_end].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a normalized import target to a file ID via `lookup`, or `None`
+/// when the target does not map to any file inside the repository.
+///
+/// Relative targets (`./`, `../`) are resolved against the importing file's
+/// directory; absolute targets are tried as-is and relative to a
+/// conventional `src/` crate root.
+fn resolve_dependency(
+    importer_rel: &str,
+    target: &str,
+    lookup: &HashMap<String, usize>,
+) -> Option<usize> {
+    let base = if target.starts_with("./") || target.starts_with("../") {
+        let parent = Path::new(importer_rel)
+            .parent()
+            .unwrap_or_else(|| Path::new(""));
+        normalize_slashes(&parent.join(target).to_string_lossy())
+    } else {
+        normalize_slashes(target)
+    };
+    let base = base.trim_end_matches('/').to_string();
+    if base.is_empty() {
+        return None;
+    }
+
+    let mut keys = vec![base.clone()];
+    for ext in IMPORT_SCAN_EXTENSIONS {
+        keys.push(format!("{base}.{ext}"));
+    }
+    for index in MODULE_INDEX_FILES {
+        keys.push(format!("{base}/{index}"));
+    }
+    keys.push(base.replace('/', "::"));
+    if !target.starts_with("./") && !target.starts_with("../") {
+        keys.push(format!("src/{base}"));
+        keys.push(format!("src/{}", base.replace('/', "::")));
+    }
+    keys.into_iter().find_map(|key| lookup.get(&key).copied())
+}
+
+/// Normalize a slash-separated relative path, resolving `.` and `..`
+/// segments (best effort — `..` above the repo root is dropped).
+fn normalize_slashes(path: &str) -> String {
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+    segments.join("/")
+}
+
 impl SymbolKind {
     /// Human-readable label suitable for debugging / display.
     pub fn debug_label(&self) -> &'static str {
@@ -970,5 +1291,132 @@ mod tests {
         let analyzer = RepoAnalyzer::default();
         let result = analyzer.clone("/nonexistent/path").await;
         assert!(matches!(result, Err(RepoAnalyzerError::PathNotFound(_))));
+    }
+
+    /// Dependency edges must be populated for same-repo Rust imports: a file
+    /// that `use crate::util::helper;` depends on `src/util/helper.rs`, and
+    /// the reverse `dependents` edge must exist. External `std` imports must
+    /// not create edges.
+    #[tokio::test]
+    async fn test_build_repo_map_resolves_rust_dependency_edges() {
+        let tmp = std::env::temp_dir().join("go-on-repo-map-rust");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src/util")).unwrap();
+        std::fs::write(
+            tmp.join("src/lib.rs"),
+            "pub mod util;\nuse crate::util::helper;\nuse std::collections::HashMap;\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.join("src/util/mod.rs"), "pub mod helper;\n").unwrap();
+        std::fs::write(
+            tmp.join("src/util/helper.rs"),
+            "pub fn helper() -> u32 { 42 }\n",
+        )
+        .unwrap();
+
+        let analyzer = RepoAnalyzer::default();
+        let map = analyzer.build_repo_map(&tmp).await.unwrap();
+        let lib = map
+            .files
+            .iter()
+            .position(|f| f == "src/lib.rs")
+            .expect("lib.rs indexed");
+        let helper = map
+            .files
+            .iter()
+            .position(|f| f == "src/util/helper.rs")
+            .expect("helper.rs indexed");
+
+        // `use crate::util::helper;` must produce a dependency edge.
+        assert!(
+            map.dependencies[&lib].contains(&helper),
+            "lib.rs should depend on src/util/helper.rs, got {:?}",
+            map.dependencies[&lib]
+        );
+        // Reverse edge in dependents.
+        assert!(
+            map.dependents[&helper].contains(&lib),
+            "src/util/helper.rs should list lib.rs as dependent, got {:?}",
+            map.dependents[&helper]
+        );
+        // The external stdlib import must not create an edge.
+        assert_eq!(
+            map.dependencies[&lib].len(),
+            1,
+            "only the same-repo edge should be recorded, got {:?}",
+            map.dependencies[&lib]
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Dependency edges must be populated for Python and JS/TS imports too:
+    /// `import pkg.b` / `from pkg import b`, relative `./util/helper.js`
+    /// imports, and `require('../pkg/b')` walking up the directory tree.
+    #[tokio::test]
+    async fn test_build_repo_map_resolves_python_and_js_dependency_edges() {
+        let tmp = std::env::temp_dir().join("go-on-repo-map-py-js");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("pkg")).unwrap();
+        std::fs::create_dir_all(tmp.join("web/util")).unwrap();
+        std::fs::write(tmp.join("pkg/__init__.py"), "").unwrap();
+        std::fs::write(tmp.join("pkg/a.py"), "import pkg.b\nfrom pkg import b\n").unwrap();
+        std::fs::write(tmp.join("pkg/b.py"), "VALUE = 1\n").unwrap();
+        std::fs::write(
+            tmp.join("web/app.js"),
+            "import { foo } from './util/helper.js';\nconst other = require('../pkg/b');\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.join("web/util/helper.js"), "export const foo = 1;\n").unwrap();
+
+        let analyzer = RepoAnalyzer::default();
+        let map = analyzer.build_repo_map(&tmp).await.unwrap();
+        let a = map
+            .files
+            .iter()
+            .position(|f| f == "pkg/a.py")
+            .expect("pkg/a.py indexed");
+        let b = map
+            .files
+            .iter()
+            .position(|f| f == "pkg/b.py")
+            .expect("pkg/b.py indexed");
+        let app = map
+            .files
+            .iter()
+            .position(|f| f == "web/app.js")
+            .expect("web/app.js indexed");
+        let helper = map
+            .files
+            .iter()
+            .position(|f| f == "web/util/helper.js")
+            .expect("web/util/helper.js indexed");
+
+        // Python: `import pkg.b` / `from pkg import b` both resolve to pkg/b.py.
+        assert!(
+            map.dependencies[&a].contains(&b),
+            "pkg/a.py should depend on pkg/b.py, got {:?}",
+            map.dependencies[&a]
+        );
+        // JS: relative import resolves within the importer's directory tree.
+        assert!(
+            map.dependencies[&app].contains(&helper),
+            "web/app.js should depend on web/util/helper.js, got {:?}",
+            map.dependencies[&app]
+        );
+        // JS: `require('../pkg/b')` walks up to the repo root.
+        assert!(
+            map.dependencies[&app].contains(&b),
+            "web/app.js should depend on pkg/b.py via require('../pkg/b'), got {:?}",
+            map.dependencies[&app]
+        );
+        // Reverse edges are populated.
+        assert!(
+            map.dependents[&helper].contains(&app),
+            "web/util/helper.js should list web/app.js as dependent, got {:?}",
+            map.dependents[&helper]
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

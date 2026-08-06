@@ -447,7 +447,12 @@ pub(crate) async fn execute_mcp_tool_call(
 
     let result = async {
     if let Some(harness_bus) = server.governance_deps.harness_bus.as_ref() {
-        let verdict = harness_bus.evaluator.check_tool_call(&tool_name, arguments);
+        // `validate_action` runs PolicyEvaluator::check_tool_call
+        // (sandbox / require_review / idempotency / budget / RBAC) and
+        // updates the governance profile (sandbox_denials,
+        // idempotency_hits) plus drift metrics — the same entry point the
+        // MCP handler path uses, so both routes share one governance chain.
+        let verdict = harness_bus.validate_action(&tool_name, arguments).await;
         // Skip require_review for tools that are registered in the
         // tool_registry — they are explicitly registered and trusted.
         let is_registered = server.tool_registry.get(name).is_some();
@@ -479,6 +484,23 @@ pub(crate) async fn execute_mcp_tool_call(
         if !verdict.permitted {
             record_tool_rbac_denied();
             anyhow::bail!("tool '{}' denied by harness RBAC permission gate", name);
+        }
+
+        // ── Idempotency dedup (standard semantics) ───────────────────
+        // A repeated (tool, args) call that hits the IdempotencyCache skips
+        // re-execution and returns the cached result (the cache is populated
+        // by `record_tool_success` on the success path below).
+        if verdict.idempotent {
+            if let Some(cached) = harness_bus.cached_tool_result(name, arguments) {
+                record_tool_call_audit_with_protocol(
+                    name,
+                    arguments,
+                    true,
+                    "cached idempotency hit via acp bridge",
+                    "mcp_tools_call",
+                );
+                return Ok(cached);
+            }
         }
     } else {
         // No HarnessBus — apply default tool governance policy
@@ -756,10 +778,10 @@ pub(crate) async fn execute_mcp_tool_call(
         }
         _ => {
             let registry = global_tool_registry();
-            if let Some(tool) = registry.get(name) {
+            // `get_arc` so the owned `Arc<dyn Tool>` can be moved into
+            // `run_async` (a plain `get` borrow cannot outlive the method).
+            if let Some(tool) = registry.get_arc(name) {
                 crate::shared::tool_descriptors::validate_required_arguments(name, arguments)?;
-                // Use spawn_blocking to avoid blocking the tokio runtime thread
-                // with synchronous tool execution (e.g. shell_exec may take 60s).
                 let input = ToolInput {
                     task_id: format!("mcp-tool-{name}"),
                     phase: "mcp".to_string(),
@@ -770,10 +792,31 @@ pub(crate) async fn execute_mcp_tool_call(
                     payload: arguments.clone(),
                     allowed_base_dir: None,
                 };
-                let result = tokio::task::spawn_blocking(move || tool.run(&input))
-                    .await
-                    .map_err(|e| anyhow::anyhow!("tool execution panicked: {e}"))??;
-                return Ok(serde_json::to_value(result)?);
+                // ── Pre-execute hooks (unified async chain) ─────────────
+                // `run_pre_async` invokes every hook's `async_pre_execute` —
+                // sync hooks via the trait's default delegation, async hooks
+                // such as GuardianHook (config-gated LLM review) directly.
+                // A denying hook aborts the call (fail-fast).
+                registry.hooks.run_pre_async(name, &input).await?;
+
+                // ── Execute via the async path ───────────────────────────
+                // `run_async`'s default implementation offloads the
+                // synchronous `run` to `spawn_blocking` internally so
+                // long-running tools (e.g. shell_exec may take 60s) cannot
+                // stall the tokio worker.
+                let tool_output = tool.run_async(input).await?;
+
+                // ── Record successful execution for idempotency dedup ────
+                if tool_output.success {
+                    if let Some(hb) = server.governance_deps.harness_bus.as_ref() {
+                        hb.record_tool_success(
+                            name,
+                            arguments,
+                            &serde_json::to_value(&tool_output)?,
+                        );
+                    }
+                }
+                return Ok(serde_json::to_value(tool_output)?);
             }
 
             let resolved_skill_name = {
@@ -931,10 +974,16 @@ pub(crate) fn budget_scope_key(name: &str, arguments: &Value) -> String {
 }
 
 pub(crate) fn estimate_argument_tokens(arguments: &Value) -> usize {
-    // Lightweight approximation keeps budget enforcement deterministic without model calls.
-    serde_json::to_string(arguments)
-        .map(|payload| (payload.len() / 4).max(1))
-        .unwrap_or(1)
+    // Delegate to the shared canonical CJK-aware token estimator (used by the
+    // CLI, compression, and token-cache sizing paths) so PUA budget
+    // enforcement uses the same token estimate as the rest of the binary.
+    // The previous `bytes/4` heuristic counted CJK characters at 0.75
+    // tokens each (3 UTF-8 bytes / 4); the shared estimator weights them at
+    // ~1.5 tokens each, so CJK payloads are charged more conservatively.
+    crate::shared::token_estimator::estimate_tokens(
+        &serde_json::to_string(arguments).unwrap_or_default(),
+    )
+    .max(1)
 }
 
 pub(super) fn governance_action_for_tool(name: &str) -> GovernanceAction {
@@ -1044,6 +1093,21 @@ mod tests {
         let small = estimate_argument_tokens(&json!("a"));
         let large = estimate_argument_tokens(&json!("a".repeat(400)));
         assert!(large > small);
+    }
+
+    #[test]
+    fn estimate_argument_tokens_uses_shared_cjk_aware_estimator() {
+        // 20 CJK characters are weighted ~1.5 tokens each by the shared
+        // estimator (30 tokens), whereas the old `bytes/4` heuristic would
+        // have estimated 5 tokens (20 bytes / 4) — a ~6x under-count.
+        let cjk = estimate_argument_tokens(&json!("一二三四五六七八九十一二三四五六七八九十"));
+        assert!(
+            cjk >= 30,
+            "CJK payload must use the shared CJK-aware estimate, got {cjk}"
+        );
+        // ASCII "hello world" serializes to `"\"hello world\""` (13 chars,
+        // 4 chars/token → 3 tokens) via the shared estimator.
+        assert_eq!(estimate_argument_tokens(&json!("hello world")), 3);
     }
 
     // ── governance_action_for_tool ─────────────────────────────────────

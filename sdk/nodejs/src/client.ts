@@ -611,12 +611,12 @@ export class GoOnClient {
     return (await this._jsonRpc("selector.status")) as SelectorStatusResponse;
   }
 
-  /** Trigger knowledge distillation. */
-  async knowledgeDistill(): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("knowledge.distill")) as Record<
-      string,
-      unknown
-    >;
+  /** Trigger knowledge distillation over the last `limit` events. */
+  async knowledgeDistill(limit?: number): Promise<Record<string, unknown>> {
+    return (await this._jsonRpc(
+      "knowledge.distill",
+      limit === undefined ? {} : { limit },
+    )) as Record<string, unknown>;
   }
 
   /** Run offline RL alignment evaluation. */

@@ -2,7 +2,7 @@
 
 `go-on` is a three-surface runtime around a Rust backend:
 
-- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 7-feature-gated sub-bus capability architecture with cognitive modules. All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum.
+- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 7-feature-gated sub-bus capability architecture with cognitive modules. All 148 JSON-RPC handlers return a unified `DispatchOutput` enum.
 - **GUI**: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.
 - **VS Code addon**: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.
 
@@ -42,16 +42,16 @@ Four build profiles support different deployment scenarios:
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **local** | ✅ **Zero warnings** | **~1.7K (1 known failure)** |
+| **local** | ✅ **Zero warnings** | **all pass (~3.5K)** |
 | **simple-server** | ✅ **Zero warnings** | **all pass** |
 | **full** | ✅ **Zero warnings** | **all pass** |
 | **multi-users-server** | ✅ **Zero warnings** | **all pass** |
 
-The last `cargo test` run (default `local` profile) passes every suite except one pre-existing failure in `governance::security_governor::tests::test_profile_reflects_state`. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
+The latest full `cargo test --all-targets` run (default `local` profile) passes every suite with zero failures (see the latest section of `CHANGELOG.md` for current counts). E2E tests do not require external infrastructure and do not need `#[ignore]` (see `tests/structural_tests.rs`).
 
 ## Unified Handler Dispatch Pattern
 
-All 122+ JSON-RPC handlers return `Result<DispatchOutput>`. The `dispatch_to_client` function converts each variant to the appropriate transport response:
+All 148 JSON-RPC handlers return `Result<DispatchOutput>`. The `dispatch_to_client` function converts each variant to the appropriate transport response:
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → transport response
@@ -161,17 +161,17 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 
 | Language | File | Keys |
 |:---------|:-----|:----:|
-| English (US) | `languages/en_US.json` | 448+ |
-| Chinese (Simplified) | `languages/zh_CN.json` | 448+ |
-| Chinese (Traditional) | `languages/zh_TW.json` | 448+ |
+| English (US) | `config/languages/en-US.json` | 711 |
+| Chinese (Simplified) | `config/languages/zh-CN.json` | 711 |
+| Chinese (Traditional) | `config/languages/zh-TW.json` | 711 |
 
-Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 38 providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
+Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 37 providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
 
 ## Repository areas that map to the architecture
 
 - `src/`: backend runtime, CLI, setup, ACP and MCP implementation.
   - `src/acp/`: ACP server, request routing, workflow/task/chat/checkpoint, unified DispatchOutput dispatch
-  - `src/agents/`: Provider adapters (OpenAI, Anthropic, DeepSeek, Gemini, xAI Grok, SiliconFlow, and 30+ more), AgentFactory
+  - `src/agents/`: Provider adapters (OpenAI, Anthropic, DeepSeek, Gemini, xAI Grok, SiliconFlow, and 30+ more)
   - `src/core/`: Config, setup, readiness, error model
   - `src/governance/`: Policy/rule governance, audit, security governor, drift protection
   - `src/intelligence/`: Selectors, RL, capability bus, discovery, consensus, evolution
@@ -181,7 +181,7 @@ Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 38 pro
   - `src/protocol/`: Protocol server, JSON-RPC, multi-channel transport
   - `src/i18n/`: Language runtime
 - `gui/`: EGUI (Rust native) desktop GUI
-- `vscode-addon/`: VS Code extension with i18n (en_US, zh_CN, zh_TW)
+- `vscode-addon/`: VS Code extension with i18n (en-US, zh-CN, zh-TW)
 - `config/`: Configuration files
 - `tests/`: Integration tests and replay assets
 - `scripts/`: Quality/release gate scripts

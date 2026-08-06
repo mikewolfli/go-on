@@ -96,5 +96,5 @@ using Server-Sent Events (SSE).
 
 - `docs/blueprints/blue67.md` — BLUE67 tracking: Item E1 (SSE→GUI), E2 (SSE→VSCode)
 - `src/protocol/state_sync.rs` — Backend implementation
-- `gui/src/backend.rs` (lines 1616-1751) — GUI client implementation
+- `gui/src/state_sync.rs` — GUI client implementation (SSE listener)
 - `vscode-addon/src/stateSync.ts` — VSCode client implementation

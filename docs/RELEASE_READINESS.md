@@ -12,11 +12,11 @@ This document defines production SLO and pre-release drill gates for go-on.
 
 ## Pre-release Drill Checklist
 
-1. Use `config.production.toml` with `production_strict=true` and `entry_auth_enabled=true`.
-2. Verify ingress TLS configuration via `deploy/nginx/go-on.conf`.
-3. Run release readiness gate:
-   - Linux/macOS: `scripts/run-release-readiness-gate.sh config.production.toml`
-   - Windows: `scripts/run-release-readiness-gate.ps1 -Config config.production.toml`
+1. Use `config/config.multi-users-server.toml` with `production_strict=true` and `entry_auth_enabled=true` (single-server variant: `config/config.simple-server.toml`).
+2. Verify ingress TLS configuration via `scripts/deploy/nginx/go-on.conf`.
+3. Run release readiness gate (it validates all four profiles against the configs in `config/`):
+   - Linux/macOS: `scripts/run-release-readiness-gate.sh`
+   - Windows: `scripts/run-release-readiness-gate.ps1`
 4. Ensure all checks pass:
    - `runtime.stability`
    - `security.baseline`
@@ -29,7 +29,7 @@ This document defines production SLO and pre-release drill gates for go-on.
 Keep the following artifacts per release candidate:
 
 1. Gate output logs
-2. Config snapshot (`config.production.toml` + env map without secrets)
+2. Config snapshot (`config/config.multi-users-server.toml` + env map without secrets)
 3. Commit SHA and build metadata
 
 ## Automation Gates
@@ -41,6 +41,6 @@ Keep the following artifacts per release candidate:
 | Unit Tests | `cargo test --lib` | ✅ All passing |
 | Integration Tests | `cargo test --test '*'` | ✅ All passing |
 | Profile Check | `cargo check --no-default-features -F multi-users-server` | ✅ Zero errors |
-| Contract Smoke | `cargo test --test step2_three_endpoint_contract` | ✅ All passing |
-| Performance Baseline | `scripts/run-performance-baseline.sh` | 📊 Report generated |
+| Contract Smoke | `cargo test --test pua_contract_smoke` | ✅ All passing |
+| Performance Baseline | `cargo bench` (see `benches/`) | 📊 Report generated |
 | Release Gate | `scripts/run-release-readiness-gate.sh` | ✅ All gates pass |

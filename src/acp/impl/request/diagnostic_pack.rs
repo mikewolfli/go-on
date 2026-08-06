@@ -5,7 +5,8 @@
 //!
 //! Note: Per lock-optimization pass (log-20260622-5), fine-grained lock
 //! monitoring data is no longer collected at runtime. The lock-status
-//! handlers return empty/sensible defaults.
+//! handlers report `not_monitored` — they must not claim a healthy/zero
+//! state for monitoring that does not exist.
 
 use super::*;
 
@@ -25,6 +26,10 @@ pub(super) struct LockHealthSummary {
 /// The summary status is `"warn"` when any component has been poisoned,
 /// any slow wait has been recorded, or any lock wait exceeded 5 ms.
 /// Otherwise the status is `"healthy"`.
+///
+/// Note: when no components are tracked (an empty slice — the current
+/// runtime state, see log-20260622-5), callers report `"not_monitored"`
+/// instead of relying on the vacuous `"healthy"` result.
 pub(super) fn summarize_lock_health(components: &[LockHealthSummary]) -> LockHealthSummary {
     let poisoned_total = components
         .iter()
@@ -58,10 +63,14 @@ pub(super) fn summarize_lock_health(components: &[LockHealthSummary]) -> LockHea
     }
 }
 
-/// Handle "lock.status" request — return empty lock status (monitoring removed).
+/// Handle "lock.status" request — report that lock monitoring is not enabled.
+///
+/// Fine-grained lock monitoring was removed in the lock-optimization pass
+/// (log-20260622-5); returning "healthy" with all-zero counters would be a
+/// fake positive, so the handler truthfully reports "not_monitored".
 pub(super) async fn lock_status_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
     let summary = LockHealthSummary {
-        status: "healthy",
+        status: "not_monitored",
         poisoned_total: 0,
         recovered_total: 0,
         slow_wait_total: 0,

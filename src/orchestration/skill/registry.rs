@@ -15,7 +15,8 @@ use crate::i18n::runtime::tf;
 use crate::orchestration::skill_import::{parse_skill_md, SkillImportManifest};
 
 use super::execution::{
-    extract_intent_tokens, name_similarity, normalize_name, semantic_similarity, PromptBasedSkill,
+    extract_intent_tokens, name_similarity, normalize_name, semantic_similarity,
+    tokenize_with_stopwords, PromptBasedSkill,
 };
 
 /// Convert a JSON schema Value (e.g. `{"type":"object","properties":{"code":{"type":"string"}}}`)
@@ -1192,10 +1193,11 @@ pub fn spawn_skill_refresh_task(
 /// Tokenize a string into lowercase word tokens, filtering short/common words.
 /// Shared between `SkillRegistry::discover_skills` and legacy `SkillDiscovery`.
 ///
-/// Splits on non-alphanumeric characters, removes tokens shorter than 3 chars,
-/// and filters common English stop words.
+/// Delegates to `execution::tokenize_with_stopwords` with the common English
+/// stop-word list; `execution::tokenize_text` is the no-stop-word variant, so
+/// the two skill-module tokenizers share one rule (B3).
 pub fn tokenize(text: &str) -> HashSet<String> {
-    let stop_words: HashSet<&str> = [
+    const STOP_WORDS: &[&str] = &[
         "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
         "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
         "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
@@ -1204,12 +1206,9 @@ pub fn tokenize(text: &str) -> HashSet<String> {
         "each", "every", "both", "few", "more", "most", "other", "some", "such", "no", "nor",
         "not", "only", "own", "same", "so", "than", "too", "very", "just", "because", "but", "and",
         "or", "if", "while", "that", "this", "these", "those", "it", "its",
-    ]
-    .into_iter()
-    .collect();
-
-    text.split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| w.len() >= 3 && !stop_words.contains(w))
-        .map(|w| w.to_ascii_lowercase())
+    ];
+    let stop_words: HashSet<&str> = STOP_WORDS.iter().copied().collect();
+    tokenize_with_stopwords(text, 3, &stop_words)
+        .into_iter()
         .collect()
 }

@@ -121,7 +121,7 @@ pub async fn respond(
             send_error(
                 server,
                 Some(id),
-                -32602,
+                crate::acp::impl::request::protocol::AcpErrorCode::InvalidParams as i32,
                 format!("{:#}", e),
                 Some(serde_json::json!({"code": "DISPATCH_ERROR"})),
             )

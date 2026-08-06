@@ -62,7 +62,6 @@ shutdown_drain_seconds = 30
 entry_auth_enabled = false
 entry_rate_limit_rpm = 240
 entry_rate_limit_burst = 60
-i18n_enabled = true
 i18n_default_language = "en-US"
 governance_enabled = true
 governance_policy_mode = "advisory"
@@ -145,9 +144,6 @@ cargo run -- --config config/config.toml --protocol-mode adaptive
 ```bash
 # 默认健康端点
 curl http://127.0.0.1:8090/health
-
-# 详细输出
-curl http://127.0.0.1:8090/health?verbose=true
 ```
 
 ## 开发工作流
@@ -199,22 +195,9 @@ cache_max_memory_mb = 256
 vector_max_memory_mb = 512
 ```
 
-### 并发
-```toml
-[concurrency]
-# 最大并发请求数
-max_inflight_requests = 32
-max_parallel_tasks = 8
-```
-
-### 超时
-```toml
-[timeouts]
-# 请求超时
-request_timeout_seconds = 120
-health_check_timeout_seconds = 30
-shutdown_timeout_seconds = 60
-```
+### 并发与超时
+并发限制通过 `[phases.<name>.options]` 按阶段配置（`phase_max_inflight` /
+`global_max_inflight`）。不存在 `[concurrency]` 或 `[timeouts]` 顶层段。
 
 ## 故障排除
 
@@ -237,7 +220,6 @@ cargo build --features "sqlite-vec"
 # 回退到 JSON 模式
 [vector]
 auto_mode = false
-use_json_fallback = true
 ```
 
 #### 端口冲突
@@ -267,8 +249,8 @@ tail -f go-on.log
 cp acp_cache.sqlite3 acp_cache.sqlite3.backup
 cp acp_vector.sqlite3 acp_vector.sqlite3.backup
 
-# 运行迁移
-cargo run -- --migrate --config config/config.toml
+# 配置 schema 带版本号（schema_version），启动时校验并迁移受支持的 schema。
+# 不存在 --migrate CLI 标志。
 ```
 
 ### 迁移到其他部署模式

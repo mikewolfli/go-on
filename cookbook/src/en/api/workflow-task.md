@@ -4,7 +4,7 @@
 
 The Workflow and Task API enables orchestration of complex workflows, task planning, execution management, and result tracking. The API is **JSON-RPC 2.0 over HTTP** (`POST /rpc`); there are no dedicated REST endpoints for these capabilities.
 
-> The authoritative JSON-RPC method reference lives in `docs/protocol-guide.md`.
+> The backend JSON-RPC dispatch table lives in `src/acp/impl/request.rs`; the method allowlist is in `src/acp/impl/request/protocol.rs`. `docs/protocol-guide.md` covers protocol modes only.
 
 ## Methods
 

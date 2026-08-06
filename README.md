@@ -37,7 +37,7 @@ go-on is a **local-first**, production-grade **AI agent orchestration runtime** 
 - 🔌 Connect AI models to MCP servers or act as an MCP server yourself
 - 🛡️ Enforce governance policies with RBAC, audit trails, and risk assessment
 - 📊 Monitor sub-agent executions and command outputs in real-time via SSE panels
-- 🧩 Extend via VS Code extension, Skill Marketplace (18 skills), or Rust/Python/TypeScript SDK
+- 🧩 Extend via VS Code extension, Skill Marketplace (33 skills), or Rust/Python/TypeScript SDK
 
 ## Quick Start
 
@@ -100,7 +100,7 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 ### Protocols & Transport
 - **ACP** (Agent Client Protocol) — stdio + HTTP, JSON-RPC 2.0
 - **MCP** (Model Context Protocol) — stdio + HTTP, tool list/call, streaming, cancellation, timeout
-- **5 transport modes**: `adaptive` (dual-stack), `acp-stdio`, `acp-http`, `mcp-stdio`, `mcp-http`
+- **5 transport modes**: `adaptive` (dual-stack), `acp_stdio`, `acp_http`, `mcp_stdio`, `mcp_http`
 - **SSE streaming protocol** — chunk, done, telemetry, error, state_sync, sub_agent, command + Responses API events
 - **Cross-entry parity** — consistent stop_reason and round count across ACP/CLI/MCP
 
@@ -160,8 +160,8 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **OTel** — distributed tracing via OTLP collector (default: `localhost:4317`)
 - **Trilingual i18n** — English, Simplified Chinese, Traditional Chinese (~95% coverage across backend, GUI, VS Code)
 
-### Skill Marketplace (37 skills)
-- **Marketplace catalog**: 37 verified skill entries — code-reviewer, commit-message-generator, refactoring-advisor, test-generator, api-docs-generator, changelog-generator, ci-pipeline-generator, data-transformer, dependency-analyzer, dockerfile-generator, knowledge-retriever, log-analyzer, prompt-optimizer, regex-builder, skill-creator, sql-query-helper, task-planner, web-scraper + more
+### Skill Marketplace (33 skills)
+- **Marketplace catalog**: 33 built-in skill entries — code-reviewer, commit-message-generator, refactoring-advisor, test-generator, api-docs-generator, changelog-generator, ci-pipeline-generator, context-summarizer, data-transformer, decision-logger, dependency-analyzer, dockerfile-generator, error-recovery-planner, knowledge-retriever, log-analyzer, progress-tracker, prompt-optimizer, regex-builder, self-reviewer, skill-creator, sql-query-helper, task-planner, web-scraper, code-execution-sandbox, project-analyzer, api-tester, semantic-diff, note-taking, classify-text, summarize-text, translate-text, review-pr, embed-text + more
 - **Import from GitHub/URL/local** — SkillImportStore fetches and validates SKILL.md manifests
 - **Auto-discovery** — `~/.agents/skills/` directory scanned on startup
 
@@ -191,15 +191,15 @@ go-on uses a **sub-bus capability architecture** — 7 feature-gated sub-buses (
 > Sub-bus feature gates are defined in `Cargo.toml`: `sub-bus-tool`,
 > `sub-bus-orchestration`, `sub-bus-observability`, `sub-bus-optimization`,
 > `sub-bus-memory`, `sub-bus-protocol`, and `sub-bus-distributed-memory`.
-> The `local` profile enables the core four (tool, orchestration,
-> observability, optimization); `simple-server` adds distributed-memory;
-> `multi-users-server` enables all seven. The diagram groups these into
-> the capability modules above.
+> The `local` profile enables six sub-buses (tool, orchestration,
+> observability, optimization, memory, protocol); `simple-server` and
+> `multi-users-server` additionally enable distributed-memory (all seven).
+> The diagram groups these into the capability modules above.
 ```
 
 ### Request Handler Dispatch
 
-All 122+ JSON-RPC handlers return a unified `DispatchOutput` enum. The dispatch layer serializes each variant to the appropriate transport response:
+All 148 JSON-RPC handlers return a unified `DispatchOutput` enum. The dispatch layer serializes each variant to the appropriate transport response:
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain
@@ -287,8 +287,8 @@ npm run compile
 | SDK (Rust + Python + Node.js + TypeScript) LOC | ~4K |
 | Built-in tools | 60+ |
 | AI providers | 37 |
-| Skills in marketplace | 37 |
-| Unit tests | ~1.7K (see Verification below) |
+| Skills in marketplace | 33 |
+| Unit tests | ~3.5K (see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles
@@ -312,12 +312,12 @@ cargo build --no-default-features --features full
 
 | Profile | `cargo clippy -D warnings` | Test Status |
 |:--------|:--------------------------:|:-----------:|
-| `local` | ✅ **Zero warnings** | ✅ **1663 pass, 1 known failure** |
+| `local` | ✅ **Zero warnings** | ✅ **all pass** |
 | `simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `full` | ✅ **Zero warnings** | ✅ **all pass** |
 
-All 4 build profiles compile with zero clippy warnings. The last `cargo test` run (default `local` profile) passes every suite except one pre-existing failure in `governance::security_governor::tests::test_profile_reflects_state` (see `src/governance/security_governor.rs`). The GUI and VS Code addon also compile cleanly with zero errors.
+All 4 build profiles compile with zero clippy warnings. The latest full `cargo test --all-targets` run passes every suite with zero failures (see the latest section of `CHANGELOG.md` for the current counts). The GUI and VS Code addon also compile cleanly with zero errors.
 
 ---
 

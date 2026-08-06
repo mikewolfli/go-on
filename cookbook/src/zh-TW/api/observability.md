@@ -2,7 +2,7 @@
 
 可觀測性 API 提供健康檢查、Prometheus 指標和即時狀態事件。這些端點供監控基礎設施、儀表板和警示系統使用。
 
-> 權威的 API 參考見 `docs/protocol-guide.md`。本頁僅記錄真實存在的端點。
+> JSON-RPC 方法分發表見 `src/acp/impl/request.rs`；`docs/protocol-guide.md` 僅介紹協議模式。本頁僅記錄真實存在的端點。
 
 ## 端點
 

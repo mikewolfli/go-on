@@ -303,14 +303,10 @@ pub async fn start_background_tasks(
     // loop ran and the evaluator's `policy_reloader` was always None. See
     // log-20260730-18 for the original risk analysis.
 
-    // BLUE56-D02: Process timeouts — spawn the approval timeout loop
-    {
-        let approval_engine = server.governance_deps.approval_engine.clone();
-        crate::governance::runtime_controls::spawn_timeout_loop(
-            shutdown_notify.clone(),
-            approval_engine,
-        );
-    }
+    // BLUE56-D02 approval-timeout loop was removed in the 2026-08-06 cleanup:
+    // the HITL ApprovalEngine (and its preference learner) had zero production
+    // callers — ACP approvals flow through session/request_permission instead —
+    // so the engine and its 5s `spawn_timeout_loop` were deleted together.
 
     // ── Metacognitive auto-reflexion every 30 seconds (BLUE56-B10) ───────
     // S6 startup optimization: delay 500ms to let server accept requests first.

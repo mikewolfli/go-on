@@ -7,7 +7,7 @@
 //! For structured plan management (DAG, deep reasoning, reflection, replanning),
 //! see [`BrainLoop`](crate::orchestration::brain_loop::BrainLoop).  The two
 //! are packaged together via `autonomy_loop_adapter::run_acp_autonomy_loop()`
-//! which provides a single entry point with `use_brain_loop` config selection.
+//! which provides a single entry point for the real execution loop.
 //!
 //! ## Key types
 //! - [`AutonomyLoopConfig`] — loop configuration
@@ -51,7 +51,6 @@ pub struct AutonomyLoopParams {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AutonomyLoopConfig {
     pub max_iterations: usize,
-    pub use_brain_loop: bool,
     /// When true, the loop is more persistent: if the first round produces
     /// text without tool calls, it continues with a planning prompt to
     /// encourage tool-based execution. This enables FullAuto to work like
@@ -73,7 +72,6 @@ impl Default for AutonomyLoopConfig {
     fn default() -> Self {
         Self {
             max_iterations: 5,
-            use_brain_loop: false,
             persistent_loop: false,
             operation_mode: "edit".to_string(),
             acp_session_id: None,
@@ -635,7 +633,6 @@ mod tests {
     fn default_config_is_reasonable() {
         let cfg = AutonomyLoopConfig::default();
         assert_eq!(cfg.max_iterations, 5);
-        assert!(!cfg.use_brain_loop, "brain loop must be opt-in");
         assert!(!cfg.persistent_loop, "persistent loop must be opt-in");
         assert_eq!(cfg.operation_mode, "edit");
     }

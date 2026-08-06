@@ -388,6 +388,21 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
         }
     }
 
+    // Reload language files together with the config reload: the global i18n
+    // manager (initialized in bootstrap) re-runs load_all_languages() so
+    // on-disk changes to en-US/zh-CN/zh-TW are picked up immediately. The
+    // file watcher covers edits between reloads; this covers the explicit
+    // config.reload path. Best-effort — failures are logged, not fatal.
+    if let Some(manager) = crate::i18n::runtime::I18N.get() {
+        if let Err(e) = manager.hot_reload() {
+            tracing::warn!(
+                target: "config_pack",
+                error = %e,
+                "i18n hot reload failed during config reload"
+            );
+        }
+    }
+
     // Notify connected clients that configuration was reloaded so they can
     // refresh their settings views without polling. When the reload changed
     // the agent set or the configured agent models, publish the dedicated
@@ -442,7 +457,7 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
     let warnings = report.warning_messages();
     Ok(json!({
         "ok": true,
-        "note": "config validated and runtime_config updated; agent/cache/vector changes require restart",
+        "note": "config validated; runtime_config and i18n language files reloaded; agent/cache/vector changes require restart",
         "path": config_path.display().to_string(),
         "warning_count": warnings.len(),
         "warnings": warnings,

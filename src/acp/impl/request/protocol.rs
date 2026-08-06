@@ -8,6 +8,10 @@
 ///
 /// Standard codes follow the JSON-RPC 2.0 specification.
 /// Custom codes use the server-error range (-32000 to -32099).
+///
+/// This enum is the single source of truth for ACP error codes; production
+/// call sites must use `AcpErrorCode::X as i32` instead of bare literals so
+/// the code→semantics mapping (including [`Self::classify`]) cannot drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcpErrorCode {
     /// The method does not exist / is not available (-32601).
@@ -16,6 +20,49 @@ pub enum AcpErrorCode {
     InvalidParams = -32602,
     /// Authentication is required (-32001).
     AuthRequired = -32001,
+    /// Internal server error (-32603).
+    InternalError = -32603,
+    /// A consultation (workflow.consult) was blocked (-32007).
+    ConsultationBlocked = -32007,
+    /// PUA red-line / stage violation (-32003).
+    PuaViolation = -32003,
+    /// Server-side configuration / draining error (-32000).
+    ServerError = -32000,
+    /// Request rate limited (-32029, shared with the rate-limit middleware).
+    RateLimited = -32029,
+}
+
+impl AcpErrorCode {
+    /// Map a raw JSON-RPC code back to its canonical variant, or `None` when
+    /// the code is not part of the ACP enum (e.g. MCP-specific codes).
+    pub fn from_code(code: i32) -> Option<Self> {
+        Some(match code {
+            Self::MethodNotFound as i32 => Self::MethodNotFound,
+            Self::InvalidParams as i32 => Self::InvalidParams,
+            Self::AuthRequired as i32 => Self::AuthRequired,
+            Self::InternalError as i32 => Self::InternalError,
+            Self::ConsultationBlocked as i32 => Self::ConsultationBlocked,
+            Self::PuaViolation as i32 => Self::PuaViolation,
+            Self::ServerError as i32 => Self::ServerError,
+            Self::RateLimited as i32 => Self::RateLimited,
+            _ => return None,
+        })
+    }
+
+    /// Classify a raw code into its canonical error-contract kind, or `None`
+    /// when the code is not an ACP enum code.
+    pub fn classify(code: i32) -> Option<&'static str> {
+        Self::from_code(code).map(|c| match c {
+            Self::MethodNotFound => "MethodNotFound",
+            Self::InvalidParams => "InvalidParams",
+            Self::AuthRequired => "AuthRequired",
+            Self::InternalError => "InternalError",
+            Self::ConsultationBlocked => "ConsultationBlocked",
+            Self::PuaViolation => "PuaViolation",
+            Self::ServerError => "ServerError",
+            Self::RateLimited => "RateLimited",
+        })
+    }
 }
 
 use crate::acp::server::AcpServer;
@@ -69,15 +116,17 @@ pub(super) fn normalize_mcp_method(method: &str) -> String {
 }
 
 /// Returns true if the method belongs to the ACP/A2A protocol.
-pub(crate) fn is_acp_request(method: &str) -> bool {
-    // Common ACP/A2A JSON-RPC methods. Sorted alphabetically for binary_search.
-    const ACP_METHODS: &[&str] = &[
-        "$/cancel_request",
-        "action.check",
-        "authenticate",
-        "autotune.get",
-        "autotune.reset",
-        "autotune.status",
+/// Common ACP/A2A JSON-RPC methods. Sorted alphabetically for binary_search.
+///
+/// Kept as a module-level constant so tests can assert the sorted invariant
+/// against the same list the hot path uses.
+pub(crate) const ACP_METHODS: &[&str] = &[
+    "$/cancel_request",
+    "action.check",
+    "authenticate",
+    "autotune.get",
+    "autotune.reset",
+    "autotune.status",
         "breaker.recovery",
         "breaker.reset",
         "breaker.status",
@@ -197,11 +246,11 @@ pub(crate) fn is_acp_request(method: &str) -> bool {
         "task.execute",
         "task.plan",
         "terminal/create",
-        "tool.approve",
         "terminal/kill",
         "terminal/output",
         "terminal/release",
         "terminal/wait_for_exit",
+        "tool.approve",
         "tools/call",
         "tools/list",
         "trace.get",
@@ -221,6 +270,7 @@ pub(crate) fn is_acp_request(method: &str) -> bool {
         "workflow.run.pause",
         "workflow.run.resume",
     ];
+
     ACP_METHODS.binary_search(&method).is_ok()
 }
 

@@ -46,29 +46,6 @@ pub struct SystemMemoryInfo {
     pub total_bytes: u64,
     /// Approximate free (available) memory in bytes.
     pub free_bytes: u64,
-    /// Active memory in bytes.
-    // populated by query_system_memory; reserved for memory-pressure-level heuristics and macOS vm_page_free_count tracking
-    #[allow(
-        dead_code,
-        reason = "Reserved for memory-pressure-level heuristics and macOS vm_page_free_count tracking"
-    )]
-    pub active_bytes: u64,
-    /// Wired (unpageable) memory in bytes.
-    // populated by query_system_memory; reserved for wired-memory-aware OOM prediction on macOS
-    #[allow(
-        dead_code,
-        reason = "Reserved for wired-memory-aware OOM prediction on macOS"
-    )]
-    pub wired_bytes: u64,
-    /// Swap usage in bytes (0 if swap is disabled).
-    // populated by query_system_memory; reserved for swap-pressure triggers and early-warning thresholds
-    #[allow(
-        dead_code,
-        reason = "Reserved for swap-pressure triggers and early-warning thresholds"
-    )]
-    pub swap_used_bytes: u64,
-    /// Swap total capacity in bytes.
-    pub swap_total_bytes: u64,
     /// macOS memory pressure level (1=normal, 2=warning, 3=critical, 4=panic). 0 if unavailable.
     pub pressure_level: u8,
 }
@@ -92,15 +69,6 @@ impl SystemMemoryInfo {
     /// Whether the system is under warning memory pressure.
     pub fn is_warning(&self) -> bool {
         self.free_mb() < MEMORY_WARN_MB || self.pressure_level >= 2
-    }
-
-    /// Whether the system has no swap available.
-    #[allow(
-        dead_code,
-        reason = "Reserved for swap-awareness features — returns true when no swap is configured, useful for AlertManager policy decisions"
-    )]
-    pub fn swap_disabled(&self) -> bool {
-        self.swap_total_bytes == 0
     }
 }
 
@@ -129,10 +97,6 @@ pub fn query_system_memory() -> SystemMemoryInfo {
     SystemMemoryInfo {
         total_bytes: 0,
         free_bytes: 0,
-        active_bytes: 0,
-        wired_bytes: 0,
-        swap_used_bytes: 0,
-        swap_total_bytes: 0,
         pressure_level: 0,
     }
 }
@@ -146,66 +110,18 @@ fn query_macos_memory() -> SystemMemoryInfo {
     // Memory pressure level
     let pressure_level = sysctl_u64("kern.memorystatus_vm_pressure_level").unwrap_or(0) as u8;
 
-    // Parse vm_stat output for page counts
-    let (free_pages, active_pages, wired_pages, speculative_pages) = vm_stat_pages();
+    // Parse vm_stat output for page counts (free + speculative are reclaimable)
+    let (free_pages, speculative_pages) = vm_stat_pages();
 
     // Page size on Apple Silicon / Intel Macs
     let page_size = sysctl_u64("hw.pagesize").unwrap_or(16384);
 
-    let active_bytes = active_pages * page_size;
-    let wired_bytes = wired_pages * page_size;
-
     // Free = free pages + speculative (can be reclaimed) + purgeable
     let free_bytes = (free_pages + speculative_pages) * page_size;
-
-    // Swap usage from sysctl vm.swapusage
-    let swap_used_bytes;
-    let swap_total_bytes;
-    {
-        let output = std::process::Command::new("sysctl")
-            .args(["vm.swapusage"])
-            .output();
-        match output {
-            Ok(out) if out.status.success() => {
-                let s = String::from_utf8_lossy(&out.stdout);
-                // Format: vm.swapusage: total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)
-                if let Some(rest) = s.strip_prefix("vm.swapusage:") {
-                    let parts: Vec<&str> = rest.split(',').collect();
-                    let total_str = parts
-                        .first()
-                        .and_then(|p| p.split('=').nth(1))
-                        .unwrap_or("0")
-                        .trim()
-                        .trim_end_matches('M');
-                    let used_str = parts
-                        .get(1)
-                        .and_then(|p| p.split('=').nth(1))
-                        .unwrap_or("0")
-                        .trim()
-                        .trim_end_matches('M');
-                    swap_total_bytes =
-                        (total_str.parse::<f64>().unwrap_or(0.0) * 1024.0 * 1024.0) as u64;
-                    swap_used_bytes =
-                        (used_str.parse::<f64>().unwrap_or(0.0) * 1024.0 * 1024.0) as u64;
-                } else {
-                    swap_total_bytes = 0;
-                    swap_used_bytes = 0;
-                }
-            }
-            _ => {
-                swap_total_bytes = 0;
-                swap_used_bytes = 0;
-            }
-        }
-    }
 
     SystemMemoryInfo {
         total_bytes,
         free_bytes,
-        active_bytes,
-        wired_bytes,
-        swap_used_bytes,
-        swap_total_bytes,
         pressure_level,
     }
 }
@@ -224,21 +140,19 @@ fn sysctl_u64(key: &str) -> Option<u64> {
     s.trim().parse::<u64>().ok()
 }
 
-/// Parse `vm_stat` output to get page counts for free, active, wired, and speculative pages.
+/// Parse `vm_stat` output to get page counts for free and speculative pages.
 #[cfg(target_os = "macos")]
-fn vm_stat_pages() -> (u64, u64, u64, u64) {
+fn vm_stat_pages() -> (u64, u64) {
     let output = std::process::Command::new("vm_stat").output().ok();
     let Some(out) = output else {
-        return (0, 0, 0, 0);
+        return (0, 0);
     };
     if !out.status.success() {
-        return (0, 0, 0, 0);
+        return (0, 0);
     }
 
     let s = String::from_utf8_lossy(&out.stdout);
     let mut free: u64 = 0;
-    let mut active: u64 = 0;
-    let mut wired: u64 = 0;
     let mut speculative: u64 = 0;
 
     for line in s.lines() {
@@ -249,16 +163,12 @@ fn vm_stat_pages() -> (u64, u64, u64, u64) {
         // vm_stat output format: "Pages free:                         4148."
         if let Some(val) = parse_vm_stat_line(line, "Pages free:") {
             free = val;
-        } else if let Some(val) = parse_vm_stat_line(line, "Pages active:") {
-            active = val;
-        } else if let Some(val) = parse_vm_stat_line(line, "Pages wired down:") {
-            wired = val;
         } else if let Some(val) = parse_vm_stat_line(line, "Pages speculative:") {
             speculative = val;
         }
     }
 
-    (free, active, wired, speculative)
+    (free, speculative)
 }
 
 /// Parse a single line from `vm_stat` output.
@@ -280,32 +190,13 @@ fn query_linux_memory() -> SystemMemoryInfo {
 
     let mut total_bytes: u64 = 0;
     let mut free_bytes: u64 = 0;
-    let mut active_bytes: u64 = 0;
 
     for line in meminfo.lines() {
         if let Some(val) = parse_meminfo_line(line, "MemTotal:") {
             total_bytes = val * 1024;
         } else if let Some(val) = parse_meminfo_line(line, "MemAvailable:") {
             free_bytes = val * 1024;
-        } else if let Some(val) = parse_meminfo_line(line, "Active:") {
-            active_bytes = val * 1024;
         }
-    }
-
-    let swap_total_bytes;
-    let swap_used_bytes;
-    {
-        let mut swap_total: u64 = 0;
-        let mut swap_free: u64 = 0;
-        for line in meminfo.lines() {
-            if let Some(val) = parse_meminfo_line(line, "SwapTotal:") {
-                swap_total = val * 1024;
-            } else if let Some(val) = parse_meminfo_line(line, "SwapFree:") {
-                swap_free = val * 1024;
-            }
-        }
-        swap_total_bytes = swap_total;
-        swap_used_bytes = swap_total.saturating_sub(swap_free);
     }
 
     // Read memory pressure from /proc/pressure/memory (if available)
@@ -339,10 +230,6 @@ fn query_linux_memory() -> SystemMemoryInfo {
     SystemMemoryInfo {
         total_bytes,
         free_bytes,
-        active_bytes,
-        wired_bytes: 0, // Not easily available on Linux from /proc/meminfo
-        swap_used_bytes,
-        swap_total_bytes,
         pressure_level,
     }
 }
@@ -385,10 +272,6 @@ fn query_windows_memory() -> SystemMemoryInfo {
                     return SystemMemoryInfo {
                         total_bytes: total_kb * 1024,
                         free_bytes: free_kb * 1024,
-                        active_bytes: (total_kb - free_kb) * 1024,
-                        wired_bytes: 0,
-                        swap_used_bytes: 0,
-                        swap_total_bytes: 0,
                         pressure_level: 0,
                     };
                 }

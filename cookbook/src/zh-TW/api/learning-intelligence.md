@@ -4,7 +4,7 @@
 
 學習和智能 API 暴露 go-on 的機器學習、強化學習、自適應選擇和知識蒸餾能力。該 API 是**基於 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；這些能力沒有專用的 REST 端點。
 
-> 權威的 JSON-RPC 方法參考見 `docs/protocol-guide.md`。
+> JSON-RPC 方法分發表在 `src/acp/impl/request.rs`；方法白名單見 `src/acp/impl/request/protocol.rs`。`docs/protocol-guide.md` 僅介紹協議模式。
 
 ## 方法
 

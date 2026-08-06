@@ -4,7 +4,7 @@
 
 工作流和任务 API 支持复杂工作流的编排、任务规划、执行管理和结果跟踪。该 API 是**基于 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；这些能力没有专用的 REST 端点。
 
-> 权威的 JSON-RPC 方法参考见 `docs/protocol-guide.md`。
+> JSON-RPC 方法分发表在 `src/acp/impl/request.rs`；方法白名单见 `src/acp/impl/request/protocol.rs`。`docs/protocol-guide.md` 仅介绍协议模式。
 
 ## 方法
 

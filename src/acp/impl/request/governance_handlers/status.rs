@@ -1116,10 +1116,29 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             "memory_write_policy_ready": memory_write_policy_ready,
         },
     });
+    // ── Real governance component probes ────────────────────────────────
+    // All evaluator-owned components (PuaRuleEngine, BudgetTracker,
+    // IdempotencyCache, OnlineControllerState, SelfRationalizationGuard,
+    // SecurityGovernor, review-verdict helpers) are constructed together with
+    // the HarnessBus, so its presence is the truthful existence probe for each.
+    let harness_bus_active = server.governance_deps.harness_bus.is_some();
+    // IdempotencyPolicy comes from the GovernancePolicy — Enabled iff the
+    // HarnessBus evaluator has idempotency dedup active.
+    let idempotency_policy_enabled = server
+        .governance_deps
+        .harness_bus
+        .as_ref()
+        .map(|hb| {
+            matches!(
+                hb.evaluator.governance.idempotency,
+                crate::governance::harness_bus::IdempotencyPolicy::Enabled { .. }
+            )
+        })
+        .unwrap_or(false);
     let tool_budget_enforcement_profile = json!({
         "ready": tool_budget_enforcement_ready,
         "budget_enforcement": true,
-        "idempotency_guard": true,
+        "idempotency_guard": idempotency_policy_enabled,
         "timeout_control": true,
         "permission_check": true,
         "checks": {
@@ -1263,20 +1282,32 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         .into_iter()
         .map(|s| s.to_string())
         .collect();
+    // Guardian is active only when both the config flag is on and the
+    // GuardianHook is actually registered on the global tool registry.
+    let guardian_active = app_config
+        .as_ref()
+        .map(|cfg| cfg.security.guardian_enabled)
+        .unwrap_or(false)
+        && tool_registry.hooks.has_guardian();
+    // ToolCapabilityRegistry is a static capability classifier consumed by the
+    // HarnessBus evaluator and tool governance — probe it functionally.
+    let tool_capability_active =
+        crate::governance::tool_capability::ToolCapabilityRegistry::operation("read_file")
+            != crate::governance::tool_capability::ToolOperation::Unknown;
     let governance_modules = json!({
-        "approval_engine": server.governance_deps.approval_engine.is_some(),
-        "approval_learning": server.governance_deps.approval_engine.is_some(),
         "audit": !governance_audit.is_empty(),
-        "drift": server.governance_deps.harness_bus.is_some(),
-        "hardening": true,
-        "harness_bus": server.governance_deps.harness_bus.is_some(),
-        "pua": true,
-        "rationalization": true,
+        "drift": harness_bus_active,
+        "guardian": guardian_active,
+        "hardening": harness_bus_active,
+        "harness_bus": harness_bus_active,
+        "pua": harness_bus_active,
+        "rationalization": harness_bus_active,
         "rbac": server.governance_deps.rbac_enforcer.is_some(),
-        "review_controls": true,
-        "runtime_controls": server.governance_deps.approval_engine.is_some(),
-        "security_governor": true,
+        "review_controls": harness_bus_active,
+        "runtime_controls": harness_bus_active,
+        "security_governor": harness_bus_active,
         "status": true,
+        "tool_capability": tool_capability_active,
         "known_tool_names": known_tools,
     });
 

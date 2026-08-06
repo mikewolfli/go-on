@@ -4,6 +4,13 @@
 
 ### 第 38 轮 — 遗留 7 项收口（2026-08-06）
 
+#### 文档一致性修复（2026-08-07）
+
+- 文档与代码对齐（原则 #18）：技能数（33）、JSON-RPC handler 数（148）、供应商数（37）、提示词模板数（149 个模板 / 16 个类别）、后端 i18n 键数（扁平化 711）、`docs/protocol-guide.md` 的 MCP 工具表（真实 27 个基线工具）、CLI 标志（`--protocol-mode`；不存在 `--export`/`--import`/`--mock`/`--dry-run`）、配置预设（`config/config.simple-server.toml` 等），并移除对不存在的环境变量（`GO_ON_CONFIG`、`GOON_LOG`）与配置段（`[observability]`、`[access]`、`[logging]`、`[metrics]`、`[concurrency]`、`[timeouts]`、`[security]`、`[database]`）的引用。
+- `.zed/settings.json` 现在按 `docs/zed-integration.md` 与 `scripts/verify-zed-integration.sh` 的检查项预注册 go-on 为 Zed agent server（`agent_servers.go-on` + 自动批准 + `auto_approve_tools`）；`scripts/verify-zed-integration.ps1` 重写以匹配当前 settings schema 与文档位置。
+- 修复 `prompts/zh-CN.json` 与 `prompts/zh-TW.json`（错位的 `goon_agent` 类别移入正规类别；zh-TW 字符串内两处裸换行转义）；`scripts/validate-prompts.sh`（含 `--strict-i18n`）零错误零警告通过。
+- README/README.zh-CN 的测试数字改为引用下方最新一次完整 `cargo test --all-targets`（第 38 轮：**3478 passed / 0 failed**），不再保留过期的分配置数字。
+
 第37轮遗留的 7 项（见 `docs/log/log-20260806-6.md`）全部完成并一次验证：重复逻辑唯一收敛、隐藏重复栈统一、自进化子系统接线真实 LLM。
 
 #### 重复功能合并（原则 #8）

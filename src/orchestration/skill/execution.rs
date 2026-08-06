@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::Result;
@@ -388,10 +388,28 @@ pub(crate) fn semantic_similarity(
     (0.5 * token_score + 0.5 * embedding_score).clamp(0.0, 1.0)
 }
 
-fn tokenize_text(text: &str) -> std::collections::BTreeSet<String> {
+/// Shared bag-of-words tokenizer for the skill module tree.
+///
+/// Splits `text` on non-alphanumeric ASCII characters, keeps tokens whose
+/// raw length is at least `min_len` and which are not present in `stopwords`
+/// (an empty set disables stop-word filtering), then lowercases the
+/// survivors. Both `registry::tokenize` (with the common stop-word list) and
+/// `tokenize_text` (without one) delegate here so the two scoring paths share
+/// a single tokenization rule (B3).
+pub(crate) fn tokenize_with_stopwords(
+    text: &str,
+    min_len: usize,
+    stopwords: &HashSet<&str>,
+) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|token| token.len() >= 3)
+        .filter(|token| token.len() >= min_len && !stopwords.contains(token))
         .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn tokenize_text(text: &str) -> std::collections::BTreeSet<String> {
+    tokenize_with_stopwords(text, 3, &HashSet::new())
+        .into_iter()
         .collect()
 }
 

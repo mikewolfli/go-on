@@ -2,7 +2,7 @@
 
 ## 概述
 
-提示词模板系统（Prompts System）是 go-on 内置的提示词模板管理功能，提供**84+ 个即用模板**，覆盖 12 个行业类别。用户可以在 GUI 中浏览、搜索、插入模板，也可以通过 `/` 命令快速展开模板，或在 Chat 对话中由 AI agent 通过 MCP 自动调用。
+提示词模板系统（Prompts System）是 go-on 内置的提示词模板管理功能，提供**149 个即用模板**，覆盖 16 个类别（以 `prompts/en.json` 为准）。用户可以在 GUI 中浏览、搜索、插入模板，也可以通过 `/` 命令快速展开模板，或在 Chat 对话中由 AI agent 通过 MCP 自动调用。
 
 > 相关文档：[GUI 使用指南](gui-guide.md) | [工作流配置](workflow-config.md)
 
@@ -39,24 +39,28 @@ prompts/
 
 ---
 
-## 12 个行业类别
+## 16 个类别
 
-每个类别包含 7 个模板，共计 **84+ 个模板**，涵盖各行业的典型使用场景。
+模板按类别组织，各类模板数量不一（合计 **149 个**）：
 
-| 序号 | 类别         | 说明                                           | 代表模板                                                     |
-|------|--------------|------------------------------------------------|--------------------------------------------------------------|
-| 1    | 软件开发     | 代码生成、调试、重构、代码审查等               | `explain_code` 解释代码 / `review_code` 审查代码 / `generate_test` 生成单元测试 |
-| 2    | 写作创作     | 文章撰写、创意写作、文案策划等                 | `write_article` 撰写文章 / `creative_story` 创意故事 / `copywriting` 文案策划 |
-| 3    | 学术研究     | 论文写作、文献综述、数据分析等                 | `write_paper` 论文写作 / `literature_review` 文献综述 / `data_analysis` 数据分析 |
-| 4    | 商业分析     | 市场分析、商业模式、竞争分析等                 | `market_analysis` 市场分析 / `business_model` 商业模式 / `competitive_analysis` 竞争分析 |
-| 5    | 市场营销     | 营销方案、广告文案、社交媒体等                 | `marketing_plan` 营销方案 / `ad_copy` 广告文案 / `social_media` 社交媒体内容 |
-| 6    | 法律合规     | 合同审查、法律咨询、合规检查等                 | `contract_review` 合同审查 / `legal_advice` 法律咨询 / `compliance_check` 合规检查 |
-| 7    | 医疗健康     | 医学咨询、健康管理、药物说明等                 | `medical_consult` 医学咨询 / `health_plan` 健康管理 / `drug_info` 药物说明 |
-| 8    | 教育培训     | 课程设计、教学计划、学习辅导等                 | `course_design` 课程设计 / `lesson_plan` 教学计划 / `tutoring` 学习辅导 |
-| 9    | 金融投资     | 投资分析、风险评估、财务报告等                 | `investment_analysis` 投资分析 / `risk_assessment` 风险评估 / `financial_report` 财务报告 |
-| 10   | 数据科学     | 数据分析、机器学习、数据可视化等               | `data_cleaning` 数据清洗 / `ml_model` 机器学习模型 / `data_viz` 数据可视化 |
-| 11   | 设计创意     | UI/UX 设计、平面设计、创意构思等               | `ui_design` UI 设计 / `brand_design` 品牌设计 / `creative_brainstorm` 创意构思 |
-| 12   | 系统运维     | 服务器管理、网络配置、监控告警等               | `server_setup` 服务器配置 / `network_config` 网络配置 / `monitor_setup` 监控告警设置 |
+| # | 类别 | 模板数 | 代表模板 |
+|----|------|--------|---------|
+| 1 | 软件开发 | 10 | `explain_code` 解释代码 / `code_review` 代码审查 / `generate_unit_test` 生成单元测试 |
+| 2 | 写作创作 | 12 | `blog_post_outline` 博客大纲 / `proofread_text` 校对 / `creative_story` 创意故事 |
+| 3 | 学术研究 | 8 | `literature_review` 文献综述 / `abstract_generation` 摘要生成 / `peer_review` 同行评审 |
+| 4 | 商业分析 | 9 | `swot_analysis` SWOT / `business_plan` 商业计划 / `competitive_analysis` 竞争分析 |
+| 5 | 市场营销 | 13 | `marketing_strategy` 营销策略 / `ad_copy` 广告文案 / `social_media_content` 社媒内容 |
+| 6 | 法律合规 | 11 | `contract_review` 合同审查 / `contract_clause` 合同条款 / `compliance_checklist` 合规清单 |
+| 7 | 医疗健康 | 8 | `symptom_analysis` 症状分析 / `medication_guide` 用药说明 / `treatment_plan` 治疗方案 |
+| 8 | 教育培训 | 10 | `lesson_plan` 教案 / `quiz_generation` 测验生成 / `explain_concept` 概念讲解 |
+| 9 | 金融投资 | 11 | `investment_analysis` 投资分析 / `budget_planning` 预算规划 / `financial_report` 财务报告 |
+| 10 | 数据科学 | 11 | `eda_plan` 探索性分析 / `model_selection` 模型选择 / `sql_query` SQL 查询 |
+| 11 | 设计创意 | 11 | `ux_review` UX 评审 / `design_brief` 设计简报 / `accessibility_audit` 无障碍审计 |
+| 12 | 系统运维 | 10 | `incident_response` 故障响应 / `monitoring_setup` 监控配置 / `security_hardening` 安全加固 |
+| 13 | 效率提升 | 8 | `requirements_breakdown` 需求拆解 / `prd_draft` PRD 草稿 / `meeting_minutes` 会议纪要 |
+| 14 | 工程交付 | 6 | `release_notes` 发布说明 / `rca_report` 根因报告 / `rollback_plan` 回滚计划 |
+| 15 | 运营支持 | 6 | `customer_reply` 客服回复 / `kb_article` 知识库文章 / `faq_builder` FAQ 生成 |
+| 16 | Go-On 代理技能 | 5 | `skill_discovery` 技能发现 / `tool_selection` 工具选择 / `best_practices` 代理最佳实践 |
 
 ---
 
@@ -64,7 +68,7 @@ prompts/
 
 在 GUI 的 **Prompts（提示词管理）** Tab 中，你可以：
 
-- **浏览** — 按行业类别分组查看所有模板（内置 + 自定义）
+- **浏览** — 按类别分组查看所有模板（内置 + 自定义）
 - **搜索** — 按关键词搜索模板标题和内容
 - **创建** — 创建新的自定义模板，选择所属类别和语言
 - **编辑** — 修改已创建的自定义模板内容
@@ -93,24 +97,24 @@ prompts/
 
 例如：
 - `/explain_code` — 解释选中的代码
-- `/review_code` — 审查代码质量
-- `/generate_test Rust` — 为 Rust 代码生成单元测试
-- `/write_article 主题: AI 发展趋势` — 撰写指定主题的文章
+- `/code_review` — 审查代码质量
+- `/generate_unit_test Rust` — 为 Rust 代码生成单元测试
+- `/blog_post_outline 主题: AI 发展趋势` — 撰写指定主题的文章
 
 ### 常用命令列表
 
 | 命令               | 功能             |
 |--------------------|------------------|
 | `/explain_code`    | 解释选中的代码   |
-| `/review_code`     | 审查代码质量     |
-| `/optimize_code`   | 优化代码性能     |
-| `/generate_test`   | 生成单元测试     |
-| `/refactor_code`   | 重构代码         |
-| `/write_doc`       | 编写文档注释     |
-| `/write_article`   | 撰写文章         |
-| `/market_analysis` | 市场分析         |
+| `/code_review`     | 审查代码质量     |
+| `/refactor_suggestion` | 重构建议     |
+| `/generate_unit_test` | 生成单元测试  |
+| `/debug_error`     | 调试错误         |
+| `/generate_documentation` | 生成文档注释 |
+| `/blog_post_outline` | 撰写文章大纲   |
+| `/marketing_strategy` | 营销策略     |
 | `/contract_review` | 合同审查         |
-| `/data_analysis`   | 数据分析         |
+| `/literature_review` | 文献综述       |
 
 输入 `/` 后系统会弹出自动补全列表，支持模糊搜索，可以按类别筛选，也可以直接输入模板 id 全称。
 
@@ -166,7 +170,7 @@ prompts/
 | `prompts_list` | 列出所有可用的提示词模板         |
 | `prompts_get`  | 获取指定模板的详细内容           |
 
-AI agent 通过 MCP 协议发现这些工具后，可以在对话中自动选择合适的模板并应用。例如在对话中，当用户说"帮我审查这段代码"时，AI agent 可以自动调用 `prompts_get` 获取 `review_code` 模板并应用到回答中。
+AI agent 通过 MCP 协议发现这些工具后，可以在对话中自动选择合适的模板并应用。例如在对话中，当用户说"帮我审查这段代码"时，AI agent 可以自动调用 `prompts_get` 获取 `code_review` 模板并应用到回答中。
 
 ---
 

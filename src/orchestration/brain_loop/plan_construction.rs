@@ -1,12 +1,11 @@
 //! Plan construction — adaptive DAG decomposition of tasks into execution plans.
 //!
 //! Provides the `Planner` struct that decomposes a task envelope into an
-//! `ExecutionPlan` using embedding-based classification and keyword heuristics.
+//! `ExecutionPlan` using keyword + subtask-hint heuristics (`analyze_task`).
 //! Moved from `planner_executor::plan_optimization` for direct use by BrainLoop.
 
 use crate::agent::AgentTaskEnvelope;
 use crate::orchestration::mode::ModeKind;
-use crate::orchestration::planner_embedding::EmbeddingTaskClassifier;
 use crate::orchestration::planner_executor::{ExecutionPlan, PlanStep};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -58,35 +57,28 @@ pub struct Planner;
 impl Planner {
     /// Decompose a task envelope into an execution plan.
     ///
-    /// Uses EmbeddingTaskClassifier for semantic task complexity detection,
-    /// falling back to keyword heuristics (analyze_task) when embedding unavailable.
+    /// Classifies the task exactly once via [`Self::analyze_task`] (keyword +
+    /// subtask-hint heuristics) and feeds the resulting context into the
+    /// adaptive DAG planner. The former `EmbeddingTaskClassifier` pass was
+    /// removed: its rules had diverged from `analyze_task` (it ignored
+    /// `subtask_hints`) and its complexity result was overwritten by the
+    /// analyze_task context anyway, so the objective was classified twice for
+    /// no observable effect.
     pub async fn plan(task: &AgentTaskEnvelope) -> ExecutionPlan {
-        // Classify task via keyword-based classifier (the embedding branch was
-        // removed — no code ever wrote task-classification docs to the store).
-        let classifier = EmbeddingTaskClassifier;
-        let task_category = classifier.classify_task(&task.objective);
+        let context = Planner::analyze_task(task);
         info!(
-            "EmbeddingTaskClassifier: task_category={:?}, complexity_score={:.2}",
-            task_category,
-            match task_category {
+            "Planner::analyze_task: complexity={:?}, has_code={}, has_research={}, has_multiple_subtasks={}, subtask_hints={}, complexity_score={:.2}",
+            context.complexity,
+            context.has_code,
+            context.has_research,
+            context.has_multiple_subtasks,
+            context.subtask_hints.len(),
+            match context.complexity {
                 TaskComplexity::Simple => 0.25,
                 TaskComplexity::Medium => 0.50,
                 TaskComplexity::Complex => 0.75,
             }
         );
-
-        // Build planning context directly from classifier result.
-        // analyze_task() provides keyword-based fallback context
-        // (subtask_hints, has_code, has_research, has_multiple_subtasks),
-        // while the primary complexity decision comes from the embedding classifier.
-        let keyword_ctx = Planner::analyze_task(task);
-        let context = PlanningContext {
-            complexity: task_category,
-            has_code: keyword_ctx.has_code,
-            has_research: keyword_ctx.has_research,
-            has_multiple_subtasks: keyword_ctx.has_multiple_subtasks,
-            subtask_hints: keyword_ctx.subtask_hints,
-        };
         Planner::plan_to_dag(task, &context)
     }
 
@@ -434,6 +426,130 @@ mod tests {
             complex_plan.steps.len() >= 3,
             "Complex task should produce >= 3 steps"
         );
+    }
+
+    /// The merged single classifier (`analyze_task`) must reproduce the former
+    /// `EmbeddingTaskClassifier` keyword rules — the two implementations were
+    /// merged into one classification pass (A1).
+    #[test]
+    fn test_analyze_task_matches_former_classifier_keyword_rules() {
+        let envelope = |objective: &str| AgentTaskEnvelope {
+            task_id: "classify-1".into(),
+            phase: "coding".into(),
+            role: "coder".into(),
+            objective: objective.to_string(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({}),
+        };
+
+        // Simple: no code/research/multiple signals and short length.
+        assert_eq!(
+            Planner::analyze_task(&envelope("Greet the user")).complexity,
+            TaskComplexity::Simple
+        );
+        assert_eq!(
+            Planner::analyze_task(&envelope("Hello world")).complexity,
+            TaskComplexity::Simple
+        );
+        assert_eq!(
+            Planner::analyze_task(&envelope("Hi")).complexity,
+            TaskComplexity::Simple
+        );
+        assert_eq!(
+            Planner::analyze_task(&envelope("")).complexity,
+            TaskComplexity::Simple
+        );
+
+        // Medium: code signal alone.
+        assert_eq!(
+            Planner::analyze_task(&envelope("write a function to calculate fibonacci")).complexity,
+            TaskComplexity::Medium
+        );
+
+        // Complex: strong code signals + research + multiple subtasks.
+        assert_eq!(
+            Planner::analyze_task(&envelope(
+                "Research and refactor the codebase, then write tests for the module and build it"
+            ))
+            .complexity,
+            TaskComplexity::Complex
+        );
+        // Medium: code signals alone (>60 chars, no research).
+        assert_eq!(
+            Planner::analyze_task(&envelope(
+                "Refactor the codebase and write tests, then also build the module"
+            ))
+            .complexity,
+            TaskComplexity::Medium
+        );
+    }
+
+    /// The merged classifier keeps `analyze_task`'s subtask-hint rules, which
+    /// the former `EmbeddingTaskClassifier` lacked — hints are the deciding
+    /// factor for Multi/Complex plans even when the objective text is short.
+    #[test]
+    fn test_analyze_task_subtask_hints_drive_complexity() {
+        let envelope_with_hints = |hints: Vec<&str>| AgentTaskEnvelope {
+            task_id: "hints-1".into(),
+            phase: "coding".into(),
+            role: "coder".into(),
+            objective: "Short objective".to_string(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({ "subtasks": hints }),
+        };
+
+        // 4+ explicit subtasks -> Complex.
+        let ctx = Planner::analyze_task(&envelope_with_hints(vec!["a", "b", "c", "d"]));
+        assert_eq!(ctx.complexity, TaskComplexity::Complex);
+        assert_eq!(ctx.subtask_hints.len(), 4);
+
+        // 1-3 subtasks -> Medium.
+        let ctx = Planner::analyze_task(&envelope_with_hints(vec!["a"]));
+        assert_eq!(ctx.complexity, TaskComplexity::Medium);
+        assert_eq!(ctx.subtask_hints.len(), 1);
+
+        // Bullet-style subtasks in the objective are extracted and promote
+        // the task to Medium (non-empty hints).
+        let bullet_task = AgentTaskEnvelope {
+            task_id: "hints-2".into(),
+            phase: "coding".into(),
+            role: "coder".into(),
+            objective: "- design the schema\n- implement the endpoint\n".to_string(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({}),
+        };
+        let ctx = Planner::analyze_task(&bullet_task);
+        assert_eq!(ctx.complexity, TaskComplexity::Medium);
+        assert_eq!(ctx.subtask_hints.len(), 2);
+    }
+
+    /// `Planner::plan` classifies exactly once: the DAG complexity level must
+    /// equal `analyze_task`'s result, including for subtask-hint-driven tasks.
+    #[tokio::test]
+    async fn test_plan_uses_analyze_task_complexity() {
+        let task = AgentTaskEnvelope {
+            task_id: "plan-hints-1".into(),
+            phase: "coding".into(),
+            role: "coder".into(),
+            objective: "Handle the ticket".to_string(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({
+                "subtasks": ["one", "two", "three", "four"],
+            }),
+        };
+        let expected = Planner::analyze_task(&task).complexity;
+        assert_eq!(expected, TaskComplexity::Complex);
+        let plan = Planner::plan(&task).await;
+        assert_eq!(
+            plan.dag_metrics.unwrap().complexity_level,
+            format!("{:?}", expected)
+        );
+        // Complex plan: research + parallel execution + review.
+        assert!(plan.steps.len() >= 4);
     }
 
     #[test]

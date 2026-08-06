@@ -4,7 +4,7 @@
 
 優化和操作 API 為 go-on 部署提供成本管理、效能最佳化、操作監控和系統調校。該 API 是**基於 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；這些能力沒有專用的 REST 端點。
 
-> 權威的 JSON-RPC 方法參考見 `docs/protocol-guide.md`。
+> JSON-RPC 方法分發表在 `src/acp/impl/request.rs`；方法白名單見 `src/acp/impl/request/protocol.rs`。`docs/protocol-guide.md` 僅介紹協議模式。
 
 ## 方法
 

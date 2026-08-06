@@ -343,8 +343,31 @@ async fn execute_single_tool(
             allowed_base_dir: None,
         };
 
-        // ── Pre-execute hooks ──────────────────────────────────────
-        tool_registry.hooks.run_pre(&tool_name, &input);
+        // ── Pre-execute hooks (unified async chain) ──────────────────
+        // `run_pre_async` invokes every hook's `async_pre_execute` — sync
+        // hooks are covered via the trait's default delegation, and async
+        // hooks such as GuardianHook (config-gated LLM review) run
+        // directly. A denying hook aborts the call (fail-fast).
+        if let Err(hook_err) = tool_registry.hooks.run_pre_async(&tool_name, &input).await {
+            let denied_msg = format!(
+                "Tool '{}' blocked by pre-execute governance hook: {}",
+                tool_name, hook_err
+            );
+            return ToolExecItem {
+                tool_name,
+                output: ToolOutput {
+                    success: false,
+                    result: None,
+                    error: Some(denied_msg.clone()),
+                    verification: None,
+                    audit_log: None,
+                    pua_report: None,
+                },
+                success: false,
+                duration_ms: start.elapsed().as_millis() as u64,
+                formatted: format!("\n[{}]\n", denied_msg),
+            };
+        }
 
         // ── Execute with per-tool retry ────────────────────────────
         let max_exec_retries = if retry_policy.retry_on_failure {

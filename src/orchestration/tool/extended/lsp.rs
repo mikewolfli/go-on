@@ -377,30 +377,52 @@ impl LspClient {
     }
 }
 
+/// Maximum number of distinct LSP clients kept in the cache. When the cache
+/// exceeds this, the oldest (FIFO) client is evicted so an unbounded set of
+/// LSP addresses cannot leak open connections.
+const MAX_CACHED_LSP_CLIENTS: usize = 32;
+
+/// LSP client cache: address → client, plus a FIFO queue of insertion order
+/// for oldest-first eviction.
+type LspClientCache = (
+    std::collections::HashMap<String, Arc<LspClient>>,
+    std::collections::VecDeque<String>,
+);
+
 /// Connect to an LSP server, reusing a cached client when one already exists
 /// for the same address (avoids a fresh TCP connection + initialize handshake
 /// on every tool call).
 async fn cached_lsp_client(addr: &str) -> Result<Arc<LspClient>> {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::Mutex;
-    static CLIENTS: OnceLock<Mutex<HashMap<String, Arc<LspClient>>>> = OnceLock::new();
+    static CLIENTS: OnceLock<Mutex<LspClientCache>> = OnceLock::new();
     {
         // Fast path: reuse an existing client for this address. The guard is
         // dropped before the (potentially slow) connect below.
         let map = CLIENTS
-            .get_or_init(|| Mutex::new(HashMap::new()))
+            .get_or_init(|| Mutex::new((HashMap::new(), VecDeque::new())))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(client) = map.get(addr) {
+        if let Some(client) = map.0.get(addr) {
             return Ok(client.clone());
         }
     }
     let client = Arc::new(LspClient::connect(addr).await?);
     let mut map = CLIENTS
-        .get_or_init(|| Mutex::new(HashMap::new()))
+        .get_or_init(|| Mutex::new((HashMap::new(), VecDeque::new())))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    map.insert(addr.to_string(), client.clone());
+    // The key may have been inserted by a concurrent caller while we were
+    // connecting — only track FIFO order for genuinely new addresses.
+    if !map.0.contains_key(addr) {
+        map.1.push_back(addr.to_string());
+        if map.0.len() >= MAX_CACHED_LSP_CLIENTS {
+            if let Some(oldest) = map.1.pop_front() {
+                map.0.remove(&oldest);
+            }
+        }
+    }
+    map.0.insert(addr.to_string(), client.clone());
     Ok(client)
 }
 

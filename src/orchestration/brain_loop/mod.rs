@@ -11,9 +11,11 @@
 //! same reason.
 //!
 //! The live part is [`plan_construction`]: the `Planner` task-decomposition
-//! engine (embedding-based classification + keyword heuristics), which is
-//! used by `response_finalizer`, `planner_execution_graph`, `planner_embedding`
-//! and `planner_executor`.
+//! engine (keyword + subtask-hint heuristics), which is used by
+//! `response_finalizer`, `planner_execution_graph` and `planner_executor`.
+//! The former `planner_embedding` module was removed: its
+//! `EmbeddingTaskClassifier` duplicated `Planner::analyze_task` and its
+//! complexity result was always overwritten by the analyze_task context.
 
 // ---------------------------------------------------------------------------
 // Sub-modules

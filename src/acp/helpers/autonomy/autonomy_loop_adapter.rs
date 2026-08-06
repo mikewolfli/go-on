@@ -73,12 +73,6 @@ pub(crate) async fn run_acp_autonomy_loop(
         operation_mode: params.operation_mode.clone(),
         acp_session_id: params.acp_session_id.clone(),
         progress_tx: params.progress_sse_tx.clone(),
-        // The `use_brain_loop` option is accepted for backward compatibility
-        // but both branches drive the same real execution loop: the former
-        // BrainLoop orchestration path was bookkeeping-only (it never called
-        // the agent or tools), so it has been removed in favour of the single
-        // real execution path below.
-        use_brain_loop: false,
     };
 
     let loop_params = AutonomyLoopParams {

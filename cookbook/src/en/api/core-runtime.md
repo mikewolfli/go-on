@@ -4,7 +4,7 @@
 
 The Core Runtime API covers runtime lifecycle, health, configuration, and maintenance operations. go-on's primary programmatic interface is **JSON-RPC 2.0 over HTTP** (`POST /rpc`); a small set of HTTP GET endpoints and the SSE streaming endpoint complement it for health probes, metrics scraping, and chat streaming.
 
-The complete, authoritative JSON-RPC method reference lives in `docs/protocol-guide.md`. This page documents the endpoints that exist today; anything not listed here should not be assumed to exist.
+The backend JSON-RPC dispatch table lives in the source (`src/acp/impl/request.rs`); the method allowlist is in `src/acp/impl/request/protocol.rs`. `docs/protocol-guide.md` covers protocol modes and editor integration only. This page documents the endpoints that exist today; anything not listed here should not be assumed to exist.
 
 ## HTTP Endpoints
 

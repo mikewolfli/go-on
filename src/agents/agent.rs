@@ -648,28 +648,6 @@ pub trait Agent: Send + Sync {
         tracing::info!(from = %msg.from, kind = ?msg.kind, "agent received message (default handler)");
         Ok(None)
     }
-
-    /// Send a message to another agent via the CommunicationBus.
-    ///
-    /// Convenience wrapper that should be called from inside an agent's
-    /// chat() implementation when it needs to communicate with sibling
-    /// or child agents. The messenger reference is typically injected
-    /// via the agent's constructor or stored as a capability reference.
-    /// Send a message to another agent via the CommunicationBus.
-    ///
-    /// Convenience wrapper that should be called from inside an agent's
-    /// chat() implementation when it needs to communicate with sibling
-    /// or child agents. The messenger reference is typically injected
-    /// via the agent's constructor or stored as a capability reference.
-    async fn send_message(
-        &self,
-        _messenger: &crate::agents::communication::bus::CommunicationBus,
-        _to: crate::agents::communication::message::AgentTarget,
-        _kind: crate::agents::communication::message::AgentMessageKind,
-        _payload: serde_json::Value,
-    ) -> AppResult<()> {
-        Ok(())
-    }
 }
 
 /// Agent registry for managing and accessing agents

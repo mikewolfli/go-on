@@ -20,18 +20,18 @@ go-on supports multiple workflow types designed for different use cases. Workflo
 
 ## 2. Quick Start
 
-Two ready-to-use config templates are available in `config/templates/`:
+The project ships ready-to-use config presets in `config/`. Start from one of them:
 
-### Development Workflow
+### Universal Workflow (default)
 ```bash
-cp config/templates/config.dev.toml config.toml
+cp config/config.toml config.toml
 # Edit config.toml to add your API keys
 go-on --config config.toml
 ```
 
-### General Workflow
+### Low-Memory Workflow
 ```bash
-cp config/templates/config.general.toml config.toml
+cp config/config.low-memory.toml config.toml
 # Edit config.toml to add your API keys
 go-on --config config.toml
 ```

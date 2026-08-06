@@ -9,7 +9,7 @@ in the go-on runtime.
 ## Enabling Skills
 
 Skills are controlled by a single configuration flag in `config.toml` (or
-`config.production.toml`):
+the server presets under `config/`):
 
 ```toml
 [runtime]
@@ -17,7 +17,8 @@ skills_enabled = true   # true = load builtin skills on startup (default)
                         # false = no skills loaded (recommended for production)
 ```
 
-> **Production note**: `config.production.toml` ships with `skills_enabled = false`
+> **Production note**: the `config/config.simple-server.toml` and
+> `config/config.multi-users-server.toml` presets ship with `skills_enabled = false`
 > to minimise the exposed tool surface.  Enable it explicitly if you need builtin
 > skills in production.
 

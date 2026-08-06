@@ -178,7 +178,14 @@ pub async fn dispatch_to_client(
                             .get("message")
                             .and_then(|v| v.as_str())
                             .unwrap_or(&err_str);
-                        send_error(server, Some(id.clone()), -32603, msg.to_string(), None).await?;
+                        send_error(
+                            server,
+                            Some(id.clone()),
+                            crate::acp::impl::request::protocol::AcpErrorCode::InternalError as i32,
+                            msg.to_string(),
+                            None,
+                        )
+                        .await?;
                     }
                     "status" => {
                         send_notification(server, "chat.stream.status", frame.payload).await?;
@@ -203,7 +210,7 @@ pub async fn dispatch_to_client(
             crate::acp::r#impl::io::send_error(
                 server,
                 Some(id),
-                -32602,
+                crate::acp::impl::request::protocol::AcpErrorCode::InvalidParams as i32,
                 format!("{:#}", e),
                 Some(serde_json::json!({"code": "DISPATCH_ERROR"})),
             )

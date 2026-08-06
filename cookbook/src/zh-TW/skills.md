@@ -7,7 +7,7 @@ Skills 系統為 go-on 運行時提供了一種輕量、類型安全的能力單
 
 ## 啟用 Skills
 
-通過 `config.toml`（或 `config.production.toml`）中的單一開關控制：
+透過 `config.toml`（或 `config/` 下的服務端預設）中的單一開關控制：
 
 ```toml
 [runtime]
@@ -15,7 +15,7 @@ skills_enabled = true   # true = 啟動時加載內置 skills（默認值）
                         # false = 不加載（生產環境推薦）
 ```
 
-> **生產環境提示**：`config.production.toml` 默認 `skills_enabled = false`，
+> **生產環境提示**：`config/config.simple-server.toml` 與 `config/config.multi-users-server.toml` 默認 `skills_enabled = false`，
 > 以減少暴露面。如有需要可顯式開啟。
 
 ---

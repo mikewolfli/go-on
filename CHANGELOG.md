@@ -4,6 +4,13 @@
 
 ### Round 38 — Legacy 7-Item Closeout (2026-08-06)
 
+#### Docs Consistency Pass (2026-08-07)
+
+- Documentation aligned with the codebase (principle #18): skill counts (33), JSON-RPC handler count (148), provider count (37), prompt template counts (149 templates / 16 categories), backend i18n key counts (711, flattened), the MCP tool table in `docs/protocol-guide.md` (the real 27 baseline tools), CLI flags (`--protocol-mode`; no `--export`/`--import`/`--mock`/`--dry-run`), config presets (`config/config.simple-server.toml`, etc.), and removal of references to non-existent env vars (`GO_ON_CONFIG`, `GOON_LOG`) and config sections (`[observability]`, `[access]`, `[logging]`, `[metrics]`, `[concurrency]`, `[timeouts]`, `[security]`, `[database]`).
+- `.zed/settings.json` now pre-registers go-on as a Zed agent server (`agent_servers.go-on` + auto-approve + `auto_approve_tools`) exactly as documented in `docs/zed-integration.md` and checked by `scripts/verify-zed-integration.sh`; `scripts/verify-zed-integration.ps1` was rewritten to match the current settings schema and doc locations.
+- `prompts/zh-CN.json` and `prompts/zh-TW.json` repaired (misplaced `goon_agent` category moved into a proper category; two raw newlines inside a zh-TW string escaped); `scripts/validate-prompts.sh` (incl. `--strict-i18n`) passes with zero errors/warnings.
+- Test counts in README/README.zh-CN now defer to the latest full `cargo test --all-targets` run recorded below (Round 38: **3478 passed / 0 failed**) instead of stale per-profile numbers.
+
 The 7 items left open by Round 37 (`docs/log/log-20260806-6.md`) are all completed and verified in one pass: duplicate logic collapsed to a single source, hidden duplicate stacks unified, and the self-evolution subsystem finally wired to a real LLM.
 
 #### Duplicate Unification (principle #8)

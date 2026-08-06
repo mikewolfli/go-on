@@ -137,15 +137,16 @@ Four preset config files ship with the project — each with a different phase s
 | File | Phases | Best for |
 |------|--------|----------|
 | `config.toml` | think, act, check, done | Generic workflows (default) |
-| `config.coding.toml` | coding | IDE integrations (Zed, VS Code) |
+| `zed-config.toml` | think, act, check, review, done | IDE integrations (Zed, VS Code) |
 | `config.simple-server.toml` | think, act, check, done | Single-server deployment |
 | `config.multi-users-server.toml` | think, act, check, done | Multi-user enterprise |
 
 ### Using a specific phase config
 
 ```bash
-# Use the coding phase config with an IDE
-go-on --config config.coding.toml --phase coding
+# Use the Zed config preset with an IDE
+# (config/zed-config.toml — the shipped IDE-oriented preset)
+go-on --config zed-config.toml
 
 # Use the universal config with HTTP endpoint
 go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090

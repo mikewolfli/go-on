@@ -87,20 +87,27 @@ pub(crate) use vector_context::{
 };
 
 pub(crate) fn estimate_token_economy(messages: &[Message], response_text: &str) -> Value {
+    use crate::shared::token_estimator::estimate_tokens;
+
     let input_chars = messages
         .iter()
         .map(|message| message.content.chars().count())
         .sum::<usize>();
     let output_chars = response_text.chars().count();
+    // Delegate to the shared CJK-aware estimator so SSE / OpenAI-compat
+    // telemetry agrees with CLI and session-compressor token accounting.
     let input_tokens = if input_chars == 0 {
         0_u64
     } else {
-        input_chars.div_ceil(4) as u64
+        messages
+            .iter()
+            .map(|m| estimate_tokens(&m.content) as u64)
+            .sum()
     };
     let output_tokens = if output_chars == 0 {
         0_u64
     } else {
-        output_chars.div_ceil(4) as u64
+        estimate_tokens(response_text) as u64
     };
     let compression_ratio = if input_tokens == 0 {
         1.0

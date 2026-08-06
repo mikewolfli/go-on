@@ -2,7 +2,7 @@
 
 可观测性 API 提供健康检查、Prometheus 指标和实时状态事件。这些端点供监控基础设施、仪表盘和告警系统使用。
 
-> 权威的 API 参考见 `docs/protocol-guide.md`。本页仅记录真实存在的端点。
+> JSON-RPC 方法分发表见 `src/acp/impl/request.rs`；`docs/protocol-guide.md` 仅介绍协议模式。本页仅记录真实存在的端点。
 
 ## 端点
 

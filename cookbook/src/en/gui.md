@@ -40,11 +40,11 @@ The backend process is started from the configured working directory. The GUI ex
 
 ### Prompts Tab
 
-Browse, search, create, edit, and delete prompt templates across 12 industry categories.
+Browse, search, create, edit, and delete prompt templates across 16 categories.
 See the [Prompts System](prompts.md) document for full details.
 
-- **Browse by category** — filter templates by 12 industry categories (Software Development, Writing,
-  Academic Research, Business Analysis, Marketing, Legal, Medical, Education, Finance, Data Science, Design, System Operations)
+- **Browse by category** — filter templates by 16 categories (Software Development, Writing,
+  Academic Research, Business Analysis, Marketing, Legal, Medical, Education, Finance, Data Science, Design, System Operations, Productivity, Engineering Delivery, Operations Support, Go-On Agent Skills)
 - **Search** — keyword search across template titles and content
 - **Custom templates** — create your own templates with `{{variable}}` placeholders
 - **Insert to Chat** — click the **Insert to Chat** button on any template card to insert the template
@@ -74,9 +74,9 @@ The GUI displays a **Risk Decision panel** on AI responses when the backend's go
 The panel adapts theme-wise: high-risk topics get a warm orange/red background, normal risk gets a subtle green tint — both respecting dark/light mode correctly.
 
 ### Settings Tab
-- **Provider Management**: dynamic environment variable injection (all 37+ providers), no longer hardcoded to 8
+- **Provider Management**: dynamic environment variable injection (all 37 providers), no longer hardcoded to 8
 - **Config Editor**: manages `gui_config.json` with JSON syntax validation
-- **Theme Selection**: 6 visual themes (Minimal / Chinese-Classic / Wuxia / Landscape / Hello Kitty / Dark)
+- **Theme Selection**: 6 visual themes (Minimal / GuoFeng / Wuxia / ShanShui / Hello Kitty / Serve The People)
 - **Language Switching**: English, Simplified Chinese, Traditional Chinese
 - **Feature Toggles**: enable/disable GUI features (including **Prompts** toggle that controls the Prompts Tab visibility and related RPC/MCP interfaces)
 

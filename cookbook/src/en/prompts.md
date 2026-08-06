@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Prompts System is go-on's built-in prompt template management feature, providing **84+ ready-to-use templates** across 12 industry categories. Users can browse, search, and insert templates via the GUI, expand templates quickly with `/` commands in Chat, or have AI agents automatically invoke templates through MCP (Model Context Protocol).
+The Prompts System is go-on's built-in prompt template management feature, providing **149 ready-to-use templates** across 16 categories (per `prompts/en.json`). Users can browse, search, and insert templates via the GUI, expand templates quickly with `/` commands in Chat, or have AI agents automatically invoke templates through MCP (Model Context Protocol).
 
 > Related docs: [GUI Console](gui.md) | [Workflow Config](workflow-config.md)
 
@@ -39,24 +39,28 @@ When switching the GUI language, the prompt template system automatically loads 
 
 ---
 
-## 12 Industry Categories
+## 16 Categories
 
-Each category contains 7 templates, totaling **84+ templates** covering typical use cases across industries.
+Templates are grouped into 16 categories with varying counts, totaling **149 templates**:
 
-| # | Category | Description | Representative Templates |
-|---|----------|-------------|------------------------|
-| 1 | Software Development | Code generation, debugging, refactoring, code review | `explain_code` Explain code / `review_code` Code review / `generate_test` Generate unit tests |
-| 2 | Writing & Creative | Article writing, creative writing, copywriting | `write_article` Write article / `creative_story` Creative story / `copywriting` Copywriting |
-| 3 | Academic Research | Paper writing, literature review, data analysis | `write_paper` Paper writing / `literature_review` Literature review / `data_analysis` Data analysis |
-| 4 | Business Analysis | Market analysis, business model, competitive analysis | `market_analysis` Market analysis / `business_model` Business model / `competitive_analysis` Competitive analysis |
-| 5 | Marketing | Marketing plans, ad copy, social media | `marketing_plan` Marketing plan / `ad_copy` Ad copy / `social_media` Social media content |
-| 6 | Legal & Compliance | Contract review, legal advice, compliance checks | `contract_review` Contract review / `legal_advice` Legal advice / `compliance_check` Compliance check |
-| 7 | Medical & Health | Medical consultation, health management, drug info | `medical_consult` Medical consultation / `health_plan` Health plan / `drug_info` Drug information |
-| 8 | Education & Training | Course design, lesson plans, tutoring | `course_design` Course design / `lesson_plan` Lesson plan / `tutoring` Tutoring |
-| 9 | Finance & Investment | Investment analysis, risk assessment, financial reports | `investment_analysis` Investment analysis / `risk_assessment` Risk assessment / `financial_report` Financial report |
-| 10 | Data Science | Data analysis, machine learning, data visualization | `data_cleaning` Data cleaning / `ml_model` ML model / `data_viz` Data visualization |
-| 11 | Design & Creative | UI/UX design, graphic design, creative brainstorming | `ui_design` UI design / `brand_design` Brand design / `creative_brainstorm` Creative brainstorming |
-| 12 | System Operations | Server management, network config, monitoring alerts | `server_setup` Server setup / `network_config` Network config / `monitor_setup` Monitoring setup |
+| # | Category | Templates | Representative Templates |
+|---|----------|-----------|--------------------------|
+| 1 | Software Development | 10 | `explain_code` / `code_review` / `generate_unit_test` |
+| 2 | Writing & Creative | 12 | `blog_post_outline` / `proofread_text` / `creative_story` |
+| 3 | Academic Research | 8 | `literature_review` / `abstract_generation` / `peer_review` |
+| 4 | Business Analysis | 9 | `swot_analysis` / `business_plan` / `competitive_analysis` |
+| 5 | Marketing | 13 | `marketing_strategy` / `ad_copy` / `social_media_content` |
+| 6 | Legal & Compliance | 11 | `contract_review` / `contract_clause` / `compliance_checklist` |
+| 7 | Medical & Health | 8 | `symptom_analysis` / `medication_guide` / `treatment_plan` |
+| 8 | Education & Training | 10 | `lesson_plan` / `quiz_generation` / `explain_concept` |
+| 9 | Finance & Investment | 11 | `investment_analysis` / `budget_planning` / `financial_report` |
+| 10 | Data Science | 11 | `eda_plan` / `model_selection` / `sql_query` |
+| 11 | Design & Creative | 11 | `ux_review` / `design_brief` / `accessibility_audit` |
+| 12 | System Operations | 10 | `incident_response` / `monitoring_setup` / `security_hardening` |
+| 13 | Productivity | 8 | `requirements_breakdown` / `prd_draft` / `meeting_minutes` |
+| 14 | Engineering Delivery | 6 | `release_notes` / `rca_report` / `rollback_plan` |
+| 15 | Operations Support | 6 | `customer_reply` / `kb_article` / `faq_builder` |
+| 16 | Go-On Agent Skills | 5 | `skill_discovery` / `tool_selection` / `best_practices` |
 
 ---
 
@@ -93,24 +97,24 @@ In the Chat input box, type `/` to trigger command completion. Type a template I
 
 Examples:
 - `/explain_code` — Explain selected code
-- `/review_code` — Review code quality
-- `/generate_test Rust` — Generate unit tests for Rust code
-- `/write_article topic: AI trends` — Write an article on the specified topic
+- `/code_review` — Review code quality
+- `/generate_unit_test Rust` — Generate unit tests for Rust code
+- `/blog_post_outline topic: AI trends` — Write an article on the specified topic
 
 ### Common Commands
 
 | Command | Function |
 |---------|----------|
 | `/explain_code` | Explain selected code |
-| `/review_code` | Review code quality |
-| `/optimize_code` | Optimize code performance |
-| `/generate_test` | Generate unit tests |
-| `/refactor_code` | Refactor code |
-| `/write_doc` | Write documentation comments |
-| `/write_article` | Write an article |
-| `/market_analysis` | Market analysis |
+| `/code_review` | Review code quality |
+| `/refactor_suggestion` | Suggest code refactorings |
+| `/generate_unit_test` | Generate unit tests |
+| `/debug_error` | Debug an error message |
+| `/generate_documentation` | Write documentation comments |
+| `/blog_post_outline` | Outline an article |
+| `/marketing_strategy` | Marketing strategy |
 | `/contract_review` | Contract review |
-| `/data_analysis` | Data analysis |
+| `/literature_review` | Literature review |
 
 When you type `/`, the system shows an autocomplete list with fuzzy search support, category filtering, and full template ID matching.
 
@@ -166,7 +170,7 @@ Through MCP (Model Context Protocol), AI agents can automatically discover and i
 | `prompts_list` | List all available prompt templates |
 | `prompts_get` | Get the detailed content of a specific template |
 
-AI agents discover these tools via the MCP protocol and can automatically select and apply appropriate templates during conversations. For example, when a user says "help me review this code", the AI agent can automatically call `prompts_get` to retrieve the `review_code` template and apply it to the response.
+AI agents discover these tools via the MCP protocol and can automatically select and apply appropriate templates during conversations. For example, when a user says "help me review this code", the AI agent can automatically call `prompts_get` to retrieve the `code_review` template and apply it to the response.
 
 ---
 

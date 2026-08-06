@@ -47,7 +47,7 @@ path = "src/lib.rs"
 #                Fast startup, minimal external dependencies
 #
 # simple-server: single-server deployment; SQLite cache + required sqlite-vec
-#                        All sub-buses except distributed-memory
+#                        All sub-buses, including distributed-memory
 #                        Full capability bus for production readiness
 #
 # multi-users-server: multi-user production; PostgreSQL cache + pgvector
@@ -134,8 +134,8 @@ model-3d-extra = []
 # local:       single-user local tool (default for `cargo build`)
 #                      Core sub-buses for local operation.
 # simple-server: single-server deployment (explicit --features)
-#                        Adds sub-bus-distributed-memory and vault
-#                        on top of local to support production server needs.
+#                        Adds sub-bus-distributed-memory on top of local to
+#                        support production server needs.
 local = [
     "backend-sqlite",
     "sub-bus-tool",

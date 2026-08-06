@@ -102,23 +102,18 @@ pub(crate) fn infer_error_contract_kind(
     if lower.contains("hardening policy denied") || lower.contains("sandbox") {
         return "SandboxBlocked".to_string();
     }
-    if code == -32601 {
-        return "MethodNotFound".to_string();
+    // Code-based classification comes from the canonical AcpErrorCode enum
+    // (single source of truth) so the table cannot drift from the codes
+    // production paths actually send. Keyword rules above stay first because
+    // they are more specific than a bare code.
+    if let Some(kind) = crate::acp::impl::request::protocol::AcpErrorCode::classify(code) {
+        return kind.to_string();
     }
-    if code == -32602 {
-        return "InvalidParams".to_string();
-    }
-    if code == -32003 {
-        return "AuthRequired".to_string();
-    }
-    if code == -32029 || lower.contains("rate limited") || lower.contains("too many requests") {
+    if lower.contains("rate limited") || lower.contains("too many requests") {
         return "RateLimited".to_string();
     }
     if lower.contains("timeout") {
         return "UpstreamTimeout".to_string();
-    }
-    if code == -32603 {
-        return "InternalError".to_string();
     }
     "GeneralError".to_string()
 }
@@ -1176,6 +1171,29 @@ mod tests {
         assert_eq!(
             infer_error_contract_kind(-32603, "internal", Some("")),
             "InternalError"
+        );
+    }
+
+    // The code→kind table must agree with the canonical AcpErrorCode enum
+    // (single source of truth) — regression guard for code drift.
+    #[test]
+    fn infer_error_contract_kind_matches_acp_error_code_enum() {
+        use crate::acp::impl::request::protocol::AcpErrorCode;
+        assert_eq!(
+            infer_error_contract_kind(AcpErrorCode::AuthRequired as i32, "auth", None),
+            "AuthRequired"
+        );
+        assert_eq!(
+            infer_error_contract_kind(AcpErrorCode::PuaViolation as i32, "policy", None),
+            "PuaViolation"
+        );
+        assert_eq!(
+            infer_error_contract_kind(AcpErrorCode::ConsultationBlocked as i32, "blocked", None),
+            "ConsultationBlocked"
+        );
+        assert_eq!(
+            infer_error_contract_kind(AcpErrorCode::ServerError as i32, "draining", None),
+            "ServerError"
         );
     }
 

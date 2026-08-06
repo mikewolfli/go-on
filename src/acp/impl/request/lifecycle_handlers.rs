@@ -228,6 +228,13 @@ pub(super) async fn build_health_probes_payload(server: &AcpServer) -> Result<Va
         });
 
     let lock_components: Vec<LockHealthSummary> = Vec::new();
+    // Lock monitoring is not enabled (log-20260622-5) — report the true state
+    // instead of the vacuous "healthy" summary of an empty component set.
+    let lock_status = if lock_components.is_empty() {
+        "not_monitored"
+    } else {
+        summarize_lock_health(&lock_components).status
+    };
     let lock_summary = summarize_lock_health(&lock_components);
     let timeout_status = if metrics.agent_timeout_failures_total > 0
         || metrics.review_gate_timeout_total > 0
@@ -252,11 +259,8 @@ pub(super) async fn build_health_probes_payload(server: &AcpServer) -> Result<Va
         .collect::<Vec<_>>();
     dependencies.push(json!({
         "name": "locks",
-        "status": lock_summary.status,
-        "message": format!(
-            "poisoned={}, recovered={}, slow_waits={}",
-            lock_summary.poisoned_total, lock_summary.recovered_total, lock_summary.slow_wait_total
-        ),
+        "status": lock_status,
+        "message": "lock monitoring not enabled (no components tracked)",
         "details": {
             "poisoned_total": lock_summary.poisoned_total,
             "recovered_total": lock_summary.recovered_total,
@@ -309,7 +313,7 @@ pub(super) async fn build_health_probes_payload(server: &AcpServer) -> Result<Va
                 "buckets": rate_limiter_buckets,
             },
             "locks": {
-                "status": lock_summary.status,
+                "status": lock_status,
                 "poisoned_total": lock_summary.poisoned_total,
                 "recovered_total": lock_summary.recovered_total,
                 "slow_wait_total": lock_summary.slow_wait_total,

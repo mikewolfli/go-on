@@ -108,7 +108,7 @@ impl MemorySummarizer {
     }
 
     /// Shared helper that builds a compressed summary entry from a set of
-    /// memory entries. Used by both `summarize()` and `summarize_sync()`.
+    /// memory entries. Used by `summarize()`.
     fn build_summary_entry(&self, entries: &[MemoryEntry]) -> SummarizedMemory {
         // Sort by usefulness (descending), then by accessed_at (descending, most recent first).
         let mut sorted = entries.to_vec();

@@ -19,7 +19,7 @@ use super::{
 };
 use crate::protocol::rpc_protocol::RequestTraceContext;
 use crate::shared::tool_descriptors::validate_required_arguments;
-use crate::tool::ToolInput;
+use crate::tool::{ToolInput, ToolOutput};
 
 /// Signals an invalid / missing parameter in an MCP request.
 /// Dispatched as JSON-RPC INVALID_PARAMS (-32602).
@@ -758,40 +758,43 @@ impl McpServer {
 
         // Step 1: Try tool_registry first (existing behavior)
         // Use `get_arc` so the owned `Arc<dyn Tool>` can be moved into
-        // `spawn_blocking` (a plain `get` borrow cannot outlive the method).
+        // `run_async` (a plain `get` borrow cannot outlive the method).
         if let Some(tool) = self.tool_registry.get_arc(&tool_name) {
-            // ── Governance check ─────────────────────────────────────
+            // ── Governance check (unified with the ACP route) ────────────
             // Previously, tool.run() was called directly without any
             // HarnessBus sandbox/budget/RBAC check. This meant tools
             // invoked via MCP stdio bypassed ALL governance (AUTON-05).
-            // Now we enforce the same pattern as the ACP route.
+            // `validate_action` runs PolicyEvaluator::check_tool_call
+            // (sandbox / require_review / idempotency / budget / RBAC) and
+            // updates the governance profile (sandbox_denials,
+            // idempotency_hits) plus drift metrics.
             //
             // IMPORTANT: Only check budget & RBAC for registered tools.
             // The require_review/whitelist check is skipped because the
             // tool is already explicitly registered in the tool_registry.
+            let mut verdict: Option<crate::governance::harness_bus::ToolVerdict> = None;
             if let Some(ref acp) = self.acp_server {
                 if let Some(ref harness_bus) = acp.governance_deps.harness_bus {
-                    let verdict = harness_bus
-                        .evaluator
-                        .check_tool_call(&tool_name, &tool_input);
+                    let v = harness_bus.validate_action(&tool_name, &tool_input).await;
                     // Skip require_review for registered tools — they are
                     // explicitly registered and trusted.
-                    if !verdict.allowed && !verdict.require_review {
+                    if !v.allowed && !v.require_review {
                         anyhow::bail!(
                             "tool '{}' denied by harness sandbox policy (sandbox_allowed={})",
                             tool_name,
-                            verdict.allowed
+                            v.allowed
                         );
                     }
-                    if !verdict.budget_ok {
+                    if !v.budget_ok {
                         anyhow::bail!("tool '{}' denied by harness budget gate", tool_name);
                     }
-                    if !verdict.permitted {
+                    if !v.permitted {
                         anyhow::bail!(
                             "tool '{}' denied by harness RBAC permission gate",
                             tool_name
                         );
                     }
+                    verdict = Some(v);
                 } else {
                     // No HarnessBus — apply default tool governance policy
                     // to prevent "default allow all" blind spot.
@@ -817,6 +820,48 @@ impl McpServer {
 
             validate_required_arguments(&tool_name, &tool_input)
                 .map_err(|e| invalid_params(e.to_string()))?;
+
+            // ── Idempotency dedup (standard semantics) ────────────────────
+            // A repeated (tool, args) call that hits the IdempotencyCache
+            // skips re-execution and returns the cached result (the cache is
+            // populated by `record_tool_success` on the success path below).
+            if let Some(v) = verdict {
+                if v.idempotent {
+                    if let Some(harness_bus) = self
+                        .acp_server
+                        .as_ref()
+                        .and_then(|a| a.governance_deps.harness_bus.clone())
+                    {
+                        if let Some(cached) =
+                            harness_bus.cached_tool_result(&tool_name, &tool_input)
+                        {
+                            info!(
+                                "MCP: idempotency hit for tool '{}' — returning cached result",
+                                tool_name
+                            );
+                            record_tool_call_audit_with_protocol(
+                                &tool_name,
+                                &tool_input,
+                                true,
+                                "cached idempotency hit via mcp",
+                                "mcp_stdio",
+                            );
+                            let result: ToolOutput = serde_json::from_value(cached)?;
+                            let result_value: Value = serde_json::to_value(&result)?;
+                            return Ok(serde_json::to_value(
+                                McpCallToolResult::new(
+                                    vec![json!({
+                                        "type": "text",
+                                        "text": serde_json::to_string(&result)?,
+                                    })],
+                                    Some(result_value),
+                                )
+                                .with_is_error(false),
+                            )?);
+                        }
+                    }
+                }
+            }
 
             // ── Budget accounting (matches the ACP tool path) ────────────
             // Wall-clock, tool-call-count and PUA token consumption are tracked
@@ -879,11 +924,38 @@ impl McpServer {
                 payload: tool_input.clone(),
                 allowed_base_dir: None,
             };
-            // Run synchronous tools on a blocking thread so long-running tools
-            // (e.g. shell_exec) cannot stall the tokio worker.
-            let result = tokio::task::spawn_blocking(move || tool.run(&input))
-                .await
-                .map_err(|e| anyhow::anyhow!("tool execution panicked: {e}"))??;
+
+            // ── Pre-execute hooks (unified async chain) ───────────────────
+            // `run_pre_async` invokes every hook's `async_pre_execute` — sync
+            // hooks are covered via the trait's default delegation, and async
+            // hooks such as GuardianHook (config-gated LLM review) run
+            // directly. A denying hook aborts the call (fail-fast).
+            self.tool_registry
+                .hooks
+                .run_pre_async(&tool_name, &input)
+                .await?;
+
+            // ── Execute via the async path ────────────────────────────────
+            // `run_async`'s default implementation offloads the synchronous
+            // `run` to `spawn_blocking` internally so long-running tools
+            // (e.g. shell_exec) cannot stall the tokio worker; I/O-bound
+            // tools may override it with a fully async implementation.
+            let result = tool.run_async(input).await?;
+
+            // ── Record successful execution for idempotency dedup ─────────
+            if result.success {
+                if let Some(harness_bus) = self
+                    .acp_server
+                    .as_ref()
+                    .and_then(|a| a.governance_deps.harness_bus.clone())
+                {
+                    harness_bus.record_tool_success(
+                        &tool_name,
+                        &tool_input,
+                        &serde_json::to_value(&result)?,
+                    );
+                }
+            }
 
             info!(
                 "MCP: Tool '{}' returned: {:?} (budget_scope={} remaining_tokens={})",
@@ -1318,4 +1390,252 @@ fn filter_tools_by_exposure(tools: &mut Vec<Value>, _server: &AcpServer) {
         }
         true
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    use crate::acp::server::ServerBuilder;
+    use crate::governance::harness_bus::default_harness_bus;
+    use crate::tool::{Tool, ToolHook, ToolRegistry as OrchestrationToolRegistry};
+
+    // ── Test doubles ─────────────────────────────────────────────────────
+
+    /// A tool whose name deliberately avoids every read/write/shell/network/
+    /// search keyword in `ToolCapabilityRegistry`, so `check_tool_call`
+    /// reports `require_review = true` (unknown operation). Registered tools
+    /// pass the require_review gate (same policy as the ACP route) but still
+    /// run the pre-execute hook chain.
+    #[derive(Clone)]
+    struct UnclassifiedTestTool {
+        name: &'static str,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Tool for UnclassifiedTestTool {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn run(&self, _input: &ToolInput) -> anyhow::Result<ToolOutput> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput {
+                success: true,
+                result: Some(json!({ "ok": true })),
+                error: None,
+                verification: None,
+                audit_log: None,
+                pua_report: None,
+            })
+        }
+    }
+
+    /// A pre-execute review hook (the same mechanism `GuardianHook` uses)
+    /// that records reviewed tool names; when `deny` is set it blocks the
+    /// call with an error.
+    #[derive(Clone)]
+    struct RecordingReviewHook {
+        reviewed: Arc<StdMutex<Vec<String>>>,
+        deny: bool,
+    }
+
+    #[async_trait]
+    impl ToolHook for RecordingReviewHook {
+        async fn async_pre_execute(
+            &self,
+            tool_name: &str,
+            _input: &ToolInput,
+        ) -> anyhow::Result<()> {
+            if let Ok(mut reviewed) = self.reviewed.lock() {
+                reviewed.push(tool_name.to_string());
+            }
+            if self.deny {
+                anyhow::bail!("test review hook denied tool '{}'", tool_name);
+            }
+            Ok(())
+        }
+    }
+
+    async fn initialize(server: &McpServer) {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "initialize".to_string(),
+            params: Some(json!({ "protocolVersion": "2024-11-05" })),
+            id: Some(json!(0)),
+        };
+        let response = server
+            .handle_request(request)
+            .await
+            .expect("initialize should return a response");
+        assert!(response.result.is_some(), "initialize must succeed");
+    }
+
+    /// Build an McpServer whose ACP server carries a real HarnessBus so the
+    /// unified governance chain (`check_tool_call` via `validate_action` +
+    /// pre-execute hooks + `run_async`) is exercised end-to-end.
+    fn build_gov_server(
+        registry: OrchestrationToolRegistry,
+    ) -> (McpServer, Arc<crate::governance::harness_bus::HarnessBus>) {
+        let mut acp_server = ServerBuilder::new().build();
+        let harness_bus = Arc::new(default_harness_bus());
+        acp_server.governance_deps.harness_bus = Some(Arc::clone(&harness_bus));
+        let server = McpServer::new_with_acp(
+            Arc::new(crate::agent::AgentRegistry::new()),
+            Arc::new(registry),
+            "go-on".to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+            Some(Arc::new(acp_server)),
+        );
+        (server, harness_bus)
+    }
+
+    async fn call_tool(
+        server: &McpServer,
+        tool_name: &str,
+        arguments: Value,
+        id: i64,
+    ) -> JsonRpcResponse {
+        server
+            .handle_request(JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                method: "tools/call".to_string(),
+                params: Some(json!({ "name": tool_name, "arguments": arguments })),
+                id: Some(json!(id)),
+            })
+            .await
+            .expect("tools/call must produce a response envelope")
+    }
+
+    // ── Task 1: MCP tool execution runs the unified governance chain ────
+
+    #[tokio::test]
+    async fn mcp_tool_call_runs_review_hook_chain_before_execution() {
+        // A registered-but-unclassified tool: `check_tool_call` reports
+        // require_review = true and the registered pre-execute review hook
+        // must fire before the tool runs — proving the MCP entry is no
+        // longer a governance-weakened path (check_tool_call + async hook
+        // chain + run_async all run here).
+        let mut registry = OrchestrationToolRegistry::new_empty();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let reviewed = Arc::new(StdMutex::new(Vec::new()));
+        registry.register(UnclassifiedTestTool {
+            name: "test_zzz_gov_review",
+            calls: Arc::clone(&calls),
+        });
+        registry.hooks.register(Arc::new(RecordingReviewHook {
+            reviewed: Arc::clone(&reviewed),
+            deny: false,
+        }));
+        let (server, _harness_bus) = build_gov_server(registry);
+        initialize(&server).await;
+
+        let response = call_tool(&server, "test_zzz_gov_review", json!({}), 10).await;
+        assert!(
+            response.error.is_none(),
+            "governance review should allow the call, got error: {:?}",
+            response.error
+        );
+        let result = response.result.expect("tool result must be present");
+        assert_eq!(result["structuredContent"]["success"], true);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "tool must have executed exactly once"
+        );
+        // The review hook (same mechanism as GuardianHook) must have fired
+        // on the MCP path before execution.
+        let reviewed_names = reviewed.lock().unwrap();
+        assert_eq!(
+            reviewed_names.as_slice(),
+            &["test_zzz_gov_review".to_string()],
+            "pre-execute review hook must run before execution via the MCP path"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_tool_call_denied_by_review_hook_is_blocked_fail_fast() {
+        let mut registry = OrchestrationToolRegistry::new_empty();
+        let calls = Arc::new(AtomicUsize::new(0));
+        registry.register(UnclassifiedTestTool {
+            name: "test_zzz_gov_deny",
+            calls: Arc::clone(&calls),
+        });
+        registry.hooks.register(Arc::new(RecordingReviewHook {
+            reviewed: Arc::new(StdMutex::new(Vec::new())),
+            deny: true,
+        }));
+        let (server, _harness_bus) = build_gov_server(registry);
+        initialize(&server).await;
+
+        let response = call_tool(&server, "test_zzz_gov_deny", json!({}), 11).await;
+        let error = response
+            .error
+            .expect("denying review hook must block the call");
+        assert!(
+            error.message.contains("test review hook denied"),
+            "error must surface the hook denial, got: {}",
+            error.message
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "tool must NOT execute when the review hook denies"
+        );
+    }
+
+    // ── Task 2: IdempotencyCache dedup via the MCP path ─────────────────
+
+    #[tokio::test]
+    async fn mcp_tool_call_dedup_repeated_tool_args_via_idempotency_cache() {
+        let mut registry = OrchestrationToolRegistry::new_empty();
+        let calls = Arc::new(AtomicUsize::new(0));
+        registry.register(UnclassifiedTestTool {
+            name: "test_zzz_gov_idem",
+            calls: Arc::clone(&calls),
+        });
+        let (server, harness_bus) = build_gov_server(registry);
+        initialize(&server).await;
+
+        let arguments = json!({ "k": "v" });
+        // First call executes and records the result in the IdempotencyCache
+        // keyed by (tool, args) hash.
+        let first = call_tool(&server, "test_zzz_gov_idem", arguments.clone(), 20).await;
+        assert!(
+            first.error.is_none(),
+            "first call must succeed, got error: {:?}",
+            first.error
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Second call with identical (tool, args) must hit the cache: skip
+        // re-execution and return the cached result.
+        let second = call_tool(&server, "test_zzz_gov_idem", arguments.clone(), 21).await;
+        assert!(
+            second.error.is_none(),
+            "cached call must succeed, got error: {:?}",
+            second.error
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "repeated (tool, args) call must not re-execute the tool"
+        );
+        assert_eq!(
+            second.result.expect("cached result").clone(),
+            first.result.expect("first result").clone(),
+            "the cached response must match the original execution response"
+        );
+
+        // The governance profile must accumulate the idempotency hit.
+        let profile = harness_bus.governance_profile();
+        assert!(
+            profile.idempotency_hits >= 1,
+            "idempotency_hits must accumulate on a cache hit, got {}",
+            profile.idempotency_hits
+        );
+    }
 }

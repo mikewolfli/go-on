@@ -205,11 +205,6 @@ impl VideoProcessor {
         &self.config
     }
 
-    /// Update the configuration at runtime.
-    pub fn set_config(&mut self, config: VideoProcessorConfig) {
-        self.config = config;
-    }
-
     // ── Validation helpers ──────────────────────────────────────────────
 
     fn validate_duration(&self, duration_secs: f64) -> Result<(), VideoProcessorError> {

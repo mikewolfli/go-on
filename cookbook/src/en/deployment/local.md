@@ -63,7 +63,6 @@ shutdown_drain_seconds = 30
 entry_auth_enabled = false
 entry_rate_limit_rpm = 240
 entry_rate_limit_burst = 60
-i18n_enabled = true
 i18n_default_language = "en-US"
 governance_enabled = true
 governance_policy_mode = "advisory"
@@ -143,9 +142,6 @@ cargo run -- --config config/config.toml --protocol-mode adaptive
 ```bash
 # Default health endpoint
 curl http://127.0.0.1:8090/health
-
-# With verbose output
-curl http://127.0.0.1:8090/health?verbose=true
 ```
 
 ## Development Workflow
@@ -189,30 +185,11 @@ sqlite3 acp_vector.sqlite3 "VACUUM;"
 
 ## Performance Tuning
 
-### Memory Settings
-```toml
-[runtime]
-# Adjust based on available memory
-cache_max_memory_mb = 256
-vector_max_memory_mb = 512
-```
-
-### Concurrency
-```toml
-[concurrency]
-# Maximum concurrent requests
-max_inflight_requests = 32
-max_parallel_tasks = 8
-```
-
-### Timeouts
-```toml
-[timeouts]
-# Request timeouts
-request_timeout_seconds = 120
-health_check_timeout_seconds = 30
-shutdown_timeout_seconds = 60
-```
+### Concurrency and timeouts
+Concurrency limits are configured per phase via `[phases.<name>.options]`
+(`phase_max_inflight` / `global_max_inflight`) and entry rate limits via
+`[runtime]` (`entry_rate_limit_rpm` / `entry_rate_limit_burst`). There are no
+`[concurrency]` or `[timeouts]` top-level sections.
 
 ## Troubleshooting
 
@@ -231,12 +208,12 @@ sqlite3 acp_cache.sqlite3 ".recover" | sqlite3 acp_cache_fixed.sqlite3
 ```bash
 # Check sqlite-vec availability
 cargo build --features "sqlite-vec"
-
-# Fallback to JSON mode
-[vector]
-auto_mode = false
-use_json_fallback = true
 ```
+
+The vector store resolves its mode automatically: in the `local` profile it falls
+back to a JSON embedding table when sqlite-vec is unavailable; `simple-server` /
+`multi-users-server` require sqlite-vec (or pgvector). There is no
+`use_json_fallback` config option.
 
 #### Port Conflicts
 ```bash
@@ -264,10 +241,10 @@ tail -f go-on.log
 # Backup existing data
 cp acp_cache.sqlite3 acp_cache.sqlite3.backup
 cp acp_vector.sqlite3 acp_vector.sqlite3.backup
-
-# Run migration
-cargo run -- --migrate --config config/config.toml
 ```
+
+Config schema is versioned (`schema_version`); go-on validates and migrates
+supported schemas on startup. There is no `--migrate` CLI flag.
 
 ### To Other Deployment Modes
 Local mode can be migrated to:

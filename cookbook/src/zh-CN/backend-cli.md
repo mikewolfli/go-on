@@ -137,7 +137,7 @@ Sub-phases 会继承父级的 `options` 作为默认值，可在每个 sub-phase
 | 文件 | Phases | 适用场景 |
 |------|--------|----------|
 | `config.toml` | think, act, check, done | 通用工作流（默认） |
-| `config.coding.toml` | coding | IDE 集成（Zed、VS Code） |
+| `zed-config.toml` | think, act, check, review, done | IDE 集成（Zed、VS Code） |
 | `config.simple-server.toml` | think, act, check, done | 单服务部署 |
 | `config.multi-users-server.toml` | think, act, check, done | 多用户企业环境 |
 
@@ -145,7 +145,7 @@ Sub-phases 会继承父级的 `options` 作为默认值，可在每个 sub-phase
 
 ```bash
 # 使用编码阶段配置与 IDE 配合
-go-on --config config.coding.toml --phase coding
+go-on --config zed-config.toml
 
 # 使用通用配置配合 HTTP 端点
 go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090

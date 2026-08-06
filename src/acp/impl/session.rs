@@ -8,11 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use hmac::{digest::KeyInit, Mac};
-use sha2::Sha256;
-use subtle::ConstantTimeEq;
-
 use crate::config::RuntimeConfig;
+use subtle::ConstantTimeEq;
 
 // ---------------------------------------------------------------------------
 // Constant-time equality helper for token comparison
@@ -439,15 +436,7 @@ fn hmac_sha256_b64(key: &[u8], data: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine;
 
-    let hmac_bytes = hmac_sha256(key, data);
-    BASE64_STANDARD.encode(&hmac_bytes)
-}
-
-/// Compute an HMAC-SHA256 digest (RFC 2104) via the `hmac` crate.
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(data);
-    mac.finalize().into_bytes().to_vec()
+    BASE64_STANDARD.encode(crate::shared::hmac_sha256(key, data))
 }
 
 // ---------------------------------------------------------------------------

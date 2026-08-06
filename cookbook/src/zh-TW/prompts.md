@@ -2,7 +2,7 @@
 
 ## 概述
 
-Prompts 系統是 go-on 內建的提示詞範本管理功能，提供 **84+ 個即用範本**，涵蓋 12 個行業類別。使用者可透過 GUI 瀏覽、搜尋和插入範本，在 Chat 中使用 `/` 指令快速展開範本，或透過 MCP（Model Context Protocol）讓 AI 代理自動呼叫範本。
+Prompts 系統是 go-on 內建的提示詞範本管理功能，提供 **149 個即用範本**，涵蓋 16 個類別（以 `prompts/en.json` 為準）。使用者可透過 GUI 瀏覽、搜尋和插入範本，在 Chat 中使用 `/` 指令快速展開範本，或透過 MCP（Model Context Protocol）讓 AI 代理自動呼叫範本。
 
 > 相關文件：[GUI 控制台](gui.md) | [工作流程配置](workflow-config.md)
 
@@ -39,24 +39,28 @@ prompts/
 
 ---
 
-## 12 個行業類別
+## 16 個類別
 
-每個類別包含 7 個範本，共 **84+ 個範本**，覆蓋各行業典型使用場景。
+範本按類別組織，各類數量不一，合計 **149 個範本**：
 
-| # | 類別 | 描述 | 代表範本 |
-|---|------|------|----------|
-| 1 | 軟體開發 | 程式碼生成、除錯、重構、程式碼審查 | `explain_code` 解釋程式碼 / `review_code` 程式碼審查 / `generate_test` 生成單元測試 |
-| 2 | 寫作與創意 | 文章寫作、創意寫作、文案撰寫 | `write_article` 撰寫文章 / `creative_story` 創意故事 / `copywriting` 文案寫作 |
-| 3 | 學術研究 | 論文寫作、文獻綜述、資料分析 | `write_paper` 論文寫作 / `literature_review` 文獻綜述 / `data_analysis` 資料分析 |
-| 4 | 商業分析 | 市場分析、商業模式、競爭分析 | `market_analysis` 市場分析 / `business_model` 商業模式 / `competitive_analysis` 競爭分析 |
-| 5 | 市場行銷 | 行銷方案、廣告文案、社交媒體 | `marketing_plan` 行銷計畫 / `ad_copy` 廣告文案 / `social_media` 社交媒體內容 |
-| 6 | 法律與合規 | 合約審查、法律諮詢、合規檢查 | `contract_review` 合約審查 / `legal_advice` 法律諮詢 / `compliance_check` 合規檢查 |
-| 7 | 醫療與健康 | 醫療諮詢、健康管理、藥品資訊 | `medical_consult` 醫療諮詢 / `health_plan` 健康計畫 / `drug_info` 藥品資訊 |
-| 8 | 教育與培訓 | 課程設計、教案編寫、輔導答疑 | `course_design` 課程設計 / `lesson_plan` 教案 / `tutoring` 輔導答疑 |
-| 9 | 金融與投資 | 投資分析、風險評估、財務報告 | `investment_analysis` 投資分析 / `risk_assessment` 風險評估 / `financial_report` 財務報告 |
-| 10 | 資料科學 | 資料分析、機器學習、資料視覺化 | `data_cleaning` 資料清洗 / `ml_model` 機器學習模型 / `data_viz` 資料視覺化 |
-| 11 | 設計與創意 | UI/UX 設計、平面設計、創意腦力激盪 | `ui_design` UI 設計 / `brand_design` 品牌設計 / `creative_brainstorm` 創意腦力激盪 |
-| 12 | 系統維運 | 伺服器管理、網路配置、監控告警 | `server_setup` 伺服器設定 / `network_config` 網路配置 / `monitor_setup` 監控設定 |
+| # | 類別 | 範本數 | 代表範本 |
+|---|------|--------|----------|
+| 1 | 軟體開發 | 10 | `explain_code` 解釋程式碼 / `code_review` 程式碼審查 / `generate_unit_test` 生成單元測試 |
+| 2 | 寫作與創意 | 12 | `blog_post_outline` 部落格大綱 / `proofread_text` 校對 / `creative_story` 創意故事 |
+| 3 | 學術研究 | 8 | `literature_review` 文獻綜述 / `abstract_generation` 摘要生成 / `peer_review` 同儕評審 |
+| 4 | 商業分析 | 9 | `swot_analysis` SWOT / `business_plan` 商業計畫 / `competitive_analysis` 競爭分析 |
+| 5 | 市場行銷 | 13 | `marketing_strategy` 行銷策略 / `ad_copy` 廣告文案 / `social_media_content` 社媒內容 |
+| 6 | 法律與合規 | 11 | `contract_review` 合約審查 / `contract_clause` 合約條款 / `compliance_checklist` 合規清單 |
+| 7 | 醫療與健康 | 8 | `symptom_analysis` 症狀分析 / `medication_guide` 用藥說明 / `treatment_plan` 治療方案 |
+| 8 | 教育與培訓 | 10 | `lesson_plan` 教案 / `quiz_generation` 測驗生成 / `explain_concept` 概念講解 |
+| 9 | 金融與投資 | 11 | `investment_analysis` 投資分析 / `budget_planning` 預算規劃 / `financial_report` 財務報告 |
+| 10 | 資料科學 | 11 | `eda_plan` 探索性分析 / `model_selection` 模型選擇 / `sql_query` SQL 查詢 |
+| 11 | 設計與創意 | 11 | `ux_review` UX 評審 / `design_brief` 設計簡報 / `accessibility_audit` 無障礙審計 |
+| 12 | 系統維運 | 10 | `incident_response` 故障回應 / `monitoring_setup` 監控設定 / `security_hardening` 安全加固 |
+| 13 | 效率提升 | 8 | `requirements_breakdown` 需求拆解 / `prd_draft` PRD 草稿 / `meeting_minutes` 會議紀要 |
+| 14 | 工程交付 | 6 | `release_notes` 發布說明 / `rca_report` 根因報告 / `rollback_plan` 回滾計畫 |
+| 15 | 營運支援 | 6 | `customer_reply` 客服回覆 / `kb_article` 知識庫文章 / `faq_builder` FAQ 生成 |
+| 16 | Go-On 代理技能 | 5 | `skill_discovery` 技能發現 / `tool_selection` 工具選擇 / `best_practices` 代理最佳實踐 |
 
 ---
 
@@ -93,24 +97,24 @@ prompts/
 
 範例：
 - `/explain_code` — 解釋選中的程式碼
-- `/review_code` — 審查程式碼品質
-- `/generate_test Rust` — 為 Rust 程式碼生成單元測試
-- `/write_article topic: AI 趨勢` — 撰寫指定主題的文章
+- `/code_review` — 審查程式碼品質
+- `/generate_unit_test Rust` — 為 Rust 程式碼生成單元測試
+- `/blog_post_outline topic: AI 趨勢` — 撰寫指定主題的文章
 
 ### 常用指令
 
 | 指令 | 功能 |
 |------|------|
 | `/explain_code` | 解釋選中的程式碼 |
-| `/review_code` | 審查程式碼品質 |
-| `/optimize_code` | 最佳化程式碼效能 |
-| `/generate_test` | 生成單元測試 |
-| `/refactor_code` | 重構程式碼 |
-| `/write_doc` | 編寫文件註解 |
-| `/write_article` | 撰寫文章 |
-| `/market_analysis` | 市場分析 |
+| `/code_review` | 審查程式碼品質 |
+| `/refactor_suggestion` | 重構建議 |
+| `/generate_unit_test` | 生成單元測試 |
+| `/debug_error` | 除錯錯誤 |
+| `/generate_documentation` | 編寫文件註解 |
+| `/blog_post_outline` | 撰寫文章大綱 |
+| `/marketing_strategy` | 行銷策略 |
 | `/contract_review` | 合約審查 |
-| `/data_analysis` | 資料分析 |
+| `/literature_review` | 文獻綜述 |
 
 輸入 `/` 時，系統會顯示自動補全列表，支援模糊搜尋、類別篩選和完整範本 ID 比對。
 
@@ -166,7 +170,7 @@ prompts/
 | `prompts_list` | 列出所有可用的提示詞範本 |
 | `prompts_get` | 取得指定範本的詳細內容 |
 
-AI 代理透過 MCP 協定發現這些工具，並可在對話過程中自動選擇和應用合適的範本。例如，當使用者說"幫我審查這段程式碼"時，AI 代理可以自動呼叫 `prompts_get` 取得 `review_code` 範本並應用到回覆中。
+AI 代理透過 MCP 協定發現這些工具，並可在對話過程中自動選擇和應用合適的範本。例如，當使用者說"幫我審查這段程式碼"時，AI 代理可以自動呼叫 `prompts_get` 取得 `code_review` 範本並應用到回覆中。
 
 ---
 

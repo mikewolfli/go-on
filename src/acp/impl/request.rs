@@ -88,7 +88,7 @@ mod lifecycle_handlers;
 mod lifecycle_pack;
 mod metrics_pack;
 pub mod prompts_pack;
-mod protocol;
+pub(crate) mod protocol;
 pub(crate) mod protocol_pack;
 pub(crate) use self::trace_pack::tool_budget_trackers;
 mod pua_pack;
@@ -372,7 +372,7 @@ pub async fn handle_request(
             return send_error(
                 server,
                 request.id,
-                -32000,
+                AcpErrorCode::ServerError as i32,
                 "Request signing is enabled but no verification key is configured".into(),
                 Some(serde_json::json!({
                     "code": "SIGNING_CONFIG_ERROR",
@@ -546,7 +546,7 @@ pub async fn handle_request(
         return send_error(
             server,
             request.id,
-            -32003,
+            AcpErrorCode::PuaViolation as i32,
             tf(
                 "error.request.pua_red_line_violation",
                 &[("detail", &violation.detail)],
@@ -602,7 +602,7 @@ pub async fn handle_request(
                 return send_error(
                     server,
                     request.id,
-                    -32003,
+                    AcpErrorCode::PuaViolation as i32,
                     tf(
                         "error.request.pua_stage_violation",
                         &[("detail", &violation.detail)],
@@ -636,7 +636,7 @@ pub async fn handle_request(
         return send_error(
             server,
             request.id,
-            -32000,
+            AcpErrorCode::ServerError as i32,
             "Server is shutting down".into(),
             Some(serde_json::json!({
                 "code": "SERVER_DRAINING",
@@ -2318,9 +2318,37 @@ mod tests {
         // Tool methods (registered in MethodRouter and ACP_METHODS list)
         assert!(is_acp_request("tools/list"));
         assert!(is_acp_request("tools/call"));
+        // Terminal + approval methods live in the sorted ACP_METHODS list;
+        // binary_search depends on the list staying alphabetically sorted, so
+        // these were previously unreachable in ACP mode (see log 20260806-7).
+        assert!(is_acp_request("terminal/create"));
+        assert!(is_acp_request("terminal/kill"));
+        assert!(is_acp_request("terminal/output"));
+        assert!(is_acp_request("terminal/wait_for_exit"));
+        assert!(is_acp_request("tool.approve"));
         // Unknown methods return false
         assert!(!is_acp_request("unknown.method"));
         assert!(!is_acp_request(""));
+    }
+
+    #[test]
+    fn acp_methods_list_is_sorted_for_binary_search() {
+        // The production `is_acp_request` uses `binary_search`, which silently
+        // misses entries when the list is not alphabetically sorted (this made
+        // `tool.approve` / `terminal/kill` unreachable in ACP mode — see
+        // log 20260806-7 round-2 regression verification). Assert the invariant
+        // against the real list to prevent silent regressions.
+        let list = super::protocol::ACP_METHODS;
+        let mut prev: Option<&str> = None;
+        for entry in list {
+            if let Some(p) = prev {
+                assert!(
+                    p < entry,
+                    "ACP_METHODS out of order: {p:?} must sort before {entry:?}"
+                );
+            }
+            prev = Some(entry);
+        }
     }
 
     #[test]

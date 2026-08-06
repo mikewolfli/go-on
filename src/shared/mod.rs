@@ -43,6 +43,18 @@ pub fn sha256_bytes(data: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
+/// Raw HMAC-SHA256 digest (RFC 2104) of `data` with the given `key`.
+///
+/// Single shared primitive for every compute-side HMAC use (token signing,
+/// request signatures, etc.). Verification callers must keep their own
+/// constant-time comparison (`verify_slice`) on top of this.
+pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+    use hmac::{digest::KeyInit, Mac};
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
+}
+
 /// Hex-encoded SHA-256 digest of `data`.
 pub fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};

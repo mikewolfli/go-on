@@ -1109,49 +1109,49 @@
         "description": "解读支持指标并给出改进动作",
         "content": "分析以下客服指标并输出可执行复盘。覆盖：工单量趋势、响应时长、解决时长、满意度、积压健康度、主要根因和优先改进动作。\n\n{{input}}",
         "tags": ["指标", "KPI", "持续改进"]
-      },
-      {
-        "id": "goon_agent",
-        "name": "Go-On 代理技能",
-        "icon": "🤖",
-        "templates": [
-          {
-            "id": "skill_discovery",
-            "title": "技能发现",
-            "description": "根据任务需求查找和选择技能",
-            "content": "从技能注册表中为以下任务找到最佳技能。根据技能名称、描述和标签确定最佳匹配。使用 skill_list 浏览可用技能，使用 discover_skills 查找与任务描述匹配的技能。推荐前三名技能并解释每个技能的相关性。\n\n任务：{{input}}",
-            "tags": ["技能", "发现", "go-on", "代理"]
-          },
-          {
-            "id": "tool_selection",
-            "title": "工具选择指南",
-            "description": "从注册表中选择合适的工具",
-            "content": "从 go-on 工具注册表中为以下请求选择最合适的工具。考虑工具的能力、风险级别、超时预算和回退链。优先使用 async run_async 而非 sync run 以实现非阻塞执行。如果任务涉及文件操作，应优先使用 ReadFile/WriteFile 而非 shell 命令。\n\n请求：{{input}}",
-            "tags": ["工具", "选择", "go-on", "注册表"]
-          },
-          {
-            "id": "cache_layer_info",
-            "title": "缓存层概述",
-            "description": "了解缓存系统以优化性能",
-            "content": "解释 go-on 缓存架构。涵盖：GovernanceCache（会话+工具权限缓存）、FastPathCache（任务解析、技能发现、环境检查缓存，基于指纹的键值和 TTL）以及 CacheLayer trait 和 CacheMetricsCollector 用于聚合。如需查看指标，使用 get_aggregate_cache_stats 查看缓存效率。\n\n查询：{{input}}",
-            "tags": ["缓存", "性能", "go-on", "指标"]
-          },
-          {
-            "id": "pipeline_flow",
-            "title": "Full-Auto 流水线流程",
-            "description": "了解 FullAutoFlow 如何处理端到端任务",
-            "content": "解释 FullAutoFlow 流水线：任务输入 → FastPathCache（意图解析、技能发现、环境检查）→ 通过 SkillRegistry::discover_skills 进行技能匹配 → 执行环境准备 → 带并发限制的并行技能执行 → 生成带成功/失败追踪的报告。使用 cache_metrics 快照监控流水线效率。\n\n查询：{{input}}",
-            "tags": ["流水线", "全自动", "go-on", "技能"]
-          },
-          {
-            "id": "best_practices",
-            "title": "代理最佳实践",
-            "description": "优化 Go-On 代理行为",
-            "content": "提供 go-on 代理操作最佳实践。涵盖：1）优先使用 skill_execute/skill_list 进行可复用能力而非临时工具链。2）使用 loop_executor 进行迭代式思考-行动-观察循环。3）利用 brain_loop 进行规划-执行-反思迭代和深度推理。4）在 FastPathCache 中为重复任务模式注册自定义路由。5）使用 CacheLayer trait 暴露缓存指标用于治理。\n\n场景：{{input}}",
-            "tags": ["最佳实践", "go-on", "代理", "优化"]
-          }
-        ]
       }
+    ]
+  },
+  {
+    "id": "goon_agent",
+    "name": "Go-On 代理技能",
+    "icon": "🤖",
+    "templates": [
+        {
+          "id": "skill_discovery",
+          "title": "技能发现",
+          "description": "根据任务需求查找和选择技能",
+          "content": "从技能注册表中为以下任务找到最佳技能。根据技能名称、描述和标签确定最佳匹配。使用 skill_list 浏览可用技能，使用 discover_skills 查找与任务描述匹配的技能。推荐前三名技能并解释每个技能的相关性。\n\n任务：{{input}}",
+          "tags": ["技能", "发现", "go-on", "代理"]
+        },
+        {
+          "id": "tool_selection",
+          "title": "工具选择指南",
+          "description": "从注册表中选择合适的工具",
+          "content": "从 go-on 工具注册表中为以下请求选择最合适的工具。考虑工具的能力、风险级别、超时预算和回退链。优先使用 async run_async 而非 sync run 以实现非阻塞执行。如果任务涉及文件操作，应优先使用 ReadFile/WriteFile 而非 shell 命令。\n\n请求：{{input}}",
+          "tags": ["工具", "选择", "go-on", "注册表"]
+        },
+        {
+          "id": "cache_layer_info",
+          "title": "缓存层概述",
+          "description": "了解缓存系统以优化性能",
+          "content": "解释 go-on 缓存架构。涵盖：GovernanceCache（会话+工具权限缓存）、FastPathCache（任务解析、技能发现、环境检查缓存，基于指纹的键值和 TTL）以及 CacheLayer trait 和 CacheMetricsCollector 用于聚合。如需查看指标，使用 get_aggregate_cache_stats 查看缓存效率。\n\n查询：{{input}}",
+          "tags": ["缓存", "性能", "go-on", "指标"]
+        },
+        {
+          "id": "pipeline_flow",
+          "title": "Full-Auto 流水线流程",
+          "description": "了解 FullAutoFlow 如何处理端到端任务",
+          "content": "解释 FullAutoFlow 流水线：任务输入 → FastPathCache（意图解析、技能发现、环境检查）→ 通过 SkillRegistry::discover_skills 进行技能匹配 → 执行环境准备 → 带并发限制的并行技能执行 → 生成带成功/失败追踪的报告。使用 cache_metrics 快照监控流水线效率。\n\n查询：{{input}}",
+          "tags": ["流水线", "全自动", "go-on", "技能"]
+        },
+        {
+          "id": "best_practices",
+          "title": "代理最佳实践",
+          "description": "优化 Go-On 代理行为",
+          "content": "提供 go-on 代理操作最佳实践。涵盖：1）优先使用 skill_execute/skill_list 进行可复用能力而非临时工具链。2）使用 loop_executor 进行迭代式思考-行动-观察循环。3）利用 brain_loop 进行规划-执行-反思迭代和深度推理。4）在 FastPathCache 中为重复任务模式注册自定义路由。5）使用 CacheLayer trait 暴露缓存指标用于治理。\n\n场景：{{input}}",
+          "tags": ["最佳实践", "go-on", "代理", "优化"]
+        }
     ]
   }
 ]

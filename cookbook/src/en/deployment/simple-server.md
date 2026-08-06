@@ -12,8 +12,8 @@ Simple Server mode (`simple-server`) is designed for single-server deployments t
 - **Improved performance**: Optimized for server workloads
 - **Better reliability**: Enhanced error handling and recovery
 - **Production readiness**: Suitable for small-scale production use
-- **Full Phase 4 architecture**: All 7 feature-gated sub-buses and 21 F-GAP modules, including AgentFactory and OrchestrationCouncil
-- **Conditionally compiled modules**: AgentFactory and Council are gated with `#[cfg(feature = "simple-server")]`
+- **Full sub-bus architecture**: All 7 feature-gated sub-buses (including distributed-memory), per `Cargo.toml`
+- **Conditionally compiled modules**: `DistributedMemoryBus` is gated with `#[cfg(feature = "sub-bus-distributed-memory")]` (enabled by the `simple-server` profile)
 
 ### Architecture
 ```
@@ -27,10 +27,10 @@ Simple Server Architecture:
 ## Configuration
 
 ### Server Configuration
-Create `config/simple-server.toml`:
+Create `config/config.simple-server.toml`:
 
 ```toml
-# config/simple-server.toml
+# config/config.simple-server.toml
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
@@ -54,18 +54,21 @@ max_entries = 20000
 [vector]
 enabled = true
 auto_mode = false  # Require sqlite-vec
-use_json_fallback = false
 path = "/var/lib/go-on/vector.sqlite3"
 dimensions = 384  # Higher dimensions for better accuracy
 top_k = 5
 min_similarity = 0.75
 
-[observability]
+# OpenTelemetry settings live under [runtime]
+[runtime]
 otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
-metrics_port = 9090
 ```
+
+> Note: there is no separate `[observability]` or `[metrics]` section. OpenTelemetry
+> settings belong to `[runtime]`, and Prometheus metrics are served at `GET /metrics`
+> on the ACP HTTP port (8090).
 
 ### Feature Flags
 Simple Server mode requires:
@@ -104,7 +107,7 @@ Group=go-on
 WorkingDirectory=/opt/go-on
 Environment="GO_ON_SERVER_API_KEY=your-api-key-here"
 Environment="RUST_LOG=info"
-ExecStart=/opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+ExecStart=/opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
@@ -122,7 +125,7 @@ sudo mkdir -p /opt/go-on /var/lib/go-on /var/log/go-on
 sudo chown -R go-on:go-on /opt/go-on /var/lib/go-on /var/log/go-on
 
 # Copy configuration
-sudo cp config/simple-server.toml /opt/go-on/config/
+sudo cp config/config.simple-server.toml /opt/go-on/config/
 sudo cp scripts/start-go-on.sh /opt/go-on/
 sudo chmod +x /opt/go-on/start-go-on.sh
 ```
@@ -130,10 +133,10 @@ sudo chmod +x /opt/go-on/start-go-on.sh
 ### Database Initialization
 ```bash
 # Initialize as go-on user
-sudo -u go-on /opt/go-on/go-on --init --config /opt/go-on/config/simple-server.toml
+sudo -u go-on /opt/go-on/go-on --init --config /opt/go-on/config/config.simple-server.toml
 
 # Check configuration
-sudo -u go-on /opt/go-on/go-on --check --config /opt/go-on/config/simple-server.toml
+sudo -u go-on /opt/go-on/go-on --check --config /opt/go-on/config/config.simple-server.toml
 ```
 
 ### User and Permissions
@@ -165,10 +168,10 @@ sudo journalctl -u go-on -f
 ### Manual Start
 ```bash
 # As go-on user
-sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 
 # With environment variables
-GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 ```
 
 ### Health and Monitoring
@@ -176,11 +179,8 @@ GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-
 # Health endpoint
 curl http://localhost:8090/health
 
-# Metrics endpoint
-curl http://localhost:9090/metrics
-
-# Prometheus metrics
-curl http://localhost:9090/metrics/prometheus
+# Prometheus metrics (text format, served on the ACP HTTP port)
+curl http://localhost:8090/metrics
 ```
 
 ## Network Configuration
@@ -189,9 +189,6 @@ curl http://localhost:9090/metrics/prometheus
 ```bash
 # Allow HTTP port
 sudo ufw allow 8090/tcp
-
-# Allow metrics port
-sudo ufw allow 9090/tcp
 
 # Enable firewall
 sudo ufw enable
@@ -260,7 +257,7 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 ".backup $BACKUP_DIR/cache-$D
 sudo -u go-on sqlite3 /var/lib/go-on/vector.sqlite3 ".backup $BACKUP_DIR/vector-$DATE.sqlite3"
 
 # Backup configuration
-cp /opt/go-on/config/simple-server.toml $BACKUP_DIR/config-$DATE.toml
+cp /opt/go-on/config/config.simple-server.toml $BACKUP_DIR/config-$DATE.toml
 
 # Rotate old backups (keep 30 days)
 find $BACKUP_DIR -name "*.sqlite3" -mtime +30 -delete
@@ -278,31 +275,11 @@ df -h /var/lib/go-on
 
 ## Performance Tuning
 
-### Memory Optimization
-```toml
-[runtime]
-# Adjust based on server memory
-cache_max_memory_mb = 1024
-vector_max_memory_mb = 2048
-max_connections = 100
-```
-
-### Concurrency Settings
-```toml
-[concurrency]
-max_inflight_requests = 100
-max_parallel_tasks = 16
-worker_threads = 8
-```
-
-### Timeout Configuration
-```toml
-[timeouts]
-request_timeout_seconds = 180
-health_check_timeout_seconds = 10
-shutdown_timeout_seconds = 120
-database_timeout_seconds = 30
-```
+### Memory and concurrency
+Concurrency limits are configured per phase via `[phases.<name>.options]`
+(`phase_max_inflight` / `global_max_inflight`) and entry rate limits via
+`[runtime]` (`entry_rate_limit_rpm` / `entry_rate_limit_burst`). There are no
+`[concurrency]` or `[timeouts]` top-level sections.
 
 ## Security
 
@@ -316,43 +293,38 @@ keyring set go-on server-api-key
 ```
 
 ### Rate Limiting
+Entry-layer rate limits are configured in `[runtime]`:
+
 ```toml
-[security]
-rate_limit_enabled = true
-rate_limit_rpm = 1000
-rate_limit_burst = 200
-rate_limit_by_ip = true
+[runtime]
+entry_rate_limit_rpm = 1000
+entry_rate_limit_burst = 200
 ```
 
 ### Access Control
+CORS origins and entry auth are configured in `[runtime]`:
+
 ```toml
-[access]
-allowed_ips = ["192.168.1.0/24", "10.0.0.0/8"]
-blocked_ips = []
-require_https = true
+[runtime]
+entry_auth_enabled = true
+entry_auth_api_key_env = "GO_ON_SERVER_API_KEY"
 cors_allowed_origins = ["https://your-domain.com"]
 ```
 
+> There is no `[security]` or `[access]` section. IP allow/block lists and an
+> HTTPS enforcement toggle are not supported; use a firewall / reverse proxy
+> for those controls.
+
 ## Monitoring and Logging
 
-### Log Configuration
-```toml
-[logging]
-level = "info"
-file_path = "/var/log/go-on/go-on.log"
-max_file_size_mb = 100
-max_files = 10
-json_format = true
-```
+### Logging
+Set the log level via the `RUST_LOG` environment variable (or `--verbose`); there
+is no `[logging]` section. Logs go to stderr and can be redirected by systemd or
+a log manager.
 
 ### Metrics Collection
-```toml
-[metrics]
-enabled = true
-port = 9090
-path = "/metrics"
-collect_interval_seconds = 30
-```
+Prometheus-format metrics are served at `GET /metrics` on the ACP HTTP port (8090)
+— no separate metrics port is needed.
 
 ### Alerting
 ```bash
@@ -386,12 +358,13 @@ groups:
 ## Migration
 
 ### From Local Mode
-```bash
-# Export data from local mode
-cargo run -- --export --config config/config.toml --output local-export.json
+The SQLite data files (`cache.sqlite3`, `vector.sqlite3`) can be copied directly
+from the local machine to the server (go-on has no `--export`/`--import` CLI):
 
-# Import to simple server
-sudo -u go-on /opt/go-on/go-on --import --config /opt/go-on/config/simple-server.toml --input local-export.json
+```bash
+# Stop both instances, then copy the data files
+scp ./sqlite3/acp_cache.sqlite3 go-on@server:/var/lib/go-on/cache.sqlite3
+scp ./sqlite3/acp_vector.sqlite3 go-on@server:/var/lib/go-on/vector.sqlite3
 ```
 
 ### Backup and Restore
@@ -417,7 +390,7 @@ sudo ls -la /opt/go-on/
 sudo ls -la /var/lib/go-on/
 
 # Test manually
-sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml --dry-run
+sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml --validate-config
 ```
 
 #### Database Issues

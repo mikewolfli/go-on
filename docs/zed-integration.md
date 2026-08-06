@@ -19,15 +19,17 @@ communicate with go-on via the Agent Communication Protocol (ACP).
     "go-on": {
       "command": {
         "command": "go-on",
-        "args": ["--protocol-mode", "acp_stdio"],
-        "env": {
-          "GO_ON_CONFIG": "/path/to/your/config.toml"
-        }
+        "args": ["--protocol-mode", "acp_stdio", "--config", "/path/to/your/config.toml"]
       }
     }
   }
 }
 ```
+
+> The `--config` flag points at go-on's `config.toml`. If it is omitted, go-on
+> resolves `./config.toml` in the working directory, then
+> `~/.config/go-on/config.toml` (Linux/macOS) or `%APPDATA%\go-on\config.toml`
+> (Windows). There is no `GO_ON_CONFIG` environment variable.
 
 3. Open the AI panel (`Ctrl+Enter`), select **"go-on"** from the agent dropdown, and start
    chatting.
@@ -80,13 +82,14 @@ cycle triggers a full restart.
           "--protocol-mode",
           "acp_stdio",
           "-b",
-          "127.0.0.1:8090"
+          "127.0.0.1:8090",
+          "--config",
+          "/home/user/.goon/config.toml"
         ],
         "env": {
           "OPENAI_API_KEY": "sk-...",
           "ANTHROPIC_API_KEY": "sk-ant-...",
-          "DEEPSEEK_API_KEY": "sk-...",
-          "GO_ON_CONFIG": "/home/user/.goon/config.toml"
+          "DEEPSEEK_API_KEY": "sk-..."
         }
       }
     }
@@ -105,7 +108,7 @@ cycle triggers a full restart.
 | `--protocol-mode acp_stdio` | ACP over stdio **(required for Zed)** |
 | `-b 127.0.0.1:8090` | Optional HTTP bind address for health checks / metrics |
 | `--verbose` | Enable verbose logging to stderr (useful for debugging) |
-| `--config <path>` | Path to go-on's `config.toml` (alternative to `GO_ON_CONFIG` env var) |
+| `--config <path>` | Path to go-on's `config.toml` |
 
 ### Environment Variables
 
@@ -114,8 +117,7 @@ cycle triggers a full restart.
 | `OPENAI_API_KEY` | API key for OpenAI models |
 | `ANTHROPIC_API_KEY` | API key for Anthropic models |
 | `DEEPSEEK_API_KEY` | API key for DeepSeek models |
-| `GO_ON_CONFIG` | Path to the go-on configuration file |
-| `GOON_LOG` | Log level (e.g., `debug`, `info`, `warn`, `error`) |
+| `RUST_LOG` | Log level directive (e.g., `debug`, `info`, `warn`, `error`) |
 
 Only set the environment variables you actually need for the models you intend to use.
 
@@ -143,7 +145,8 @@ before invoking tools.
 go-on can serve two roles simultaneously:
 
 - **ACP stdio** (required by Zed) — used for agent communication.
-- **HTTP server** (optional) — serves the go-on web GUI and exposes health/metrics endpoints.
+- **HTTP server** (optional) — exposes JSON endpoints on the ACP HTTP port
+  (`/health`, `/metrics`, `/v1/models`, etc.). It does **not** serve a web GUI.
 
 When you pass `-b 127.0.0.1:8090`, go-on starts an HTTP server on that address while still
 communicating with Zed over stdio. This is useful for monitoring or debugging.
@@ -155,7 +158,9 @@ communicating with Zed over stdio. This is useful for monitoring or debugging.
 }
 ```
 
-You can then visit `http://127.0.0.1:8090` in your browser to access the go-on web GUI.
+You can then poll `http://127.0.0.1:8090/health` (or other JSON endpoints such
+as `/metrics` or `/v1/models`) from your browser or `curl`. The HTTP server
+returns JSON only — there is no web GUI.
 
 ---
 
@@ -203,12 +208,12 @@ curl http://127.0.0.1:8090/health
 | Agent not appearing in dropdown | `go-on` not on `PATH` | Use an absolute path for `"command"` |
 | Connection refused | Wrong `--protocol-mode` | Make sure `--protocol-mode acp_stdio` is set |
 | Empty response / timeout | Missing API keys | Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in `env` |
-| `config.toml` not found | Wrong path | Set `GO_ON_CONFIG` or pass `--config` |
+| `config.toml` not found | Wrong path | Pass `--config <path>` (there is no `GO_ON_CONFIG` env var) |
 | Verbose errors on stderr | Need debugging | Add `"--verbose"` to `args` |
 
 ### Enabling debug logging
 
-Add `"--verbose"` to the `args` array and set `"GOON_LOG": "debug"` in `env`. Then check Zed's
+Add `"--verbose"` to the `args` array and set `"RUST_LOG": "debug"` in `env`. Then check Zed's
 agent server logs via **"Zed: Open Log"** → select the agent server log file.
 
 ---

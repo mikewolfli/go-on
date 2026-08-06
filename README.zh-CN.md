@@ -32,7 +32,7 @@ go-on 是一个**本地优先**、生产级的 AI 智能体编排运行时，使
 - 🔌 将 AI 模型连接到 MCP 服务器，或作为 MCP 服务器运行
 - 🛡️ 通过 RBAC、审计追踪和风险评估执行治理策略
 - 📊 通过 SSE 面板实时监控子代理执行和命令输出
-- 🧩 通过 VS Code 插件、技能市场（18 个技能）或 Rust/Python/TypeScript SDK 扩展
+- 🧩 通过 VS Code 插件、技能市场（33 个技能）或 Rust/Python/TypeScript SDK 扩展
 
 ## 快速开始
 
@@ -85,7 +85,7 @@ cargo run -- --protocol-mode mcp_stdio
 - **快路径缓存** — SHA-256 指纹索引、TTL/LRU 淘汰、四层缓存（意图/技能/环境/路由）
 - **多模型投票** — 高风险决策的并发智能体投票（多数/加权/一致/融合）
 
-### AI 供应商支持（38 家）
+### AI 供应商支持（37 家）
 OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · Copilot · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · 文心 · 西湖
 
 OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Function Call。
@@ -93,7 +93,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 ### 协议与传输
 - **ACP**（Agent Client Protocol）— stdio + HTTP，JSON-RPC 2.0
 - **MCP**（Model Context Protocol）— stdio + HTTP，工具列表/调用、流式传输、取消、超时
-- **5 种传输模式**：`adaptive`（双栈）、`acp-stdio`、`acp-http`、`mcp-stdio`、`mcp-http`
+- **5 种传输模式**：`adaptive`（双栈）、`acp_stdio`、`acp_http`、`mcp_stdio`、`mcp_http`
 - **SSE 流式传输协议** — chunk、done、telemetry、error、state_sync、sub_agent、command + Responses API 事件
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
@@ -153,8 +153,8 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **OTel** — 通过 OTLP collector 的分布式追踪（默认：`localhost:4317`）
 - **三语国际化** — 英文、简体中文、繁体中文，覆盖后端/GUI/VS Code 约 95%
 
-### 技能市场（18 个技能）
-- **内置技能**：api-docs-generator、changelog-generator、ci-pipeline-generator、code-reviewer、commit-message-generator、data-transformer、dependency-analyzer、dockerfile-generator、knowledge-retriever、log-analyzer、prompt-optimizer、refactoring-advisor、regex-builder、skill-creator、sql-query-helper、task-planner、test-generator、web-scraper
+### 技能市场（33 个技能）
+- **内置技能**：code-reviewer、commit-message-generator、refactoring-advisor、test-generator、api-docs-generator、changelog-generator、ci-pipeline-generator、context-summarizer、data-transformer、decision-logger、dependency-analyzer、dockerfile-generator、error-recovery-planner、knowledge-retriever、log-analyzer、progress-tracker、prompt-optimizer、regex-builder、self-reviewer、skill-creator、sql-query-helper、task-planner、web-scraper、code-execution-sandbox、project-analyzer、api-tester、semantic-diff、note-taking、classify-text、summarize-text、translate-text、review-pr、embed-text
 - **从 GitHub/URL/本地导入** — SkillImportStore 获取并验证 SKILL.md 清单
 - **自动发现** — 启动时扫描 `~/.agents/skills/` 目录
 
@@ -167,8 +167,8 @@ go-on 采用**子总线能力架构** —— 7 个特性门控子总线（tool�
 > 子总线特性门控定义在 `Cargo.toml`：`sub-bus-tool`、
 > `sub-bus-orchestration`、`sub-bus-observability`、`sub-bus-optimization`、
 > `sub-bus-memory`、`sub-bus-protocol` 和 `sub-bus-distributed-memory`。
-> `local` 配置启用核心四项（tool、orchestration、observability、optimization）；
-> `simple-server` 增加 distributed-memory；`multi-users-server` 启用全部七项。
+> `local` 配置启用六个子总线（tool、orchestration、observability、optimization、memory、protocol）；
+> `simple-server` 与 `multi-users-server` 额外启用 distributed-memory（全部七项）。
 > 下图将上述子总线归组为上层能力模块。
 
 ```
@@ -191,7 +191,7 @@ go-on 采用**子总线能力架构** —— 7 个特性门控子总线（tool�
 
 ### 请求处理分发
 
-所有 122+ 个 JSON-RPC handler 返回统一的 `DispatchOutput` 枚举，dispatch 层自动序列化为对应的传输响应：
+所有 148 个 JSON-RPC handler 返回统一的 `DispatchOutput` 枚举，dispatch 层自动序列化为对应的传输响应：
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain
@@ -242,7 +242,6 @@ GUI/CLI → POST /chat/stream → 后端
 | **SelfModelCore 自模型** | 系统自感知与能力追踪 |
 | **MetacognitiveController 元认知** | 观察驱动的反思与纠偏 |
 | **WorldModel 世界模型** | 实体/事件/关系追踪，含因果洞察 |
-| **FederatedRL 联邦强化学习** | 跨节点的分布式强化学习 |
 | **HyperResilience 超弹性** | 熔断器、故障切换组、自愈 |
 | **MultiChannelTransport 多渠道传输** | QoS 感知、优先级消息传输 |
 
@@ -280,8 +279,8 @@ npm run compile
 | SDK（Rust + Python + Node.js + TypeScript）代码行数 | ~4K |
 | 内置工具数量 | 60+ |
 | AI 供应商数量 | 37 |
-| 技能市场数量 | 37 |
-| 单元测试数量 | ~1.7K（见下方验证状态）|
+| 技能市场数量 | 33 |
+| 单元测试数量 | ~3.5K（见下方验证状态）|
 | 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
@@ -305,12 +304,12 @@ cargo build --no-default-features --features full
 
 | 配置 | `cargo clippy -D warnings` | 测试状态 |
 |:-----|:--------------------------:|:--------:|
-| `local` | ✅ **零警告** | ✅ **1663 通过，1 个已知失败** |
+| `local` | ✅ **零警告** | ✅ **全部通过** |
 | `simple-server` | ✅ **零警告** | ✅ **全部通过** |
 | `multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
 | `full` | ✅ **零警告** | ✅ **全部通过** |
 
-所有 4 种构建配置零 clippy 警告通过。最近一次 `cargo test`（默认 `local` 配置）除 `governance::security_governor::tests::test_profile_reflects_state` 一处既有失败外全部通过（见 `src/governance/security_governor.rs`）。GUI 和 VS Code 插件同样零错误编译通过。
+所有 4 种构建配置零 clippy 警告通过。最近一次完整 `cargo test --all-targets` 运行全部通过、零失败（最新计数见 `CHANGELOG.md` 最新一节）。GUI 和 VS Code 插件同样零错误编译通过。
 
 ---
 

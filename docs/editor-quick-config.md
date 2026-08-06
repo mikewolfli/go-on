@@ -10,10 +10,9 @@ Use go-on as an AI agent in any editor. Copy the config snippet for your editor 
     "servers": {
       "go-on": {
         "command": "go-on",
-        "args": ["--protocol-mode", "mcp_stdio"],
+        "args": ["--protocol-mode", "mcp_stdio", "--config", "/home/user/.goon/config.toml"],
         "env": {
-          "OPENAI_API_KEY": "sk-...",
-          "GO_ON_CONFIG": "/home/user/.goon/config.toml"
+          "OPENAI_API_KEY": "sk-..."
         }
       }
     }

@@ -34,7 +34,6 @@
 │   ├── ACP HTTP 服務器（端口 8090）：CORS → 入口認證 → 用戶認證 → RBAC → 路由
 │   └── MCP HTTP 服務器（端口 8090）：CORS → 入口認證 → 用戶認證 → RBAC → 分發
 ├── 數據庫層：帶 pgvector 的 PostgreSQL
-├── 緩存層：Redis（可選）
 ├── 負載均衡器：流量分發
 ├── 監控：Prometheus、Grafana、ELK
 └── 備份：自動化備份系統
@@ -52,10 +51,10 @@
 ## 配置
 
 ### 服務器配置
-創建 `config/multi-users-server.toml`：
+創建 `config/config.multi-users-server.toml`：
 
 ```toml
-# config/multi-users-server.toml
+# config/config.multi-users-server.toml
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
@@ -87,35 +86,33 @@ tenant_default_daily_token_limit = 1000000
 tenant_default_concurrent_tasks = 10
 tenant_default_daily_api_calls = 10000
 
-[database]
-type = "postgres"
-host = "localhost"
-port = 5432
-database = "go_on_production"
-username_env = "GO_ON_DB_USERNAME"
-password_env = "GO_ON_DB_PASSWORD"
-pool_size = 20
-connection_timeout_seconds = 30
-ssl_mode = "prefer"
-
-[cache]
-enabled = true
-type = "database"  # 使用 PostgreSQL 作為緩存
-
-[vector]
-enabled = true
-type = "pgvector"
-dimensions = 768
-top_k = 10
-min_similarity = 0.7
-
-[observability]
+# ── OpenTelemetry（位於 [runtime] 內）───────────────────────
 otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
-metrics_port = 9090
-tracing_sampling_rate = 0.1
+otel_sample_ratio = 0.1
+
+[cache]
+enabled = true
+# PostgreSQL 連線（multi-users-server）：設定 postgres:// URL。
+# 範例："postgres://user:pass@host:5432/goon_cache?sslmode=verify-full"
+# connection_string = "postgres://..."
+# read_replica_connection_string = "postgres://..."
+
+[vector]
+enabled = true
+# pgvector 連線（multi-users-server）：設定 postgres:// URL。
+# 範例："postgres://user:pass@host:5432/goon_vector?sslmode=verify-full"
+# connection_string = "postgres://..."
+dimensions = 768
+top_k = 10
+min_similarity = 0.7
 ```
+
+> 不存在 `[database]` 或 `[observability]` 區段。PostgreSQL 連線透過
+> `cache.connection_string` / `vector.connection_string` 設定，OpenTelemetry
+> 設定位於 `[runtime]` 內。Prometheus 指標由 ACP HTTP 連接埠（8090）的
+> `GET /metrics` 提供。
 
 ### 特性標誌
 多用戶服務器模式需要：
@@ -185,33 +182,22 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-
   go-on:
     build:
       context: .
       dockerfile: Dockerfile.multi-users
     environment:
-      GO_ON_DB_USERNAME: go_on
-      GO_ON_DB_PASSWORD: ${DB_PASSWORD}
       GO_ON_ENTRY_API_KEY: ${ENTRY_API_KEY}
       RUST_LOG: info
     ports:
       - "8090:8090"
-      - "9090:9090"
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     volumes:
-      - ./config/multi-users-server.toml:/app/config.toml
+      # 掛載的設定必須設定 cache.connection_string / vector.connection_string
+      # 為 postgres URL（例如 postgres://go_on:${DB_PASSWORD}@postgres:5432/go_on_production）。
+      - ./config/config.multi-users-server.toml:/app/config.toml
       - ./logs:/app/logs
 
   prometheus:
@@ -234,7 +220,6 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   prometheus_data:
   grafana_data:
 ```
@@ -365,19 +350,7 @@ spec:
         ports:
         - containerPort: 8090
           name: http
-        - containerPort: 9090
-          name: metrics
         env:
-        - name: GO_ON_DB_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: go-on-secrets
-              key: db-username
-        - name: GO_ON_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: go-on-secrets
-              key: db-password
         - name: GO_ON_ENTRY_API_KEY
           valueFrom:
             secretKeyRef:
@@ -415,9 +388,6 @@ spec:
   - port: 80
     targetPort: 8090
     name: http
-  - port: 9090
-    targetPort: 9090
-    name: metrics
   type: LoadBalancer
 ```
 
@@ -585,7 +555,6 @@ let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot
 # 防火牆規則
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
-sudo ufw allow 6379/tcp  # Redis
 sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # 啟用防火牆
@@ -595,12 +564,12 @@ sudo ufw --force enable
 ### 密鑰管理
 ```bash
 # 設置所需的環境變量
+# （用於 GO_ON_ENTRY_API_KEY / GO_ON_USER_AUTH_TOKEN_SECRET 等 env 欄位）
 export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
 export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# 可選：PostgreSQL 憑據
-export GO_ON_DB_USERNAME="go_on"
-export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
+# PostgreSQL 憑據寫在設定檔中的 cache.connection_string /
+# vector.connection_string 裡（例如 postgres://USER:PASS@HOST:5432/goon_cache?sslmode=verify-full）。
 ```
 
 ## 監控和可觀測性
@@ -616,16 +585,12 @@ global:
 scrape_configs:
   - job_name: 'go-on'
     static_configs:
-      - targets: ['go-on:9090']
-    metrics_path: '/metrics/prometheus'
+      - targets: ['go-on:8090']
+    metrics_path: '/metrics'
     
   - job_name: 'postgres'
     static_configs:
       - targets: ['postgres-exporter:9187']
-      
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['redis-exporter:9121']
 
 alerting:
   alertmanagers:
@@ -646,19 +611,8 @@ rule_files:
 - 資源利用率
 
 ### 日誌聚合
-```toml
-[logging]
-level = "info"
-format = "json"
-outputs = ["file", "stdout", "loki"]
-
-[logging.loki]
-enabled = true
-url = "http://loki:3100"
-labels = ["app=go-on", "environment=production"]
-batch_size = 1000
-batch_timeout_seconds = 5
-```
+收集 stderr/stdout（systemd、Docker 或日誌採集器）。日誌級別透過 `RUST_LOG`
+環境變數設定；不存在 `[logging]` 設定區段。
 
 ## 備份和災難恢復
 
@@ -675,7 +629,7 @@ pg_dump -h localhost -U go_on -d go_on_production \
   --file="$BACKUP_DIR/go-on-$DATE.dump"
 
 # 備份配置
-cp /opt/go-on/config/multi-users-server.toml "$BACKUP_DIR/config-$DATE.toml"
+cp /opt/go-on/config/config.multi-users-server.toml "$BACKUP_DIR/config-$DATE.toml"
 
 # 上傳到雲存儲
 aws s3 cp "$BACKUP_DIR/go-on-$DATE.dump" s3://go-on-backups/
@@ -746,22 +700,23 @@ CREATE TABLE cache_2024_q2 PARTITION OF cache_partitioned
 ## 遷移
 
 ### 從簡單服務器模式遷移
+簡單服務器使用 SQLite（`cache.sqlite3`、`vector.sqlite3`），多用戶服務器使用
+PostgreSQL。go-on 沒有 `--export`/`--import` CLI——遷移配置並讓緩存重新填充即可：
+
 ```bash
-# 從簡單服務器導出數據
-pg_dump -h simple-server -U go_on -d go_on_simple \
-  --format=custom \
-  --file=simple-server-export.dump
+# 1. 複製配置（agents、phases、runtime 設定）
+cp config/config.simple-server.toml config/config.multi-users-server.toml
 
-# 導入到多用戶服務器
-pg_restore -h multi-users-server -U go_on -d go_on_production \
-  --clean \
-  --if-exists \
-  simple-server-export.dump
+# 2. 在新配置中更新數據庫連接串
+#    cache.connection_string = "postgres://USER:PASS@HOST:5432/goon_cache?sslmode=verify-full"
+#    vector.connection_string = "postgres://USER:PASS@HOST:5432/goon_vector?sslmode=verify-full"
 
-# 更新配置
-cp config/simple-server.toml config/multi-users-server.toml
-# 在新配置中更新數據庫設置
+# 3. 可選：保留 SQLite 緩存檔案以獲得較快的冷啟動
+cp /var/lib/go-on/cache.sqlite3  /var/lib/go-on/cache.sqlite3.simple-server.bak
+cp /var/lib/go-on/vector.sqlite3 /var/lib/go-on/vector.sqlite3.simple-server.bak
 ```
+
+緩存響應與向量索引是盡力而為的緩存；首次請求後會在 PostgreSQL 上按需重建。
 
 ### 零停機遷移
 1. **階段 1**：在舊系統旁邊設置新基礎設施
@@ -806,7 +761,6 @@ kubectl describe pods -l app=go-on
 
 # 檢查網絡連接
 kubectl exec go-on-pod -- curl http://postgres:5432
-kubectl exec go-on-pod -- curl http://redis:6379
 ```
 
 ### 安全問題
@@ -838,7 +792,7 @@ trivy image your-registry/go-on:multi-users-latest
 gitleaks detect --source . --verbose
 
 # 網絡安全掃描
-nmap -sV -p 80,443,5432,6379,8090,9090 go-on.example.com
+nmap -sV -p 80,443,5432,8090 go-on.example.com
 ```
 
 ## 維護
@@ -855,9 +809,7 @@ psql -h localhost -U go_on -d go_on_production -c "REINDEX DATABASE go_on_produc
 # 2. 日誌輪轉
 find /var/log/go-on -name "*.log" -mtime +7 -delete
 
-# 3. 緩存清理
-redis-cli FLUSHDB
-
+# 3. 驗證數據完整性（cache/vector 的 SQLite 或 PostgreSQL）
 # 4. 備份驗證
 # （驗證最新備份可以恢復）
 ```

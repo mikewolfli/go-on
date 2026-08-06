@@ -4,7 +4,7 @@
 
 安全和治理 API 为 go-on 部署提供安全策略执行、审计追踪维护、合规性监控和访问控制。该 API 是**基于 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；这些能力没有专用的 REST 端点。
 
-> 权威的 JSON-RPC 方法参考见 `docs/protocol-guide.md`。
+> JSON-RPC 方法分发表在 `src/acp/impl/request.rs`；方法白名单见 `src/acp/impl/request/protocol.rs`。`docs/protocol-guide.md` 仅介绍协议模式。
 
 ## 方法
 

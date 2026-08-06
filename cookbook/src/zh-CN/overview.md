@@ -42,12 +42,12 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo clippy -D warnings` | 测试数 |
 |:--------|:--------------------------:|:------:|
-| **local** | ✅ **零警告** | **~1.7K（1 个已知失败）** |
+| **local** | ✅ **零警告** | **全部通过（~3.5K）** |
 | **simple-server** | ✅ **零警告** | **全部通过** |
 | **full** | ✅ **零警告** | **全部通过** |
 | **multi-users-server** | ✅ **零警告** | **全部通过** |
 
-最近一次 `cargo test`（默认 `local` 配置）除 `governance::security_governor::tests::test_profile_reflects_state` 一处既有失败外全部通过。E2E 测试（需要基础设施）标记为 `#[ignore]`。
+最近一次完整 `cargo test --all-targets` 运行全部通过、零失败（最新计数见 `CHANGELOG.md` 最新一节）。E2E 测试不需要外部基础设施，也无需 `#[ignore]`（见 `tests/structural_tests.rs`）。
 
 ## 运行时协议模式
 
@@ -136,9 +136,9 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
 
 | 语言 | 文件 | 键值数 |
 |:-----|:-----|:------:|
-| 英语（美国） | `languages/en_US.json` | 448+ |
-| 简体中文 | `languages/zh_CN.json` | 448+ |
-| 繁体中文 | `languages/zh_TW.json` | 448+ |
+| 英语（美国） | `config/languages/en-US.json` | 711 |
+| 简体中文 | `config/languages/zh-CN.json` | 711 |
+| 繁体中文 | `config/languages/zh-TW.json` | 711 |
 
 覆盖层：ACP/MCP HTTP 错误（100%）、Agent 供应商模块（100%，35 家供应商）、配置验证（100%）、CLI 初始化（100%）、API 处理错误（100%）、编排层（100%）、GUI（约 98%）、VS Code 插件（70+ 键值）。
 
@@ -146,7 +146,7 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
 
 - `src/`：后端运行时、CLI、setup、ACP 与 MCP 实现。
   - `src/acp/`：ACP 服务、请求路由、workflow/task/chat/checkpoint
-  - `src/agents/`：Provider 适配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 35 家），AgentFactory
+  - `src/agents/`：Provider 适配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 31 家）
   - `src/core/`：配置、初始化、就绪性检查、错误模型
   - `src/governance/`：策略/规则治理、审计、安全治理器、漂移防护
   - `src/intelligence/`：选择器、强化学习、能力总线、发现、共识、演化
@@ -156,7 +156,7 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
   - `src/protocol/`：协议服务、JSON-RPC、多渠道消息传输
   - `src/i18n/`：语言运行时
 - `gui/`：EGUI（Rust 原生）桌面图形界面
-- `vscode-addon/`：VS Code 插件（支持 en_US、zh_CN、zh_TW 多语言）
+- `vscode-addon/`：VS Code 插件（支持 en-US、zh-CN、zh-TW 多语言）
 - `config/`：配置文件
 - `tests/`：集成测试与回放资产
 - `scripts/`：质量/发布门禁脚本

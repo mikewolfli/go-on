@@ -248,6 +248,31 @@ impl AsyncWrite for MaybeTlsStream {
 /// pushed to all connected SSE clients in real time.
 pub(crate) type SseBroadcaster = tokio::sync::broadcast::Sender<String>;
 
+/// Build the JSON-RPC 2.0 notification payload for an MCP `tools/list_changed`
+/// event (standard MCP subscription notification).
+fn tools_list_changed_notification() -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/tools/list_changed",
+        "params": {}
+    })
+    .to_string()
+}
+
+/// Publish an MCP server notification to all connected SSE subscribers.
+///
+/// Returns the number of active receivers the payload was delivered to (0 when
+/// no SSE client is currently subscribed — a broadcast with zero receivers is
+/// a no-op, not an error). This is the single send path for the SSE
+/// broadcaster; it is fed by tool/resource list change points and by the
+/// server-initialized notification in `McpHttpServer::run`.
+fn broadcast_sse_notification(sse_broadcaster: &SseBroadcaster, payload: String) -> usize {
+    // `Err(SendError)` means zero receivers (no connected SSE client); the
+    // broadcast channel never closes while the server owns the sender, so
+    // a failed send is simply a no-op delivery of 0.
+    sse_broadcaster.send(payload).unwrap_or_default()
+}
+
 pub struct McpHttpServer {
     mcp_server: Arc<McpServer>,
     bind_addr: String,
@@ -366,6 +391,21 @@ impl McpHttpServer {
                 &[("address", &self.bind_addr)]
             )
         );
+
+        // ── SSE notification: tool/resource registries initialized ───────
+        // The tool registry is fully registered before the server is
+        // constructed (see `transport_factory::dispatch_server`), so this
+        // startup broadcast marks the end of tool registration. Any SSE
+        // client already connected (e.g. reconnect) receives the
+        // `tools/list_changed` notification and re-fetches the tool list.
+        let delivered =
+            broadcast_sse_notification(&self.sse_broadcaster, tools_list_changed_notification());
+        if delivered > 0 {
+            info!(
+                "MCP HTTP: broadcast tools/list_changed on startup to {} SSE subscriber(s)",
+                delivered
+            );
+        }
 
         // Shared accept loop: signal handling (SIGINT/SIGTERM/notify), accept
         // dispatch, and per-connection spawn live in
@@ -974,6 +1014,14 @@ async fn handle_mcp_sse_connection(
 
     // ── Subscribe to broadcast channel ─────────────────────────────────
     let mut rx = sse_broadcaster.subscribe();
+
+    // ── Push current tool-list state through the broadcast path ─────────
+    // The new subscriber has already subscribed above, so this send is
+    // delivered through `rx.recv()` below — guaranteeing the client receives
+    // the current tool list immediately instead of waiting for the first
+    // change. This also keeps the broadcast channel a live producer path.
+    let _ = broadcast_sse_notification(&sse_broadcaster, tools_list_changed_notification());
+
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
 
     loop {
@@ -1209,5 +1257,39 @@ mod tests {
         let parsed = parse_request_target_for_test(request).expect("request line should parse");
         assert_eq!(parsed.0, "POST");
         assert_eq!(parsed.1, "/api/v1/chat");
+    }
+
+    #[test]
+    fn sse_broadcaster_delivers_tool_list_changed_to_subscribers() {
+        // The server creates its broadcaster as `Arc::new(channel.0)` in
+        // `McpHttpServer::new`/`new_with_acp`; replicate that channel here and
+        // drive it through the exact send path the server uses so the test
+        // proves the send has a producer that reaches subscribers.
+        let broadcaster: SseBroadcaster = tokio::sync::broadcast::channel::<String>(256).0;
+        let mut rx = broadcaster.subscribe();
+
+        // The same notification `McpHttpServer::run` and
+        // `handle_mcp_sse_connection` publish.
+        let delivered = broadcast_sse_notification(&broadcaster, tools_list_changed_notification());
+        assert_eq!(
+            delivered, 1,
+            "one active subscriber must receive the notification"
+        );
+        let received = rx.try_recv().expect("subscriber must receive the message");
+        assert!(
+            received.contains("notifications/tools/list_changed"),
+            "payload must carry the MCP tools/list_changed method, got: {received}"
+        );
+        // The received payload is valid JSON-RPC 2.0 (as `handle_mcp_sse_connection`
+        // serializes into an `event: message\ndata: ...` SSE frame).
+        let parsed: serde_json::Value =
+            serde_json::from_str(&received).expect("payload must be valid JSON");
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        assert_eq!(parsed["method"], "notifications/tools/list_changed");
+
+        // A send with no subscribers is a no-op (0 receivers), not an error —
+        // this is the disconnect/reconnect case during startup.
+        let empty: SseBroadcaster = tokio::sync::broadcast::channel::<String>(256).0;
+        assert_eq!(broadcast_sse_notification(&empty, String::new()), 0);
     }
 }

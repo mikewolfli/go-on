@@ -335,17 +335,6 @@ impl TokenMultiLevelCache {
             });
         }
     }
-
-    /// Synchronous snapshot of cache statistics.
-    /// Falls back to `serde_json::Value::Null` if the lock cannot be acquired.
-    pub fn stats_snapshot(&self) -> serde_json::Value {
-        match self.stats.try_read() {
-            Ok(guard) => guard.to_json(),
-            Err(_) => {
-                serde_json::json!({ "status": "locked" })
-            }
-        }
-    }
 }
 
 /// Which cache level produced a hit.

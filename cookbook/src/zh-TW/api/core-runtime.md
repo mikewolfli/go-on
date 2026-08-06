@@ -4,7 +4,7 @@
 
 核心運行時 API 涵蓋運行時生命週期、健康檢查、配置管理和維護操作。go-on 的主要程式化介面是**基於 HTTP 的 JSON-RPC 2.0**（`POST /rpc`）；少量 HTTP GET 端點與 SSE 串流端點用於健康探針、指標抓取和對話串流傳輸。
 
-完整且權威的 JSON-RPC 方法參考見 `docs/protocol-guide.md`。本頁僅記錄當前真實存在的端點；未列出的端點不應假定其存在。
+JSON-RPC 方法分發表在原始碼中（`src/acp/impl/request.rs`），方法白名單見 `src/acp/impl/request/protocol.rs`。`docs/protocol-guide.md` 僅介紹協議模式與編輯器整合。本頁僅記錄當前真實存在的端點；未列出的端點不應假定其存在。
 
 ## HTTP 端點
 
@@ -35,8 +35,7 @@
 | `/chat/completions` | OpenAI 相容對話補全 |
 | `/v1/responses` | OpenAI Responses API |
 
-> 下文所有 JSON-RPC 方法名稱均透過 `POST /rpc` 分發。完整方法參考見
-> `docs/protocol-guide.md`。
+> 下文所有 JSON-RPC 方法名稱均透過 `POST /rpc` 分發。完整方法分發表見 `src/acp/impl/request.rs`。
 
 ## 健康檢查
 

@@ -26,18 +26,25 @@ use futures_util::future::join_all;
 
 /// Observer for tool execution lifecycle events.
 ///
-/// Hooks are invoked during tool dispatch. Sync hooks run on both sync and async
-/// paths. Async hooks (`async_pre_execute`) only run on the async path
-/// (`run_with_fallback_async`). All methods have default no-op implementations.
+/// Hooks are invoked during tool dispatch. All execution paths (ACP autonomy
+/// loop, MCP `tools/call`, ACP bridge, CLI) run the async pre-execute chain
+/// (`run_pre_async`), which invokes every hook's `async_pre_execute`. Sync
+/// hooks are covered via the default delegation of `async_pre_execute` to
+/// `pre_execute`, so async hooks such as `GuardianHook` run on every path.
+/// All methods have default no-op implementations.
+///
+/// The `Any` supertrait enables registry introspection (e.g. governance status
+/// probing whether a `GuardianHook` is registered) via downcasting.
 #[async_trait]
-pub trait ToolHook: Send + Sync {
+pub trait ToolHook: Send + Sync + std::any::Any {
     /// Called immediately before a tool is executed, after governance checks.
     fn pre_execute(&self, _tool_name: &str, _input: &ToolInput) -> Result<()> {
         Ok(())
     }
 
-    /// Async variant of pre_execute — called by run_with_fallback_async.
-    /// Default implementation delegates to the sync pre_execute.
+    /// Async variant of pre_execute — called by `run_pre_async` on every
+    /// execution path. Default implementation delegates to the sync
+    /// pre_execute.
     async fn async_pre_execute(&self, tool_name: &str, input: &ToolInput) -> Result<()> {
         self.pre_execute(tool_name, input)
     }
@@ -85,7 +92,9 @@ impl AgentCommunicationHook {
 // ── BLUE71 §11: GuardianHook — async model-based tool review ───────────
 
 /// Tool hook that uses GuardianReviewer to review tool actions before execution.
-/// Only takes effect on the async tool path (run_with_fallback_async).
+/// Runs on every tool execution path via `run_pre_async` (sync-only hooks are
+/// covered by the trait's default delegation, but this hook overrides
+/// `async_pre_execute` so the model review always fires).
 /// Activated via config: `guardian_enabled = true` + `guardian_agent = "..."`
 pub struct GuardianHook {
     reviewer: std::sync::Arc<crate::governance::guardian::GuardianReviewer>,
@@ -159,6 +168,20 @@ impl ToolHookRegistry {
     /// Returns true if no hooks are registered.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Whether a `GuardianHook` (BLUE71 §11 model-based tool review) is
+    /// registered. Used by the governance status probe so the guardian module
+    /// reports its true runtime state instead of the config flag alone.
+    pub fn has_guardian(&self) -> bool {
+        self.hooks
+            .lock()
+            .map(|hooks| {
+                hooks
+                    .iter()
+                    .any(|hook| hook.type_id() == std::any::TypeId::of::<GuardianHook>())
+            })
+            .unwrap_or(false)
     }
 
     /// Invoke all registered pre-execute hooks (sync path).

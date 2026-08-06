@@ -12,8 +12,8 @@
 - **改进的性能**：针对服务器工作负载优化
 - **更好的可靠性**：增强的错误处理和恢复
 - **生产就绪**：适用于小规模生产使用
-- **完整 Phase 4 架构**：全部 7 个特性门控子总线和 21 个 F-GAP 模块，包括 AgentFactory 和 OrchestrationCouncil
-- **条件编译模块**：AgentFactory 和 Council 使用 `#[cfg(feature = "simple-server")]` 门控
+- **完整子总线架构**：全部 7 个特性门控子总线（含 distributed-memory），见 `Cargo.toml`
+- **条件编译模块**：`DistributedMemoryBus` 使用 `#[cfg(feature = "sub-bus-distributed-memory")]` 门控（由 `simple-server` 配置启用）
 
 ### 架构
 ```
@@ -27,10 +27,10 @@
 ## 配置
 
 ### 服务器配置
-创建 `config/simple-server.toml`：
+创建 `config/config.simple-server.toml`：
 
 ```toml
-# config/simple-server.toml
+# config/config.simple-server.toml
 default_phase = "coding"
 model_selection_mode = "adaptive"
 
@@ -54,17 +54,16 @@ max_entries = 20000
 [vector]
 enabled = true
 auto_mode = false  # 需要 sqlite-vec
-use_json_fallback = false
 path = "/var/lib/go-on/vector.sqlite3"
 dimensions = 384  # 更高维度以获得更好准确性
 top_k = 5
 min_similarity = 0.75
 
-[observability]
+# OpenTelemetry 设置位于 [runtime] 内
+[runtime]
 otel_enabled = true
 otel_exporter = "otlp"
 otel_endpoint = "http://localhost:4317"
-metrics_port = 9090
 ```
 
 ### 特性标志
@@ -104,7 +103,7 @@ Group=go-on
 WorkingDirectory=/opt/go-on
 Environment="GO_ON_SERVER_API_KEY=your-api-key-here"
 Environment="RUST_LOG=info"
-ExecStart=/opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+ExecStart=/opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
@@ -122,7 +121,7 @@ sudo mkdir -p /opt/go-on /var/lib/go-on /var/log/go-on
 sudo chown -R go-on:go-on /opt/go-on /var/lib/go-on /var/log/go-on
 
 # 复制配置
-sudo cp config/simple-server.toml /opt/go-on/config/
+sudo cp config/config.simple-server.toml /opt/go-on/config/
 sudo cp scripts/start-go-on.sh /opt/go-on/
 sudo chmod +x /opt/go-on/start-go-on.sh
 ```
@@ -130,10 +129,10 @@ sudo chmod +x /opt/go-on/start-go-on.sh
 ### 数据库初始化
 ```bash
 # 以 go-on 用户身份初始化
-sudo -u go-on /opt/go-on/go-on --init --config /opt/go-on/config/simple-server.toml
+sudo -u go-on /opt/go-on/go-on --init --config /opt/go-on/config/config.simple-server.toml
 
 # 检查配置
-sudo -u go-on /opt/go-on/go-on --check --config /opt/go-on/config/simple-server.toml
+sudo -u go-on /opt/go-on/go-on --check --config /opt/go-on/config/config.simple-server.toml
 ```
 
 ### 用户和权限
@@ -165,10 +164,10 @@ sudo journalctl -u go-on -f
 ### 手动启动
 ```bash
 # 以 go-on 用户身份
-sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 
 # 带环境变量
-GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml
+GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml
 ```
 
 ### 健康和监控
@@ -176,11 +175,8 @@ GO_ON_SERVER_API_KEY="your-key" sudo -u go-on /opt/go-on/go-on --config /opt/go-
 # 健康端点
 curl http://localhost:8090/health
 
-# 指标端点
-curl http://localhost:9090/metrics
-
-# Prometheus 指标
-curl http://localhost:9090/metrics/prometheus
+# Prometheus 指标（文本格式，由 ACP HTTP 端口提供）
+curl http://localhost:8090/metrics
 ```
 
 ## 网络配置
@@ -189,9 +185,6 @@ curl http://localhost:9090/metrics/prometheus
 ```bash
 # 允许 HTTP 端口
 sudo ufw allow 8090/tcp
-
-# 允许指标端口
-sudo ufw allow 9090/tcp
 
 # 启用防火墙
 sudo ufw enable
@@ -260,7 +253,7 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 ".backup $BACKUP_DIR/cache-$D
 sudo -u go-on sqlite3 /var/lib/go-on/vector.sqlite3 ".backup $BACKUP_DIR/vector-$DATE.sqlite3"
 
 # 备份配置
-cp /opt/go-on/config/simple-server.toml $BACKUP_DIR/config-$DATE.toml
+cp /opt/go-on/config/config.simple-server.toml $BACKUP_DIR/config-$DATE.toml
 
 # 轮转旧备份（保留 30 天）
 find $BACKUP_DIR -name "*.sqlite3" -mtime +30 -delete
@@ -278,31 +271,10 @@ df -h /var/lib/go-on
 
 ## 性能调优
 
-### 内存优化
-```toml
-[runtime]
-# 根据服务器内存调整
-cache_max_memory_mb = 1024
-vector_max_memory_mb = 2048
-max_connections = 100
-```
-
-### 并发设置
-```toml
-[concurrency]
-max_inflight_requests = 100
-max_parallel_tasks = 16
-worker_threads = 8
-```
-
-### 超时配置
-```toml
-[timeouts]
-request_timeout_seconds = 180
-health_check_timeout_seconds = 10
-shutdown_timeout_seconds = 120
-database_timeout_seconds = 30
-```
+### 内存与并发
+并发限制通过 `[phases.<name>.options]` 按阶段配置（`phase_max_inflight` / `global_max_inflight`），
+入口限流通过 `[runtime]` 配置（`entry_rate_limit_rpm` / `entry_rate_limit_burst`）。
+不存在 `[concurrency]` 或 `[timeouts]` 顶层段。
 
 ## 安全
 
@@ -316,43 +288,35 @@ keyring set go-on server-api-key
 ```
 
 ### 速率限制
+入口限流在 `[runtime]` 中配置：
+
 ```toml
-[security]
-rate_limit_enabled = true
-rate_limit_rpm = 1000
-rate_limit_burst = 200
-rate_limit_by_ip = true
+[runtime]
+entry_rate_limit_rpm = 1000
+entry_rate_limit_burst = 200
 ```
 
 ### 访问控制
+CORS 与入口认证在 `[runtime]` 中配置：
+
 ```toml
-[access]
-allowed_ips = ["192.168.1.0/24", "10.0.0.0/8"]
-blocked_ips = []
-require_https = true
+[runtime]
+entry_auth_enabled = true
+entry_auth_api_key_env = "GO_ON_SERVER_API_KEY"
 cors_allowed_origins = ["https://your-domain.com"]
 ```
 
+> 不存在 `[security]` 或 `[access]` 段。IP 白/黑名单与 HTTPS 强制开关不受支持；
+> 请使用防火墙/反向代理实现这些控制。
+
 ## 监控和日志
 
-### 日志配置
-```toml
-[logging]
-level = "info"
-file_path = "/var/log/go-on/go-on.log"
-max_file_size_mb = 100
-max_files = 10
-json_format = true
-```
+### 日志
+通过 `RUST_LOG` 环境变量（或 `--verbose`）设置日志级别；不存在 `[logging]` 段。
+日志输出到 stderr，可由 systemd 或日志管理器重定向。
 
 ### 指标收集
-```toml
-[metrics]
-enabled = true
-port = 9090
-path = "/metrics"
-collect_interval_seconds = 30
-```
+Prometheus 格式指标由 ACP HTTP 端口（8090）的 `GET /metrics` 提供——无需独立指标端口。
 
 ### 告警
 ```bash
@@ -386,12 +350,12 @@ groups:
 ## 迁移
 
 ### 从本地模式迁移
-```bash
-# 从本地模式导出数据
-cargo run -- --export --config config/config.toml --output local-export.json
+go-on 没有 `--export`/`--import` CLI；直接复制 SQLite 数据文件即可：
 
-# 导入到简单服务器
-sudo -u go-on /opt/go-on/go-on --import --config /opt/go-on/config/simple-server.toml --input local-export.json
+```bash
+# 先停止两个实例，然后复制数据文件
+scp ./sqlite3/acp_cache.sqlite3 go-on@server:/var/lib/go-on/cache.sqlite3
+scp ./sqlite3/acp_vector.sqlite3 go-on@server:/var/lib/go-on/vector.sqlite3
 ```
 
 ### 备份和恢复
@@ -417,7 +381,7 @@ sudo ls -la /opt/go-on/
 sudo ls -la /var/lib/go-on/
 
 # 手动测试
-sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/simple-server.toml --dry-run
+sudo -u go-on /opt/go-on/go-on --config /opt/go-on/config/config.simple-server.toml --validate-config
 ```
 
 #### 数据库问题

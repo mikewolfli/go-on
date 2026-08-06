@@ -252,9 +252,6 @@ pub struct GovernanceServerDeps {
     pub rbac_enforcer: Option<Arc<std::sync::RwLock<crate::governance::rbac::RbacEnforcer>>>,
     /// Provenance ledger — immutable data lineage tracking
     pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
-    /// Approval engine for HITL workflow (GAP-B52-19)
-    pub approval_engine:
-        Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     /// Prompt injection detector (GAP-B52-25)
     pub injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
     /// Memory persistence manager (GAP-B52-11)
@@ -867,8 +864,6 @@ pub struct ServerBuilder {
     harness_bus: Option<Arc<HarnessBus>>,
     capability_bus: Option<Arc<CapabilityBus>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
-    approval_engine:
-        Option<Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
     injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
     memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
     evolution_loop: Option<
@@ -909,7 +904,6 @@ impl ServerBuilder {
             harness_bus: None,
             capability_bus: None,
             provenance_ledger: None,
-            approval_engine: None,
             injection_detector: None,
             memory_persistence: None,
             evolution_loop: None,
@@ -976,17 +970,7 @@ impl ServerBuilder {
         self
     }
 
-    /// Set the memory response cache
-    /// Set the approval engine
-    pub fn with_approval_engine(
-        mut self,
-        engine: Arc<tokio::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
-    ) -> Self {
-        self.approval_engine = Some(engine);
-        self
-    }
-
-    /// Set the injection detector
+    /// Set the prompt injection detector
     pub fn with_injection_detector(
         mut self,
         detector: Arc<crate::security::prompt_injection::InjectionDetector>,
@@ -1290,11 +1274,6 @@ impl ServerBuilder {
                 rbac_enforcer: None,
                 provenance_ledger: if governance_enabled {
                     self.provenance_ledger
-                } else {
-                    None
-                },
-                approval_engine: if governance_enabled {
-                    self.approval_engine
                 } else {
                     None
                 },

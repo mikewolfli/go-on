@@ -211,25 +211,6 @@ pub async fn new_acp_server(
     }
 
     // ── Governance dependency wiring ──────────────────────────────────────
-    // Wire approval engine with preference learner (GAP-B58-D01)
-    {
-        use crate::governance::approval_engine::{ApprovalEngine, TimeoutPolicy};
-        use crate::governance::approval_learning::ApprovalPreferenceLearner;
-        use crate::governance::pua::PuaRuleEngine;
-        let pua_plan = Arc::new(std::sync::Mutex::new(
-            crate::pua::PuaEnforcementPlan::default(),
-        ));
-        let pua_rule_engine = Arc::new(tokio::sync::Mutex::new(PuaRuleEngine::new(pua_plan)));
-        let preference_learner = Arc::new(std::sync::RwLock::new(
-            ApprovalPreferenceLearner::with_thresholds(20, 0.9),
-        ));
-        let engine = Arc::new(tokio::sync::RwLock::new(
-            ApprovalEngine::new(pua_rule_engine, TimeoutPolicy::default())
-                .with_learner(preference_learner),
-        ));
-        builder = builder.with_approval_engine(engine);
-    }
-
     // Wire injection detector with runtime config (BLUE56-GAP-D08)
     {
         use crate::security::prompt_injection::InjectionDetector;
@@ -430,9 +411,13 @@ pub async fn new_acp_server(
 
     // ── GuardianHook: config-gated model-based tool review ──────────
     // Enabled via `guardian_enabled = true` + `guardian_agent = "agent_name"` in config.
-    // When enabled, every tool call is reviewed by the specified LLM agent before
-    // execution. The reviewer operates at the ToolHook level, not at the HarnessBus
-    // level — it does NOT intercept "chat.execute" or other non-tool operations.
+    // When enabled, every tool call dispatched through the ToolRegistry (ACP
+    // autonomy loop, MCP tools/call, ACP bridge, CLI) runs the async
+    // pre-execute hook chain (`run_pre_async`), and the GuardianHook reviews
+    // the call with the specified LLM agent before execution. A denied call
+    // aborts execution (fail-fast). The reviewer operates at the ToolHook
+    // level, not at the HarnessBus level — it does NOT intercept
+    // "chat.execute" or other non-tool operations.
     {
         let guardian_enabled = app_config
             .as_ref()
@@ -562,10 +547,6 @@ pub async fn new_acp_server(
             tracing::warn!("capability_bus: Arc already shared, cannot inject memory backends");
         }
     }
-
-    // GAP-B55-042: approval-engine timeout processing is handled by
-    // spawn_timeout_loop (5s cycle, shutdown-aware) in background.rs — the
-    // duplicate 30s loop here was removed (same process_timeouts() call).
 
     server
 }

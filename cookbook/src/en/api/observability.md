@@ -2,7 +2,7 @@
 
 The Observability API exposes health checking, Prometheus metrics, and real-time state events. These endpoints are used by monitoring infrastructure, dashboards, and alerting systems.
 
-> The authoritative API reference lives in `docs/protocol-guide.md`. Only endpoints that exist are documented here.
+> The backend JSON-RPC dispatch table lives in `src/acp/impl/request.rs`; `docs/protocol-guide.md` covers protocol modes only. Only endpoints that exist are documented here.
 
 ## Endpoints
 

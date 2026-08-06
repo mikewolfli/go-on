@@ -35,7 +35,7 @@ Go-On 是一个 ACP 运行时代理，集成了多智能体编排能力，可运
 
 | 模块 | 说明 |
 |------|------|
-| `src/governance/` | 沙盒、RBAC、审计、PUA 规则、审批引擎 |
+| `src/governance/` | 沙盒、RBAC、审计、PUA 规则、治理策略 |
 | `src/security/` | 认证、加密、提示注入检测 |
 
 ### 工具
@@ -49,18 +49,19 @@ Go-On 是一个 ACP 运行时代理，集成了多智能体编排能力，可运
 | 模块 | 说明 |
 |------|------|
 | `src/observability/` | 遥测、性能指标 |
-| `src/optimization/` | 故障预防、工作流优化 |
+| `src/intelligence/capability_bus/optimization_bus.rs` | OptimizationBus — 成本/速度/可靠性建议 |
 
 ## 客户端集成
 
 - [VS Code 扩展](../vscode-addon/README.md) — IDE 集成（ACP/MCP）
-- [GUI 应用](../gui/README.md) — 基于 Tauri 的桌面应用
+- [GUI 应用](../cookbook/src/zh-CN/gui.md) — 基于 EGUI/eframe 的桌面应用
 - [Rust SDK](../sdk/rust/README.md) — 程序化访问
 
 ## 部署
 
 - [配置](workflow-config.md) — Profile 和工作流配置
-- [部署指南](../deploy/README.md) — 服务端部署说明
+- [部署指南](../cookbook/src/zh-CN/deployment/simple-server.md) — 单服务部署
+- [多用户部署](../cookbook/src/zh-CN/deployment/multi-users-server.md) — 多用户生产部署
 
 ## 蓝图
 

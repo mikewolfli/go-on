@@ -376,14 +376,10 @@ impl BackendClient {
                         avg_latency_ms: val["metrics"]["avg_request_duration_ms"]
                             .as_f64()
                             .unwrap_or(0.0),
-                        backend_version: val
-                            .get("backend_version")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        backend_build: val
-                            .get("backend_build")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
+                        // The /health response does not expose backend version/build
+                        // fields — always None (the About view falls back).
+                        backend_version: None,
+                        backend_build: None,
                     },
                     Err(_) => HealthStatus {
                         connected: true,

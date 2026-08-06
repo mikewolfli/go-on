@@ -7,7 +7,6 @@
 //! Each sub-module below validates invariants via in-memory type construction;
 //! these files do NOT spawn a backend.
 
-pub mod test_hitl_approval;
 pub mod test_memory_persistence;
 pub mod test_multimodal;
 pub mod test_security;

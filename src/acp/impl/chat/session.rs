@@ -86,7 +86,7 @@ pub(crate) async fn handle_chat(
                 send_error(
                     server,
                     id,
-                    -32602,
+                    crate::acp::impl::request::protocol::AcpErrorCode::InvalidParams as i32,
                     tf("error.invalid_chat_params", &[("error", &format!("{err}"))]),
                     None,
                 )

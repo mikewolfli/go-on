@@ -35,7 +35,7 @@ Go-On is an ACP runtime proxy with integrated multi-agent orchestration, capable
 
 | Module | Description |
 |--------|-------------|
-| `src/governance/` | Sandbox, RBAC, audit, PUA rules, approval engine |
+| `src/governance/` | Sandbox, RBAC, audit, PUA rules, governance policies |
 | `src/security/` | Authentication, encryption, prompt injection detection |
 
 ### Tools
@@ -49,18 +49,19 @@ Go-On is an ACP runtime proxy with integrated multi-agent orchestration, capable
 | Module | Description |
 |--------|-------------|
 | `src/observability/` | Telemetry, performance metrics |
-| `src/optimization/` | Failure prevention, workflow optimization |
+| `src/intelligence/capability_bus/optimization_bus.rs` | OptimizationBus — cost/speed/reliability recommendations |
 
 ## Client Integration
 
 - [VS Code Extension](../vscode-addon/README.md) — IDE integration with ACP/MCP
-- [GUI Application](../gui/README.md) — Tauri-based desktop application
+- [GUI Application](../cookbook/src/en/gui.md) — EGUI/eframe-based desktop application
 - [Rust SDK](../sdk/rust/README.md) — Programmatic access
 
 ## Deployment
 
 - [Configuration](workflow-config.md) — Profile and workflow configuration
-- [Deployment Guide](../deploy/README.md) — Server deployment instructions
+- [Deployment Guide](../cookbook/src/en/deployment/simple-server.md) — Simple server deployment
+- [Multi-Users Deployment](../cookbook/src/en/deployment/multi-users-server.md) — Multi-user production deployment
 
 ## Blueprints
 

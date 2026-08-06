@@ -701,8 +701,8 @@ impl SecurityGovernor {
                     }
                 }
                 PolicyAction::Escalate => {
+                    // Escalation count is recorded centrally in `record_audit`.
                     let level = escalation_level.unwrap_or_else(|| "elevated".into());
-                    inner.active_escalations += 1;
                     PolicyVerdict {
                         allowed: true,
                         required_review: false,
@@ -725,7 +725,7 @@ impl SecurityGovernor {
 
         Ok(match inner.config.default_action {
             PolicyAction::Allow if use_catch_all => {
-                inner.total_denials += 1;
+                // Denial count is recorded centrally in `record_audit`.
                 PolicyVerdict {
                     allowed: false,
                     required_review: false,
@@ -742,7 +742,7 @@ impl SecurityGovernor {
                 reasons: vec![t("error.security_governor.no_match_allowed")],
             },
             PolicyAction::Deny => {
-                inner.total_denials += 1;
+                // Denial count is recorded centrally in `record_audit`.
                 PolicyVerdict {
                     allowed: false,
                     required_review: false,
@@ -752,7 +752,7 @@ impl SecurityGovernor {
                 }
             }
             PolicyAction::RequireReview => {
-                inner.total_reviews += 1;
+                // Review count is recorded centrally in `record_audit`.
                 PolicyVerdict {
                     allowed: true,
                     required_review: true,
@@ -789,7 +789,7 @@ impl SecurityGovernor {
         if entry.verdict.required_review {
             inner.total_reviews += 1;
         }
-        if entry.verdict.escalation_level == "elevated" {
+        if entry.verdict.escalation_level != "normal" {
             inner.active_escalations += 1;
         }
         // Single process-wide audit sink (From conversion).
@@ -1129,6 +1129,57 @@ mod tests {
         assert!(verdict.allowed);
         assert_eq!(verdict.escalation_level, "critical");
         assert_eq!(verdict.matched_policy, Some("esc1".into()));
+    }
+
+    /// Escalation with a custom level is counted exactly once via
+    /// `record_audit` (no double-count from `evaluate` itself).
+    #[test]
+    fn test_escalate_custom_level_counts_once_via_record_audit() {
+        let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
+        let policy = make_escalate_policy("esc2", "actor", "sensitive-role", "critical");
+        governor.register_policy(policy);
+
+        let verdict = governor
+            .evaluate("r", "sensitive-role", &HashMap::new())
+            .expect("evaluate");
+        assert!(verdict.allowed);
+        assert_eq!(verdict.escalation_level, "critical");
+        // `evaluate` alone must not bump escalation counters (centralized
+        // in `record_audit` — see principle §3 batch 3 unified counting).
+        assert_eq!(governor.profile().active_escalations, 0);
+
+        governor.record_audit(AuditEntry::new(
+            "esc2".into(),
+            verdict,
+            "test".to_string(),
+            "u".to_string(),
+            String::new(),
+        ));
+        assert_eq!(governor.profile().active_escalations, 1);
+    }
+
+    /// Default-action Deny (no policy matched) is counted exactly once via
+    /// `record_audit`, covering the no-match branch the earlier unified-count
+    /// test did not exercise.
+    #[test]
+    fn test_default_deny_counts_once_via_record_audit() {
+        let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
+        // Default config uses default_action Deny; register nothing so the
+        // default-action branch (not the catch-all) is hit.
+        let verdict = governor
+            .evaluate("anything", "anyone", &HashMap::new())
+            .expect("evaluate");
+        assert!(!verdict.allowed);
+        assert_eq!(governor.profile().total_denials, 0);
+
+        governor.record_audit(AuditEntry::new(
+            "none".into(),
+            verdict,
+            "test".to_string(),
+            "u".to_string(),
+            String::new(),
+        ));
+        assert_eq!(governor.profile().total_denials, 1);
     }
 
     /// 12. Disabled governor always allows regardless of policies.

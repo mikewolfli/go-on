@@ -351,31 +351,6 @@ impl PuaRuleEngine {
         self.plan = plan;
     }
 
-    /// Evaluate approval feedback from the ApprovalEngine.
-    /// This allows the PUA rule engine to adjust enforcement plans based on
-    /// approval outcomes (e.g., auto-deny patterns, escalation frequency).
-    pub fn evaluate_approval_feedback(
-        &self,
-        request: &super::approval_engine::ApprovalRequest,
-    ) -> Result<(), PuaViolation> {
-        use super::approval_engine::ApprovalStatus;
-        match &request.status {
-            ApprovalStatus::AutoDenied { reason, .. } => {
-                self.escalate(&format!("auto-deny for {}: {}", request.action, reason));
-                Ok(())
-            }
-            ApprovalStatus::Rejected { reason, .. } => {
-                self.escalate(&format!("rejected {}: {}", request.action, reason));
-                Ok(())
-            }
-            ApprovalStatus::Approved { .. } => {
-                self.de_escalate(&format!("approved {}", request.action));
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
     pub fn check_red_lines(&self, action: &str) -> Result<(), PuaViolation> {
         let plan = self.plan.lock().map_err(|_| PuaViolation {
             kind: PuaViolationKind::MissingEvidence,

@@ -776,8 +776,23 @@ pub(super) fn error_contract_payload(_server: &AcpServer) -> Result<Value> {
                 },
                 {
                     "kind": "AuthRequired",
+                    "codes": [-32001],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "PuaViolation",
                     "codes": [-32003],
                     "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "ConsultationBlocked",
+                    "codes": [-32007],
+                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
+                },
+                {
+                    "kind": "ServerError",
+                    "codes": [-32000],
+                    "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
                 },
                 {
                     "kind": "RateLimited",
@@ -788,11 +803,6 @@ pub(super) fn error_contract_payload(_server: &AcpServer) -> Result<Value> {
                     "kind": "UpstreamTimeout",
                     "codes": [-32603],
                     "retry": {"retryable": true, "strategy": "exponential_backoff", "base_delay_ms": 500, "max_delay_ms": 10000, "max_retries": 3}
-                },
-                {
-                    "kind": "PuaViolation",
-                    "codes": [-32603],
-                    "retry": {"retryable": false, "strategy": "none", "max_retries": 0}
                 },
                 {
                     "kind": "BudgetExceeded",

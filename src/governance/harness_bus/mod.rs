@@ -372,6 +372,22 @@ impl HarnessBus {
         verdict
     }
 
+    /// Return the cached result for a repeated (tool, args) call, or `None`
+    /// when no valid entry exists (first call / policy TTL expired).
+    ///
+    /// Tool execution paths use this after `validate_action` reports
+    /// `verdict.idempotent` to implement standard idempotency semantics:
+    /// a repeat call skips re-execution and returns the cached result.
+    pub fn cached_tool_result(&self, tool: &str, args: &Value) -> Option<Value> {
+        self.evaluator.cached_idempotent_result(tool, args)
+    }
+
+    /// Record a successful tool execution so a repeated (tool, args) call is
+    /// deduplicated within the `IdempotencyPolicy` TTL.
+    pub fn record_tool_success(&self, tool: &str, args: &Value, response: &Value) {
+        self.evaluator.record_tool_success(tool, args, response);
+    }
+
     /// Post-execution output verification with audit recording.
     pub fn verify_output(&self, output: &Value) -> OutputVerdict {
         let start = Instant::now();

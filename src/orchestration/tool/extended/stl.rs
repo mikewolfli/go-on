@@ -28,10 +28,12 @@ struct Vertex {
 }
 
 /// A single triangular facet with its normal.
+///
+/// The normal is consumed by `StlGenerateTool` when emitting ASCII STL
+/// (readers fill it from the file; the generator computes it via cross product).
 #[cfg(any(feature = "cad-stl", feature = "model-3d"))]
 #[derive(Debug, Clone)]
 struct Facet {
-    #[allow(dead_code, reason = "F-GAP reserved: face normal data")]
     normal: Vertex,
     v0: Vertex,
     v1: Vertex,

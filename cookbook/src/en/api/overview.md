@@ -142,7 +142,9 @@ Rate limiting is enforced internally via a token bucket algorithm per phase.
 
 ### Official Libraries
 - **Python**: `go-on-sdk` (install via `pip install go-on-sdk`)
-- **Rust**: `go-on-client` crate
+- **Rust**: `go_on_sdk` crate (`sdk/rust/`)
+- **Node.js**: `go-on-sdk-nodejs` (`sdk/nodejs/`)
+- **TypeScript**: `go-on-sdk-typescript` (`sdk/typescript/`)
 
 ### Generating a Custom Client
 The JSON-RPC interface at `POST /rpc` is straightforward to call from any language:
@@ -155,22 +157,24 @@ curl http://localhost:8090/rpc \
 
 ## Testing
 
-### Mock Server
+### Local HTTP Runtime
 ```bash
-# Start mock server
-go-on --mock --port 8080
+# Start the backend as a local HTTP runtime (ACP HTTP on 8090)
+go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 
 # Test with curl
-curl http://localhost:8080/health
+curl http://127.0.0.1:8090/health
 ```
+
+There is no `--mock` flag or separate mock server.
 
 ### Integration Tests
 ```bash
-# Run API tests
-cargo test --test api
+# Run the structural integration suite
+cargo test --test structural_tests
 
-# Run specific test group
-cargo test --test api_health
+# Run ACP runtime RPC integration tests
+cargo test --test acp_runtime_rpc_integration
 ```
 
 ## Performance
@@ -188,12 +192,11 @@ cargo test --test api_health
 ## Security
 
 ### CORS Configuration
+CORS is configured via `runtime.cors_allowed_origins` in `config.toml` (empty list = disabled):
+
 ```toml
-[security.cors]
-allowed_origins = ["https://example.com", "http://localhost:3000"]
-allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-allowed_headers = ["Authorization", "Content-Type", "X-Api-Key", "X-Go-On-Key"]
-allow_credentials = true
+[runtime]
+cors_allowed_origins = ["https://example.com", "http://localhost:3000"]
 ```
 
 ## Monitoring

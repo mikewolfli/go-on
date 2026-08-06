@@ -142,7 +142,9 @@ API 密鑰通過 `X-Api-Key` 或 `X-Go-On-Key` HTTP 頭髮送。認證根據運�
 
 ### 官方庫
 - **Python**：`go-on-sdk`（通過 `pip install go-on-sdk` 安裝）
-- **Rust**：`go-on-client` crate
+- **Rust**：`go_on_sdk` crate（`sdk/rust/`）
+- **Node.js**：`go-on-sdk-nodejs`（`sdk/nodejs/`）
+- **TypeScript**：`go-on-sdk-typescript`（`sdk/typescript/`）
 
 ### 生成自定義客戶端
 `POST /rpc` 的 JSON-RPC 接口可以直接從任何語言調用：
@@ -157,20 +159,20 @@ curl http://localhost:8090/rpc \
 
 ### 模擬服務器
 ```bash
-# 啟動模擬服務器
-go-on --mock --port 8080
+# 以本機 HTTP 運行時啟動後端（ACP HTTP，連接埠 8090）
+go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 
 # 使用 curl 測試
-curl http://localhost:8080/health
+curl http://127.0.0.1:8090/health
 ```
 
 ### 集成測試
 ```bash
-# 運行 API 測試
-cargo test --test api
+# 運行結構整合測試套件
+cargo test --test structural_tests
 
-# 運行特定測試組
-cargo test --test api_health
+# 運行 ACP 運行時 RPC 整合測試
+cargo test --test acp_runtime_rpc_integration
 ```
 
 ## 性能
@@ -188,12 +190,11 @@ cargo test --test api_health
 ## 安全
 
 ### CORS 配置
+CORS 透過 `config.toml` 中的 `runtime.cors_allowed_origins` 設定（空列表 = 停用）：
+
 ```toml
-[security.cors]
-allowed_origins = ["https://example.com", "http://localhost:3000"]
-allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-allowed_headers = ["Authorization", "Content-Type", "X-Api-Key", "X-Go-On-Key"]
-allow_credentials = true
+[runtime]
+cors_allowed_origins = ["https://example.com", "http://localhost:3000"]
 ```
 
 ## 監控

@@ -19,18 +19,18 @@ Workflows are configured in the `[flow]` section of `config.toml`.
 
 ## 2. Quick Start Templates
 
-Two ready-to-use config templates are provided:
+Ready-to-use config presets ship in the `config/` directory. Start from one of them:
 
-### Development Workflow
+### Universal Workflow (default)
 ```bash
-cp config/templates/config.dev.toml config.toml
+cp config/config.toml config.toml
 # Edit config.toml to add your API keys
 go-on --config config.toml
 ```
 
-### General Workflow
+### Low-Memory Workflow
 ```bash
-cp config/templates/config.general.toml config.toml
+cp config/config.low-memory.toml config.toml
 # Edit config.toml to add your API keys
 go-on --config config.toml
 ```
@@ -146,14 +146,14 @@ Each `[phases.<name>.options]` block supports:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `request_timeout_seconds` | u64 | 120 | Max seconds per request |
-| `review_timeout_seconds` | u64 | 60 | Max seconds for review |
+| `request_timeout_seconds` | u64 | 150 | Max seconds per request (adaptive coding template) |
+| `review_timeout_seconds` | u64 | 60 | Max seconds for review (adaptive coding template) |
 | `review_timeout_policy` | string | `"reject"` | `"reject"`, `"degrade_single"`, or `"warn"` |
 | `review_min_response_chars` | usize | 12 | Min chars for review to accept |
 | `cache_enabled` | bool | true | Enable response cache |
 | `vector_enabled` | bool | true | Enable vector memory |
 | `summary_enabled` | bool | false | Enable phase summary |
-| `phase_max_inflight` | usize | 8 | Max concurrent tasks in this phase |
+| `phase_max_inflight` | usize | 24 | Max concurrent tasks in this phase (adaptive coding template) |
 | `global_max_inflight` | usize | 128 | Max concurrent tasks globally |
 | `extra` | table | `{}` | Additional key-value options |
 
@@ -197,7 +197,7 @@ go-on looks for `config.toml` in this order:
 3. `~/.config/go-on/config.toml` (XDG config on Linux/macOS)
 4. `%APPDATA%/go-on/config.toml` (Windows)
 
-Template files are located in `config/templates/` in the project directory.
+Template files are located in `config/` in the project directory.
 
 ---
 
@@ -390,13 +390,13 @@ go-on has three build profiles that enable different feature sets:
 |---------|--------------------------|------------------------|------------------------------|
 | SQLite backend | ✅ | ✅ | ❌ |
 | PostgreSQL backend | ❌ | ❌ | ✅ |
-| ToolBus | ❌ | ✅ | ✅ |
-| OrchestrationBus | ❌ | ✅ | ✅ |
-| ObservabilityBus | ❌ | ❌ | ✅ |
-| OptimizationBus | ❌ | ❌ | ✅ |
-| MemoryBus | ❌ | ❌ | ✅ |
-| ProtocolBus | ❌ | ❌ | ✅ |
-| DistributedMemoryBus | ❌ | ❌ | ✅ |
+| ToolBus | ✅ | ✅ | ✅ |
+| OrchestrationBus | ✅ | ✅ | ✅ |
+| ObservabilityBus | ✅ | ✅ | ✅ |
+| OptimizationBus | ✅ | ✅ | ✅ |
+| MemoryBus | ✅ | ✅ | ✅ |
+| ProtocolBus | ✅ | ✅ | ✅ |
+| DistributedMemoryBus | ❌ | ✅ | ✅ |
 
 To build with a specific profile:
 
