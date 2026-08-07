@@ -90,11 +90,7 @@ pub struct AutonomyLoopReport {
     pub total_tools: usize,
     pub final_phase: AutonomyPhase,
     pub rounds: Vec<AutonomyRound>,
-    pub planner_guidance_used: bool,
-    pub trace_alignment_coverage: f64,
     pub total_duration_ms: u64,
-    pub corrective_actions_applied_total: u64,
-    pub corrective_action_effectiveness_ratio: f64,
     pub stop_reason: String,
 }
 
@@ -517,11 +513,7 @@ pub async fn run_autonomy_loop(
             total_tools,
             final_phase: AutonomyPhase::Completed,
             rounds,
-            planner_guidance_used: false,
-            trace_alignment_coverage: 0.0,
             total_duration_ms,
-            corrective_actions_applied_total: 0,
-            corrective_action_effectiveness_ratio: 0.0,
             stop_reason: if all_tools_failed {
                 "all_tools_failed".to_string()
             } else if total_tools > 0 {
@@ -591,8 +583,6 @@ pub fn contract_snapshot(report: &AutonomyLoopReport) -> Value {
         "final_phase": format!("{:?}", report.final_phase),
         "total_duration_ms": report.total_duration_ms,
         "stop_reason": report.stop_reason,
-        "corrective_actions_applied_total": report.corrective_actions_applied_total,
-        "corrective_action_effectiveness_ratio": report.corrective_action_effectiveness_ratio,
     })
 }
 
@@ -644,11 +634,7 @@ mod tests {
             total_tools: 10,
             final_phase: AutonomyPhase::Completed,
             rounds: vec![],
-            planner_guidance_used: true,
-            trace_alignment_coverage: 0.0,
             total_duration_ms: 5000,
-            corrective_actions_applied_total: 0,
-            corrective_action_effectiveness_ratio: 0.0,
             stop_reason: "completed".to_string(),
         };
         assert_eq!(report.final_phase, AutonomyPhase::Completed);
@@ -662,11 +648,7 @@ mod tests {
             total_tools: 0,
             final_phase: AutonomyPhase::Planning,
             rounds: vec![],
-            planner_guidance_used: false,
-            trace_alignment_coverage: 0.0,
             total_duration_ms: 0,
-            corrective_actions_applied_total: 0,
-            corrective_action_effectiveness_ratio: 0.0,
             stop_reason: "initial".to_string(),
         };
         let json_val = serde_json::to_value(&report).unwrap();
@@ -684,11 +666,7 @@ mod tests {
                 total_tools: 0,
                 final_phase: AutonomyPhase::Failed,
                 rounds: vec![],
-                planner_guidance_used: false,
-                trace_alignment_coverage: 0.0,
                 total_duration_ms: 0,
-                corrective_actions_applied_total: 0,
-                corrective_action_effectiveness_ratio: 0.0,
                 stop_reason: "no_response".to_string(),
             },
             all_tools_failed: false,
@@ -723,11 +701,7 @@ mod tests {
             total_tools: 5,
             final_phase: AutonomyPhase::Completed,
             rounds: vec![],
-            planner_guidance_used: false,
-            trace_alignment_coverage: 0.0,
             total_duration_ms: 3000,
-            corrective_actions_applied_total: 1,
-            corrective_action_effectiveness_ratio: 0.0,
             stop_reason: "completed".to_string(),
         };
         let snapshot = contract_snapshot(&report);

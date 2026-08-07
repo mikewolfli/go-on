@@ -60,7 +60,6 @@ When a reconnect attempt succeeds, the attempt counter resets to 0 so that the n
 | GUI (Rust) | `gui/src/backend/rpc.rs` | `retry_backoff()`, `QUICK_RPC_ATTEMPTS`, `FULL_RPC_ATTEMPTS` | Used for RPC call retries to the backend. Bounded: 20 attempts ≈ 5 minutes before giving up (base formula shared via `gui/src/backoff.rs::exp_backoff_ms`). |
 | VSCode (TypeScript) | `vscode-addon/src/runtime/reconnect.ts` | `ReconnectManager.backoffMs()`, `ReconnectManager.schedule()` | Used for restarting the backend process. Already had unlimited retries; updated cap from 300 s to 30 s and base from 2 s to 1 s. |
 | Rust SDK | `sdk/rust/src/client.rs` | `GoOnClient::backoff_delay()` | RPC retries with the same formula (`min(base*2^n, 30s) * (0.7 + random*0.3)`). |
-| Node SDK | `sdk/nodejs/src/client.ts` | `GoOnClient._retryDelayForAttempt()` | Same formula (ms). |
 | Python SDK | `sdk/python/go_on_sdk/client.py` | `GoOnClient._retry_delay_for_attempt()` | Same formula (seconds). |
 | TypeScript SDK | `sdk/typescript/src/client.ts` | `GoOnClient.delay()` | Same formula (ms). |
 

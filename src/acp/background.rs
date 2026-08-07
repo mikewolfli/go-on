@@ -579,6 +579,7 @@ pub async fn start_background_tasks(
     {
         let alert_manager = Arc::clone(&server.observability.alert_manager);
         let metrics = Arc::clone(&server.observability.metrics);
+        let hyper_resilience = Arc::clone(&server.resilience.hyper_resilience);
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
@@ -590,6 +591,12 @@ pub async fn start_background_tasks(
                         _ = interval.tick() => {}
                     }
                     let snapshot = metrics.snapshot();
+                    // Circuit-breaker open count: the canonical source is
+                    // HyperResilienceEngine (same one the Prometheus exporter
+                    // reads); the RuntimeMetrics snapshot never owns this
+                    // signal. Read it before taking the alert-manager lock so
+                    // the non-Send guard is not held across the await.
+                    let resilience_profile = hyper_resilience.profile().await;
                     let mut mgr = alert_manager.lock().unwrap_or_else(|poisoned| {
                         tracing::warn!("alert_manager lock poisoned");
                         poisoned.into_inner()
@@ -607,7 +614,7 @@ pub async fn start_background_tasks(
                     // Circuit-breaker open count rule.
                     mgr.evaluate(
                         "circuit_breaker_open",
-                        f64::from(snapshot.circuit_breaker_open_count),
+                        resilience_profile.open_circuits as f64,
                     );
                     // Agent timeout-rate rule (% of requests that timed out).
                     let timeout_rate = if snapshot.total_requests > 0 {

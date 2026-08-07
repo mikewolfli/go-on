@@ -1357,9 +1357,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             },
             "org_policy": {
                 "bundle_version": policy_bundle_version,
-                "exceptions": {
-                    "active_total": 0,
-                },
             },
             "custom_role_registry": {
                 "ready": custom_role_registry_ready,

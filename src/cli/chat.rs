@@ -106,7 +106,7 @@ fn injection_detector() -> &'static crate::security::prompt_injection::Injection
 }
 
 /// Type alias for the safeguard approval return type to satisfy clippy::type_complexity.
-type SafeguardApprovalResult<'a> = Result<(&'a [(String, String)], Option<usize>)>;
+type SafeguardApprovalResult<'a> = Result<(&'a [(String, String)], bool)>;
 
 /// Returns the global ToolRegistry reference (shared process-wide singleton).
 fn tool_registry() -> &'static ToolRegistry {
@@ -1957,11 +1957,15 @@ async fn run_agent_with_tools(
 
     // ── Phase 2 (inline): Filter/block tool calls by mode constraints + SafeGuard ──
     let filtered_calls = filter_tool_calls_by_mode(&tool_calls, mode_runtime);
-    let (filtered_calls, early_exit_tokens) =
-        safeguard_approval(&filtered_calls, mode_runtime, &response)?;
-    if let Some(tokens) = early_exit_tokens {
+    let (filtered_calls, early_exit) = safeguard_approval(&filtered_calls, mode_runtime)?;
+    if early_exit {
+        // Cancelled by SafeGuard: the agent already consumed the prompt tokens.
         let estimated_completion_tokens = estimate_tokens(&response);
-        return Ok((response, tokens, estimated_completion_tokens));
+        return Ok((
+            response,
+            estimated_prompt_tokens,
+            estimated_completion_tokens,
+        ));
     }
 
     // ── Phase 3: Tool execution with FuturesUnordered + semaphore ──
@@ -2222,12 +2226,12 @@ fn filter_tool_calls_by_mode(
 }
 
 /// SafeGuard mode: interactive approval of high-risk operations.
-/// Returns `(filtered_calls, Option<early_exit_prompt_tokens>)`.
-/// If the user cancels, the second element contains the prompt token count for an early return.
+/// Returns `(filtered_calls, early_exit)`; `early_exit` is `true` when the
+/// user cancelled execution. The caller reports real token usage in that case
+/// (the prompt tokens were already consumed to produce the response).
 fn safeguard_approval<'a>(
     filtered_calls: &'a [(String, String)],
     mode_runtime: Option<&dyn ModeRuntime>,
-    _response: &str,
 ) -> SafeguardApprovalResult<'a> {
     let mode_kind = mode_runtime.map(|m| m.kind());
     let is_safeguard = matches!(mode_kind, Some(ModeKind::SafeGuard));
@@ -2272,11 +2276,11 @@ fn safeguard_approval<'a>(
                 ansi!("33"),
                 ansi!("0")
             );
-            return Ok((filtered_calls, Some(0)));
+            return Ok((filtered_calls, true));
         }
     }
 
-    Ok((filtered_calls, None))
+    Ok((filtered_calls, false))
 }
 
 /// Phase 2: Execute tools with progressive streaming via FuturesUnordered + Semaphore.
@@ -2291,70 +2295,22 @@ async fn run_tool_execution_phase(
 
     // ── Skill dedup: when AI calls multiple skills simultaneously, auto-select
     //    the one with the highest score and drop the rest. Non-skill tools are
-    //    preserved. This mirrors the same logic in ACP's run_agent_collecting.
-    let tool_calls = {
-        let skill_names: Vec<&str> = filtered_calls
-            .iter()
-            .filter(|(name, _)| {
-                // Only consider names that are registered as skills (not regular tools)
-                crate::orchestration::tool::skill_registry()
-                    .and_then(|r| r.read().ok())
-                    .map(|guard| guard.get(name).is_some())
-                    .unwrap_or(false)
-            })
-            .map(|(name, _)| name.as_str())
-            .collect();
-        if skill_names.len() > 1 {
-            let best = {
-                let reg = crate::orchestration::tool::skill_registry().and_then(|r| r.read().ok());
-                reg.as_ref().and_then(|guard| {
-                    skill_names
-                        .iter()
-                        .filter_map(|name| {
-                            let score = guard.score_of(name).unwrap_or(0.5);
-                            guard.get(name).map(|_| (name.to_string(), score))
-                        })
-                        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                })
-            };
-            if let Some((best_name, _)) = best {
-                warn!(
-                    "skill dedup: AI called {} skills ({}), auto-selecting '{}'",
-                    skill_names.len(),
-                    skill_names.join(", "),
-                    best_name
-                );
+    //    preserved. Shared logic with ACP's run_agent_collecting.
+    let tool_calls = match crate::orchestration::tool::skill_registry() {
+        Some(registry) => {
+            let (deduped, best) =
+                crate::orchestration::tool::dedup_skill_calls(filtered_calls, registry);
+            if let Some(best_name) = best {
                 eprintln!(
-                    "  {}skill dedup: {} skills called ({}), auto-selected '{}'{}",
+                    "  {}skill dedup: auto-selected '{}'{}",
                     ansi!("33"),
-                    skill_names.len(),
-                    skill_names.join(", "),
                     best_name,
                     ansi!("0")
                 );
-                filtered_calls
-                    .iter()
-                    .filter(|(name, _)| {
-                        // Keep all non-skill tools, and only the best skill
-                        crate::orchestration::tool::skill_registry()
-                            .and_then(|r| r.read().ok())
-                            .map(|guard| {
-                                if guard.get(name).is_some() {
-                                    *name == best_name
-                                } else {
-                                    true
-                                }
-                            })
-                            .unwrap_or(true)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>()
-            } else {
-                filtered_calls.to_vec()
             }
-        } else {
-            filtered_calls.to_vec()
+            deduped
         }
+        None => filtered_calls.to_vec(),
     };
 
     eprintln!("{}── Tool execution ──{}", ansi!("33"), ansi!("0"));
@@ -2907,21 +2863,37 @@ fn format_cargo_check_output(r: &serde_json::Value) -> Result<String> {
 }
 
 /// Cached build of CLI principles — rebuilt only when skills change.
-/// Uses a generation counter so that principles are re-built only when
-/// the skill registry content changes (detected via total skill count).
+/// Uses a content fingerprint (name + description of every visible skill)
+/// so both additions/removals and content edits invalidate the cache,
+/// unlike a bare count which misses description changes.
 fn build_cli_principles() -> Vec<String> {
-    static CACHED: std::sync::OnceLock<std::sync::RwLock<(Vec<String>, usize)>> =
+    static CACHED: std::sync::OnceLock<std::sync::RwLock<(Vec<String>, u64)>> =
         std::sync::OnceLock::new();
-    let cache = CACHED.get_or_init(|| std::sync::RwLock::new((Vec::new(), usize::MAX)));
+    let cache = CACHED.get_or_init(|| std::sync::RwLock::new((Vec::new(), u64::MAX)));
 
-    // Detect skill registry change by current skill count
-    let current_skill_count = crate::orchestration::tool::skill_registry()
+    // Fingerprint the skill content (sorted by name so runtime score changes
+    // don't reorder entries and trigger spurious rebuilds).
+    let current_fingerprint = crate::orchestration::tool::skill_registry()
         .and_then(|r| r.read().ok())
-        .map(|g| g.list(false).len())
+        .map(|g| {
+            use std::hash::Hasher;
+            let mut entries: Vec<(String, String)> = g
+                .list(false)
+                .into_iter()
+                .map(|d| (d.name, d.description))
+                .collect();
+            entries.sort();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for (name, desc) in &entries {
+                hasher.write(name.as_bytes());
+                hasher.write(desc.as_bytes());
+            }
+            hasher.finish()
+        })
         .unwrap_or(0);
 
     if let Ok(guard) = cache.read() {
-        if guard.1 == current_skill_count && !guard.0.is_empty() {
+        if guard.1 == current_fingerprint && !guard.0.is_empty() {
             return guard.0.clone();
         }
     }
@@ -2957,7 +2929,7 @@ fn build_cli_principles() -> Vec<String> {
 
     if let Ok(mut guard) = cache.write() {
         guard.0 = principles.clone();
-        guard.1 = current_skill_count;
+        guard.1 = current_fingerprint;
     }
     principles
 }

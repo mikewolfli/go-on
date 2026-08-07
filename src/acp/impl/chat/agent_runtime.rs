@@ -217,60 +217,11 @@ pub(crate) async fn run_agent_collecting(
                 .await?;
                 // ── Execute tool calls ────────────────────────────────
                 const MAX_TOOL_CALLS_PER_AGENT: usize = 100;
-                // ── Skill dedup ──
-                let tool_calls = {
-                    let is_builtin = |name: &str| -> bool {
-                        name == "skill-finder"
-                            || name == "skill-creator"
-                            || name == "acp_trace_get"
-                            || name == "acp_debug_panel_get"
-                            || name.starts_with("goon_")
-                    };
-                    let skill_names: Vec<&str> = tool_calls
-                        .iter()
-                        .filter(|(name, _)| !is_builtin(name))
-                        .map(|(name, _)| name.as_str())
-                        .collect();
-                    if skill_names.len() > 1 {
-                        let best = {
-                            let reg = server
-                                .orchestration_deps
-                                .skill_registry
-                                .read()
-                                .unwrap_or_else(|poisoned| {
-                                    warn!(
-                                        "run_agent_collecting: skill_registry poisoned, recovering"
-                                    );
-                                    poisoned.into_inner()
-                                });
-                            skill_names
-                                .iter()
-                                .filter_map(|name| {
-                                    let score = reg.score_of(name).unwrap_or(0.5);
-                                    reg.get(name).map(|_| (name.to_string(), score))
-                                })
-                                .max_by(|a, b| {
-                                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                                })
-                        };
-                        if let Some((best_name, _)) = best {
-                            warn!(
-                                "skill dedup: AI called {} skills ({}), auto-selecting '{}'",
-                                skill_names.len(),
-                                skill_names.join(", "),
-                                best_name
-                            );
-                            tool_calls
-                                .into_iter()
-                                .filter(|(name, _)| *name == best_name)
-                                .collect::<Vec<_>>()
-                        } else {
-                            tool_calls
-                        }
-                    } else {
-                        tool_calls
-                    }
-                };
+                // ── Skill dedup (shared logic with CLI chat) ──
+                let (tool_calls, _) = crate::orchestration::tool::dedup_skill_calls(
+                    &tool_calls,
+                    &server.orchestration_deps.skill_registry,
+                );
 
                 if tool_calls.len() >= MAX_TOOL_CALLS_PER_AGENT {
                     warn!(

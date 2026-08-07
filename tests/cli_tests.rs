@@ -108,22 +108,19 @@ fn test_cli_config_validation_rejects_missing_config() {
 }
 
 #[test]
-fn test_cli_verbose_mode_output() {
-    let (stdout, stderr, _status) =
-        run_cli(&["--verbose", "--validate-config", "--config", "/dev/null"]);
-    // Verbose mode may produce output on stdout (tracing) or stderr depending on
-    // the tracing subscriber configuration. Accept either.
+fn test_cli_help_lists_known_flags() {
+    // Regression guard: the CLI flag surface must stay explicit. Previously a
+    // `--verbose` test exercised a flag that never existed — the assertion
+    // passed only because clap's unknown-argument error happened to satisfy
+    // "output non-empty". Verify real flags instead.
+    let (stdout, stderr, status) = run_cli(&["--help"]);
+    let output = format!("{stdout}{stderr}");
+    assert!(status.success());
+    for flag in ["--config", "--validate-config", "--setup", "--diagnose"] {
+        assert!(output.contains(flag), "--help must list {flag}");
+    }
     assert!(
-        !stdout.is_empty() || !stderr.is_empty(),
-        "Expected verbose mode to emit diagnostic output, stdout was: {stdout}, stderr: {stderr}"
-    );
-    // Ensure stdout or stderr contains a validation message.
-    assert!(
-        stdout.contains("config")
-            || stderr.contains("config")
-            || stdout.contains("go-on")
-            || stderr.contains("go-on"),
-        "Expected verbose mode to mention config validation, \
-         stdout: {stdout}, stderr: {stderr}"
+        !output.contains("--verbose"),
+        "--help must not advertise a non-existent --verbose flag"
     );
 }

@@ -376,6 +376,15 @@ pub(crate) async fn persist_session_distillation(
         .map(|path| path.display().to_string());
 
     let analyzed = TaskRouter::analyze_task(&task);
+    // Derive clarification metrics from the task's latest requirement contract
+    // (same source as the task.execute path). Reports zero when no contract
+    // exists for this task yet — honest "no data", never a fake score.
+    let clarification_metrics =
+        crate::acp::helpers::requirement::resolve_learning_clarification_metrics(
+            &ledger,
+            &task,
+            &distill_params,
+        );
     let learning_event = WorkflowLearningEvent {
         generated_at: crate::acp::prelude::now_ts(),
         task: truncate_chars(&task, 200),
@@ -385,6 +394,8 @@ pub(crate) async fn persist_session_distillation(
         subtasks_completed: success_count,
         subtasks_failed: failure_count,
         subtasks_skipped: 0,
+        // The chat distillation path has no per-attempt timing data, so
+        // serial/critical-path durations are not available (0 = no data).
         serial_work_ms: 0,
         critical_path_ms: 0,
         parallel_speedup: if agent_attempts.len() > 1 { 1.0 } else { 0.0 },
@@ -405,9 +416,9 @@ pub(crate) async fn persist_session_distillation(
             "C".to_string()
         },
         risk_score: round_metric((1.0 - success_rate).clamp(0.0, 1.0)),
-        clarification_rounds: 0,
-        clarification_quality_score: 1.0,
-        requirement_change_count: 0,
+        clarification_rounds: clarification_metrics.rounds,
+        clarification_quality_score: clarification_metrics.quality_score,
+        requirement_change_count: clarification_metrics.requirement_change_count,
         review_reject_root_cause: String::new(),
         primary_stability_score: round_metric(success_rate),
         secondary_utilization_rate: if agent_attempts.len() > 1 {

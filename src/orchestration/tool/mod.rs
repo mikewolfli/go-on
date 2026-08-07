@@ -56,6 +56,57 @@ pub fn set_skill_registry(registry: Arc<RwLock<SkillRegistry>>) {
     }
 }
 
+/// Deduplicate concurrent skill calls: when the model emits several skill
+/// calls at once, keep every non-skill tool and only the best-scored skill.
+/// Returns the filtered calls plus the name of the winning skill when a
+/// dedup actually happened (so callers can surface a user-facing notice).
+/// Shared by the CLI chat and ACP agent-runtime paths so behavior stays
+/// identical on both sides.
+pub fn dedup_skill_calls(
+    calls: &[(String, String)],
+    registry: &RwLock<SkillRegistry>,
+) -> (Vec<(String, String)>, Option<String>) {
+    let reg = registry
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let skill_names: Vec<&str> = calls
+        .iter()
+        .filter(|(name, _)| reg.get(name).is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if skill_names.len() <= 1 {
+        return (calls.to_vec(), None);
+    }
+    let best = skill_names
+        .iter()
+        .filter_map(|name| {
+            let score = reg.score_of(name).unwrap_or(0.5);
+            reg.get(name).map(|_| (name.to_string(), score))
+        })
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    match best {
+        Some((best_name, _)) => {
+            tracing::warn!(
+                target: "tool",
+                "skill dedup: AI called {} skills ({}), auto-selecting '{}'",
+                skill_names.len(),
+                skill_names.join(", "),
+                best_name
+            );
+            let deduped = calls
+                .iter()
+                .filter(|(name, _)| match reg.get(name) {
+                    Some(_) => *name == best_name,
+                    None => true,
+                })
+                .cloned()
+                .collect();
+            (deduped, Some(best_name))
+        }
+        None => (calls.to_vec(), None),
+    }
+}
+
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tool_names: Vec<&&str> = self.tools.keys().collect();

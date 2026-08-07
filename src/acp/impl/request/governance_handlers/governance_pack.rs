@@ -685,11 +685,6 @@ pub(crate) fn build_change_bundle(
             "risk_level": level,
             "ready": status == "passed",
         },
-        "test_coverage": {
-            "overall_coverage": 0.0,
-            "affected_areas": [],
-            "test_plan": "standard"
-        }
     })
 }
 

@@ -25,11 +25,6 @@ sdk/typescript/.vite/
 sdk/typescript/gen/
 sdk/typescript/target/
 sdk/rust/target/
-sdk/nodejs/node_modules/
-sdk/nodejs/dist/
-sdk/nodejs/.vite/
-sdk/nodejs/gen/
-sdk/nodejs/target/
 sdk/python/dist/
 sdk/python/build/
 

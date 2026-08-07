@@ -767,7 +767,7 @@ pub(crate) async fn handle_workflow_execute(
             subtasks_completed: execution_report.subtasks_completed,
             subtasks_failed: execution_report.subtasks_failed,
             subtasks_skipped: execution_report.subtasks_skipped,
-            serial_work_ms: 0,
+            serial_work_ms: execution_report.serial_work_ms,
             critical_path_ms: execution_report.critical_path_ms,
             parallel_speedup: execution_report.parallel_speedup,
             parallel_efficiency: execution_report.parallel_efficiency,
@@ -777,6 +777,8 @@ pub(crate) async fn handle_workflow_execute(
             gates_ok: true,
             work_grade: "full_auto".to_string(),
             risk_score: 1.0_f64 - plan.routing.predicted_success_rate as f64,
+            // The requirement gate passed (or auto-recovered) before execution
+            // started, so there was no clarification round on this run.
             clarification_rounds: 0,
             clarification_quality_score: 0.0,
             requirement_change_count: 0,
@@ -906,6 +908,10 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         corrective_effective as f64 / corrective_actions_applied as f64
     };
+    // NOTE: `total_rounds` is the number of execution rounds (1 + repair
+    // cycles) and `total_tools` is the completed subtask count — both are
+    // real workflow counters, but the field names intentionally mirror the
+    // ACP autonomy contract shape for cross-path consistency.
     let autonomy_contract = build_runtime_execute_autonomy_contract(
         1 + corrective_actions_applied,
         execution_report.subtasks_completed

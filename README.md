@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.5.0
+  <strong>go-on</strong> — A Rust-based AI agent orchestration runtime with desktop GUI, VS Code extension, SSE streaming, MCP/ACP protocols, autonomous workflows, and built-in governance. v1.5.1
 </p>
 
 <p align="center">
@@ -16,14 +16,14 @@
 
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.5.0-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.5.1-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/mikewolfli/go-on/actions/workflows/build.yml/badge.svg)](https://github.com/mikewolfli/go-on/actions/workflows/build.yml)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]()
 [![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-success)]()
 [![Providers](https://img.shields.io/badge/providers-37-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-[![LOC](https://img.shields.io/badge/code-251K-blue)]()
+[![LOC](https://img.shields.io/badge/code-248K-blue)]()
 
 ## What is go-on?
 
@@ -280,14 +280,14 @@ npm run compile
 
 | Metric | Value |
 |:-------|:------|
-| Rust backend LOC | ~206K (451 modules) |
+| Rust backend LOC | ~203K (451 modules) |
 | GUI (EGUI) LOC | ~24K |
 | VS Code addon (TypeScript) LOC | ~17K |
-| SDK (Rust + Python + Node.js + TypeScript) LOC | ~4K |
+| SDK (Rust + Python + TypeScript) LOC | ~4K |
 | Built-in tools | 60+ |
 | AI providers | 37 |
-| Skills in marketplace | 33 |
-| Unit tests | ~3.5K (see Verification below) |
+| Skills in marketplace | 30+ |
+| Unit tests | ~1.7K (1,590 lib + 139 integration; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles

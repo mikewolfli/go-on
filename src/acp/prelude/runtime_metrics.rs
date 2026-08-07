@@ -370,6 +370,10 @@ impl RuntimeMetrics {
             chat_latency_bucket_counts: agg.chat_latency_bucket_counts,
             review_latency_sum_ms: agg.review_latency_sum_ms,
             review_latency_bucket_counts: agg.review_latency_bucket_counts,
+            // The four signals below are not owned by RuntimeMetrics: they are
+            // filled by AcpServer::get_status (perf monitor + resilience
+            // engine) and the Prometheus exporter. RuntimeMetrics::snapshot
+            // reports zero for them by design, not as fake data.
             cache_hit_rate: 0.0,
             circuit_breaker_open_count: 0,
             memory_usage_bytes: 0,

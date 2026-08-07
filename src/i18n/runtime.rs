@@ -316,19 +316,7 @@ impl I18nManager {
 
     /// Get translated message with format arguments
     pub fn get_formatted(&self, key: &str, format_args: &[(&str, &str)]) -> String {
-        let mut message = self.get(key);
-
-        // Escape {{ → sentinel so literal {name} is not substituted
-        message = message.replace("{{", ESCAPED_SENTINEL);
-
-        for (placeholder, value) in format_args {
-            message = message.replace(&format!("{{{}}}", placeholder), value);
-        }
-
-        // Restore sentinel → {
-        message = message.replace(ESCAPED_SENTINEL, "{");
-
-        message
+        format_template(self.get(key), format_args)
     }
 
     /// Hot reload language files (monitors for changes)
@@ -395,17 +383,18 @@ pub fn t(key: &str) -> String {
 
 /// Translate message with formatting
 pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
-    let template = t(key);
+    format_template(t(key), args)
+}
 
-    let mut message = template;
-    // Escape {{ → sentinel so literal {name} is not substituted
-    message = message.replace("{{", ESCAPED_SENTINEL);
+/// Apply `{placeholder}` substitutions to a translated template, escaping
+/// `{{` literals so they survive substitution untouched. Shared by
+/// `I18nManager::get_formatted` and the global `tf` helper.
+fn format_template(message: String, args: &[(&str, &str)]) -> String {
+    let mut message = message.replace("{{", ESCAPED_SENTINEL);
     for (placeholder, value) in args {
         message = message.replace(&format!("{{{}}}", placeholder), value);
     }
-    // Restore sentinel → {
-    message = message.replace(ESCAPED_SENTINEL, "{");
-    message
+    message.replace(ESCAPED_SENTINEL, "{")
 }
 
 /// Set global language

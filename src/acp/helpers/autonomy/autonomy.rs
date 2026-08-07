@@ -90,11 +90,7 @@ pub(crate) fn terminal_chat_contract_snapshot(
         total_tools: tool_call_count,
         final_phase,
         rounds: Vec::new(),
-        planner_guidance_used: false,
-        trace_alignment_coverage: 0.0,
         total_duration_ms: 0,
-        corrective_actions_applied_total: 0,
-        corrective_action_effectiveness_ratio: 0.0,
         stop_reason: stop_reason.to_string(),
     })
 }
@@ -146,11 +142,7 @@ mod tests {
             total_tools: 2,
             final_phase: AutonomyPhase::Completed,
             rounds: Vec::new(),
-            planner_guidance_used: false,
-            trace_alignment_coverage: 0.0,
             total_duration_ms: 0,
-            corrective_actions_applied_total: 0,
-            corrective_action_effectiveness_ratio: 0.0,
             stop_reason: "tools_exhausted_task_complete".to_string(),
         });
 
@@ -190,11 +182,7 @@ mod tests {
             total_tools: tool_call_count,
             final_phase,
             rounds: Vec::new(),
-            planner_guidance_used: false,
-            trace_alignment_coverage: 0.0,
             total_duration_ms: 0,
-            corrective_actions_applied_total: 0,
-            corrective_action_effectiveness_ratio: 0.0,
             stop_reason: stop_reason.to_string(),
         }
     }
@@ -296,9 +284,9 @@ mod tests {
         let canonical_keys: &[&str] = &[
             "total_rounds",
             "total_tools",
+            "final_phase",
+            "total_duration_ms",
             "stop_reason",
-            "corrective_actions_applied_total",
-            "corrective_action_effectiveness_ratio",
         ];
 
         for (idx, contract) in scenarios.iter().enumerate() {

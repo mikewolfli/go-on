@@ -80,7 +80,7 @@ BLUE42 的全部约束继续作为 BLUE43 的硬门槛：
 | 执行速度 | 10/10 | FastPathCache 快路径缓存（SHA-256 指纹/TTL/LRU, cache miss/hit ratio >1.5x 实测）；predictive reroute early break 避免空转（低 health+高 failures 提前终止）；recovery orchestrator 六类策略最小化故障恢复；快路径路由模板绕过重规划 |
 | 交互流畅度 | 10/10 | 自治循环含预测式 reroute（3 类原因码）+ early break 防止轮次浪费；apply_corrective_actions 注入下轮 message 减少摩擦；recovery 六类策略树覆盖 timeout/empty/permission/rate_limit/generic 全部 5 类故障；高严重度自动 escalate_and_halt |
 | 智能深度 | 10/10 | pre_check 使用 self_model 限制检测+world_model 事件记录（3 次连续失败触发 degrade 含具体原因）；post_check 产生纠偏动作并写入 metacognitive autoreflect；CapabilityBus 多因子（reputation/recency/task-fit/recent-outcome）选路；ContinuousLearning 经验整合；高严重度自动 escalate |
-| 可观测可信度 | 10/10 | governance.status 暴露真实 p95（非 avg）、DAG metrics（width/depth）、FastPathCache metrics、idempotency conflict rate；contract_snapshot 含 corrective_action_effectiveness_ratio；AuditTrail 可回放；external_benchmark 回归门禁 |
+| 可观测可信度 | 10/10 | governance.status 暴露真实 p95（非 avg）、DAG metrics（width/depth）、FastPathCache metrics、idempotency conflict rate；runtime execute 契约含 corrective_action_effectiveness_ratio（真实修复轮次）；AuditTrail 可回放；external_benchmark 回归门禁 |
 
 **结论**：已达到钢铁侠战衣级。
 

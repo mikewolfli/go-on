@@ -1329,7 +1329,7 @@ pub(crate) async fn handle_task_execute(
             subtasks_completed: execution_report.subtasks_completed,
             subtasks_failed: execution_report.subtasks_failed,
             subtasks_skipped: execution_report.subtasks_skipped,
-            serial_work_ms: 0,
+            serial_work_ms: execution_report.serial_work_ms,
             critical_path_ms: execution_report.critical_path_ms,
             parallel_speedup: execution_report.parallel_speedup,
             parallel_efficiency: execution_report.parallel_efficiency,

@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.5.1] - 2026-08-07
+
+### Version bump + errors/warnings sweep (2026-08-07, docs/log/log-20260807-1.md)
+
+- All product versions aligned to **1.5.1** (workspace, GUI, VS Code addon, rust/python/typescript SDKs, crates, cookbook, README badges).
+- Full-project errors/warnings sweep: `cargo check` (4 profiles + workspace) and `cargo clippy --all-targets -D warnings` zero warnings/errors; GUI `cargo check` zero warnings; `sdk/typescript` and `vscode-addon` `tsc --noEmit` zero errors.
+
+## [1.5.0] - 2026-08-07
+
+### Round 40 — Super-Deep/Broad Scan Rounds 1-6 (2026-08-07, docs/log/log-20260807-1.md)
+
+#### SDK / Three-Client Contract
+
+- **`sdk/nodejs` removed** (confirmed duplicate of `sdk/typescript`): `vscode-addon` keeps its hard dependency on `go-on-sdk-typescript`; TS SDK gained `configReload` (aligns with backend `config.reload`) and `health()` return type corrected to the real `ServerStatus` payload; `.gitignore`/`contracts/cross-client-sync.md`/cookbook index updated to drop Node.js references.
+
+#### Anti-Fake-Metric Cleanup (principles #13/18)
+
+- **`AutonomyLoopReport` constant-zero fields removed** (`planner_guidance_used`/`trace_alignment_coverage`/`corrective_actions_applied_total`/`corrective_action_effectiveness_ratio`): the ACP/CLI autonomy-loop path never applies corrective actions, so exposing constant 0/1.0 was a fake metric. `contract_snapshot()` now exposes the unified execution-evidence contract (rounds/tools/phase/duration/stop_reason); the workflow.execute runtime contract keeps its real repair-cycle counters.
+- **`circuit_breaker_open` alert now has a real producer**: the 30s alert loop reads `HyperResilienceEngine.profile().open_circuits` (same source as the Prometheus exporter) instead of the always-zero `RuntimeMetrics` snapshot field; the snapshot's four non-owned signals are documented as filled externally.
+- **`serial_work_ms` wired to real values** in `workflow.execute`/`task.execute` learning events (was 0); chat-distillation events document why 0 = no timing data.
+- **`record_autonomy_loop_stop_reason` value-domain unified**: chat-path `completed`/`tools_executed`/`all_tools_failed` now map into the complete/failed buckets (completion ratio was always ~0); the producer-less `escalated` bucket removed.
+- **`fallback_unhealthy_ratio` removed** (numerator and denominator measured unrelated events); the real `fallback_unhealthy_agent_total` counter stays.
+- **Constant-fake fields deleted**: `build_change_bundle.test_coverage` (no test data source), `org_policy.exceptions.active_total` (never tracked), `cpu_usage_percent` now reads the real perf snapshot, `clarification_quality_score` fake 1.0 removed.
+- **Clarification metrics derived, not faked**: the chat-distillation learning event now calls `resolve_learning_clarification_metrics` (same source as `task.execute`), deriving rounds/quality/change-count from the task's latest requirement contract; 0 when no contract exists.
+
+#### Speed / Dedup
+
+- **`dedup_skill_calls` shared helper** (`orchestration/tool/mod.rs`) unifies CLI chat and ACP `run_agent_collecting`; fixes an ACP behavior bug where dedup dropped non-skill tools.
+- **`build_cli_principles` cache key upgraded** from skill count to a content fingerprint (name+description hash), so skill description edits invalidate the cache.
+- **SafeGuard cancel reports real prompt tokens** (was a placeholder 0); unused `_response` param removed.
+- **`recommend_parallelism_from_learning_bus` filters to real execution sources** so distillation placeholder speedups no longer dilute parallelism recommendations.
+- **i18n `format_template` helper** deduplicates `get_formatted`/`tf`.
+- **AppConfig process-level mtime cache** (single config load per request), healthcheck report 2s TTL, `start_drift_monitor` lazified, HTTP clients unified, dead harness/communication/memory-vacuum APIs deleted (Rounds 1-3).
+
+#### Verification
+
+```
+cargo check 4 profiles + --workspace   → zero warnings
+cargo clippy --all-targets -D warnings → zero warnings
+cargo test --lib                     → 1590 passed / 0 failed
+```
+
 ## [1.5.0] - 2026-08-06
 
 ### Round 39 — Architecture Unification & Speed Pass (2026-08-06/07, docs/log/log-20260806-7.md)

@@ -15,7 +15,6 @@ static ORCHESTRATION_NODE_MAPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ORCHESTRATION_NODE_UNMAPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AUTONOMY_LOOP_STOP_COMPLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AUTONOMY_LOOP_STOP_FAILED_TOTAL: AtomicU64 = AtomicU64::new(0);
-static AUTONOMY_LOOP_STOP_ESCALATED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static AUTONOMY_LOOP_STOP_INCOMPLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TOOL_FOLLOWUP_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TOOL_FOLLOWUP_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -79,15 +78,17 @@ pub(crate) fn record_orchestration_node_mapping(mapped_nodes: u64, unmapped_node
 
 pub(crate) fn record_autonomy_loop_stop_reason(reason: &str) {
     match reason {
-        "complete" => {
+        // workflow.execute reports "complete"; the autonomy loop reports
+        // "completed" / "tools_executed" for successful termination.
+        "complete" | "completed" | "tools_executed" => {
             AUTONOMY_LOOP_STOP_COMPLETE_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
-        "failed" => {
+        // "all_tools_failed" is the loop's failed-stop equivalent of "failed".
+        "failed" | "all_tools_failed" => {
             AUTONOMY_LOOP_STOP_FAILED_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
-        "escalated" => {
-            AUTONOMY_LOOP_STOP_ESCALATED_TOTAL.fetch_add(1, Ordering::Relaxed);
-        }
+        // "incomplete" (workflow waiting_clarification) and anything unknown
+        // land in the incomplete bucket.
         _ => {
             AUTONOMY_LOOP_STOP_INCOMPLETE_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
@@ -187,7 +188,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let orchestration_node_unmapped = ORCHESTRATION_NODE_UNMAPPED_TOTAL.load(Ordering::Relaxed);
     let loop_stop_complete = AUTONOMY_LOOP_STOP_COMPLETE_TOTAL.load(Ordering::Relaxed);
     let loop_stop_failed = AUTONOMY_LOOP_STOP_FAILED_TOTAL.load(Ordering::Relaxed);
-    let loop_stop_escalated = AUTONOMY_LOOP_STOP_ESCALATED_TOTAL.load(Ordering::Relaxed);
     let loop_stop_incomplete = AUTONOMY_LOOP_STOP_INCOMPLETE_TOTAL.load(Ordering::Relaxed);
     let tool_followup_attempt = TOOL_FOLLOWUP_ATTEMPT_TOTAL.load(Ordering::Relaxed);
     let tool_followup_success = TOOL_FOLLOWUP_SUCCESS_TOTAL.load(Ordering::Relaxed);
@@ -200,7 +200,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let fallback_unhealthy = FALLBACK_UNHEALTHY_AGENT_TOTAL.load(Ordering::Relaxed);
     let reputation_routing_applied = REPUTATION_ROUTING_APPLIED_TOTAL.load(Ordering::Relaxed);
     let vote_reputation_tiebreak = VOTE_REPUTATION_TIEBREAK_TOTAL.load(Ordering::Relaxed);
-    let decision_total = auto_recovery + human_confirmation;
     let capability_selection_total =
         capability_selection_applied + capability_selection_no_match + capability_selection_none;
     let vote_total = vote_winner_strong + vote_winner_escalation;
@@ -211,8 +210,7 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let alignment_total = alignment_high + alignment_low;
     let repair_total = repair_resolved + repair_improved + repair_unresolved;
     let orchestration_node_total = orchestration_node_mapped + orchestration_node_unmapped;
-    let loop_stop_total =
-        loop_stop_complete + loop_stop_failed + loop_stop_escalated + loop_stop_incomplete;
+    let loop_stop_total = loop_stop_complete + loop_stop_failed + loop_stop_incomplete;
 
     let auto_recovery_ratio = if recovery_total == 0 {
         0.0
@@ -268,12 +266,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         vote_winner_escalation as f64 / vote_total as f64
     };
 
-    let fallback_unhealthy_ratio = if decision_total == 0 {
-        0.0
-    } else {
-        fallback_unhealthy as f64 / decision_total as f64
-    };
-
     json!({
         "requirement_auto_recovery_total": auto_recovery,
         "requirement_human_confirmation_total": human_confirmation,
@@ -293,7 +285,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         "orchestration_node_mapping_ratio": orchestration_node_mapping_ratio,
         "autonomy_loop_stop_complete_total": loop_stop_complete,
         "autonomy_loop_stop_failed_total": loop_stop_failed,
-        "autonomy_loop_stop_escalated_total": loop_stop_escalated,
         "autonomy_loop_stop_incomplete_total": loop_stop_incomplete,
         "autonomy_loop_completion_ratio": autonomy_loop_completion_ratio,
         "tool_followup_attempt_total": tool_followup_attempt,
@@ -311,7 +302,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         "vote_winner_escalation_total": vote_winner_escalation,
         "vote_escalation_ratio": vote_escalation_ratio,
         "fallback_unhealthy_agent_total": fallback_unhealthy,
-        "fallback_unhealthy_ratio": fallback_unhealthy_ratio,
         "reputation_routing_applied_total": reputation_routing_applied,
         "vote_reputation_tiebreak_total": vote_reputation_tiebreak,
         "agent_switch_total": agent_switch_total,

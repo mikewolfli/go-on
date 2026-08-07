@@ -465,7 +465,6 @@ fn assert_blue22_change_bundle_shape(result: &Value) {
     assert!(result["change_bundle"]["commit"].is_object());
     assert!(result["change_bundle"]["commit_bundle"].is_object());
     assert!(result["change_bundle"]["pr_bundle"].is_object());
-    assert!(result["change_bundle"]["test_coverage"].is_object());
 }
 
 struct AdvancedRpcHarness {
@@ -1256,7 +1255,6 @@ fn http_chat_completions_updates_health_metrics_and_emits_latency_log() {
         let mut cmd = Command::new(binary_path());
         cmd.arg("--config")
             .arg(&config_path)
-            .arg("--verbose")
             .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
             .env("GO_ON_SKIP_MEMORY_CHECK", "true")
             .stdout(Stdio::null())

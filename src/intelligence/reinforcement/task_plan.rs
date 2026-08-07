@@ -532,7 +532,16 @@ pub fn recommend_parallelism_from_learning_bus(
         return current;
     }
 
-    let recent = bus.events.iter().rev().take(20).collect::<Vec<_>>();
+    // Distillation events (source="session_distillation") carry only a
+    // constant placeholder speedup (1.0/0.0), so they would dilute the real
+    // parallelism evidence. Only count actual execution sources here.
+    let recent = bus
+        .events
+        .iter()
+        .rev()
+        .filter(|event| event.source == "workflow.execute" || event.source == "task.execute")
+        .take(20)
+        .collect::<Vec<_>>();
     if recent.is_empty() {
         return current;
     }

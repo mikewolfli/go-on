@@ -1,5 +1,43 @@
 # 更新日志
 
+## [1.5.1] - 2026-08-07
+
+### 版本升级 + 全项目 errors/warnings 清理（2026-08-07，docs/log/log-20260807-1.md）
+
+- 全平台版本统一为 **1.5.1**（workspace、GUI、VS Code 插件、rust/python/typescript SDK、crates、cookbook、README 徽章）。
+- 全项目 errors/warnings 清理：`cargo check`（4 profile + workspace）与 `cargo clippy --all-targets -D warnings` 零警告零错误；GUI `cargo check` 零警告；`sdk/typescript` 与 `vscode-addon` `tsc --noEmit` 零错误。
+
+## [1.5.0] - 2026-08-07
+
+### 第 40 轮 — 超级深度/广度扫描第 1-6 轮（2026-08-07，docs/log/log-20260807-1.md）
+
+#### SDK / 三端契约
+- **删除 `sdk/nodejs`**（用户确认与 `sdk/typescript` 重复）：`vscode-addon` 保持对 `go-on-sdk-typescript` 的硬依赖；TS SDK 补 `configReload`（对齐后端 `config.reload`）、`health()` 返回类型修正为真实 `ServerStatus` 载荷；`.gitignore`/`contracts/cross-client-sync.md`/cookbook 索引同步移除 Node.js 引用。
+
+#### 反假指标清理（原则 §13/§18）
+- **删除 `AutonomyLoopReport` 恒零字段**（`planner_guidance_used`/`trace_alignment_coverage`/`corrective_actions_applied_total`/`corrective_action_effectiveness_ratio`）：ACP/CLI 自治循环路径不执行纠错动作，暴露恒 0/1.0 属假指标；`contract_snapshot()` 收敛为统一执行证据契约（轮次/工具数/阶段/耗时/终止原因）；workflow.execute 的 runtime 契约保留真实修复轮次计数。
+- **`circuit_breaker_open` 告警接入真实源**：30s 告警循环读 `HyperResilienceEngine.profile().open_circuits`（与 Prometheus 导出器同源）；`RuntimeMetrics` 快照中 4 个非自有信号字段注释标明由外部填充。
+- **`serial_work_ms` 接线真实值**（workflow.execute/task.execute 学习事件，原恒 0）；chat 蒸馏路径注释说明 0=无时序数据。
+- **`record_autonomy_loop_stop_reason` 值域统一**：chat 路径 `completed`/`tools_executed`/`all_tools_failed` 正确映射完成/失败桶（此前 completion_ratio 恒失真）；删除无生产者的 `escalated` 死桶。
+- **删除 `fallback_unhealthy_ratio`**（分子分母衡量无关事件）；保留真实计数 `fallback_unhealthy_agent_total`。
+- **删除恒零假字段**：`build_change_bundle.test_coverage`（无测试数据源）、`org_policy.exceptions.active_total`（从不追踪）；`cpu_usage_percent` 接真实 perf 快照；`clarification_quality_score` 假满分 1.0 删除。
+- **澄清指标真实推导**：chat 蒸馏学习事件调用 `resolve_learning_clarification_metrics`（与 task.execute 同源），从任务最新需求契约推导 rounds/quality/change-count；无契约时如实回退 0。
+
+#### 加速 / 去重
+- **`dedup_skill_calls` 共享 helper**（`orchestration/tool/mod.rs`）统一 CLI chat 与 ACP `run_agent_collecting`；修复 ACP 版 dedup 丢弃非技能工具的行为 bug。
+- **`build_cli_principles` 缓存 key 升级**：技能数量 → 内容指纹（name+description 哈希），技能描述变更即失效重建。
+- **SafeGuard 取消返回真实 prompt tokens**（原占位 0）；删除未用 `_response` 参数。
+- **`recommend_parallelism_from_learning_bus` 按 source 过滤**：蒸馏占位 speedup 不再稀释并行度推荐。
+- **i18n `format_template` helper** 去重 `get_formatted`/`tf`。
+- **AppConfig 进程级 mtime 缓存**（单请求 6× load → 1×）、healthcheck 报告 2s TTL、`start_drift_monitor` 惰性化、HTTP client 统一、harness/communication/memory-vacuum 死 API 删除（第 1-3 轮）。
+
+#### 验证
+```
+cargo check 4 profile + --workspace   → 零警告
+cargo clippy --all-targets -D warnings → 零警告
+cargo test --lib                     → 1590 passed / 0 failed
+```
+
 ## [1.5.0] - 2026-08-06
 
 ### 第 39 轮 — 架构统一与加速（2026-08-06/07，docs/log/log-20260806-7.md）

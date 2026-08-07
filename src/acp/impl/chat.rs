@@ -1003,8 +1003,6 @@ pub(crate) async fn execute_autonomy_round(
                     "autonomy_contract": autonomy_contract,
                     "total_rounds": loop_result.report.total_rounds,
                     "total_tools": loop_result.report.total_tools,
-                    "corrective_actions_applied_total": loop_result.report.corrective_actions_applied_total,
-                    "corrective_action_effectiveness_ratio": loop_result.report.corrective_action_effectiveness_ratio,
                     "stop_reason": stop_reason,
                     "candidate_index": idx,
                     "candidate_count": resolved.agents.len(),

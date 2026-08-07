@@ -627,7 +627,10 @@ impl AcpServer {
                 .as_ref()
                 .map(|s| s.memory_usage_bytes)
                 .unwrap_or(0),
-            cpu_usage_percent: 0.0,
+            cpu_usage_percent: perf_snapshot
+                .as_ref()
+                .map(|s| s.cpu_usage_percent)
+                .unwrap_or(0.0),
             ..MetricsSnapshot::default()
         };
         let runtime_snapshot = self.observability.metrics.snapshot();
