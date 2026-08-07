@@ -245,7 +245,11 @@ fn split_secret_pool(raw: &str) -> Vec<String> {
     vec![trimmed.to_string()]
 }
 
-fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
+/// Env-var fallback candidates for a keyring service/account pair.
+///
+/// Shared with `intelligence::reinforcement::health` (single source of truth
+/// for the keyring → env fallback chain).
+pub(crate) fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
     if account == "openai_api_key" {
@@ -276,7 +280,9 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
     candidates
 }
 
-fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
+/// Candidate keyring service/account pairs for a locator, including
+/// backward-compatible aliases (e.g. copilot_api_key ↔ github_copilot_token).
+pub(crate) fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
     let mut targets = vec![(service.to_string(), account.to_string())];
 
     // Backward/forward compatibility for Copilot key naming.
@@ -632,21 +638,6 @@ pub trait Agent: Send + Sync {
             audit_log: None,
             pua_report: None,
         })
-    }
-
-    // ── BLUE70: Agent communication methods ────────────────────────
-
-    /// Receive an inter-agent message.
-    ///
-    /// Default implementation logs the message and returns None (no reply).
-    /// Agents that participate in tree-based communication override this
-    /// to handle Delegate, Cancel, StatusQuery, etc.
-    async fn on_message(
-        &self,
-        msg: &crate::agents::communication::message::AgentMessage,
-    ) -> AppResult<Option<crate::agents::communication::message::AgentMessage>> {
-        tracing::info!(from = %msg.from, kind = ?msg.kind, "agent received message (default handler)");
-        Ok(None)
     }
 }
 

@@ -18,6 +18,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+
+use crate::config::StartupContextConfig;
 use std::time::Duration;
 
 pub mod detection;
@@ -126,45 +128,10 @@ fn reset_cache() {
 // Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration knobs for startup context loading.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StartupContextConfig {
-    /// Master switch – when `false` `load()` returns immediately with defaults.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Maximum number of characters to read from the README.
-    #[serde(default = "default_readme_max_chars")]
-    pub readme_max_chars: usize,
-    /// Number of recent commits to retrieve.
-    #[serde(default = "default_recent_commits")]
-    pub recent_commits: usize,
-    /// Per-file I/O timeout in milliseconds.
-    #[serde(default = "default_io_timeout_ms")]
-    pub io_timeout_ms: u64,
-}
-
-fn default_readme_max_chars() -> usize {
-    2000
-}
-
-fn default_recent_commits() -> usize {
-    5
-}
-
-fn default_io_timeout_ms() -> u64 {
-    5_000
-}
-
-impl Default for StartupContextConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            readme_max_chars: 2000,
-            recent_commits: 5,
-            io_timeout_ms: 5_000,
-        }
-    }
-}
+// StartupContextConfig is defined in core/config/types.rs (re-exported as
+// crate::config::StartupContextConfig) and shared with the config loader; the
+// io_timeout_ms field was merged into that type to eliminate the duplicate
+// definition that used to live here.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Summary text

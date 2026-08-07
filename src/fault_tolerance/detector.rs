@@ -74,7 +74,8 @@ impl FaultToleranceEngine {
     }
 
     /// Report a heartbeat from a node. Resets the missed-beat counter and
-    /// moves the node back to Online if it was recovering.
+    /// moves the node back to Online if it was recovering. Any unresolved
+    /// faults for the node are resolved now that it is healthy again.
     pub async fn report_heartbeat(&self, node_id: &str) -> Result<()> {
         let mut inner = self.inner.write().await;
         let node_id = node_id.to_string();
@@ -87,6 +88,15 @@ impl FaultToleranceEngine {
         record.missed_beats = 0;
         if record.status == NodeStatus::Offline || record.status == NodeStatus::Recovering {
             record.status = NodeStatus::Online;
+            // Resolve unresolved faults for this node now that it is healthy.
+            for (_, fault) in inner
+                .faults
+                .iter_mut()
+                .filter(|(_, f)| f.node_id == node_id && !f.recovered)
+            {
+                fault.resolved_ms = Some(now);
+                fault.recovered = true;
+            }
         }
         Ok(())
     }
@@ -244,6 +254,33 @@ impl FaultToleranceEngine {
                 // Update status based on missed beats
                 if record.missed_beats >= max_missed {
                     record.status = NodeStatus::Offline;
+                    // Record a fault event so `active_faults()` / cluster
+                    // health reflect the outage (once per outage — skip when
+                    // an unresolved fault for this node already exists).
+                    let has_active_fault = inner
+                        .faults
+                        .values()
+                        .any(|f| f.node_id == node_id && !f.recovered);
+                    if !has_active_fault {
+                        inner.fault_counter += 1;
+                        let fault_id = format!("fault-{}", inner.fault_counter);
+                        inner.faults.insert(
+                            fault_id.clone(),
+                            crate::fault_tolerance::FaultEvent {
+                                id: fault_id,
+                                node_id: node_id.clone(),
+                                fault_type: crate::fault_tolerance::FaultType::NetworkTimeout,
+                                severity: 8,
+                                description: format!(
+                                    "node '{}' missed {} consecutive heartbeats",
+                                    node_id, max_missed
+                                ),
+                                detected_ms: now,
+                                resolved_ms: None,
+                                recovered: false,
+                            },
+                        );
+                    }
                     offenders.push(node_id.clone());
                 } else if record.missed_beats > 0 {
                     record.status = NodeStatus::Degraded;

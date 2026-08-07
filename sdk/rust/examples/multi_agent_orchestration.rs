@@ -47,8 +47,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 4. Check health ─────────────────────────────────────────────────
     let health = client.health().await?;
     println!(
-        "   ✓ Health: {} (uptime: {}s)",
-        health.status, health.uptime_seconds
+        "   ✓ Health: version={} lifecycle={}",
+        health.version.as_deref().unwrap_or("unknown"),
+        health
+            .lifecycle
+            .as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "n/a".to_string())
     );
 
     // ── 5. Check governance status (agents, capabilities, phases) ───────
@@ -74,16 +79,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("     {}", serde_json::to_string_pretty(&plan.plan)?);
 
     // ── 7. Execute the planned task ─────────────────────────────────────
-    // The plan_id would typically come from the task_plan response.
-    // Here we use a placeholder; in production you'd extract it from plan.plan.
-    let plan_id = plan
-        .plan
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("plan_001");
-
-    println!("🚀 Executing task (plan_id: {plan_id})...");
-    let execution = client.task_execute(plan_id).await?;
+    // task.execute takes the task text (the backend re-plans/executes it);
+    // plan_id is not consumed by the current backend contract.
+    println!("🚀 Executing task...");
+    let execution = client.task_execute(task_description).await?;
     println!(
         "   ✓ Execution started: {}",
         execution

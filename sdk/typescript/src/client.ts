@@ -5,7 +5,6 @@ import type {
   AcpSessionCloseRequest,
   AcpSessionListResponse,
   AcpSessionResumeRequest,
-  ApiResponse,
   BreakerStatusResponse,
   ChatRequest,
   ChatMessage,
@@ -286,7 +285,8 @@ export class GoOnClient {
   // ── Core Runtime ───────────────────────────────────────────────────
 
   /** GET /health — quick health check. */
-  async health(): Promise<ApiResponse<HealthResponse>> {
+  /** GET /health — quick health check (ServerStatus payload, no envelope). */
+  async health(): Promise<HealthResponse> {
     const response = await fetch(`${this.baseUrl}/health`, {
       signal: AbortSignal.timeout(5_000),
     });
@@ -296,7 +296,7 @@ export class GoOnClient {
         `HTTP ${response.status}: ${response.statusText}`,
       );
     }
-    return (await response.json()) as ApiResponse<HealthResponse>;
+    return (await response.json()) as HealthResponse;
   }
 
   /** runtime.health — full runtime health via JSON-RPC. */
@@ -474,6 +474,11 @@ export class GoOnClient {
   /** config.baseline — get configuration baseline. */
   async configBaseline(): Promise<ConfigBaselineResponse> {
     return this.jsonRpc("config.baseline", {});
+  }
+
+  /** config.reload — reload configuration at runtime. */
+  async configReload(): Promise<Record<string, unknown>> {
+    return this.jsonRpc("config.reload", {});
   }
 
   /** harness.status — get harness integration testing status. */

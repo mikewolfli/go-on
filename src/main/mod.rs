@@ -28,12 +28,6 @@
 //!
 //! # Check readiness and completeness
 //! go-on --check --config /path/to/config.toml
-//!
-//! # Enable verbose logging
-//! go-on --verbose
-//!
-//! # Specify phase to run
-//! go-on --phase review
 //! ```
 //!
 //! # Architecture Overview
@@ -302,7 +296,8 @@ async fn run() -> Result<()> {
     };
     if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
         let cp = config_path.clone();
-        let config = Arc::new(tokio::task::spawn_blocking(move || AppConfig::load(&cp)).await??);
+        let config =
+            Arc::new(tokio::task::spawn_blocking(move || AppConfig::load_uncached(&cp)).await??);
         tokio::select! {
             result = server::start_server(config.clone(), &cli, &config_path, Some(cl_agent_handle.clone()), skill_registry.clone()) => {
                 result?;

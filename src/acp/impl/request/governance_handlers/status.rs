@@ -109,13 +109,10 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         .unwrap_or_default();
     let startup_context_profile = {
         let ctx = startup_context.clone().unwrap_or_default();
-        let core_cfg = app_config.as_ref().and_then(|c| c.startup_context.as_ref());
-        let cfg = crate::orchestration::startup_context::StartupContextConfig {
-            enabled: core_cfg.map(|c| c.enabled).unwrap_or(false),
-            readme_max_chars: core_cfg.map(|c| c.readme_max_chars).unwrap_or(2000),
-            recent_commits: core_cfg.map(|c| c.recent_commits).unwrap_or(5),
-            io_timeout_ms: 5_000,
-        };
+        let cfg = app_config
+            .as_ref()
+            .and_then(|c| c.startup_context.clone())
+            .unwrap_or_default();
         json!(crate::orchestration::startup_context::profile::startup_context_profile(&ctx, &cfg))
     };
     let compliance_framework_profile = json!({
@@ -207,63 +204,12 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
         .and_then(Value::as_str)
         .or(server.runtime_config.platform_mode.as_deref())
         .unwrap_or("phase_compat");
-    let phase_view = json!({
-        "mode": "phase_compat",
-        "success_rate": if runtime_snapshot.total_requests > 0 {
-            (runtime_snapshot.total_requests.saturating_sub(runtime_snapshot.failed_requests)) as f64
-                / runtime_snapshot.total_requests as f64
-        } else {
-            1.0
-        },
-        "gate_reject_rate": if runtime_snapshot.total_requests > 0 {
-            runtime_snapshot.review_gate_rejected_total as f64 / runtime_snapshot.total_requests as f64
-        } else {
-            0.0
-        },
-        "repair_iterations": if runtime_snapshot.review_gate_total > 0 {
-            runtime_snapshot.review_gate_rejected_total as f64 / runtime_snapshot.review_gate_total as f64
-        } else {
-            0.0
-        },
-        "intervention_rate": if runtime_snapshot.total_requests > 0 {
-            runtime_snapshot.review_gate_rejected_total as f64 / runtime_snapshot.total_requests as f64
-        } else {
-            0.0
-        },
-    });
-    let universal_view = json!({
-        "mode": "universal",
-        "success_rate": phase_view["success_rate"],
-        "gate_reject_rate": phase_view["gate_reject_rate"],
-        "repair_iterations": phase_view["repair_iterations"],
-        "intervention_rate": phase_view["intervention_rate"],
-        "source": "runtime.metrics.snapshot",
-    });
 
-    let reconcile = |metric: &str| -> f64 {
-        let phase = phase_view
-            .get(metric)
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let uni = universal_view
-            .get(metric)
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        (uni - phase).abs()
-    };
-    let success_rate_delta = reconcile("success_rate");
-    let gate_reject_rate_delta = reconcile("gate_reject_rate");
-    let repair_iterations_delta = reconcile("repair_iterations");
-    let intervention_rate_delta = reconcile("intervention_rate");
-    let reconciliation_threshold = params
-        .get("reconciliation_threshold")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.02);
-    let max_delta = success_rate_delta
-        .max(gate_reject_rate_delta)
-        .max(repair_iterations_delta)
-        .max(intervention_rate_delta);
-    let reconciliation_ok = max_delta <= reconciliation_threshold;
+    // The runtime tracks a single platform mode (phase-compat / universal).
+    // A "dual-track reconciliation" would compare a value against its own
+    // copy and is structurally always consistent; we report that fact
+    // directly instead of fabricating deltas.
+    let reconciliation_ok = true;
 
     let policy_environment = params
         .get("environment")
@@ -1331,10 +1277,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
     };
 
     let mut recommendations = Vec::new();
-    if !reconciliation_ok {
-        recommendations
-            .push("Review metrics reconciliation drift between phase_view and universal_view");
-    }
     if multi_user_enabled && !isolation_component_ok {
         recommendations
             .push("Harden entry auth and production strict mode for multi-user isolation");
@@ -1458,9 +1400,6 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
             },
             "fork_isolation_guard": {
                 "ready": fork_isolation_guard_ready,
-                "fork_isolation_profile": {
-                    "zombie_reaped_count": 0,
-                },
             },
             "capability_graph": {
                 "ready": capability_graph_ready,
@@ -1707,9 +1646,7 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
                             "ready": p.healthy,
                             "registered_agents": p.registered_agents,
                             "messages_sent": p.messages_sent,
-                            "messages_received": p.messages_received,
                             "forks_created": p.forks_created,
-                            "cancellations": p.cancellations,
                         })
                     })
                     .unwrap_or_else(|| json!({"ready": false, "registered_agents": 0})),

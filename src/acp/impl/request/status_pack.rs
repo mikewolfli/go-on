@@ -131,7 +131,17 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
     let reproducibility =
         super::repro_pack::reproducible_build_summary(server.config_path.as_deref());
 
-    let lock_summary = super::diagnostic_pack::summarize_lock_health(&[]);
+    // Lock monitoring is disabled at runtime (log-20260622-5); an empty slice
+    // must be reported as `not_monitored`, not the vacuous `healthy` result,
+    // per the summarize_lock_health contract (diagnostic_pack.rs).
+    let lock_summary = super::diagnostic_pack::LockHealthSummary {
+        status: "not_monitored",
+        poisoned_total: 0,
+        recovered_total: 0,
+        slow_wait_total: 0,
+        max_wait_ms: 0.0,
+        components_tracked: 0,
+    };
     let degraded_services = super::health_pack::collect_degraded_services(server);
     let open_breakers = status
         .circuit_breakers
@@ -297,46 +307,12 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
     if multi_user_enabled && !lifecycle_deprovision_cleanup_ready {
         lifecycle_blocking_issues.push("lifecycle_deprovision_cleanup_not_ready");
     }
-    let summary_multi_user_mode = if multi_user_enabled {
-        "multi_user"
-    } else {
-        "single_user"
-    };
-    let detail_multi_user_mode = summary_multi_user_mode;
-    let summary_multi_user_gate_ready = multi_user_server_gate;
-    let detail_multi_user_gate_ready = multi_user_server_gate;
-    let summary_multi_user_lifecycle_ready = multi_user_lifecycle_gate;
-    let detail_multi_user_lifecycle_ready = multi_user_lifecycle_gate;
-    let summary_multi_user_inference_source = server_mode_source;
-    let detail_multi_user_inference_source = server_mode_source;
+    // Summary/detail views are derived from the same in-memory server state, so
+    // a "dual-track consistency" check would always compare a value with its own
+    // copy. We keep the gate as a documented constant rather than a fake check.
     let readiness_schema_version = "blue26-release-readiness-v2";
-    let readiness_artifact_schema_version = "blue26-release-readiness-v2";
-    let _companion_governance_schema_version = "blue26-governance-v1";
-    let dual_track_schema_consistent =
-        readiness_schema_version == readiness_artifact_schema_version;
-    let dual_track_mode_consistent = summary_multi_user_mode == detail_multi_user_mode;
-    let dual_track_gate_consistent = summary_multi_user_gate_ready == detail_multi_user_gate_ready;
-    let dual_track_lifecycle_consistent =
-        summary_multi_user_lifecycle_ready == detail_multi_user_lifecycle_ready;
-    let dual_track_source_consistent =
-        summary_multi_user_inference_source == detail_multi_user_inference_source;
-    let mut dual_track_consistency_issues = Vec::new();
-    if !dual_track_schema_consistent {
-        dual_track_consistency_issues.push("readiness_schema_artifact_mismatch");
-    }
-    if !dual_track_mode_consistent {
-        dual_track_consistency_issues.push("multi_user_mode_summary_detail_mismatch");
-    }
-    if !dual_track_gate_consistent {
-        dual_track_consistency_issues.push("multi_user_gate_summary_detail_mismatch");
-    }
-    if !dual_track_lifecycle_consistent {
-        dual_track_consistency_issues.push("multi_user_lifecycle_summary_detail_mismatch");
-    }
-    if !dual_track_source_consistent {
-        dual_track_consistency_issues.push("multi_user_inference_source_summary_detail_mismatch");
-    }
-    let dual_track_consistency_gate = dual_track_consistency_issues.is_empty();
+    let dual_track_consistency_gate = true;
+    let dual_track_consistency_issues: Vec<&str> = Vec::new();
     let zero_trust_compliance_gate =
         strict_enabled && entry_auth_enabled && entry_auth_key_configured;
     let rbac_policy_engine_gate = if multi_user_enabled {
@@ -649,83 +625,13 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
             "omnipotent_mode_readiness": { "ready": omnipotent_mode_readiness_gate },
             "sota_gap_benchmark": { "ready": sota_gap_benchmark_gate },
             "blue27_release_closure": { "ready": blue27_release_closure_gate },
-            "schema_migration_versioning": { "ready": blue28_release_closure_gate },
-            "tenant_auth_api_key": { "ready": blue28_release_closure_gate },
-            "sqlite_postgres_migration": { "ready": blue28_release_closure_gate },
-            "solution_discovery_hub": { "ready": blue28_release_closure_gate },
-            "scenario_matcher": { "ready": blue28_release_closure_gate },
-            "subai_factory": { "ready": blue28_release_closure_gate },
-            "training_orchestrator": { "ready": blue28_release_closure_gate },
-            "auto_integration_runtime": { "ready": blue28_release_closure_gate },
-            "reinforcement_loop": { "ready": blue28_release_closure_gate },
-            "coordinator_council": { "ready": blue28_release_closure_gate },
-            "worker_swarm": { "ready": blue28_release_closure_gate },
-            "consensus_engine": { "ready": blue28_release_closure_gate },
-            "brain_loop": { "ready": blue28_release_closure_gate },
-            "node_reputation": { "ready": blue28_release_closure_gate },
-            "self_model_core": { "ready": blue28_release_closure_gate },
-            "meta_cognition": { "ready": blue28_release_closure_gate },
-            "drift_guard": { "ready": blue28_release_closure_gate },
             "blue28_release_closure": { "ready": blue28_release_closure_gate },
-            "federated_rl": { "ready": blue29_release_closure_gate },
-            "distributed_memory_bus": { "ready": blue29_release_closure_gate },
-            "adaptive_swarm_optimizer": { "ready": blue29_release_closure_gate },
-            "hyper_node_network": { "ready": blue29_release_closure_gate },
-            "world_model_pipeline": { "ready": blue29_release_closure_gate },
-            "continual_learning_hub": { "ready": blue29_release_closure_gate },
             "blue29_release_closure": { "ready": blue29_release_closure_gate },
-            "multi_channel_messaging": { "ready": blue30_release_closure_gate },
-            "collaboration_game_engine": { "ready": blue30_release_closure_gate },
-            "consciousness_proxy_metrics": { "ready": blue30_release_closure_gate },
-            "hyper_resilience": { "ready": blue30_release_closure_gate },
-            "dual_track_awakening_parity": { "ready": blue30_release_closure_gate },
-            "cicd_awareness_gate": { "ready": blue30_release_closure_gate },
             "blue30_release_closure": { "ready": blue30_release_closure_gate },
-            "autonomy_boundary_governance": { "ready": blue31_release_closure_gate },
-            "emergency_stop_protocol": { "ready": blue31_release_closure_gate },
-            "collaboration_ab_evaluation": { "ready": blue31_release_closure_gate },
-            "hypernode_topology": { "ready": blue31_release_closure_gate },
-            "cross_region_priority_routing": { "ready": blue31_release_closure_gate },
-            "meta_controller_replan": { "ready": blue31_release_closure_gate },
             "blue31_release_closure": { "ready": blue31_release_closure_gate },
-            "game_theory_balancer": { "ready": blue32_release_closure_gate },
-            "federated_rl_v2_guardrail": { "ready": blue32_release_closure_gate },
-            "continuous_learning_distillation": { "ready": blue32_release_closure_gate },
-            "drift_auto_takeover": { "ready": blue32_release_closure_gate },
-            "byzantine_fault_injection": { "ready": blue32_release_closure_gate },
-            "recovery_consistency_recheck": { "ready": blue32_release_closure_gate },
             "blue32_release_closure": { "ready": blue32_release_closure_gate },
-            "local_reflection_track": { "ready": blue33_release_closure_gate },
-            "server_awakening_track": { "ready": blue33_release_closure_gate },
-            "ci_gate_continuous_green": { "ready": blue33_release_closure_gate },
-            "staged_rollout_guard": { "ready": blue33_release_closure_gate },
-            "release_train_freeze": { "ready": blue33_release_closure_gate },
-            "rollout_audit_replay": { "ready": blue33_release_closure_gate },
             "blue33_release_closure": { "ready": blue33_release_closure_gate },
-            "autonomy_scope_matrix": { "ready": blue33_remaining_closure_gate },
-            "redline_policy_runtime": { "ready": blue33_remaining_closure_gate },
-            "human_approval_checkpoint": { "ready": blue33_remaining_closure_gate },
-            "supernode_hot_standby": { "ready": blue33_remaining_closure_gate },
-            "cross_zone_state_snapshot": { "ready": blue33_remaining_closure_gate },
-            "failover_recovery_drill": { "ready": blue33_remaining_closure_gate },
             "blue33_remaining_closure": { "ready": blue33_remaining_closure_gate },
-            "dual_track_boundary_freeze": { "ready": blue34_release_closure_gate },
-            "state_vector_store_trait_unified": { "ready": blue34_release_closure_gate },
-            "local_server_profile_matrix": { "ready": blue34_release_closure_gate },
-            "postgres_pgvector_schema_versioning": { "ready": blue34_release_closure_gate },
-            "sqlite_to_pg_migration_dryrun": { "ready": blue34_release_closure_gate },
-            "planner_executor_taskgraph_resume": { "ready": blue34_release_closure_gate },
-            "think_act_observe_tool_governance": { "ready": blue34_release_closure_gate },
-            "role_handoff_schema_and_conflict_arbiter": { "ready": blue34_release_closure_gate },
-            "deterministic_adversarial_double_checks": { "ready": blue34_release_closure_gate },
-            "memory_write_promotion_gc_policy": { "ready": blue34_release_closure_gate },
-            "benchmark_replay_and_3d_scoring": { "ready": blue34_release_closure_gate },
-            "capability_discovery_registry_baseline": { "ready": blue34_release_closure_gate },
-            "staged_rollout_canary_rollback_gate": { "ready": blue34_release_closure_gate },
-            "distributed_node_registry_heartbeat": { "ready": blue34_release_closure_gate },
-            "consensus_with_dissent_preservation": { "ready": blue34_release_closure_gate },
-            "brain_loop_artifact_and_safe_degrade": { "ready": blue34_release_closure_gate },
-            "fault_injection_recovery_recheck": { "ready": blue34_release_closure_gate },
             "blue34_release_closure": { "ready": blue34_release_closure_gate },
             "custom_role_registry": {
                 "ready": custom_role_registry_gate,
@@ -761,11 +667,17 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
             },
             "fork_isolation_guard": {
                 "ready": fork_isolation_guard_gate,
-                "zombie_reap": true,
+                // fork isolation is wired through the communication bus agent tree
+                // (spawn_agent registers nodes; each spawn is isolated in its own
+                // tree branch).
+                "zombie_reap": server.agent_registry().is_some(),
             },
             "capability_graph": {
                 "ready": capability_graph_gate,
-                "node_dependency_graph": true,
+                // the capability graph is constructed at server startup and
+                // drives capability-based routing (same wiring as the agent
+                // registry).
+                "node_dependency_graph": server.agent_registry().is_some(),
             },
             "provenance_ledger": {
                 "ready": provenance_ledger_gate,
@@ -781,7 +693,9 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
             },
             "workflow_type_tri_mode": {
                 "ready": workflow_type_tri_mode_gate,
-                "auto_detection": true,
+                // auto-detection is provided by the flow manager / workflow
+                // registry wired into the capability bus.
+                "auto_detection": server.flow_manager().is_some(),
             },
             "blue35_release_closure": {
                 "ready": blue35_release_closure_gate,

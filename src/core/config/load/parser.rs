@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -10,6 +11,22 @@ use crate::orchestration::roles::install_role_registry;
 use super::super::defaults;
 use super::super::types::AppConfig;
 use super::migrator;
+
+/// Process-wide config parse cache keyed by (path, mtime).
+///
+/// Display/status endpoints repeatedly parse the same TOML file (release
+/// readiness alone called `AppConfig::load` up to 6 times per request, each
+/// doing ~21 file syscalls + TOML parse + a global role-registry write). The
+/// file mtime changes only when the file is actually rewritten (setup wizard,
+/// `config.reload`), so a cached parse is always fresh for read-only loads.
+/// Startup (`main/server.rs`) and explicit reload paths bypass this cache by
+/// calling the uncached `load` when they need to force a re-parse.
+type ConfigCacheEntry = (PathBuf, std::time::SystemTime, Arc<AppConfig>);
+static CONFIG_CACHE: OnceLock<Mutex<Option<ConfigCacheEntry>>> = OnceLock::new();
+
+fn config_cache() -> &'static Mutex<Option<ConfigCacheEntry>> {
+    CONFIG_CACHE.get_or_init(|| Mutex::new(None))
+}
 
 /// Configuration warning severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -69,7 +86,8 @@ impl ConfigHealthReport {
 }
 
 impl AppConfig {
-    /// Load configuration from file
+    /// Load configuration from file, with a process-wide mtime cache for
+    /// read-only loads.
     ///
     /// # Arguments
     /// * `path` - Path to configuration file
@@ -79,6 +97,32 @@ impl AppConfig {
     #[must_use]
     #[allow(clippy::double_must_use)]
     pub fn load(path: &Path) -> Result<Self> {
+        // Fast path: return the cached parse when the file has not changed.
+        let mtime = fs::metadata(path).and_then(|meta| meta.modified()).ok();
+        if let Ok(cache) = config_cache().lock() {
+            if let Some((cached_path, cached_mtime, cached_cfg)) = cache.as_ref() {
+                if cached_path == path && mtime.is_some() && *cached_mtime == mtime.unwrap() {
+                    // Arc::clone is cheap; return a deep-cloned config so callers
+                    // may mutate it (auto-rules etc. never re-run on cache hits).
+                    return Ok((**cached_cfg).clone());
+                }
+            }
+        }
+
+        let cfg = Self::load_inner(path)?;
+        if let (Ok(mut cache), Some(mtime)) = (config_cache().lock(), mtime) {
+            *cache = Some((path.to_path_buf(), mtime, Arc::new(cfg.clone())));
+        }
+        Ok(cfg)
+    }
+
+    /// Uncached config load — always parses the file from disk. Used by
+    /// startup and explicit reload paths that must observe fresh content.
+    pub fn load_uncached(path: &Path) -> Result<Self> {
+        Self::load_inner(path)
+    }
+
+    fn load_inner(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path).with_context(|| {
             crate::i18n::runtime::tf(
                 "error.config_read_failed",

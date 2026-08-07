@@ -779,6 +779,20 @@ impl SecurityGovernor {
     /// active escalations). Evaluation totals are counted in [`Self::evaluate`]
     /// — this method does not double-count them.
     pub fn record_audit(&self, entry: AuditEntry) {
+        self.record_audit_counters(&entry);
+        // Single process-wide audit sink (From conversion). The harness bus
+        // layer also writes a phase-specific entry (pre_route / verify_output)
+        // for the same evaluation; keeping this sink write here means each
+        // evaluation is logged twice to the same sink. To keep one audit
+        // record per evaluation, external callers (PolicyEvaluator) use
+        // `record_audit_counters` and let the harness bus own the sink write.
+        crate::governance::audit::global_audit_log().record(entry.into());
+    }
+
+    /// Update denial/review/escalation counters for an audit entry without
+    /// writing to the global audit sink. Used by the harness evaluator, which
+    /// already emits the phase-level audit entry through the harness bus.
+    pub fn record_audit_counters(&self, entry: &AuditEntry) {
         let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("SecurityGovernor lock poisoned in record_audit, recovering");
             poisoned.into_inner()
@@ -792,8 +806,6 @@ impl SecurityGovernor {
         if entry.verdict.escalation_level != "normal" {
             inner.active_escalations += 1;
         }
-        // Single process-wide audit sink (From conversion).
-        crate::governance::audit::global_audit_log().record(entry.into());
     }
 
     /// Return the policy mode configured for this governor.
@@ -807,6 +819,16 @@ impl SecurityGovernor {
             .config
             .policy_mode
             .clone()
+    }
+
+    /// Return the number of registered security policies without snapshotting
+    /// the whole [`GovernorProfile`]. Used on the harness hot path to avoid
+    /// iterating policy metadata on every evaluation.
+    pub fn policies_count(&self) -> u64 {
+        self.inner
+            .lock()
+            .map(|inner| inner.policies.len() as u64)
+            .unwrap_or(0)
     }
 
     /// Return a [`GovernorProfile`] snapshot of current metrics.

@@ -548,7 +548,7 @@ pub(crate) async fn handle_workflow_execute(
         // Structured error so clients can distinguish a consultation block from
         // generic dispatch errors (dispatch maps plain Err to -32602).
         return Ok(DispatchOutput::Error {
-            code: crate::acp::impl::request::protocol::AcpErrorCode::ConsultationBlocked as i32,
+            code: crate::acp::r#impl::request::protocol::AcpErrorCode::ConsultationBlocked as i32,
             message: blocked_reason,
             data: Some(serde_json::json!({
                 "kind": "consultation_blocked",

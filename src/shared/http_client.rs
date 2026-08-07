@@ -33,3 +33,28 @@ pub fn http_client() -> Result<&'static reqwest::Client, &'static reqwest::Error
     });
     result.as_ref()
 }
+
+/// Process-global blocking `reqwest::Client` for sync contexts (tools that
+/// run on `spawn_blocking` and cannot use the async client).
+///
+/// Like [`http_client`], the client is created once and shared for connection
+/// pooling; per-request timeouts must be applied by the caller on the request
+/// builder (no fixed timeout is baked in so long-running calls like audio
+/// transcription are not cut off).
+static BLOCKING_CLIENT: OnceLock<Result<reqwest::blocking::Client, reqwest::Error>> =
+    OnceLock::new();
+
+/// Returns a reference to the process-global blocking `reqwest::Client`.
+///
+/// # Errors
+///
+/// Returns an error if the underlying client cannot be built.
+pub fn blocking_http_client() -> Result<&'static reqwest::blocking::Client, &'static reqwest::Error>
+{
+    let result = BLOCKING_CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .user_agent("go-on/1.0")
+            .build()
+    });
+    result.as_ref()
+}

@@ -527,21 +527,6 @@ impl IdempotencyCache {
         }
     }
 
-    /// Create a cache with a custom per-tenant LRU limit.
-    pub fn with_max_per_tenant(ttl: Duration, max_entries_per_tenant: usize) -> Self {
-        Self {
-            results: HashMap::new(),
-            tenant_keys: HashMap::new(),
-            ttl,
-            max_entries_per_tenant,
-        }
-    }
-
-    /// Set a custom per-tenant LRU limit on an existing cache.
-    pub fn set_max_per_tenant(&mut self, max: usize) {
-        self.max_entries_per_tenant = max;
-    }
-
     pub fn get(&self, key: &str) -> Option<&IdempotentResult> {
         let entry = self.results.get(key)?;
         if entry.cached_at.elapsed() > self.ttl {
@@ -579,25 +564,6 @@ impl IdempotencyCache {
                 cached_at: Instant::now(),
             },
         );
-    }
-
-    pub fn evict_expired(&mut self) {
-        let ttl = self.ttl;
-        let expired_keys: Vec<String> = self
-            .results
-            .iter()
-            .filter(|(_, v)| v.cached_at.elapsed() > ttl)
-            .map(|(k, _)| k.clone())
-            .collect();
-
-        for key in &expired_keys {
-            let tenant = tenant_from_key(key).to_string();
-            self.results.remove(key);
-            // VecDeque::retain is O(n) but only called during eviction, not on hot path.
-            if let Some(keys_for_tenant) = self.tenant_keys.get_mut(&tenant) {
-                keys_for_tenant.retain(|k| k != key);
-            }
-        }
     }
 }
 
@@ -638,23 +604,6 @@ impl SandboxLevel {
             SandboxLevel::Isolated => 3,
         }
     }
-}
-
-/// Structured result from a sandbox policy check with actionable feedback.
-#[derive(Debug, Clone)]
-pub struct SandboxCheckResult {
-    /// Whether the operation is allowed.
-    pub allowed: bool,
-    /// The sandbox level that was checked.
-    pub level: SandboxLevel,
-    /// The action category that was requested.
-    pub action: String,
-    /// Human-readable explanation of the decision.
-    pub reason: String,
-    /// Operations that ARE allowed at this sandbox level (for caller guidance).
-    pub allowed_at_level: Vec<&'static str>,
-    /// Hint for how to proceed if denied.
-    pub hint: Option<&'static str>,
 }
 
 pub struct SandboxPolicy;
@@ -716,61 +665,6 @@ impl SandboxPolicy {
             SandboxLevel::Strict => false,
             SandboxLevel::Isolated => false,
         }
-    }
-
-    /// Build a structured SandboxCheckResult with actionable feedback for the caller.
-    /// Unlike bare `check()` which returns bool, this provides:
-    /// - Which sandbox level is active
-    /// - What action category was checked
-    /// - What tools ARE available at this level (for fallback)
-    /// - How to proceed if denied
-    pub fn check_with_feedback(level: SandboxLevel, operation: &str) -> SandboxCheckResult {
-        let allowed = Self::check(level, operation);
-        let allowed_at_level = Self::allowed_operations_at_level(level);
-        let reason = if allowed {
-            format!("sandbox level '{}' allows '{}' operation", level, operation)
-        } else {
-            format!(
-                "sandbox level '{}' DENIED '{}' operation. Allowed at this level: {}",
-                level,
-                operation,
-                allowed_at_level.join(", ")
-            )
-        };
-        let hint = if allowed {
-            None
-        } else {
-            Some("To enable this operation, change sandbox level via config [governance.sandbox_level] to 'none' or 'basic', or use a tool from the allowed list above.")
-        };
-        SandboxCheckResult {
-            allowed,
-            level,
-            action: operation.to_string(),
-            reason,
-            allowed_at_level,
-            hint,
-        }
-    }
-
-    /// Return the list of operation names that pass at this sandbox level.
-    pub fn allowed_operations_at_level(level: SandboxLevel) -> Vec<&'static str> {
-        let mut result = Vec::new();
-        if Self::can_execute_read_file(level) {
-            result.push("read");
-        }
-        if Self::can_execute_search(level) {
-            result.push("search");
-        }
-        if Self::can_execute_write(level) {
-            result.push("write");
-        }
-        if Self::can_execute_shell(level) {
-            result.push("shell");
-        }
-        if Self::can_execute_network(level) {
-            result.push("network");
-        }
-        result
     }
 
     /// Check whether a given operation is allowed at the given sandbox level,
@@ -1024,10 +918,11 @@ mod tests {
     }
 
     #[test]
-    fn idempotency_cache_evicts_expired_entries() {
+    fn idempotency_cache_expires_entry_after_ttl() {
+        // Expiry is enforced lazily in `get` (the TTL check on read path);
+        // there is no separate eviction pass.
         let mut cache = IdempotencyCache::new(Duration::from_millis(0));
         cache.insert("k1".to_string(), serde_json::json!({"ok": true}));
-        cache.evict_expired();
         assert!(cache.get("k1").is_none());
     }
 

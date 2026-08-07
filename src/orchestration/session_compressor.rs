@@ -82,11 +82,13 @@ pub struct IncrementalState {
 
 /// Configuration for the session compressor.
 ///
-/// Some fields (max_messages, compression_msg_threshold, token_window) are
-/// read by downstream consumers (session_manager.rs, tests).
+/// `max_messages`, `compression_msg_threshold`, and `token_window` feed the
+/// compression-trigger logic (`should_compress` / `requires_compression`),
+/// which is exercised by unit tests; `compress()` (the production entry point)
+/// consumes them via the same threshold checks.
 #[cfg_attr(
     not(test),
-    allow(dead_code, reason = "fields are read by session_manager.rs and tests")
+    allow(dead_code, reason = "threshold fields feed test-only trigger helpers")
 )]
 #[derive(Debug, Clone)]
 pub struct SessionCompressor {

@@ -53,24 +53,6 @@ impl AgentMessenger {
         }
     }
 
-    /// Create with custom inbox capacity.
-    pub fn with_capacity(tree: Arc<RwLock<AgentTree>>, capacity: usize) -> Self {
-        let (notify, _) = watch::channel(0);
-        Self {
-            tree,
-            inboxes: Arc::new(RwLock::new(HashMap::new())),
-            max_inbox_size: capacity,
-            notify,
-        }
-    }
-
-    /// Subscribe to delivery notifications (for event-driven waiting).
-    ///
-    /// Returns a receiver that is notified on each new message delivery.
-    pub fn subscribe_notify(&self) -> watch::Receiver<u64> {
-        self.notify.subscribe()
-    }
-
     /// Send a message with AtMostOnce delivery (fire-and-forget).
     ///
     /// Messages are delivered to matching receivers' inboxes immediately.
@@ -140,101 +122,6 @@ impl AgentMessenger {
         }
     }
 
-    /// Receive all pending messages for an agent path.
-    pub async fn recv(&self, path: &AgentPath) -> Vec<AgentMessage> {
-        let mut inboxes = self.inboxes.write().await;
-        inboxes
-            .remove(path)
-            .map(|q| q.into_iter().collect())
-            .unwrap_or_default()
-    }
-
-    /// Peek at pending messages without consuming them.
-    pub async fn peek(&self, path: &AgentPath) -> Vec<AgentMessage> {
-        let inboxes = self.inboxes.read().await;
-        inboxes
-            .get(path)
-            .map(|q| q.iter().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// Wait for a message matching a predicate, with timeout (BLUE71 §6.2).
-    ///
-    /// Uses event-driven notification channel instead of polling.
-    /// Falls back to checking inbox on each notification.
-    pub async fn wait_for<F>(
-        &self,
-        path: &AgentPath,
-        predicate: F,
-        timeout_ms: u64,
-    ) -> Result<AgentMessage, String>
-    where
-        F: Fn(&AgentMessage) -> bool,
-    {
-        let timeout_dur = tokio::time::Duration::from_millis(timeout_ms);
-        let mut notify_rx = self.subscribe_notify();
-
-        // First, check if the message is already in the inbox (non-blocking).
-        let msgs = self.recv(path).await;
-        for msg in msgs {
-            if predicate(&msg) {
-                return Ok(msg);
-            }
-            // Re-queue non-matching messages.
-            self.deliver_single(msg, path).await;
-        }
-
-        // Then wait for new messages via event-driven notification.
-        tokio::time::timeout(timeout_dur, async {
-            loop {
-                // Wait for the next delivery notification (zero CPU).
-                notify_rx
-                    .changed()
-                    .await
-                    .map_err(|_| "notification channel closed".to_string())?;
-
-                // Check inbox for matching messages.
-                let msgs = self.recv(path).await;
-                for msg in msgs {
-                    if predicate(&msg) {
-                        return Ok(msg);
-                    }
-                    // Re-queue non-matching messages.
-                    self.deliver_single(msg, path).await;
-                }
-            }
-        })
-        .await
-        .map_err(|_| "timeout waiting for matching message".to_string())?
-    }
-
-    /// Cancel all agents in a sub-tree (cancellation propagation).
-    ///
-    /// Sends Cancel messages to all descendants (BFS).
-    /// Each receiving agent is responsible for cascading cancellation
-    /// to its own children.
-    pub async fn cancel_subtree(&self, path: &AgentPath, reason: &str) {
-        let descendants = {
-            let tree = self.tree.read().await;
-            tree.descendant_paths(path)
-        };
-
-        for child_path in descendants {
-            let cancel_msg = crate::agents::communication::message::AgentMessage::cancel(
-                path.clone(),
-                crate::agents::communication::message::AgentTarget::Direct(child_path.clone()),
-                reason.to_string(),
-            );
-            let _ = self.send_at_least_once(cancel_msg).await;
-        }
-    }
-
-    /// Get inbox size for a path.
-    pub async fn inbox_size(&self, path: &AgentPath) -> usize {
-        let inboxes = self.inboxes.read().await;
-        inboxes.get(path).map(|q| q.len()).unwrap_or(0)
-    }
-
     // -- Private helpers --------------------------------------------------
 
     /// Resolve target agents for a message.
@@ -290,6 +177,12 @@ impl AgentMessenger {
         }
         Ok(())
     }
+
+    /// Get inbox size for a path.
+    pub async fn inbox_size(&self, path: &AgentPath) -> usize {
+        let inboxes = self.inboxes.read().await;
+        inboxes.get(path).map(|q| q.len()).unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -314,54 +207,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_and_recv_direct() {
-        let tree = make_tree();
-        let messenger = AgentMessenger::new(tree);
-
-        let msg =
-            AgentMessage::status_query(make_path("root/a"), AgentTarget::Direct(make_path("root")));
-        messenger.send_at_most_once(msg).await.unwrap();
-
-        let received = messenger.recv(&make_path("root")).await;
-        assert_eq!(received.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_send_broadcast() {
-        let tree = make_tree();
-        let messenger = AgentMessenger::new(tree);
-
-        let msg = AgentMessage::status_query(make_path("root/a"), AgentTarget::Broadcast);
-        messenger.send_at_most_once(msg).await.unwrap();
-
-        let b_msgs = messenger.recv(&make_path("root/b")).await;
-        assert_eq!(b_msgs.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_send_to_parent() {
-        let tree = make_tree();
-        let messenger = AgentMessenger::new(tree);
-
-        let msg = AgentMessage::result(
-            make_path("root/a"),
-            AgentTarget::ToParent,
-            true,
-            Some("done".to_string()),
-            None,
-            None,
-            None,
-            None,
-            "ok".to_string(),
-            100,
-        );
-        messenger.send_at_most_once(msg).await.unwrap();
-
-        let received = messenger.recv(&make_path("root")).await;
-        assert_eq!(received.len(), 1);
-    }
-
-    #[tokio::test]
     async fn test_send_to_nonexistent() {
         let tree = make_tree();
         let messenger = AgentMessenger::new(tree);
@@ -371,57 +216,6 @@ mod tests {
             AgentTarget::Direct(make_path("root/nonexistent")),
         );
         assert!(messenger.send_at_most_once(msg).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_cancel_subtree() {
-        let tree = make_tree();
-        let messenger = AgentMessenger::new(tree);
-
-        messenger
-            .cancel_subtree(&make_path("root"), "timeout")
-            .await;
-
-        let a_msgs = messenger.recv(&make_path("root/a")).await;
-        assert!(!a_msgs.is_empty());
-        assert!(a_msgs[0].is_cancel());
-
-        let b_msgs = messenger.recv(&make_path("root/b")).await;
-        assert!(!b_msgs.is_empty());
-        assert!(b_msgs[0].is_cancel());
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_event_driven() {
-        let tree = make_tree();
-        let messenger = Arc::new(AgentMessenger::new(tree));
-
-        // Spawn a task that sends a message after a short delay.
-        let msg =
-            AgentMessage::status_query(make_path("root/a"), AgentTarget::Direct(make_path("root")));
-        let m2 = messenger.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            let _ = m2.send_at_most_once(msg).await;
-        });
-
-        // Wait for the message (event-driven, should complete quickly).
-        let result = messenger
-            .wait_for(&make_path("root"), |m| !m.is_cancel(), 5000)
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_timeout() {
-        let tree = make_tree();
-        let messenger = AgentMessenger::new(tree);
-
-        // No messages will be sent, so this should timeout.
-        let result = messenger
-            .wait_for(&make_path("root"), |msg| msg.is_result(), 50)
-            .await;
-        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -448,25 +242,5 @@ mod tests {
             true,
         );
         assert!(messenger.send(progress).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_subscribe_notify() {
-        let tree = make_tree();
-        let messenger = Arc::new(AgentMessenger::new(tree));
-
-        let mut rx = messenger.subscribe_notify();
-        assert_eq!(*rx.borrow_and_update(), 0);
-
-        let msg =
-            AgentMessage::status_query(make_path("root/a"), AgentTarget::Direct(make_path("root")));
-        let m2 = messenger.clone();
-        tokio::spawn(async move {
-            let _ = m2.send_at_most_once(msg).await;
-        });
-
-        // Notification should fire when message is delivered.
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.changed()).await;
-        assert!(result.is_ok());
     }
 }

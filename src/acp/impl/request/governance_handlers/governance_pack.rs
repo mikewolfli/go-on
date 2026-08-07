@@ -78,7 +78,9 @@ pub(crate) fn infer_risk_score(method: &str, task_type: &TaskType) -> f64 {
 pub(crate) fn classify_request_error_kind(error: &anyhow::Error) -> String {
     // Delegate to the canonical error-kind classifier (keyword + code rules) so
     // the PUA/budget/sandbox keyword matching lives in exactly one place.
-    infer_error_contract_kind(-32000, &error.to_string(), None)
+    // Code 0 is not an ACP code, so classification is driven by the message
+    // keywords (a bare -32000 would otherwise be mislabelled ServerError).
+    infer_error_contract_kind(0, &error.to_string(), None)
 }
 
 pub(crate) fn infer_error_contract_kind(
@@ -106,7 +108,7 @@ pub(crate) fn infer_error_contract_kind(
     // (single source of truth) so the table cannot drift from the codes
     // production paths actually send. Keyword rules above stay first because
     // they are more specific than a bare code.
-    if let Some(kind) = crate::acp::impl::request::protocol::AcpErrorCode::classify(code) {
+    if let Some(kind) = crate::acp::r#impl::request::protocol::AcpErrorCode::classify(code) {
         return kind.to_string();
     }
     if lower.contains("rate limited") || lower.contains("too many requests") {
@@ -971,7 +973,6 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
             | "mcp.resources.subscribe"
             | "mcp.logging.setLevel"
             | "mcp.completion.complete"
-            | "mcp.sampling.createMessage"
             | "mcp.tools.list"
             | "mcp.tools.call"
             | "tools/call"
@@ -1178,7 +1179,7 @@ mod tests {
     // (single source of truth) — regression guard for code drift.
     #[test]
     fn infer_error_contract_kind_matches_acp_error_code_enum() {
-        use crate::acp::impl::request::protocol::AcpErrorCode;
+        use crate::acp::r#impl::request::protocol::AcpErrorCode;
         assert_eq!(
             infer_error_contract_kind(AcpErrorCode::AuthRequired as i32, "auth", None),
             "AuthRequired"

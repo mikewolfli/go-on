@@ -2,7 +2,7 @@
 //!
 //! Structured verification and review signals are wired into the review gate
 //! (`acp::helpers::governance::review_gate`) and the single-review path
-//! (`acp::impl::agent`) — see `run_enhanced_verification`.
+//! (`acp::r#impl::agent`) — see `run_enhanced_verification`.
 //!
 //! ## Relationship to `quality_models`
 //!

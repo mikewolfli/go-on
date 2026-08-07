@@ -363,7 +363,7 @@ impl PolicyEvaluator {
                     .map(|v| v.reasons.join("; "))
                     .unwrap_or_else(|| "evaluation_error".to_string()),
             );
-            self.security_governor.record_audit(sg_entry);
+            self.security_governor.record_audit_counters(&sg_entry);
         }
 
         match sg_result {
@@ -739,7 +739,7 @@ impl PolicyEvaluator {
                     quality, risk_score, evidence_count, output_shape
                 ),
             );
-            self.security_governor.record_audit(audit_entry);
+            self.security_governor.record_audit_counters(&audit_entry);
         }
 
         verdict
@@ -763,7 +763,7 @@ impl PolicyEvaluator {
                 GovernanceAction::Shell | GovernanceAction::Network => Permission::Execute,
                 GovernanceAction::Read | GovernanceAction::Search => Permission::Read,
             };
-            let tenant_id = rbac.tenant_ids().into_iter().next();
+            let tenant_id = rbac.default_tenant_id();
             // P1-4: Extract principal from _args; fall back to "harness"/["user"] when absent
             let user_id = _args
                 .get("user_id")

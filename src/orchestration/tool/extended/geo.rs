@@ -122,6 +122,11 @@ impl Tool for GeoUtilTool {
         "geo_util"
     }
 
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let operation = input.payload["operation"]
             .as_str()

@@ -27,10 +27,20 @@ pub(super) struct LockHealthSummary {
 /// any slow wait has been recorded, or any lock wait exceeded 5 ms.
 /// Otherwise the status is `"healthy"`.
 ///
-/// Note: when no components are tracked (an empty slice — the current
-/// runtime state, see log-20260622-5), callers report `"not_monitored"`
-/// instead of relying on the vacuous `"healthy"` result.
+/// When no components are tracked (an empty slice — the current runtime
+/// state, see log-20260622-5), the status is `"not_monitored"`: a vacuous
+/// `"healthy"` for an empty component set would be a fake positive.
 pub(super) fn summarize_lock_health(components: &[LockHealthSummary]) -> LockHealthSummary {
+    if components.is_empty() {
+        return LockHealthSummary {
+            status: "not_monitored",
+            poisoned_total: 0,
+            recovered_total: 0,
+            slow_wait_total: 0,
+            max_wait_ms: 0.0,
+            components_tracked: 0,
+        };
+    }
     let poisoned_total = components
         .iter()
         .map(|item| item.poisoned_total)

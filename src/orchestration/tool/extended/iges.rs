@@ -226,6 +226,11 @@ impl Tool for IgesReadTool {
         "iges_read"
     }
 
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()

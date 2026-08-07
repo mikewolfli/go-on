@@ -493,14 +493,18 @@ impl VideoProcessor {
                 };
 
                 let label = if has_real_frames {
-                    // Compute a simple brightness estimate for labeling
-                    let avg_intensity = frames
+                    // Compute a simple brightness estimate for labeling: single
+                    // pass over the current scene window (sum + count) instead
+                    // of two full traversals of the frame bytes.
+                    let (byte_sum, byte_count) = frames
                         .iter()
                         .filter(|f| f.timestamp_secs >= current_start && f.timestamp_secs <= end_ts)
                         .flat_map(|f| &f.data)
-                        .map(|&b| b as u64)
-                        .sum::<u64>()
-                        .checked_div(frames.iter().flat_map(|f| &f.data).count().max(1) as u64)
+                        .fold((0u64, 0usize), |(sum, count), &b| {
+                            (sum + b as u64, count + 1)
+                        });
+                    let avg_intensity = byte_sum
+                        .checked_div(byte_count.max(1) as u64)
                         .unwrap_or(128) as u8;
                     let mood = if avg_intensity > 180 {
                         "bright"
@@ -566,18 +570,41 @@ impl VideoProcessor {
     }
 
     /// Convenience: run the full pipeline (extract_frames + extract_audio +
-    /// analyze_scene) and return all results.
+    /// analyze_scene) and return all results. Frame and audio extraction are
+    /// independent ffmpeg runs, so they are launched concurrently.
     pub async fn process_full(
         &self,
         path: &std::path::Path,
         interval_secs: f64,
     ) -> Result<FullVideoResult, VideoProcessorError> {
+        if self.config.extract_audio {
+            // Run the two ffmpeg passes concurrently; analyze_scene below
+            // depends only on the extracted frames.
+            let (frames_res, audio_res) = tokio::join!(
+                self.extract_frames(path, interval_secs),
+                self.extract_audio(path),
+            );
+            let frames = frames_res?;
+            let audio = audio_res?;
+            let scenes = if self.config.enable_scene_analysis {
+                self.analyze_scene(&frames).await?
+            } else {
+                Vec::new()
+            };
+
+            return Ok(FullVideoResult {
+                frames,
+                audio,
+                scenes,
+                format: path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(VideoFormat::from_extension)
+                    .unwrap_or(VideoFormat::Other),
+            });
+        }
+
         let frames = self.extract_frames(path, interval_secs).await?;
-        let audio = if self.config.extract_audio {
-            self.extract_audio(path).await?
-        } else {
-            Vec::new()
-        };
         let scenes = if self.config.enable_scene_analysis {
             self.analyze_scene(&frames).await?
         } else {
@@ -586,7 +613,7 @@ impl VideoProcessor {
 
         Ok(FullVideoResult {
             frames,
-            audio,
+            audio: Vec::new(),
             scenes,
             format: path
                 .extension()

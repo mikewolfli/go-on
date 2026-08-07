@@ -401,52 +401,6 @@ impl DriftProtectionEngine {
         new_alerts
     }
 
-    /// Marks an alert as resolved by its ID. Returns an error if no alert with that ID exists.
-    pub fn resolve_alert(&self, alert_id: &str) -> Result<()> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock drift engine: {}", e))?;
-        let alert = inner
-            .alerts
-            .iter_mut()
-            .find(|a| a.id == alert_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(tf("error.alert_not_found", &[("alert_id", alert_id)]))
-            })?;
-        alert.resolved = true;
-        alert.resolved_ms = Some(current_time_ms());
-        Ok(())
-    }
-
-    /// Returns a list of all alerts that are currently unresolved.
-    pub fn get_active_alerts(&self) -> Vec<DriftAlert> {
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
-        inner
-            .alerts
-            .iter()
-            .filter(|a| !a.resolved)
-            .cloned()
-            .collect()
-    }
-
-    /// Returns all alerts (resolved and unresolved) filtered by severity.
-    pub fn get_alerts_by_severity(&self, severity: DriftSeverity) -> Vec<DriftAlert> {
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "inner Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
-        inner
-            .alerts
-            .iter()
-            .filter(|a| a.severity == severity)
-            .cloned()
-            .collect()
-    }
-
     /// Returns a snapshot profile of the current drift protection state.
     pub fn profile(&self) -> DriftProfile {
         let inner = self.inner.lock().unwrap_or_else(|poisoned| {
@@ -575,7 +529,6 @@ mod tests {
         assert_eq!(profile.total_metrics, 0);
         assert_eq!(profile.active_alerts, 0);
         assert!(profile.highest_severity.is_none());
-        assert!(engine.get_active_alerts().is_empty());
     }
 
     // ------------------------------------------------------------------
@@ -688,72 +641,6 @@ mod tests {
         let alerts = engine.check_for_drift();
         assert_eq!(alerts.len(), 1);
         assert_eq!(alerts[0].severity, DriftSeverity::Breach);
-    }
-
-    // ------------------------------------------------------------------
-    // 9. Resolve an alert
-    // ------------------------------------------------------------------
-    #[test]
-    fn test_resolve_alert() {
-        let engine = make_engine();
-        engine
-            .register_policy(default_policy())
-            .expect("register policy should succeed");
-        engine
-            .record_metric("accuracy", 1.00, 0.50, DriftType::Goal)
-            .expect("record metric should succeed");
-        let alerts = engine.check_for_drift();
-        assert_eq!(alerts.len(), 1);
-        let alert_id = alerts[0].id.clone();
-
-        assert!(engine.resolve_alert(&alert_id).is_ok());
-
-        // Verify it no longer appears in active alerts.
-        let active = engine.get_active_alerts();
-        assert!(active.iter().all(|a| a.id != alert_id));
-    }
-
-    // ------------------------------------------------------------------
-    // 10. Resolving a nonexistent alert fails
-    // ------------------------------------------------------------------
-    #[test]
-    fn test_resolve_nonexistent_alert_fails() {
-        let engine = make_engine();
-        let result = engine.resolve_alert("nonexistent-alert-id");
-        assert!(result.is_err());
-        let err = result.expect_err("resolving nonexistent alert should fail");
-        assert!(
-            err.to_string().contains("error.alert_not_found")
-                || err.to_string().contains("not found")
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // 11. get_active_alerts returns only unresolved alerts
-    // ------------------------------------------------------------------
-    #[test]
-    fn test_get_active_alerts() {
-        let engine = make_engine();
-        engine
-            .register_policy(default_policy())
-            .expect("register policy should succeed");
-        engine
-            .record_metric("metric_a", 0.30, 0.10, DriftType::Goal)
-            .expect("record metric a should succeed");
-        engine
-            .record_metric("metric_b", 0.30, 0.10, DriftType::Capability)
-            .expect("record metric b should succeed");
-        let alerts = engine.check_for_drift();
-        assert_eq!(alerts.len(), 2);
-
-        // Resolve one alert.
-        engine
-            .resolve_alert(&alerts[0].id)
-            .expect("resolve first alert should succeed");
-
-        let active = engine.get_active_alerts();
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].id, alerts[1].id);
     }
 
     // ------------------------------------------------------------------

@@ -261,8 +261,7 @@ npm run compile
 ### SDK
 - **Rust SDK**（`sdk/rust/`）— 强类型客户端，多领域方法覆盖
 - **Python SDK**（`sdk/python/`）— 基于 HTTPX 的异步客户端，支持流式传输
-- **Node.js SDK**（`sdk/nodejs/`）— TypeScript 异步客户端，30+ 方法覆盖全部 API 领域
-- **TypeScript SDK**（`sdk/typescript/`）— 面向浏览器和 Node.js 环境的完整 TypeScript 客户端
+- **TypeScript SDK**（`sdk/typescript/`）— 面向浏览器和 Node.js 环境的完整 TypeScript 客户端（同时被 `vscode-addon` 消费）
 
 ### Zed 编辑器集成
 `.zed/settings.json` 将 go-on 预注册为 Zed 智能体服务器（`agent_servers.go-on`），启用自动批准，并配置 `auto_approve_tools` 用于常见只读操作（文件读取、目录列出、搜索）。

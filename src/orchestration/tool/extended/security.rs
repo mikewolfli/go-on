@@ -512,10 +512,11 @@ fn extract_gemfile_lock(path: &std::path::Path) -> Result<Vec<OsvPackage>> {
 
 /// Query the OSV API for vulnerabilities affecting a given package.
 fn query_osv(pkg: &OsvPackage) -> Result<Vec<Value>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .context("failed to build HTTP client for OSV query")?;
+    // Reuse the process-global blocking client (connection pooling) instead of
+    // building a fresh reqwest client per package; the 15s budget is applied
+    // per request so a slow OSV response does not stall the whole scan.
+    let client = crate::shared::http_client::blocking_http_client()
+        .map_err(|err| anyhow::anyhow!("failed to get shared HTTP client: {err}"))?;
 
     let mut body = json!({
         "package": {
@@ -530,6 +531,7 @@ fn query_osv(pkg: &OsvPackage) -> Result<Vec<Value>> {
 
     let resp = client
         .post("https://api.osv.dev/v1/query")
+        .timeout(std::time::Duration::from_secs(15))
         .json(&body)
         .send()
         .with_context(|| format!("OSV API request failed for {}", pkg.name))?;

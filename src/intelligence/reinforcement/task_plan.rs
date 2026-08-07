@@ -2,7 +2,7 @@
 //!
 //! Extracted from the original monolithic `reinforcement.rs`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
@@ -90,6 +90,8 @@ pub struct TaskExecutionMetrics {
     pub parallel_speedup: f64,
 }
 
+/// Execution summary artifact — read by `recommend_agent_order_from_execution_history`
+/// to rank candidate agents by recent executor outcomes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskExecutionSummary {
     pub generated_at: i64,
@@ -103,21 +105,6 @@ pub struct TaskExecutionSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_metrics: Option<TaskExecutionMetrics>,
     pub artifact_path: Option<String>,
-}
-
-// ── Checkpoint ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheckpointSummaryArtifact {
-    pub checkpoint_id: String,
-    pub conversation_id: String,
-    pub branch_id: String,
-    pub parent_checkpoint_id: Option<String>,
-    pub created_at: i64,
-    pub note: Option<String>,
-    pub message_count: usize,
-    pub message_chars: usize,
-    pub assistant_excerpt: Option<String>,
 }
 
 // ── Research artifact ──────────────────────────────────────────────────────
@@ -179,59 +166,6 @@ pub struct WorkflowGeneratedArtifact {
 }
 
 // ── Policy & decision artifacts ────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowOptimizationPolicyArtifact {
-    pub generated_at: i64,
-    pub task: String,
-    pub source: String,
-    pub policy_report: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub phase_parallelism_cap: Option<u64>,
-    pub force_fail_fast: bool,
-    #[serde(default)]
-    pub runtime_healthy: bool,
-    #[serde(default)]
-    pub anomaly_detected: bool,
-    #[serde(default)]
-    pub detached_modules: Vec<String>,
-    #[serde(default)]
-    pub reattached_modules: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowWorkGradeArtifact {
-    pub generated_at: i64,
-    pub task: String,
-    pub source: String,
-    pub requested_grade: String,
-    pub decided_grade: String,
-    pub decision_action: String,
-    pub reasons: Vec<String>,
-    pub risk_score: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PipelineUnifiedMetricsArtifact {
-    pub generated_at: i64,
-    pub task: String,
-    pub source: String,
-    pub predicted_success_rate: f64,
-    pub risk_score: f64,
-    pub runtime_healthy: bool,
-    pub gates_ok: bool,
-    pub subtasks_total: usize,
-    pub subtasks_completed: usize,
-    pub subtasks_failed: usize,
-    pub subtasks_skipped: usize,
-    pub parallelism: usize,
-    pub parallel_utilization: f64,
-    pub serial_degradation_count: usize,
-    pub parallel_failure_rollback_count: usize,
-    pub failure_strategy: String,
-    pub work_grade: String,
-    pub optimization_policy: Value,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequirementContractArtifact {
@@ -519,44 +453,12 @@ pub fn persist_workflow_generated(
     ledger.write_json("spec", "latest-workflow.json", workflow)
 }
 
-/// Persist an execution summary to the ledger.
-pub fn persist_task_execution_summary(
-    ledger: &ArtifactLedger,
-    summary: &TaskExecutionSummary,
-) -> Result<PathBuf> {
-    ledger.write_json("spec", "latest-execution.json", summary)
-}
-
 /// Persist a workflow research artifact to the ledger.
 pub fn persist_workflow_research(
     ledger: &ArtifactLedger,
     artifact: &WorkflowResearchArtifact,
 ) -> Result<PathBuf> {
     ledger.write_json("spec", "latest-research.json", artifact)
-}
-
-/// Persist an optimization policy artifact.
-pub fn persist_workflow_optimization_policy(
-    ledger: &ArtifactLedger,
-    artifact: &WorkflowOptimizationPolicyArtifact,
-) -> Result<PathBuf> {
-    ledger.write_json("spec", "latest-optimization-policy.json", artifact)
-}
-
-/// Persist a work grade artifact.
-pub fn persist_workflow_work_grade(
-    ledger: &ArtifactLedger,
-    artifact: &WorkflowWorkGradeArtifact,
-) -> Result<PathBuf> {
-    ledger.write_json("spec", "latest-work-grade.json", artifact)
-}
-
-/// Persist pipeline unified metrics.
-pub fn persist_pipeline_unified_metrics(
-    ledger: &ArtifactLedger,
-    artifact: &PipelineUnifiedMetricsArtifact,
-) -> Result<PathBuf> {
-    ledger.write_json("spec", "latest-pipeline-metrics.json", artifact)
 }
 
 /// Persist a requirement contract artifact.
@@ -615,99 +517,6 @@ pub fn persist_clarification_session_artifact(
     ledger.write_json("spec", "latest-clarification-session.json", artifact)
 }
 
-/// Recommend modules to reattach based on recent optimization-policy history.
-///
-/// Recovery rule:
-/// - Require the last `required_healthy_streak` records to be healthy and anomaly-free.
-/// - If satisfied, recover modules detached by the latest anomalous record before that streak.
-pub fn recommend_reattach_modules_from_policy_history(
-    ledger: &ArtifactLedger,
-    required_healthy_streak: usize,
-    max_records: usize,
-) -> Vec<String> {
-    let required_healthy_streak = required_healthy_streak.max(1);
-    let max_records = max_records.max(required_healthy_streak);
-
-    let spec_dir = ledger.latest_path("spec", "latest-optimization-policy.json");
-    let Some(parent) = spec_dir.parent() else {
-        return Vec::new();
-    };
-
-    let entries = match std::fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut events = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension() != Some(OsStr::new("json")) {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("latest-optimization-policy") {
-            continue;
-        }
-
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(event) = serde_json::from_str::<WorkflowOptimizationPolicyArtifact>(&raw) else {
-            continue;
-        };
-        events.push(event);
-    }
-
-    if events.len() < required_healthy_streak + 1 {
-        return Vec::new();
-    }
-
-    events.sort_by_key(|event| event.generated_at);
-    if events.len() > max_records {
-        let drain_to = events.len() - max_records;
-        events.drain(0..drain_to);
-    }
-
-    let healthy_tail = events
-        .iter()
-        .rev()
-        .take(required_healthy_streak)
-        .all(|event| event.runtime_healthy && !event.anomaly_detected);
-    if !healthy_tail {
-        return Vec::new();
-    }
-
-    let mut recovered = BTreeSet::new();
-    let anomaly_anchor = events
-        .iter()
-        .rev()
-        .skip(required_healthy_streak)
-        .find(|event| event.anomaly_detected && !event.detached_modules.is_empty());
-
-    if let Some(anchor) = anomaly_anchor {
-        for module in &anchor.detached_modules {
-            recovered.insert(module.clone());
-        }
-    }
-
-    recovered.into_iter().collect()
-}
-
-/// Recommend next parallelism level from persisted learning events.
-pub fn recommend_parallelism_from_learning(
-    ledger: &ArtifactLedger,
-    current: usize,
-    min_parallelism: usize,
-    max_parallelism: usize,
-) -> usize {
-    let Some(bus) = load_learning_bus(ledger) else {
-        return current;
-    };
-    recommend_parallelism_from_learning_bus(&bus, current, min_parallelism, max_parallelism)
-}
-
 /// Parallelism recommendation from an already-loaded learning bus (no I/O).
 pub fn recommend_parallelism_from_learning_bus(
     bus: &WorkflowLearningBusArtifact,
@@ -751,15 +560,6 @@ pub fn recommend_parallelism_from_learning_bus(
     }
 }
 
-/// Recommend failure strategy from persisted learning events.
-/// Returns "fail_fast" or "tolerant".
-pub fn recommend_failure_strategy_from_learning(ledger: &ArtifactLedger, current: &str) -> String {
-    let Some(bus) = load_learning_bus(ledger) else {
-        return current.to_string();
-    };
-    recommend_failure_strategy_from_learning_bus(&bus, current)
-}
-
 /// Failure-strategy recommendation from an already-loaded learning bus (no I/O).
 pub fn recommend_failure_strategy_from_learning_bus(
     bus: &WorkflowLearningBusArtifact,
@@ -789,14 +589,6 @@ pub fn recommend_failure_strategy_from_learning_bus(
     } else {
         current.to_string()
     }
-}
-
-/// Recommend work grade from persisted learning events.
-pub fn recommend_work_grade_from_learning(ledger: &ArtifactLedger, current: &str) -> String {
-    let Some(bus) = load_learning_bus(ledger) else {
-        return current.to_string();
-    };
-    recommend_work_grade_from_learning_bus(&bus, current)
 }
 
 /// Work-grade recommendation from an already-loaded learning bus (no I/O).
@@ -845,18 +637,6 @@ pub fn recommend_work_grade_from_learning_bus(
     } else {
         "agent".to_string()
     }
-}
-
-/// Recommend a tuned predicted success rate using recent LearningBus outcomes.
-pub fn recommend_predicted_success_rate_from_learning(
-    ledger: &ArtifactLedger,
-    current: f32,
-    target_complexity: u8,
-) -> f32 {
-    let Some(bus) = load_learning_bus(ledger) else {
-        return current;
-    };
-    recommend_predicted_success_rate_from_learning_bus(&bus, current, target_complexity)
 }
 
 /// Predicted-success-rate recommendation from an already-loaded learning bus (no I/O).

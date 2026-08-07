@@ -58,6 +58,11 @@ impl Tool for CadConvertTool {
         "cad_convert"
     }
 
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // Determine operation: "convert" (unit conversion) or "rotate" (angle conversion)
         let operation = input.payload["operation"].as_str().unwrap_or("convert");

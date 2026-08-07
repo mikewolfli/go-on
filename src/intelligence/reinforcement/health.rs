@@ -3,6 +3,8 @@
 //! Extracted from the original monolithic `reinforcement.rs`.
 
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,16 @@ use crate::config::{validate_runtime_readiness, AppConfig};
 use crate::vector::VectorStore;
 
 use super::ArtifactLedger;
+
+/// Short-TTL cache for healthcheck reports. The report probes keyring
+/// (per-agent D-Bus round-trips), SQLite/vector counts, and the config file;
+/// several status endpoints (health.probes, runtime.stability, runtime.self_model,
+/// release.readiness) build it on every request, and release.readiness alone
+/// used to build it twice within a single request. A 2s TTL keeps probes fresh
+/// for operators while collapsing duplicate builds.
+type HealthcheckCacheEntry = (Instant, Result<RuntimeHealthcheckReport, String>);
+static HEALTHCHECK_CACHE: OnceLock<Mutex<Option<HealthcheckCacheEntry>>> = OnceLock::new();
+const HEALTHCHECK_TTL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,8 +79,40 @@ where
         .fold(CheckStatus::Healthy, |acc, status| acc.merge(status))
 }
 
-/// Build a comprehensive runtime healthcheck report.
+/// Build a comprehensive runtime healthcheck report, with a short TTL cache
+/// so multiple status endpoints sharing one request do not re-probe keyring /
+/// SQLite / vector counters (each probe is a D-Bus or disk round-trip).
 pub async fn build_runtime_healthcheck_report(
+    config_path: Option<&Path>,
+    cache: Option<&ResponseCache>,
+    vector_store: Option<&VectorStore>,
+) -> Result<RuntimeHealthcheckReport> {
+    if let Some((stored_at, stored)) = HEALTHCHECK_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        if stored_at.elapsed() < HEALTHCHECK_TTL {
+            return match stored {
+                Ok(report) => Ok(report),
+                Err(err) => anyhow::bail!("{err}"),
+            };
+        }
+    }
+
+    let result = build_runtime_healthcheck_report_inner(config_path, cache, vector_store).await;
+    let cached = result
+        .as_ref()
+        .map(|r| r.clone())
+        .map_err(|e| e.to_string());
+    if let Ok(mut guard) = HEALTHCHECK_CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        *guard = Some((Instant::now(), cached));
+    }
+    result
+}
+
+async fn build_runtime_healthcheck_report_inner(
     config_path: Option<&Path>,
     cache: Option<&ResponseCache>,
     vector_store: Option<&VectorStore>,
@@ -319,18 +363,19 @@ fn secret_ref_ready(secret_ref: &str) -> bool {
     if secret_ref.starts_with(keyring_prefix) {
         let locator = secret_ref.trim_start_matches(keyring_prefix);
         if let Some((service, account)) = locator.split_once('/') {
-            if keyring_lookup_accounts(service, account).into_iter().any(
-                |(service_name, account_name)| {
+            if crate::agent::keyring_lookup_accounts(service, account)
+                .into_iter()
+                .any(|(service_name, account_name)| {
                     keyring::Entry::new(&service_name, &account_name)
                         .and_then(|e| e.get_password())
                         .is_ok_and(|v| !v.trim().is_empty())
-                },
-            ) {
+                })
+            {
                 return true;
             }
 
             // Also check env var fallback via get_secret() for in-memory overrides
-            return keyring_env_fallback_candidates(service, account)
+            return crate::agent::keyring_env_fallback_candidates(service, account)
                 .into_iter()
                 .any(|var| {
                     crate::shared::secret_override::get_secret(&var)
@@ -343,50 +388,6 @@ fn secret_ref_ready(secret_ref: &str) -> bool {
 
     // Direct secret ref: check override map + env var
     crate::shared::secret_override::get_secret(secret_ref).is_some_and(|v| !v.trim().is_empty())
-}
-
-fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
-    let mut targets = vec![(service.to_string(), account.to_string())];
-
-    if service == "go-on" {
-        if account == "copilot_api_key" {
-            targets.push((service.to_string(), "github_copilot_token".to_string()));
-        } else if account == "github_copilot_token" {
-            targets.push((service.to_string(), "copilot_api_key".to_string()));
-        }
-    }
-
-    targets
-}
-
-fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    // NOTE: Must stay in sync with agent.rs load_secret_value() fallback logic.
-    // service is NOT checked for openai to maximize backward compatibility for
-    // users whose keyring entries may use different service names.
-    if account == "openai_api_key" {
-        candidates.push("OPENAI_API_KEY".to_string());
-    }
-    if account == "openai_compatible_api_key" {
-        candidates.push("OPENAI_COMPATIBLE_API_KEY".to_string());
-        candidates.push("OPENAI_API_KEY".to_string());
-    }
-    if service == "go-on" && (account == "copilot_api_key" || account == "github_copilot_token") {
-        candidates.push("GITHUB_COPILOT_TOKEN".to_string());
-        candidates.push("GITHUB_TOKEN".to_string());
-    }
-
-    candidates.push(account.replace('-', "_").to_ascii_uppercase());
-    candidates.push(
-        format!("{}_{}", service, account)
-            .replace('-', "_")
-            .to_ascii_uppercase(),
-    );
-
-    candidates.sort();
-    candidates.dedup();
-    candidates
 }
 
 fn secret_pool_status(config: &AppConfig) -> Value {

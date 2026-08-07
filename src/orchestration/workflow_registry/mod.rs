@@ -32,27 +32,6 @@ pub struct WorkflowPreset {
     pub description: String,
 }
 
-/// Context describing the task to be matched against a workflow preset.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskContext {
-    /// High-level task category (e.g. "bug_fix", "feature", "refactor", "q&a")
-    pub task_type: String,
-    /// A numeric estimate of task complexity (0.0 – 1.0).  Higher = more complex.
-    pub complexity_score: f64,
-    /// Roles the task requires (e.g. ["Coder", "Reviewer"])
-    pub roles_needed: Vec<String>,
-}
-
-impl Default for TaskContext {
-    fn default() -> Self {
-        Self {
-            task_type: String::new(),
-            complexity_score: 0.0,
-            roles_needed: Vec::new(),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // WorkflowRegistry
 // ---------------------------------------------------------------------------
@@ -61,32 +40,6 @@ impl Default for TaskContext {
 #[derive(Debug, Default)]
 pub struct WorkflowRegistry {
     presets: HashMap<String, WorkflowPreset>,
-    /// Optional profile tracking registry activity.
-    profile: Option<WorkflowRegistryProfile>,
-}
-
-/// Profile that tracks registry activity and state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowRegistryProfile {
-    /// Whether the registry is enabled for matching.
-    pub enabled: bool,
-    /// Number of registered presets.
-    pub preset_count: usize,
-    /// Timestamp (unix epoch seconds) of the last successful match, or 0.
-    pub last_match: i64,
-    /// Total number of successful match calls.
-    pub match_count: u64,
-}
-
-impl Default for WorkflowRegistryProfile {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            preset_count: 0,
-            last_match: 0,
-            match_count: 0,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,15 +66,6 @@ mod tests {
         assert!(names.contains(&"dev"));
         assert!(names.contains(&"general"));
         assert!(names.contains(&"free"));
-    }
-
-    #[test]
-    fn test_new_with_profile() {
-        let registry = WorkflowRegistry::new_with_profile();
-        let p = registry.profile().expect("profile should exist");
-        assert!(p.enabled);
-        assert_eq!(p.preset_count, 4);
-        assert_eq!(p.match_count, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -265,130 +209,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 4. match_workflow
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_match_bug_fix_maps_to_dev() {
-        let mut registry = WorkflowRegistry::new();
-        let ctx = TaskContext {
-            task_type: "bug_fix".to_string(),
-            complexity_score: 0.3,
-            roles_needed: vec![],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_some());
-        assert_eq!(preset.unwrap().name, "dev");
-    }
-
-    #[test]
-    fn test_match_debug_maps_to_dev() {
-        let mut registry = WorkflowRegistry::new();
-        let ctx = TaskContext {
-            task_type: "debug".to_string(),
-            complexity_score: 0.1,
-            roles_needed: vec![],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_some());
-        assert_eq!(preset.unwrap().name, "dev");
-    }
-
-    #[test]
-    fn test_match_complex_maps_to_autopilot() {
-        let mut registry = WorkflowRegistry::new();
-        let ctx = TaskContext {
-            task_type: "feature".to_string(),
-            complexity_score: 0.85,
-            roles_needed: vec![],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_some());
-        assert_eq!(preset.unwrap().name, "autopilot");
-    }
-
-    #[test]
-    fn test_match_simple_qa_maps_to_free() {
-        let mut registry = WorkflowRegistry::new();
-        let ctx = TaskContext {
-            task_type: "q&a".to_string(),
-            complexity_score: 0.1,
-            roles_needed: vec![],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_some());
-        assert_eq!(preset.unwrap().name, "free");
-    }
-
-    #[test]
-    fn test_match_with_coder_role_maps_to_dev() {
-        let mut registry = WorkflowRegistry::new();
-        let ctx = TaskContext {
-            task_type: "general".to_string(),
-            complexity_score: 0.5,
-            roles_needed: vec!["Coder".to_string()],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_some());
-        assert_eq!(preset.unwrap().name, "dev");
-    }
-
-    #[test]
-    fn test_match_empty_roles_maps_to_free() {
-        let mut registry = WorkflowRegistry::new();
-        let ctx = TaskContext {
-            task_type: "general".to_string(),
-            complexity_score: 0.5,
-            roles_needed: vec![],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_some());
-        assert_eq!(preset.unwrap().name, "free");
-    }
-
-    #[test]
-    fn test_match_fallback_to_general() {
-        let mut registry = WorkflowRegistry::new();
-        let ctx = TaskContext {
-            task_type: "refactor".to_string(),
-            complexity_score: 0.5,
-            roles_needed: vec!["Analyst".to_string()],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_some());
-        assert_eq!(preset.unwrap().name, "general");
-    }
-
-    #[test]
-    fn test_match_updates_profile() {
-        let mut registry = WorkflowRegistry::new_with_profile();
-        let ctx = TaskContext {
-            task_type: "bug_fix".to_string(),
-            complexity_score: 0.3,
-            roles_needed: vec![],
-        };
-        let _ = registry.match_workflow(&ctx);
-        let p = registry.profile().unwrap();
-        assert_eq!(p.match_count, 1);
-        assert!(p.last_match > 0);
-    }
-
-    #[test]
-    fn test_match_disabled_profile_returns_none() {
-        let mut registry = WorkflowRegistry::new_with_profile();
-        if let Some(p) = registry.profile_mut() {
-            p.enabled = false;
-        }
-        let ctx = TaskContext {
-            task_type: "bug_fix".to_string(),
-            complexity_score: 0.3,
-            roles_needed: vec![],
-        };
-        let preset = registry.match_workflow(&ctx);
-        assert!(preset.is_none());
-    }
-
-    // -----------------------------------------------------------------------
     // 5. list
     // -----------------------------------------------------------------------
 
@@ -419,10 +239,10 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_updates_profile() {
-        let mut registry = WorkflowRegistry::new_with_profile();
-        registry.remove("free");
-        assert_eq!(registry.profile().unwrap().preset_count, 3);
+    fn test_remove_preset() {
+        let mut registry = WorkflowRegistry::new();
+        assert!(registry.remove("free"));
+        assert!(registry.find("free").is_none());
     }
 
     // -----------------------------------------------------------------------

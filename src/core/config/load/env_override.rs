@@ -1,3 +1,13 @@
+//! Secret validation, environment-readiness, and runtime health checks.
+//!
+//! Historical name (`env_override`) predates the current contents: this module
+//! performs keyring/secret-reference validation, per-agent environment
+//! readiness probing, production-strict violation collection, and runtime
+//! readiness health reports. It does not implement an "environment variable
+//! overrides config file" layer — config fields are loaded from the TOML file
+//! (see `parser.rs`); only secrets fall back to environment variables via
+//! `shared::secret_override`.
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -75,51 +85,6 @@ fn is_keyring_ref(value: &str) -> bool {
 
 // ── Keyring / secret validation ───────────────────────────────────────────
 
-pub(crate) fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    if account == "openai_api_key" {
-        candidates.push("OPENAI_API_KEY".to_string());
-    }
-
-    if account == "openai_compatible_api_key" {
-        candidates.push("OPENAI_COMPATIBLE_API_KEY".to_string());
-        candidates.push("OPENAI_API_KEY".to_string());
-    }
-
-    if service == "go-on" && (account == "copilot_api_key" || account == "github_copilot_token") {
-        // Copilot supports both historical and current names.
-        candidates.push("GITHUB_COPILOT_TOKEN".to_string());
-        candidates.push("GITHUB_TOKEN".to_string());
-    }
-
-    candidates.push(account.replace('-', "_").to_ascii_uppercase());
-    candidates.push(
-        format!("{}_{}", service, account)
-            .replace('-', "_")
-            .to_ascii_uppercase(),
-    );
-
-    candidates.sort();
-    candidates.dedup();
-    candidates
-}
-
-pub(crate) fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
-    let mut targets = vec![(service.to_string(), account.to_string())];
-
-    // Backward/forward compatibility for Copilot key naming.
-    if service == "go-on" {
-        if account == "copilot_api_key" {
-            targets.push((service.to_string(), "github_copilot_token".to_string()));
-        } else if account == "github_copilot_token" {
-            targets.push((service.to_string(), "copilot_api_key".to_string()));
-        }
-    }
-
-    targets
-}
-
 pub fn validate_external_secret_refs(config: &AppConfig) -> Result<()> {
     for (agent_name, agent) in config.agents() {
         if let Some(value) = agent.api_key_env.as_deref() {
@@ -148,7 +113,7 @@ pub(crate) fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
         )
     })?;
     let mut secret = String::new();
-    for (service_name, account_name) in keyring_lookup_accounts(service, account) {
+    for (service_name, account_name) in crate::agent::keyring_lookup_accounts(service, account) {
         match keyring::Entry::new(&service_name, &account_name) {
             Ok(entry) => match entry.get_password() {
                 Ok(value) if !value.trim().is_empty() => {
@@ -175,7 +140,7 @@ pub(crate) fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
     }
 
     if secret.is_empty() {
-        let fallback_candidates = keyring_env_fallback_candidates(service, account);
+        let fallback_candidates = crate::agent::keyring_env_fallback_candidates(service, account);
         for env_name in &fallback_candidates {
             if let Ok(env_value) = std::env::var(env_name) {
                 if !env_value.trim().is_empty() {

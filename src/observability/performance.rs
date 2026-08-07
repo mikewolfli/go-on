@@ -128,20 +128,27 @@ impl PerformanceMonitor {
             0.0
         };
 
-        // Calculate percentiles
+        // Calculate percentiles (partial selection O(n), no full sort needed).
         let mut sorted_latencies: Vec<f64> = self.latencies.iter().copied().collect();
-        sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let p95_latency = if !sorted_latencies.is_empty() {
             let index = (sorted_latencies.len() as f64 * 0.95).floor() as usize;
-            sorted_latencies[index.min(sorted_latencies.len() - 1)]
+            let index = index.min(sorted_latencies.len() - 1);
+            sorted_latencies.select_nth_unstable_by(index, |a, b| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            sorted_latencies[index]
         } else {
             0.0
         };
 
         let p99_latency = if !sorted_latencies.is_empty() {
             let index = (sorted_latencies.len() as f64 * 0.99).floor() as usize;
-            sorted_latencies[index.min(sorted_latencies.len() - 1)]
+            let index = index.min(sorted_latencies.len() - 1);
+            sorted_latencies.select_nth_unstable_by(index, |a, b| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            sorted_latencies[index]
         } else {
             0.0
         };

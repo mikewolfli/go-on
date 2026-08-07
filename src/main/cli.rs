@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 use std::sync::Arc;
 
@@ -53,14 +53,6 @@ pub struct Cli {
     /// Path to configuration file
     #[arg(short = 'c', long)]
     pub config: Option<PathBuf>,
-
-    /// Phase to run
-    #[arg(long)]
-    pub phase: Option<String>,
-
-    /// Enable verbose logging
-    #[arg(short = 'v', long, action = ArgAction::Count)]
-    pub verbose: u8,
 
     /// Validate configuration and exit
     #[arg(long, visible_alias = "doctor", default_value_t = false)]

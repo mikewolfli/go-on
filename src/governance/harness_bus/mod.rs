@@ -59,7 +59,6 @@ use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::governance::rbac::RbacEnforcer;
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::i18n::runtime::tf;
-use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
 use crate::resilience::hyper_resilience::{
     HyperResilienceEngine, ResilienceConfig, ResilienceProfile,
 };
@@ -79,7 +78,6 @@ pub struct HarnessBus {
     pub evaluator: Arc<PolicyEvaluator>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
     pub drift_engine: Arc<DriftProtectionEngine>,
-    pub artifact_layer: Arc<ArtifactLayer>,
     /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
@@ -114,7 +112,6 @@ impl HarnessBus {
             )),
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
             drift_engine: Arc::new(DriftProtectionEngine::new(DriftProtectionConfig::default())),
-            artifact_layer: Arc::new(ArtifactLayer::new()),
 
             resilience_engine: external_resilience_engine.unwrap_or_else(|| {
                 Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
@@ -124,8 +121,11 @@ impl HarnessBus {
             consecutive_allows: AtomicU32::new(0),
         };
 
-        // GAP-B58-C16: Start drift monitor (checks for metric drift every 60 seconds).
-        bus.start_drift_monitor(60);
+        // The drift monitor is NOT started here: `HarnessBus::new` is a
+        // synchronous constructor that may run outside a tokio runtime (tests,
+        // CLI paths), and spawning a perpetual background task per construction
+        // would leak one monitor per instance. The server startup path calls
+        // `start_drift_monitor` explicitly once.
 
         // Wire a real drift policy so the monitor has thresholds to evaluate.
         // Metrics are fed from the hot validation paths (see validate_action /
@@ -251,7 +251,7 @@ impl HarnessBus {
             // plus the five fixed policy bundles wired into the evaluator
             // (dispatch / execution / governance / PUA enforcement / quality
             // compass). Previously hardcoded to 12.
-            let sg_policies = self.evaluator.security_governor.profile().policies_count;
+            let sg_policies = self.evaluator.security_governor.policies_count();
             p.current_active_policies = sg_policies as u32 + 5;
         }
 
@@ -531,31 +531,6 @@ impl HarnessBus {
             .clone()
     }
 
-    /// Check a red-line violation directly.
-    pub fn check_red_line(&self, action: &str) -> bool {
-        let engine = self
-            .evaluator
-            .rule_engine
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-        engine.check_red_lines(action).is_err()
-    }
-
-    /// SelfRationalizationGuard governance profile snapshot.
-    pub fn self_rationalization_profile(&self, enabled: bool) -> serde_json::Value {
-        self.evaluator
-            .guard
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("[harness_bus] lock poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .governance_profile(enabled)
-    }
-
     /// PolicyBundle compliance check for a GovernanceAction.
     ///
     /// Delegates to `SandboxPolicy::check` for sandbox-level actions (Read, Search)
@@ -601,11 +576,6 @@ impl HarnessBus {
     // state); deleted in round 23. The live `plan_construction::Planner` is
     // wired through `OrchestrationServerDeps` and unaffected.
 
-    /// Artifact layer profile snapshot.
-    pub fn artifact_profile(&self) -> ArtifactProfile {
-        self.artifact_layer.profile()
-    }
-
     // Omnipotent mode profile snapshot removed — the OmnipotentMode module
     // had zero production callers besides `profile()` (all-zero data); deleted
     // in round 23. The `omnipotent_mode_readiness` release gate in
@@ -624,107 +594,6 @@ impl HarnessBus {
     /// Review gate prompt for LLM-based approval (PUA-wired).
     pub fn review_gate_prompt(&self) -> String {
         crate::governance::pua::review_gate_prompt()
-    }
-
-    /// Evaluate and decide the work grade for a task context.
-    ///
-    /// When real `TaskCharacteristics` are available, pass them via
-    /// `task_characteristics` to get an accurate risk assessment. When `None`
-    /// (no real task context), a meaningful default grade is returned based
-    /// on the requested grade alone — without fabricating synthetic data.
-    pub fn decide_work_grade_for_task(
-        &self,
-        requested_grade: &str,
-        task_complexity: f64,
-        task_characteristics: Option<crate::orchestration::task_router::TaskCharacteristics>,
-    ) -> serde_json::Value {
-        use crate::acp::helpers::policy::{decide_work_grade, work_grade_action, WorkGrade};
-
-        let (decided, reasons, risk_score, decision_action, decided_requested) =
-            if let Some(chars) = task_characteristics {
-                // Real task context is available — build the plan from actual data
-                let plan = crate::reinforcement::TaskPlanArtifact {
-                    generated_at: 0,
-                    task: String::new(),
-                    characteristics: chars,
-                    routing: crate::orchestration::task_router::RoutingDecision {
-                        roles: vec![],
-                        requirements: vec![],
-                        predicted_success_rate: 0.95,
-                        estimated_duration_seconds: 0,
-                        can_parallelize: vec![],
-                        risk_factors: vec![],
-                        recommended_safeguards: vec![],
-                        pua_enforcement: crate::governance::pua::PuaEnforcementPlan::default(),
-                    },
-                    decomposition: None,
-                    planned_subtasks: vec![],
-                    sub_agent_recommended: false,
-                    activation_reasons: vec![],
-                    action_checks_required: vec![],
-                };
-                let d = decide_work_grade(Some(requested_grade), &plan, true, false, false);
-                (
-                    d.decided,
-                    d.reasons,
-                    d.risk_score,
-                    d.decision_action.clone(),
-                    d.requested,
-                )
-            } else {
-                // No real task context — compute a meaningful default grade
-                // based on the requested grade and complexity alone, without
-                // fabricating a synthetic TaskPlanArtifact.
-                let complexity = task_complexity.clamp(1.0, 5.0) as u8;
-                let risk_score = (complexity as f64 / 5.0) * 0.4;
-
-                let mut decided =
-                    WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent);
-                let mut reasons = Vec::new();
-
-                if risk_score >= 0.75 {
-                    decided = WorkGrade::Safeguard;
-                    reasons.push(
-                        "insufficient context, complexity alone warrants safeguard".to_string(),
-                    );
-                } else if complexity >= 3 {
-                    decided = WorkGrade::Agent;
-                    reasons.push(
-                        "multi-step complexity (no task context), promote to agent execution"
-                            .to_string(),
-                    );
-                } else if complexity <= 1 {
-                    decided = WorkGrade::Edit;
-                    reasons.push(
-                        "low complexity (no task context), use edit for efficiency".to_string(),
-                    );
-                } else {
-                    reasons.push(
-                        "moderate complexity (no task context), retaining requested grade"
-                            .to_string(),
-                    );
-                }
-
-                let action = work_grade_action(
-                    WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent),
-                    decided,
-                );
-                (
-                    decided,
-                    reasons,
-                    risk_score,
-                    action,
-                    WorkGrade::parse(Some(requested_grade)).unwrap_or(WorkGrade::Agent),
-                )
-            };
-
-        serde_json::json!({
-            "requested": decided_requested.as_str(),
-            "decided": decided.as_str(),
-            "decision_action": decision_action,
-            "reasons": reasons,
-            "risk_score": risk_score,
-        })
     }
 
     /// Update the sandbox level at runtime.

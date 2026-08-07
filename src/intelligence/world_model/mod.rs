@@ -227,8 +227,6 @@ mod tests {
         WorldModelConfig {
             max_entities: 100,
             max_events: 50,
-            state_retention_ms: 3_600_000, // 1 hour (won't trigger in normal tests)
-            confidence_threshold: 0.3,
         }
     }
 

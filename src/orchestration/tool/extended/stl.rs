@@ -378,6 +378,11 @@ impl Tool for StlReadTool {
         "stl_read"
     }
 
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -455,6 +460,11 @@ impl Tool for StlGenerateTool {
     fn name(&self) -> &'static str {
         "stl_generate"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]

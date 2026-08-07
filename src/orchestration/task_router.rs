@@ -7,7 +7,6 @@
 //! Phase 10 enhancement: Takes the existing role definitions and makes them
 //! automatically-selected based on task characteristics.
 
-use crate::orchestration::workflow_registry::WorkflowRegistry;
 use crate::pua::{build_enforcement_plan, PuaEnforcementPlan};
 use crate::roles::{role_registry, AgentRole, RoleSpecification, RoleSpecifications};
 use serde::{Deserialize, Serialize};
@@ -362,86 +361,6 @@ impl TaskRouter {
                         RoleSpecifications::coder()
                     }
                 }
-            })
-            .collect()
-    }
-
-    /// Route a task using a WorkflowRegistry preset lookup.
-    /// If a matching preset is found (by name or by task type match),
-    /// its phases override the default routing decision's role selection.
-    pub fn route_task_with_workflow(
-        characteristics: &TaskCharacteristics,
-        workflow_registry: &WorkflowRegistry,
-    ) -> RoutingDecision {
-        let mut decision = Self::route_task(characteristics);
-
-        // Try to match task characteristics to a workflow preset
-        let task_type_str = format!("{:?}", characteristics.task_type).to_lowercase();
-        let preset = workflow_registry.find(&task_type_str);
-
-        let matched_preset = if let Some(p) = preset {
-            decision.recommended_safeguards.push(format!(
-                "workflow_preset:{} ({} phases)",
-                p.name,
-                p.phases.len()
-            ));
-            Some(p.clone())
-        } else {
-            // Fallback: check all presets for a general-purpose one
-            let mut fallback = None;
-            for preset in workflow_registry.list() {
-                if preset.name == "general" || preset.name == "autopilot" {
-                    decision.recommended_safeguards.push(format!(
-                        "workflow_fallback:{} ({} phases)",
-                        preset.name,
-                        preset.phases.len()
-                    ));
-                    fallback = Some(preset.clone());
-                    break;
-                }
-            }
-            fallback
-        };
-
-        // Apply the workflow preset's phases: map phase names to agent roles
-        // and inject them into the routing decision when they are not already
-        // present.
-        if let Some(ref preset) = matched_preset {
-            let phase_roles = Self::map_phases_to_roles(&preset.phases);
-            for (role, phase_name) in &phase_roles {
-                if !decision.roles.contains(role) {
-                    decision.roles.push(role.clone());
-                    decision.requirements.push(RoleRequirement {
-                        role: role.clone(),
-                        priority: "important".to_string(),
-                        sequence_position: decision.requirements.len(),
-                        justification: format!(
-                            "Required by workflow preset '{}' phase '{}'",
-                            preset.name, phase_name
-                        ),
-                    });
-                }
-            }
-        }
-
-        decision
-    }
-
-    /// Map workflow phase names to the corresponding agent roles.
-    fn map_phases_to_roles(phases: &[String]) -> Vec<(AgentRole, String)> {
-        phases
-            .iter()
-            .filter_map(|phase| {
-                let role = match phase.to_lowercase().as_str() {
-                    "planning" => AgentRole::Planner,
-                    "coding" | "executing" => AgentRole::Coder,
-                    "review" | "delivery" => AgentRole::Reviewer,
-                    "validating" | "testing" => AgentRole::Tester,
-                    "gathering" | "thinking" | "research" => AgentRole::Researcher,
-                    "closing" | "free" => return None, // no agent mapping
-                    _ => return None,
-                };
-                Some((role, phase.clone()))
             })
             .collect()
     }

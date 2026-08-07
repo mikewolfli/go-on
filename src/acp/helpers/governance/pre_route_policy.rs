@@ -271,10 +271,7 @@ mod tests {
             branch_id: None,
             phase: None,
             options: None,
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         }
     }

@@ -235,6 +235,11 @@ impl Tool for GameServerQueryTool {
     fn name(&self) -> &'static str {
         "game_server_query"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let addr = input.payload["server_address"]
             .as_str()
@@ -283,6 +288,11 @@ impl Tool for GamePriceTrackerTool {
     fn name(&self) -> &'static str {
         "game_price_tracker"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let game = input.payload["game_name"]
             .as_str()
@@ -296,13 +306,14 @@ impl Tool for GamePriceTrackerTool {
                     "https://store.steampowered.com/api/storesearch/?term={}&cc=US&l=en",
                     urlencoding(game)
                 );
-                let client = reqwest::blocking::Client::builder()
-                    .timeout(Duration::from_secs(10))
-                    .user_agent("go-on/1.0")
-                    .build()
+                let client = crate::shared::http_client::blocking_http_client()
                     .context("failed to build HTTP client")?;
 
-                match client.get(&search_url).send() {
+                match client
+                    .get(&search_url)
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                {
                     Ok(resp) => {
                         let body: serde_json::Value =
                             resp.json().unwrap_or(serde_json::Value::Null);
@@ -377,6 +388,11 @@ impl Tool for GameMatchmakingTool {
     fn name(&self) -> &'static str {
         "game_matchmaking"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let game = input.payload["game"]
             .as_str()
@@ -427,12 +443,12 @@ fn steam_current_players(app_id: u64) -> Option<u64> {
         "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={}",
         app_id
     );
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::shared::http_client::blocking_http_client().ok()?;
+    let resp = client
+        .get(&url)
         .timeout(Duration::from_secs(5))
-        .user_agent("go-on/1.0")
-        .build()
+        .send()
         .ok()?;
-    let resp = client.get(&url).send().ok()?;
     let body: serde_json::Value = resp.json().ok()?;
     body["response"]["player_count"].as_u64()
 }
@@ -462,6 +478,11 @@ impl Tool for GameLaunchTool {
     fn name(&self) -> &'static str {
         "game_launch"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let exe = input.payload["executable"]
             .as_str()
@@ -567,6 +588,11 @@ impl Tool for GameMonitorTool {
     fn name(&self) -> &'static str {
         "game_monitor"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let pid = input.payload["pid"]
             .as_u64()
@@ -697,6 +723,11 @@ impl Tool for GameScreenCaptureTool {
     fn name(&self) -> &'static str {
         "game_screen_capture"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let window = input.payload["window_title"].as_str().unwrap_or("game");
         let output_path = input.payload["output_path"]
@@ -830,6 +861,11 @@ impl Tool for GameReplayRecorderTool {
     fn name(&self) -> &'static str {
         "game_replay_recorder"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let duration_secs = input.payload["duration_secs"].as_u64().unwrap_or(30);
         let output_path = input.payload["output_path"]
@@ -974,6 +1010,11 @@ impl Tool for GameKeyboardInputTool {
     fn name(&self) -> &'static str {
         "game_keyboard_input"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let keys = input.payload["keys"]
             .as_str()
@@ -1042,6 +1083,11 @@ impl Tool for GameMouseInputTool {
     fn name(&self) -> &'static str {
         "game_mouse_input"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let x = input.payload["x"]
             .as_f64()
@@ -1158,6 +1204,11 @@ impl Tool for GameCoachingAssistantTool {
     fn name(&self) -> &'static str {
         "game_coaching_assistant"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let game_name = input.payload["game"]
             .as_str()
@@ -1260,6 +1311,11 @@ impl Tool for GameAutoGrindTool {
     fn name(&self) -> &'static str {
         "game_auto_grind"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let task = input.payload["task"]
             .as_str()
@@ -1377,6 +1433,11 @@ impl Tool for GameSaveManagerTool {
     fn name(&self) -> &'static str {
         "game_save_manager"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let game = input.payload["game"]
             .as_str()
@@ -1684,6 +1745,11 @@ impl Tool for GameAchievementTool {
     fn name(&self) -> &'static str {
         "game_achievements"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let game = input.payload["game"]
             .as_str()
@@ -1755,13 +1821,13 @@ fn fetch_steam_achievements(app_id: u64) -> Option<serde_json::Value> {
         "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?appid={}&l=en",
         app_id
     );
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .user_agent("go-on/1.0")
-        .build()
-        .ok()?;
+    let client = crate::shared::http_client::blocking_http_client().ok()?;
 
-    let resp = client.get(&url).send().ok()?;
+    let resp = client
+        .get(&url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .ok()?;
     let body: serde_json::Value = resp.json().ok()?;
 
     let ach_array = body["game"]["availableGameStats"]["achievements"].as_array()?;
@@ -1799,6 +1865,11 @@ impl Tool for GameModInstallTool {
     fn name(&self) -> &'static str {
         "game_mod_install"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let mod_source = input.payload["mod_source"]
             .as_str()
@@ -1892,6 +1963,11 @@ impl Tool for GameModListTool {
     fn name(&self) -> &'static str {
         "game_mod_list"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let game = input.payload["game"]
             .as_str()

@@ -83,6 +83,9 @@ mod default_functions {
     pub fn default_startup_recent_commits() -> usize {
         5
     }
+    pub fn default_startup_io_timeout_ms() -> u64 {
+        5_000
+    }
 
     // ── Reputation defaults ─────────────────────────────────────
     pub fn default_reputation_alpha() -> f64 {
@@ -236,6 +239,7 @@ impl Default for StartupContextConfig {
             enabled: false,
             readme_max_chars: default_startup_readme_max_chars(),
             recent_commits: default_startup_recent_commits(),
+            io_timeout_ms: default_startup_io_timeout_ms(),
         }
     }
 }

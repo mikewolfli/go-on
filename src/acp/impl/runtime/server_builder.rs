@@ -93,6 +93,11 @@ pub async fn new_acp_server(
         }
     };
 
+    // Start the drift monitor once at server startup (checks for metric drift
+    // every 60 seconds). Deferred out of `HarnessBus::new` so synchronous
+    // constructions outside a tokio runtime do not spawn background tasks.
+    harness_bus.start_drift_monitor(60);
+
     // Inject RBAC enforcer into the harness bus and create HTTP-level enforcer (GAP-B58-D05)
     use crate::governance::rbac::{Permission, RbacEnforcer};
     let rbac_enforcer: Arc<std::sync::RwLock<RbacEnforcer>> = {
@@ -373,6 +378,26 @@ pub async fn new_acp_server(
                 crate::protocol::rate_limit::TenantRateLimit::default(),
             ),
         ));
+        // Activate the distributed-memory transport (cross-node memory sync).
+        // Peers come from GOON_MEMORY_PEERS; with no peers the bus stays
+        // purely local and no transport thread is spawned.
+        if let Some(cb) = server.governance_deps.capability_bus.as_ref() {
+            match cb.distributed_memory_bus.configure_from_env() {
+                Ok(true) => {
+                    tracing::info!(
+                        "distributed memory transport started (peers from GOON_MEMORY_PEERS)"
+                    );
+                }
+                Ok(false) => {
+                    tracing::info!(
+                        "distributed memory transport: no GOON_MEMORY_PEERS configured — local only"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("distributed memory transport failed to start: {e}");
+                }
+            }
+        }
     }
 
     // Fix 6: Inject shared PuaEnforcementPlan into harness_bus evaluator
@@ -491,15 +516,29 @@ pub async fn new_acp_server(
                     crate::security::security_advisor::AlertSource::SecurityAdvisor => "advisor",
                     crate::security::security_advisor::AlertSource::UserReported => "user",
                 };
-                mgr.evaluate(
+                let severity = match security_alert.severity {
+                    crate::security::vulnerability_scan::Severity::Critical => {
+                        crate::shared::alert_severity::AlertSeverity::Critical
+                    }
+                    crate::security::vulnerability_scan::Severity::High => {
+                        crate::shared::alert_severity::AlertSeverity::Critical
+                    }
+                    crate::security::vulnerability_scan::Severity::Medium => {
+                        crate::shared::alert_severity::AlertSeverity::Warning
+                    }
+                    crate::security::vulnerability_scan::Severity::Low => {
+                        crate::shared::alert_severity::AlertSeverity::Warning
+                    }
+                    crate::security::vulnerability_scan::Severity::Unknown => {
+                        crate::shared::alert_severity::AlertSeverity::Info
+                    }
+                };
+                // Security findings are discrete events, not numeric metrics:
+                // report them directly so rule-name matching cannot skip them.
+                mgr.report_direct(
                     &format!("security.{}", source_label),
-                    match security_alert.severity {
-                        crate::security::vulnerability_scan::Severity::Critical => 9.0,
-                        crate::security::vulnerability_scan::Severity::High => 7.0,
-                        crate::security::vulnerability_scan::Severity::Medium => 5.0,
-                        crate::security::vulnerability_scan::Severity::Low => 2.0,
-                        crate::security::vulnerability_scan::Severity::Unknown => 0.0,
-                    },
+                    format!("{}: {}", security_alert.title, security_alert.description),
+                    severity,
                 );
             }
         });

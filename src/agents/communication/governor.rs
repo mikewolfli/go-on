@@ -7,8 +7,6 @@
 //! Design notes (simplified vs original):
 //! - Direct Semaphore::acquire — no SpawnReservation reserved mode.
 //! - check_limits + acquire are separate calls (window is microseconds, risk negligible).
-//! - Cancellation is owned by `AgentMessenger::cancel_subtree` and surfaced
-//!   through `CommunicationBus::cancel_subtree` (which records metrics).
 
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, Semaphore, TryAcquireError};
@@ -133,9 +131,6 @@ impl ExecutionGovernor {
         self.semaphore.available_permits()
     }
 }
-
-// (cancel_subtree removed — cancellation is owned by AgentMessenger and
-// surfaced through CommunicationBus::cancel_subtree, which records metrics.)
 
 #[cfg(test)]
 mod tests {

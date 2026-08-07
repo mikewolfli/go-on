@@ -355,10 +355,7 @@ fn openai_to_chat_params(req: &OpenAiChatRequest) -> ChatParams {
         branch_id: None,
         phase: None,
         options,
-        requirement_contract: None,
-        plan: None,
         vector_hits: None,
-        execution_decision_candidate: None,
         plan_output: None,
     }
 }
@@ -1657,10 +1654,7 @@ async fn handle_response_create(
                 ..Default::default()
             })
         },
-        requirement_contract: None,
-        plan: None,
         vector_hits: None,
-        execution_decision_candidate: None,
         plan_output: None,
     };
 

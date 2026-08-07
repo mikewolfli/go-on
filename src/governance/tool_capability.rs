@@ -88,8 +88,6 @@ impl ToolCapabilityRegistry {
             | "goon_skill_version_list"
             // ── Document readers ──────────────────────────────
             | "read_pdf"
-            | "pdf_merge"
-            | "pdf_split"
             | "read_docx"
             | "read_excel"
             | "read_ppt"
@@ -142,9 +140,7 @@ impl ToolCapabilityRegistry {
             | "security_scan"
             | "template_render"
             | "uuid_gen"
-            | "docker_logs"
-            // ── Skill execution ──────────────────────────────────
-            | "skill_execute" => ToolOperation::Read,
+            | "docker_logs" => ToolOperation::Read,
 
             // ── Search / Discovery tools ──────────────────────────
             | "grep" | "find_path" | "semantic_search" | "code_index_search" | "find_files"
@@ -179,7 +175,8 @@ impl ToolCapabilityRegistry {
             | "game_launch"
             | "game_keyboard_input"
             | "game_mouse_input"
-            | "game_auto_grind" => ToolOperation::Shell,
+            | "game_auto_grind"
+            | "skill_execute" => ToolOperation::Shell,
 
             // ── Write / Admin tools ───────────────────────────────
             "write_file"
@@ -225,7 +222,9 @@ impl ToolCapabilityRegistry {
             | "game_replay_recorder"
             | "game_save_manager"
             | "game_mod_install"
-            | "game_state_modify" => ToolOperation::Write,
+            | "game_state_modify"
+            | "pdf_merge"
+            | "pdf_split" => ToolOperation::Write,
 
             // ── Keyword-based fallback ─────────────────────────
             _ => classify_operation_by_keyword(tool),
@@ -260,6 +259,9 @@ impl ToolCapabilityRegistry {
             | "gltf_read" | "svg_read" | "obj_model_read" | "gcode_read" | "gpx_read" | "geo_util"
             // ── Image read/analyze tools ──
             | "image_analyze"
+            // ── Compilation / code analysis (read-only diagnostics) ──
+            | "cargo_check" | "lint_run" | "code_metrics" | "hash_file" | "encode_decode"
+            | "template_render" | "uuid_gen" | "random_token"
             // ── Document read tools ──
             | "read_docx" | "read_excel" | "read_pdf" | "read_ppt"
             | "email_parse" | "csv_read" | "csv_analyze" | "toml_read" | "yaml_read"
@@ -311,8 +313,7 @@ impl ToolCapabilityRegistry {
             | "game_auto_grind"
             | "game_keyboard_input"
             | "game_mouse_input"
-            | "game_state_modify"
-            | "spawn_agent" => GovernanceAction::Write,
+            | "game_state_modify" => GovernanceAction::Write,
 
             // ── Shell operations (command/code execution) ──
             "run_tests"
@@ -321,9 +322,9 @@ impl ToolCapabilityRegistry {
             | "bash"
             | "cargo_test"
             | "shell_exec"
-            | "cargo_check"
             | "game_launch"
-            | "skill_execute" => GovernanceAction::Shell,
+            | "skill_execute"
+            | "spawn_agent" => GovernanceAction::Shell,
 
             // ── Network operations (outbound) ──
             "http_request"
@@ -575,10 +576,6 @@ mod tests {
             ToolCapabilityRegistry::operation("diagnostics"),
             ToolOperation::Read
         );
-        assert_eq!(
-            ToolCapabilityRegistry::operation("skill_execute"),
-            ToolOperation::Read
-        );
     }
 
     #[test]
@@ -621,6 +618,12 @@ mod tests {
         );
         assert_eq!(
             ToolCapabilityRegistry::operation("run_tests"),
+            ToolOperation::Shell
+        );
+        // skill_execute runs skill code, so it is a Shell operation
+        // (consistency with GovernanceAction::Shell).
+        assert_eq!(
+            ToolCapabilityRegistry::operation("skill_execute"),
             ToolOperation::Shell
         );
     }

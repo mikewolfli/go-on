@@ -56,10 +56,15 @@ impl LatencyQuantileEstimator {
         if self.samples.is_empty() {
             return 0.0;
         }
+        // Partial selection (O(n)) instead of a full sort (O(n log n)): only
+        // the element at the 95th percentile index is needed.
         let mut sorted = self.samples.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let idx = ((sorted.len() as f64) * 0.95).ceil() as usize - 1;
-        sorted[idx.min(sorted.len() - 1)]
+        let idx = idx.min(sorted.len() - 1);
+        sorted.select_nth_unstable_by(idx, |a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        sorted[idx]
     }
 }
 

@@ -279,10 +279,7 @@ mod unit_tests {
             branch_id: Some("feature-a".to_string()),
             phase: Some("coding".to_string()),
             options: None,
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         };
 
@@ -426,10 +423,7 @@ mod unit_tests {
             branch_id: Some("e2e-branch".to_string()),
             phase: Some("coding".to_string()),
             options: None,
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         };
 
@@ -518,10 +512,7 @@ mod unit_tests {
             branch_id: Some("main".to_string()),
             phase: Some("coding".to_string()),
             options: None,
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         };
 
@@ -611,10 +602,7 @@ mod unit_tests {
             branch_id: Some("main".to_string()),
             phase: Some("coding".to_string()),
             options: None,
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         };
 
@@ -692,10 +680,7 @@ mod unit_tests {
                 .collect(),
                 ..PhaseOptions::default()
             }),
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         };
 
@@ -784,10 +769,7 @@ mod unit_tests {
             branch_id: Some("main".to_string()),
             phase: Some("coding".to_string()),
             options: None,
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         };
 
@@ -862,10 +844,7 @@ mod unit_tests {
             branch_id: Some("main".to_string()),
             phase: Some("coding".to_string()),
             options: None,
-            requirement_contract: None,
-            plan: None,
             vector_hits: None,
-            execution_decision_candidate: None,
             plan_output: None,
         };
 

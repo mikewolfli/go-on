@@ -532,17 +532,21 @@ pub async fn handle_request(
     });
 
     let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());
-    let task_type = infer_task_type(method.as_ref(), &request.params);
-    let task_context = TaskContext {
-        task_type: task_type.clone(),
-        file_count: infer_file_count(&request.params),
-        risk_score: infer_risk_score(method.as_ref(), &task_type),
+    // NOTE: task_context (task type / file count / risk score inference) is only
+    // consumed by the PUA violation error paths and the stage-evidence branch
+    // below, so it is built lazily inside those branches instead of on every
+    // passing request (hot-path allocation + keyword scans).
+    let build_task_context = || {
+        let task_type = infer_task_type(method.as_ref(), &request.params);
+        TaskContext {
+            task_type: task_type.clone(),
+            file_count: infer_file_count(&request.params),
+            risk_score: infer_risk_score(method.as_ref(), &task_type),
+        }
     };
-    // NOTE: DynamicQualityCompass is only needed on the PUA violation error
-    // paths below, so it is built lazily inside those branches instead of
-    // on every passing request.
 
     if let Err(violation) = pua_engine.check_red_lines(method.as_ref()) {
+        let task_context = build_task_context();
         return send_error(
             server,
             request.id,
@@ -566,6 +570,7 @@ pub async fn handle_request(
         .await;
     }
     if let Some(stage) = infer_pua_stage(method.as_ref()) {
+        let task_context = build_task_context();
         let completed_actions = extract_pua_completed_actions(&request.params, method.as_ref());
         let required_actions = pua_engine.collect_evidence(stage);
         let report = if required_actions.is_empty() {
@@ -2343,7 +2348,7 @@ mod tests {
         for entry in list {
             if let Some(p) = prev {
                 assert!(
-                    p < entry,
+                    p < *entry,
                     "ACP_METHODS out of order: {p:?} must sort before {entry:?}"
                 );
             }
@@ -2550,9 +2555,11 @@ mod tests {
     // ── Lock health summary ───────────────────────────────────────────
 
     #[test]
-    fn lock_health_summary_healthy_with_no_issues() {
+    fn lock_health_summary_empty_is_not_monitored() {
         let summary = summarize_lock_health(&[]);
-        assert_eq!(summary.status, "healthy");
+        // An empty component set must not claim a vacuous "healthy" state
+        // (log-20260622-5): monitoring is disabled, so report that truthfully.
+        assert_eq!(summary.status, "not_monitored");
         assert_eq!(summary.components_tracked, 0);
     }
 

@@ -100,6 +100,17 @@ pub(crate) async fn load_phase_summary(
     phase_options: Option<&PhaseOptions>,
 ) -> Option<String> {
     let settings = effective_vector_settings(server, phase_options).await?;
+    load_phase_summary_with_settings(server, phase_name, &settings).await
+}
+
+/// Read the phase summary using already-resolved vector settings, so callers
+/// that hold `EffectiveVectorSettings` (e.g. `load_vector_context`) do not
+/// re-enter `effective_vector_settings` / the autotune lock a second time.
+async fn load_phase_summary_with_settings(
+    server: &AcpServer,
+    phase_name: &str,
+    settings: &EffectiveVectorSettings,
+) -> Option<String> {
     if !settings.summary_enabled {
         return None;
     }
@@ -152,7 +163,7 @@ pub(crate) async fn load_vector_context(
         };
     };
 
-    let summary = load_phase_summary(server, phase_name, phase_options).await;
+    let summary = load_phase_summary_with_settings(server, phase_name, &settings).await;
     if query_text.chars().count() < settings.min_query_chars {
         return VectorContext {
             hits: Vec::new(),

@@ -1177,6 +1177,13 @@ pub(crate) async fn act_phase(
     // Hoisted out of the fallback block so the post-block stream completion
     // logic can tell whether the high-risk vote path already emitted done.
     let mut emit_final_vote = false;
+    // Hoisted vote metadata so ActOutput carries the real values to reflect_phase
+    // (risk_decision / routing_diagnostics consumers), instead of None/false.
+    let mut used_multi_model_vote = false;
+    let mut used_multi_agent_vote = false;
+    let mut review_required = false;
+    let mut vote_winner: Option<String> = None;
+    let mut vote_report: Option<Value> = None;
     if !(cache_hit || autonomy_loop_executed && !response_text.trim().is_empty()) {
         let (fallback_result, vote_result, vote_flag) = execute_fallback_with_vote(
             server,
@@ -1199,11 +1206,11 @@ pub(crate) async fn act_phase(
         agent_attempts = fallback_result.agent_attempts;
 
         let (
-            used_multi_model_vote,
-            used_multi_agent_vote,
-            review_required,
-            _vote_winner,
-            vote_report,
+            used_multi_model_vote_val,
+            used_multi_agent_vote_val,
+            review_required_val,
+            vote_winner_val,
+            vote_report_val,
         ) = if emit_final_vote {
             response_text = vote_result.response_text;
             reasoning_text = vote_result.reasoning_text;
@@ -1244,6 +1251,11 @@ pub(crate) async fn act_phase(
         } else {
             (false, false, false, None, None)
         };
+        used_multi_model_vote = used_multi_model_vote_val;
+        used_multi_agent_vote = used_multi_agent_vote_val;
+        review_required = review_required_val;
+        vote_winner = vote_winner_val;
+        vote_report = vote_report_val;
 
         // Error handling
         if let Some(early_value) = handle_execution_errors(
@@ -1487,11 +1499,11 @@ pub(crate) async fn act_phase(
         cache_bypassed_for_execution,
         agent_attempts,
         quota_failed_agents,
-        vote_winner: None,
-        vote_report: None,
-        used_multi_model_vote: false,
-        used_multi_agent_vote: false,
-        review_required: false,
+        vote_winner,
+        vote_report,
+        used_multi_model_vote,
+        used_multi_agent_vote,
+        review_required,
         review_blocked,
         all_tools_failed,
         checkpoint,

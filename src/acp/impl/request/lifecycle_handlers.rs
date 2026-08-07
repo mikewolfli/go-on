@@ -52,7 +52,6 @@ pub(super) async fn health_payload(server: &AcpServer) -> Result<Value> {
             "enabled": true,
             "governance": hb.governance_profile(),
             "drift": hb.drift_profile(),
-            "artifact": hb.artifact_profile(),
             "resilience": resilience,
             "fault_tolerance": fault_tolerance,
         })
@@ -411,11 +410,15 @@ pub(super) async fn build_runtime_stability_payload(server: &AcpServer) -> Resul
 
     let mut config_warnings = Vec::new();
     let mut strict_violations = Vec::new();
+    let mut config_valid = true;
 
     if let Some(cfg_path) = config_path {
         if let Ok(cfg) = AppConfig::load(cfg_path) {
+            config_valid = true;
             config_warnings = collect_config_warnings(cfg_path, &cfg);
             strict_violations = collect_production_strict_violations(&cfg);
+        } else {
+            config_valid = false;
         }
     }
 
@@ -432,12 +435,6 @@ pub(super) async fn build_runtime_stability_payload(server: &AcpServer) -> Resul
 
     let graceful_shutdown_ready = !status.lifecycle.shutdown_requested;
     let uptime_seconds = status.lifecycle.uptime_seconds;
-
-    let config_valid = if let Some(cfg_path) = config_path {
-        AppConfig::load(cfg_path).is_ok()
-    } else {
-        true
-    };
 
     let mut stability_score = 100;
     if error_count > 0 {

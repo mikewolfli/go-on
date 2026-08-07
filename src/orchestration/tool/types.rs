@@ -74,18 +74,14 @@ pub struct ToolHookRegistry {
 
 /// Tool hook that registers spawn events in the CommunicationBus AgentTree.
 ///
-/// When the `spawn_agent` tool is executed, this hook:
-/// - Pre-execute: registers the spawned agent in the AgentTree
-/// - Post-execute: records execution metrics on the CommunicationBus
-pub struct AgentCommunicationHook {
-    /// Reference to the global CommunicationBus.
-    bus: Arc<CommunicationBus>,
-}
+/// When the `spawn_agent` tool is executed, this hook registers the spawned
+/// agent in the AgentTree before execution.
+pub struct AgentCommunicationHook;
 
 impl AgentCommunicationHook {
-    /// Create a new hook with a reference to the CommunicationBus.
-    pub fn new(bus: Arc<CommunicationBus>) -> Self {
-        Self { bus }
+    /// Create a new hook.
+    pub fn new(_bus: Arc<CommunicationBus>) -> Self {
+        Self
     }
 }
 
@@ -139,15 +135,11 @@ impl ToolHook for AgentCommunicationHook {
 
     fn post_execute(
         &self,
-        tool_name: &str,
+        _tool_name: &str,
         _input: &ToolInput,
-        output: &ToolOutput,
-        duration_ms: u64,
+        _output: &ToolOutput,
+        _duration_ms: u64,
     ) -> Result<()> {
-        if tool_name == "spawn_agent" {
-            self.bus
-                .record_metrics(tool_name, duration_ms, output.success);
-        }
         Ok(())
     }
 }

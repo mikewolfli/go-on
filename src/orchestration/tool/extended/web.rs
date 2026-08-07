@@ -35,14 +35,14 @@ impl Tool for WebScrapeTool {
 
         info!(url = %url, "web_scrape: fetching page");
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(timeout_ms))
-            .user_agent("go-on/1.0")
-            .build()
+        // Reuse the shared blocking client (connection pooling); the request
+        // carries the per-call timeout.
+        let client = crate::shared::http_client::blocking_http_client()
             .context("failed to build HTTP client")?;
 
         let response = client
             .get(url)
+            .timeout(Duration::from_millis(timeout_ms))
             .send()
             .with_context(|| format!("failed to fetch {url}"))?;
 

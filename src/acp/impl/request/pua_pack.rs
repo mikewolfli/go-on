@@ -88,7 +88,6 @@ pub(super) fn infer_pua_stage(method: &str) -> Option<&'static str> {
             | "mcp.tools.call"
             | "chat"
             | "session/prompt"
-            | "mcp.sampling.createMessage"
             | "mcp.resources.read"
     ) {
         return Some("execution");

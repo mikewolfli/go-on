@@ -278,19 +278,6 @@ impl ResponseCache {
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    /// Reclaim SQLite free pages after cleanup-heavy maintenance cycles.
-    pub async fn vacuum(&self) -> Result<()> {
-        let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            conn.execute_batch("VACUUM;")?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-    }
-
     /// Get the number of entries in the cache
     ///
     /// # Returns
@@ -631,20 +618,6 @@ impl ResponseCache {
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-    }
-
-    /// No-op on PostgreSQL — VACUUM is managed by autovacuum.
-    pub fn vacuum(&self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Health check: verify the connection is alive.
-    pub fn health_check(&self) -> Result<()> {
-        let mut client = pool_get(&self.pool.write)?;
-        client
-            .query_one("SELECT 1", &[])
-            .map_err(|e| anyhow::anyhow!("postgres health check failed: {e}"))?;
-        Ok(())
     }
 
     pub async fn entry_count(&self) -> Result<u64> {

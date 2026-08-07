@@ -13,29 +13,6 @@ impl WorkflowRegistry {
         r
     }
 
-    /// Create a new registry with profile tracking enabled.
-    pub fn new_with_profile() -> Self {
-        let mut r = Self {
-            presets: HashMap::new(),
-            profile: Some(WorkflowRegistryProfile::default()),
-        };
-        r.register_defaults();
-        if let Some(ref mut p) = r.profile {
-            p.preset_count = r.presets.len();
-        }
-        r
-    }
-
-    /// Return a shared reference to the profile, if one exists.
-    pub fn profile(&self) -> Option<&WorkflowRegistryProfile> {
-        self.profile.as_ref()
-    }
-
-    /// Return a mutable reference to the profile, if one exists.
-    pub fn profile_mut(&mut self) -> Option<&mut WorkflowRegistryProfile> {
-        self.profile.as_mut()
-    }
-
     fn register_defaults(&mut self) {
         let defaults = vec![
             WorkflowPreset {
@@ -110,9 +87,6 @@ impl WorkflowRegistry {
         let mut preset = preset;
         preset.name = name.clone();
         self.presets.insert(name, preset);
-        if let Some(ref mut p) = self.profile {
-            p.preset_count = self.presets.len();
-        }
         Ok(())
     }
 
@@ -141,84 +115,7 @@ impl WorkflowRegistry {
     }
 
     // -----------------------------------------------------------------------
-    // 4. match_workflow – intelligent conditional matching
-    // -----------------------------------------------------------------------
-
-    /// Select the best workflow preset for the given `TaskContext`.
-    ///
-    /// Matching rules (first match wins):
-    ///
-    /// | Condition                                          | Selected Preset |
-    /// |----------------------------------------------------|-----------------|
-    /// | `task_type` contains "bug" / "fix" / "debug"       | dev             |
-    /// | `complexity_score` >= 0.7                          | autopilot       |
-    /// | `complexity_score` <= 0.2 AND `task_type` is "q&a" | free            |
-    /// | `roles_needed` contains "Coder" or "Reviewer"      | dev             |
-    /// | `roles_needed` is empty (Q&A / single-turn)        | free            |
-    /// | otherwise                                          | general         |
-    pub fn match_workflow(&mut self, task_context: &TaskContext) -> Option<&WorkflowPreset> {
-        if let Some(ref p) = self.profile {
-            if !p.enabled {
-                return None;
-            }
-        }
-
-        let task_lower = task_context.task_type.to_ascii_lowercase();
-        let score = task_context.complexity_score;
-
-        // Helper: check whether any of the given substrings appear in the
-        // lowercased task_type.
-        let task_type_contains =
-            |keywords: &[&str]| -> bool { keywords.iter().any(|kw| task_lower.contains(kw)) };
-
-        let selected_name: &str = {
-            // Bug-fix / debug tasks -> dev
-            if task_type_contains(&["bug", "fix", "debug"]) {
-                "dev"
-            }
-            // Complex tasks (score >= 0.7) -> autopilot
-            else if score >= 0.7 {
-                "autopilot"
-            }
-            // Simple Q&A (score <= 0.2) -> free
-            else if score <= 0.2 && task_type_contains(&["q&a", "ask", "question"]) {
-                "free"
-            }
-            // Roles matching: if the task requires coding or review roles -> dev
-            else if task_context
-                .roles_needed
-                .iter()
-                .any(|r| r.eq_ignore_ascii_case("Coder") || r.eq_ignore_ascii_case("Reviewer"))
-            {
-                "dev"
-            }
-            // No roles specified, or only passive roles -> free (single-turn / Q&A)
-            else if task_context.roles_needed.is_empty() {
-                "free"
-            }
-            // Fallback -> general
-            else {
-                "general"
-            }
-        };
-
-        let preset = self.presets.get(selected_name)?;
-
-        // Update profile statistics
-        if let Some(ref mut p) = self.profile {
-            p.last_match = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            p.match_count = p.match_count.wrapping_add(1);
-            p.preset_count = self.presets.len();
-        }
-
-        Some(preset)
-    }
-
-    // -----------------------------------------------------------------------
-    // 5. list – all presets sorted by name
+    // 4. list – all presets sorted by name
     // -----------------------------------------------------------------------
 
     /// Return references to all registered presets, sorted alphabetically.
@@ -234,13 +131,7 @@ impl WorkflowRegistry {
 
     /// Remove a preset by name.  Returns `true` if a preset was actually removed.
     pub fn remove(&mut self, name: &str) -> bool {
-        let removed = self.presets.remove(name).is_some();
-        if removed {
-            if let Some(ref mut p) = self.profile {
-                p.preset_count = self.presets.len();
-            }
-        }
-        removed
+        self.presets.remove(name).is_some()
     }
 
     // -----------------------------------------------------------------------

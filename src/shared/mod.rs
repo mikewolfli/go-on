@@ -50,6 +50,7 @@ pub fn sha256_bytes(data: &[u8]) -> Vec<u8> {
 /// constant-time comparison (`verify_slice`) on top of this.
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     use hmac::{digest::KeyInit, Mac};
+    use sha2::Sha256;
     let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(data);
     mac.finalize().into_bytes().to_vec()

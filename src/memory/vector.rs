@@ -962,19 +962,6 @@ impl VectorStore {
         })
     }
 
-    /// Reclaim SQLite free pages after retention cleanup.
-    pub async fn vacuum(&self) -> Result<()> {
-        let conn = self.conn.clone();
-        spawn_blocking_vec!(move || {
-            let conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
-                poisoned.into_inner()
-            });
-            conn.execute_batch("VACUUM;")?;
-            Ok(())
-        })
-    }
-
     /// Ensure the in-memory HNSW index is built from SQLite data.
     ///
     /// Reads all vectors from the database and constructs the HNSW graph.
@@ -1923,22 +1910,6 @@ impl VectorStore {
             let memory_deleted = client.execute("DELETE FROM vector_memory", &[])? as usize;
             let summaries_deleted = client.execute("DELETE FROM phase_summary", &[])? as usize;
             Ok((memory_deleted, summaries_deleted))
-        })
-    }
-
-    /// Reclaim PostgreSQL storage after retention cleanup.
-    ///
-    /// Issues `VACUUM ANALYZE` to reclaim free pages and update query planner
-    /// statistics, matching the SQLite backend's `vacuum()` behaviour. While
-    /// PostgreSQL autovacuum handles routine maintenance automatically, issuing
-    /// an explicit `VACUUM ANALYZE` after large deletions ensures immediate
-    /// space reclamation and consistent test/benchmark behaviour.
-    pub async fn vacuum(&self) -> Result<()> {
-        let pool = self.pool.write.clone();
-        spawn_blocking_vec!(move || {
-            let mut client = pool_get(&pool)?;
-            client.batch_execute("VACUUM ANALYZE")?;
-            Ok(())
         })
     }
 }

@@ -143,8 +143,7 @@ API 密钥通过 `X-Api-Key` 或 `X-Go-On-Key` HTTP 头发送。认证根据运�
 ### 官方库
 - **Python**：`go-on-sdk`（通过 `pip install go-on-sdk` 安装）
 - **Rust**：`go_on_sdk` crate（`sdk/rust/`）
-- **Node.js**：`go-on-sdk-nodejs`（`sdk/nodejs/`）
-- **TypeScript**：`go-on-sdk-typescript`（`sdk/typescript/`）
+- **TypeScript**：`go-on-sdk-typescript`（`sdk/typescript/`，被 `vscode-addon` 消费）
 
 ### 生成自定义客户端
 `POST /rpc` 的 JSON-RPC 接口可以直接从任何语言调用：

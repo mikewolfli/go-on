@@ -17,10 +17,6 @@ pub struct WorldModelConfig {
     pub max_entities: usize,
     /// Maximum number of events stored in the ring buffer.
     pub max_events: usize,
-    /// Time in milliseconds after which an entity/event is considered stale.
-    pub state_retention_ms: u64,
-    /// Minimum confidence required for an entity to be considered valid.
-    pub confidence_threshold: f64,
 }
 
 impl Default for WorldModelConfig {
@@ -28,8 +24,6 @@ impl Default for WorldModelConfig {
         Self {
             max_entities: 1000,
             max_events: 5000,
-            state_retention_ms: 3_600_000, // 1 hour
-            confidence_threshold: 0.3,
         }
     }
 }

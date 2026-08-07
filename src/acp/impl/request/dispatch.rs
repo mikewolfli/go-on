@@ -181,7 +181,7 @@ pub async fn dispatch_to_client(
                         send_error(
                             server,
                             Some(id.clone()),
-                            crate::acp::impl::request::protocol::AcpErrorCode::InternalError as i32,
+                            crate::acp::r#impl::request::protocol::AcpErrorCode::InternalError as i32,
                             msg.to_string(),
                             None,
                         )
@@ -210,7 +210,7 @@ pub async fn dispatch_to_client(
             crate::acp::r#impl::io::send_error(
                 server,
                 Some(id),
-                crate::acp::impl::request::protocol::AcpErrorCode::InvalidParams as i32,
+                crate::acp::r#impl::request::protocol::AcpErrorCode::InvalidParams as i32,
                 format!("{:#}", e),
                 Some(serde_json::json!({"code": "DISPATCH_ERROR"})),
             )

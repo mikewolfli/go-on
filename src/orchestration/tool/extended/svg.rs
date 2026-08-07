@@ -28,6 +28,11 @@ impl Tool for SvgReadTool {
         "svg_read"
     }
 
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -106,6 +111,11 @@ impl Tool for SvgGenerateTool {
     fn name(&self) -> &'static str {
         "svg_generate"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let width = input.payload["width"].as_u64().unwrap_or(800) as f64;
@@ -577,6 +587,11 @@ impl Tool for SvgExportTool {
     fn name(&self) -> &'static str {
         "svg_export"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         use svg::node::element::path::Data;

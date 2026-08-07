@@ -365,7 +365,8 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
         .clone()
         .unwrap_or_else(|| "config.toml".to_string());
     let config_path = std::path::PathBuf::from(&path);
-    let config = AppConfig::load(&config_path)?;
+    // Explicit reload must observe fresh file content — bypass the mtime cache.
+    let config = AppConfig::load_uncached(&config_path)?;
 
     // Attempt to update server.runtime_config with new values.
     // The runtime_config is behind a static OnceLock that can be swapped
@@ -400,6 +401,12 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
                 error = %e,
                 "i18n hot reload failed during config reload"
             );
+        }
+        // Honor a changed GO_ON_LANG at runtime (previously only detected at
+        // process startup).
+        let detected = crate::i18n::runtime::Language::detect_system();
+        if detected != manager.current_language() {
+            manager.set_language(detected);
         }
     }
 
@@ -524,7 +531,7 @@ pub(super) async fn config_baseline_payload(server: &AcpServer, _params: Value) 
         "ok": true,
         "baseline": {
             "status": if legacy_mappings.is_empty() { "frozen" } else { "migration_required" },
-            "source_precedence": ["cli_override", "env", "config_file", "default"],
+            "source_precedence": ["cli_override", "config_file", "default"],
             "effective": {
                 "configured_mode": access_selection.configured_mode,
                 "protocol_mode": server.runtime_config.protocol_mode.clone().unwrap_or_else(|| "adaptive".to_string()),

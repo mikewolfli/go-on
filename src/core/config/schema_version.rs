@@ -100,25 +100,6 @@ pub struct MigrationStep {
 }
 
 // ---------------------------------------------------------------------------
-// MigrationResult
-// ---------------------------------------------------------------------------
-
-/// Result of applying config migrations.
-#[derive(Debug, Clone)]
-pub struct MigrationResult {
-    /// Original version found in config.
-    pub original_version: SchemaVersion,
-    /// Final version after all migrations.
-    pub final_version: SchemaVersion,
-    /// How many migration steps were applied.
-    pub steps_applied: usize,
-    /// Whether any warnings were generated.
-    pub has_warnings: bool,
-    /// Description of what changed.
-    pub changes: Vec<String>,
-}
-
-// ---------------------------------------------------------------------------
 // SchemaManager
 // ---------------------------------------------------------------------------
 
@@ -144,16 +125,12 @@ impl SchemaManager {
     }
 
     /// Register built-in migration paths.
-    fn register_builtin_migrations(&mut self) {
-        // v1.0.0: Initial schema — no migration needed
-        // Future migrations would be registered here, e.g.:
-        // self.register_migration(
-        //     SchemaVersion::new(1, 0, 0),
-        //     SchemaVersion::new(1, 1, 0),
-        //     "Add scheduler concurrence config",
-        //     "migrate_1_0_to_1_1",
-        // );
-    }
+    ///
+    /// The initial schema (v1.0.0) has no migrations to register. When the
+    /// config schema evolves, add real steps here with `register_migration`
+    /// AND implement the corresponding apply logic in `migrate_config_schema`
+    /// (a step must mutate the config, not just log).
+    fn register_builtin_migrations(&mut self) {}
 
     /// Register a migration from one version to another.
     pub fn register_migration(

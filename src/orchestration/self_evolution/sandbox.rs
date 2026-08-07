@@ -25,6 +25,10 @@ use uuid::Uuid;
 
 /// Hard limit on the number of patch iterations allowed in a single sandbox session.
 const MAX_ITERATIONS: u64 = 10;
+/// Minimum pre-patch code-quality health score (0.0–1.0). Patches are rejected
+/// when the baseline clippy scan scores below this (e.g. scan failure or a
+/// heavily degraded tree).
+const MIN_QUALITY_GATE_SCORE: f64 = 0.5;
 
 /// Timeout for `cargo build` inside the sandbox (10 minutes).
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
@@ -286,6 +290,10 @@ pub enum SandboxError {
     #[error("test failed: {0}")]
     TestFailed(String),
 
+    /// Pre-patch code quality gate rejected the patch.
+    #[error("quality gate rejected: {0}")]
+    QualityGate(String),
+
     /// Network access was attempted from the sandbox.
     #[error("network access denied from sandbox")]
     NetworkDenied,
@@ -371,14 +379,28 @@ impl SandboxExecutor {
             return Err(SandboxError::ForbiddenTarget(patch.target_file.clone()));
         }
 
-        // Pre-patch code quality gate: run clippy before applying to establish baseline
-        let pre_quality = crate::intelligence::code_quality::run_code_quality_scan();
+        // Pre-patch code quality gate: run clippy before applying to establish
+        // baseline. The clippy invocation is a blocking child process (can take
+        // seconds), so it is offloaded to the blocking pool; a baseline health
+        // score below the minimum blocks the patch.
+        let pre_quality =
+            tokio::task::spawn_blocking(crate::intelligence::code_quality::run_code_quality_scan)
+                .await
+                .map_err(|join_err| {
+                    SandboxError::QualityGate(format!("quality scan panicked: {join_err}"))
+                })?;
         tracing::info!(
             sandbox = %self.instance_id,
             health_score = pre_quality.health_score,
             issues = pre_quality.issues.len(),
             "pre-patch quality gate completed"
         );
+        if pre_quality.health_score < MIN_QUALITY_GATE_SCORE {
+            return Err(SandboxError::QualityGate(format!(
+                "baseline quality score {} below minimum {}",
+                pre_quality.health_score, MIN_QUALITY_GATE_SCORE
+            )));
+        }
 
         // Apply the patch to the file
         let changed = patch.apply_to_file(&self.workdir).await?;

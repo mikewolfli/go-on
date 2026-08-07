@@ -11,9 +11,6 @@ use crate::acp::r#impl::UserSession;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::orchestration::plan_output::PlanOutput;
-use crate::reinforcement::{
-    ExecutionDecisionCandidate, RequirementContractArtifact, TaskPlanArtifact,
-};
 
 /// Chat parameters structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -33,14 +30,8 @@ pub struct ChatParams {
     pub phase: Option<String>,
     /// Optional options for phase configuration
     pub options: Option<PhaseOptions>,
-    /// Optional requirement contract
-    pub requirement_contract: Option<RequirementContractArtifact>,
-    /// Optional task plan
-    pub plan: Option<TaskPlanArtifact>,
     /// Optional vector search hits
     pub vector_hits: Option<Vec<Value>>,
-    /// Optional execution decision candidate
-    pub execution_decision_candidate: Option<ExecutionDecisionCandidate>,
     /// Optional plan output from Plan mode — used to hand off to execution modes.
     /// When present, the execution mode (Edit/SafeGuard/FullAuto) receives
     /// the structured plan as context for task execution.

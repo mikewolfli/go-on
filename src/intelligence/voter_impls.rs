@@ -1,7 +1,7 @@
 //! Concrete [`AgentVoter`] implementations for the weighted-vote / Delphi-method
 //! debate system.
 //!
-//! Provides five voter strategies:
+//! Provides four voter strategies:
 //!
 //! | Voter | Strategy |
 //! |---|---|

@@ -570,6 +570,60 @@ pub async fn start_background_tasks(
         });
     }
 
+    // ── Alert rule producers (metrics-based rules) ───────────────────────
+    // Evaluate the latency / error-rate / circuit-breaker / agent-timeout
+    // alert rules on a 30s cadence. Previously these four rules had no
+    // `evaluate` producer, so their alerts could never fire. Memory and
+    // cache-hit rules are produced elsewhere (memory_health monitor and
+    // chat/session cache-hit reporting).
+    {
+        let alert_manager = Arc::clone(&server.observability.alert_manager);
+        let metrics = Arc::clone(&server.observability.metrics);
+        let shutdown = shutdown_notify.clone();
+        spawn_background_task(
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(30));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = interval.tick() => {}
+                    }
+                    let snapshot = metrics.snapshot();
+                    let mut mgr = alert_manager.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("alert_manager lock poisoned");
+                        poisoned.into_inner()
+                    });
+                    // Latency rule (avg request latency as the p95 proxy;
+                    // the histogram would need a full percentile calculation).
+                    mgr.evaluate("p95_latency_high", snapshot.avg_request_duration_ms);
+                    // Error-rate rule (% of failed requests).
+                    let error_rate = if snapshot.total_requests > 0 {
+                        snapshot.failed_requests as f64 / snapshot.total_requests as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    mgr.evaluate("error_rate_high", error_rate);
+                    // Circuit-breaker open count rule.
+                    mgr.evaluate(
+                        "circuit_breaker_open",
+                        f64::from(snapshot.circuit_breaker_open_count),
+                    );
+                    // Agent timeout-rate rule (% of requests that timed out).
+                    let timeout_rate = if snapshot.total_requests > 0 {
+                        snapshot.agent_timeout_failures_total as f64
+                            / snapshot.total_requests as f64
+                            * 100.0
+                    } else {
+                        0.0
+                    };
+                    mgr.evaluate("agent_timeout_rate", timeout_rate);
+                }
+            },
+            "alert_metric_rules",
+        );
+    }
+
     Ok(())
 }
 

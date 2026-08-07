@@ -143,8 +143,7 @@ Rate limiting is enforced internally via a token bucket algorithm per phase.
 ### Official Libraries
 - **Python**: `go-on-sdk` (install via `pip install go-on-sdk`)
 - **Rust**: `go_on_sdk` crate (`sdk/rust/`)
-- **Node.js**: `go-on-sdk-nodejs` (`sdk/nodejs/`)
-- **TypeScript**: `go-on-sdk-typescript` (`sdk/typescript/`)
+- **TypeScript**: `go-on-sdk-typescript` (`sdk/typescript/`, consumed by `vscode-addon`)
 
 ### Generating a Custom Client
 The JSON-RPC interface at `POST /rpc` is straightforward to call from any language:

@@ -3,22 +3,19 @@
 //! Searches crates.io, npm, PyPI, and other package registries
 //! for available packages matching a query.
 
-use std::sync::LazyLock;
-
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tracing::debug;
 
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 
-/// Shared blocking HTTP client for synchronous package registry searches.
-static BLOCKING_HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
-    reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("go-on/1.0")
-        .build()
-        .expect("Failed to build blocking HTTP client for package search")
-});
+/// Lazy re-export of the process-global blocking client for synchronous
+/// package-registry searches (connection pooling shared with all subsystems;
+/// the 15s budget is applied per request inside the search helpers).
+fn blocking_client() -> Result<&'static reqwest::blocking::Client> {
+    crate::shared::http_client::blocking_http_client()
+        .map_err(|err| anyhow::anyhow!("failed to get shared HTTP client: {err}"))
+}
 
 pub struct SearchPackagesTool;
 
@@ -62,7 +59,7 @@ impl Tool for SearchPackagesTool {
         let registry = input.payload["registry"].as_str().unwrap_or("auto");
         let max_results = input.payload["max_results"].as_u64().unwrap_or(5).min(20) as usize;
 
-        let client = &*BLOCKING_HTTP_CLIENT;
+        let client = blocking_client()?;
 
         let (registry_used, results) = match registry {
             "crates.io" | "cargo-crates" => {

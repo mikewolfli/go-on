@@ -139,16 +139,17 @@ pub(crate) async fn start_server(
     // let _secret_rotation_handle = start_secret_rotation_if_configured(rt);
     // wire_cert_monitor(rt); — REMOVED (duplicate, handled in wire_server)
 
-    // Initialize StartupContext (load project context once per process)
-    let startup_cfg = crate::orchestration::startup_context::StartupContextConfig {
-        enabled: true,
-        ..Default::default()
-    };
-    tokio::spawn(async move {
-        if let Err(e) = crate::orchestration::startup_context::load(&startup_cfg).await {
-            warn!("startup context loading failed: {}", e);
-        }
-    });
+    // Initialize StartupContext (load project context once per process).
+    // Honor the user's `[startup_context] enabled=false` setting instead of
+    // hard-coding it on.
+    let startup_cfg = config.startup_context.clone().unwrap_or_default();
+    if startup_cfg.enabled {
+        tokio::spawn(async move {
+            if let Err(e) = crate::orchestration::startup_context::load(&startup_cfg).await {
+                warn!("startup context loading failed: {}", e);
+            }
+        });
+    }
 
     // persist_cache defaults to true (CacheConfig::persist_enabled) so existing
     // [cache] enabled=true deployments get the token-cache L3 durable layer.
@@ -394,7 +395,7 @@ pub(crate) async fn handle_validation_mode(
 
     // Load and validate configuration
     info!("loading config from {}", config_path.display());
-    let config = Arc::new(AppConfig::load(config_path)?);
+    let config = Arc::new(AppConfig::load_uncached(config_path)?);
 
     // Perform enhanced configuration validation (reuses the already-loaded
     // config — avoids a second AppConfig::load from disk on every startup).

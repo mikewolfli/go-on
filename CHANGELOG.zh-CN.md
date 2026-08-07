@@ -2,6 +2,57 @@
 
 ## [1.5.0] - 2026-08-06
 
+### 第 39 轮 — 架构统一与加速（2026-08-06/07，docs/log/log-20260806-7.md）
+
+#### 安全/正确性
+- **ACP_METHODS 排序修复**：`tool.approve`/`terminal/create` 逆序导致 ACP 模式两个 handler 不可达；新增排序不变量回归测试。
+- **`WriteFileTool::run_async` 沙箱漏洞**：async 路径绕过 50MB 限制与系统敏感路径拦截，现与 sync 路径共用 `enforce_write_sandbox`。
+- **`detect_audio_format` 越界 panic 修复**；**双重 base64 修复**（document_parser 已编码，不再二次编码）。
+- **`RepoAnalyzer::clone` 临时目录生命周期修复**（`Arc<TempDir>` 保活）、`head_commit` 真实获取、`loc` 真实行数、`extract_types` 复用仓库映射去双扫。
+- 修复外部提交损坏的 `AcpErrorCode::from_code`/`is_acp_request`。
+
+#### 三端契约（原则 #2）
+- Rust/Python/Node SDK：`task.plan`/`task.execute` 改发 `{task}`（此前 `description`/`plan_id` 与后端不符）。
+- 四端 `HealthResponse` 对齐后端真实载荷（Rust SDK `health()` 此前恒解析失败）。
+- Node SDK `health()`=GET /health、`runtimeHealth()`=runtime.health（原先颠倒）；`taskPlan`/`taskExecute` 参数名修正。
+- VS Code 工作流/流程视图将本地步骤模型扁平化为后端实际读取的 `task` 参数。
+- `knowledge.distill` 调用端改传后端 `limit` 窗口（删除幻影 `query`/`source`）。
+
+#### 反假修复/指标（原则 #13/18）
+- `SecurityGovernor` 计数集中到 `record_audit`（denials/reviews/escalations 原被双计；`active_escalations` 不再逐条审计恒增）。
+- `harness_bus` `current_active_policies` 由硬编码 12 改为真实计数。
+- drift 自动基线按 metric 名分组（`validate_action`/`verify_output` 延迟不再互相污染基线）。
+- `governance.status` 单次加载配置（`governance_config_summary_with`）。
+- `hash_file` 未知算法显式报错（不再静默回退 sha256 并谎报算法名）；`random_token` 改用加密安全 `rand`。
+- `cache_strategy` 大小写不敏感扫描不再复制会话历史。
+- `default_non_ai_config_toml` 写规范名 `mode = "adaptive"`；OTel 默认端点提示与实际 `localhost:4317` 一致。
+
+#### 性能
+- `http_request` 异步/同步双路径共享连接池 client + 请求级 timeout（原每请求新建）。
+- `record_outcome` 锁次数 7→4（惰性 entry 初始化，去掉无条件 `register_service`）。
+- `synthesize_keyword_heuristic` O(n²)→O(n)；`health`/`release.readiness` 独立 future `tokio::join!` 并行。
+- `load_recent_knowledge_context` 按 mtime 缓存（不再每请求读文件）；`web_search`/LSP client 缓存复用。
+
+#### 死代码/生命周期（原则 #11/13）
+- 删除：`builtin_tools!` 宏、`ToolProgress`/`run_with_progress`/`run_streaming` 子系统、`ShardedGovernanceCache` 命中/未命中计数器、`with_default_trigger_source`、`Agent::send_message` 空操作、token cache TTL 死机制与 `report`/`stats_snapshot`/`reset`/`put_string*`/`get_string`/`summarize_sync`/`expected_dimension` 死 API。
+- **故障恢复计划现在按一致性检查结果 complete/fail**（`recovery_plans_in_progress` 不再无限增长）。
+
+#### 文档
+- cookbook API 文档重写为真实接口面：JSON-RPC 走 `POST /rpc`（非 `/v1/responses`）、7 条真实 GET 路由、真实 CLI 标志/子命令；删除 `core-runtime`/`learning-intelligence`/`workflow-task`/`safety-governance`/`optimization-ops`/`observability` 的虚构 REST 端点。
+- `scripts/verify-zed-integration.sh` 修复（端口 8090、`agent_servers` schema）→ PASS。
+- README 子总线口径统一为 7 个特性门控子总线；SDK 统计补 Node.js；删除无法核实的测试计数。
+- `contracts/cross-client-sync.md` 路径引用修正。
+
+#### 验证
+```
+cargo check 4 profile + --workspace   → 零警告
+cargo clippy --all-targets -D warnings（4 profile）→ 零警告
+cargo test --lib                     → 1645 passed / 0 failed
+TS/Node/vscode tsc --noEmit、Python py_compile、verify-zed-integration.sh → PASS
+```
+
+## [1.5.0] - 2026-08-06
+
 ### 第 38 轮 — 遗留 7 项收口（2026-08-06）
 
 #### 文档一致性修复（2026-08-07）

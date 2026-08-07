@@ -213,6 +213,37 @@ impl AlertManager {
         fired
     }
 
+    /// Record a direct alert event (no rule matching).
+    ///
+    /// Security-advisor findings are discrete events (a specific dependency
+    /// vulnerability, a leaked secret) rather than continuous metrics, so
+    /// routing them through `evaluate` would let `rule_matches_metric` skip
+    /// them (no rule name contains the `security.*` metric prefix).
+    /// Cooldown is not applied: each finding is a distinct event.
+    pub fn report_direct(&mut self, rule_name: &str, message: String, severity: AlertSeverity) {
+        let now = Instant::now();
+        let alert = Alert {
+            rule: rule_name.to_string(),
+            severity,
+            message,
+            value: 0.0,
+            threshold: 0.0,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        };
+        self.last_fire.insert(rule_name.to_string(), now);
+        self.total_alerts_fired += 1;
+        self.recent_alerts.push_front(alert.clone());
+        while self.recent_alerts.len() > MAX_RECENT_ALERTS {
+            self.recent_alerts.pop_back();
+        }
+        if self.webhook.enabled && !self.webhook.url.is_empty() {
+            self.fire_webhook(&alert);
+        }
+    }
+
     /// Configure webhook from environment variables.
     /// Reads `GO_ON_ALERT_WEBHOOK_URL`, `GO_ON_ALERT_WEBHOOK_ENABLED`,
     /// and `GO_ON_ALERT_WEBHOOK_TIMEOUT`.

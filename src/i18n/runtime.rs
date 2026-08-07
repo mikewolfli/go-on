@@ -59,6 +59,13 @@ impl Language {
 
     /// Detect system language
     pub fn detect_system() -> Self {
+        // GO_ON_LANG is the explicit override (also honored by config
+        // validation); fall back to locale env vars, then English.
+        if let Ok(explicit) = std::env::var("GO_ON_LANG") {
+            if !explicit.trim().is_empty() {
+                return Self::from_code(&explicit);
+            }
+        }
         let locale = std::env::var("LANG")
             .or_else(|_| std::env::var("LANGUAGE"))
             .or_else(|_| std::env::var("LC_ALL"))

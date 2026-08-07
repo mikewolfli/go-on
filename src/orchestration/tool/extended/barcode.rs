@@ -24,6 +24,11 @@ impl Tool for QrCodeTool {
         "barcode_gen"
     }
 
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let format = input.payload["format"]
             .as_str()

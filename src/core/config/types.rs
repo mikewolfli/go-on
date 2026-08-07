@@ -752,6 +752,9 @@ pub struct StartupContextConfig {
     pub readme_max_chars: usize,
     #[serde(default = "super::defaults::default_startup_recent_commits")]
     pub recent_commits: usize,
+    /// Per-file I/O timeout in milliseconds (used by the startup context loader).
+    #[serde(default = "super::defaults::default_startup_io_timeout_ms")]
+    pub io_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

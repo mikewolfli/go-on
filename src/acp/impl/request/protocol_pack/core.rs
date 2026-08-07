@@ -144,12 +144,12 @@ pub async fn handle_chat(
             let message = err.to_string();
             if super::is_rate_limited_message(&message) {
                 Ok(DispatchOutput::error(
-                    crate::acp::impl::request::protocol::AcpErrorCode::RateLimited as i32,
+                    crate::acp::r#impl::request::protocol::AcpErrorCode::RateLimited as i32,
                     super::normalize_rate_limited_message(&message),
                 ))
             } else {
                 Ok(DispatchOutput::error(
-                    crate::acp::impl::request::protocol::AcpErrorCode::InternalError as i32,
+                    crate::acp::r#impl::request::protocol::AcpErrorCode::InternalError as i32,
                     message,
                 ))
             }

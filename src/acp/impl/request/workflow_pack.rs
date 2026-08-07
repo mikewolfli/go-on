@@ -1228,9 +1228,7 @@ pub(crate) async fn handle_workflow_ask(
 
     // Step 2b: Auto-register workflow if enabled
     // Register the generated DAG as a named preset in the global WorkflowRegistry
-    // (owned by CapabilityBus), so it becomes observable via capability_bus_profile()
-    // and routable via TaskRouter::route_task_with_workflow — not just a persisted
-    // artifact ledger entry.
+    // (owned by CapabilityBus), so it becomes observable via capability_bus_profile().
     if auto_create_workflow {
         let preset_name = format!("auto-{}", task.trim().to_lowercase().replace(' ', "-"));
         let preset = crate::orchestration::workflow_registry::WorkflowPreset {

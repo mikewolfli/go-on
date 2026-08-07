@@ -4,11 +4,11 @@
 //! here for convenience.
 
 /// Re-export of `ReviewTimeoutPolicy` from the agent implementation module.
-/// The canonical definition lives in `crate::acp::impl::agent`.
+/// The canonical definition lives in `crate::acp::r#impl::agent`.
 pub use crate::acp::r#impl::agent::ReviewTimeoutPolicy;
 
 /// Re-export of `ReviewGateOutcome` from the agent implementation module.
-/// The canonical definition lives in `crate::acp::impl::agent`.
+/// The canonical definition lives in `crate::acp::r#impl::agent`.
 pub use crate::acp::r#impl::agent::ReviewGateOutcome;
 
 /// Online controller state - real implementation from governance module

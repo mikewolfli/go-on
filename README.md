@@ -269,8 +269,7 @@ npm run compile
 ### SDKs
 - **Rust SDK** (`sdk/rust/`) — Strongly typed client with methods across multiple domains
 - **Python SDK** (`sdk/python/`) — HTTPX-based async client with streaming support
-- **Node.js SDK** (`sdk/nodejs/`) — TypeScript async client with 30+ methods across all API domains
-- **TypeScript SDK** (`sdk/typescript/`) — Full TypeScript client for browser and Node.js environments
+- **TypeScript SDK** (`sdk/typescript/`) — Full TypeScript client for browser and Node.js environments (also consumed by `vscode-addon`)
 
 ### Zed Editor Integration
 `.zed/settings.json` pre-registers go-on as a Zed agent server (`agent_servers.go-on`) with auto-approve enabled, plus `auto_approve_tools` for common read-only operations (file reads, directory listings, and searches).

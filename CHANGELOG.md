@@ -2,6 +2,78 @@
 
 ## [1.5.0] - 2026-08-06
 
+### Round 39 — Architecture Unification & Speed Pass (2026-08-06/07, docs/log/log-20260806-7.md)
+
+#### Security / Correctness
+
+- **ACP_METHODS ordering fixed**: `tool.approve` / `terminal/create` were inverted, making both handlers unreachable in ACP mode via `binary_search`; the sorted-invariant is now enforced by a regression test (`acp_methods_list_is_sorted_for_binary_search`).
+- **`WriteFileTool::run_async` sandbox hole closed**: the async path bypassed the 50MB size limit and sensitive-system-path block; both paths now share `enforce_write_sandbox`.
+- **`detect_audio_format` out-of-bounds panic fixed** (RIFF header check now requires ≥12 bytes).
+- **Double base64 fixed**: `document_parser` already base64-encodes embedded images; `process_document` no longer encodes them a second time.
+- **`RepoAnalyzer::clone` temp-dir lifetime fixed**: the cloned repo directory is kept alive by the `RepoContext` (`Arc<TempDir>`), `head_commit` is fetched from `git rev-parse`, `loc` counts real lines, and `extract_types` reuses the repo map (single scan).
+- **`AcpErrorCode::from_code`/`is_acp_request` repaired** after an external commit corrupted them (invalid match patterns, missing function header).
+
+#### Three-Client Contract (principle #2)
+
+- Rust/Python/Node SDKs: `task.plan`/`task.execute` now send `{task}` (matching the backend; previously `description`/`plan_id` failed with -32602 or were silently dropped).
+- All four SDK `HealthResponse` types aligned with the real `ServerStatus`/`runtime.health` payloads (Rust SDK `health()` previously always failed strict deserialization).
+- Node SDK: `health()` = `GET /health`, `runtimeHealth()` = `runtime.health` (methods were inverted); `taskPlan`/`taskExecute` parameter names fixed.
+- VS Code workflow/process-flow views now flatten their local step model into the `task` param the backend actually reads.
+- `knowledge.distill` callers now pass the backend's `limit` window instead of phantom `query`/`source` fields.
+
+#### Anti-Fake-Fix / Metrics (principles #13/18)
+
+- `SecurityGovernor` counters centralized in `record_audit` (denials/reviews/escalations were double-counted by `evaluate`+`record_audit`; `active_escalations` no longer increments on every audit).
+- `harness_bus` `current_active_policies` replaced the hardcoded 12 with a real count (security-governor policies + 5 fixed bundles).
+- Drift auto-baseline now keys history by metric name — `validate_action` vs `verify_output` latency no longer pollute each other's baselines.
+- `governance.status` loads the config once (new `governance_config_summary_with`) instead of parsing the same TOML twice.
+- `hash_file` rejects unknown algorithms (no more silent sha256 fallback mislabelled with the requested name) and dropped the unreachable sha1 branch; `random_token` now uses cryptographically secure `rand` instead of `fastrand`.
+- `cache_strategy` case-insensitive scanning no longer allocates a lowercased copy of the conversation history.
+- `default_non_ai_config_toml` writes the canonical `mode = "adaptive"`; OTel default-endpoint warning text matches the actual `localhost:4317`.
+
+#### Performance
+
+- `http_request` (async + blocking) uses one pooled reqwest client with per-request timeouts (was: a fresh client per call).
+- `record_outcome` lock count reduced 7 → 4 (no unconditional `register_service`; lazy `entry()` initialization).
+- `synthesize_keyword_heuristic` is O(n) (was O(n²) — `lines().nth()` rescanned the whole file per match).
+- `health`/`release.readiness` payloads run independent profile futures with `tokio::join!`.
+- `load_recent_knowledge_context` caches the knowledge artifact by mtime (no per-request file read).
+- `web_search` and LSP clients are cached (no fresh TCP+TLS handshake / LSP initialize per call).
+
+#### Dead Code / Lifecycle (principles #11/13)
+
+- Deleted: `builtin_tools!` macro module, `ToolProgress`/`run_with_progress`/`run_streaming` subsystem, `ShardedGovernanceCache` hit/miss counters, `with_default_trigger_source`, `Agent::send_message` no-op, token-cache TTL machinery (never-set `ttl_ms`), `report`/`stats_snapshot`/`reset`/`put_string*`/`get_string`/`summarize_sync`/`expected_dimension` dead APIs.
+- **Fault-tolerance recovery plans now complete or fail** after their post-recovery consistency check (`recovery_plans_in_progress` can no longer grow unbounded).
+
+#### Documentation
+
+- Cookbook API docs rewritten to the real surface: JSON-RPC over `POST /rpc` (not `/v1/responses`), the 7 real GET routes, real CLI flags/subcommands; fictional REST endpoints removed across `core-runtime`, `learning-intelligence`, `workflow-task`, `safety-governance`, `optimization-ops`, `observability`.
+- `scripts/verify-zed-integration.sh` fixed (port 8090, `agent_servers` schema) — now PASSes.
+- README sub-bus counts unified to the 7 feature-gated sub-buses; SDK count includes Node.js; unverifiable test-count numbers removed.
+- `contracts/cross-client-sync.md` path references corrected.
+
+### Round 39 — Architecture Unification & Speed Pass (2026-08-06/07, docs/log/log-20260806-7.md)
+
+#### Legacy-Item Closeout (2026-08-07)
+
+- **ApprovalEngine deleted** (verified clean): its HITL approval queue is fully replaced by the ACP chain — `executor.rs` → `request_client_permission` → SSE `PermissionRequest` notification → `session/request_permission` / `tool.approve` → `user_approved_tools` → `require_review` gate.
+- **Fault-tolerance fault records wired**: `check_heartbeats` now creates a `FaultEvent` (NetworkTimeout, de-duplicated) when a node goes Offline, and `report_heartbeat` auto-resolves all unresolved faults when the node recovers — `active_faults()`/cluster health now reflect real outages.
+- **Alert rule producers added**: a 30s background task evaluates the four previously producer-less rules (`p95_latency_high` via avg latency, `error_rate_high`, `circuit_breaker_open`, `agent_timeout_rate`).
+- **Distributed memory transport activated**: new `DistributedMemoryBus::configure_from_env` (reads `GOON_MEMORY_PEERS`, `GOON_MEMORY_SYNC_INTERVAL_MS`, `GOON_MEMORY_AUTH_TOKEN`) wired in `server_builder` for multi-users-server; with no peers the bus stays local and no transport thread spawns.
+- **Dead counters/APIs removed**: `CommunicationMetrics.tool_*` + `record_metrics`/`record_message_received` (AgentCommunicationHook slimmed to an empty struct); `AgentExecutionBudget.record_spawn`/`record_completion`/`record_tokens`/`can_spawn`/`reset`/`with_max_wall_clock`/`max_wall_clock_ms` (+5 dead-method tests).
+- **Shared blocking HTTP client**: new `shared::http_client::blocking_http_client()` singleton; `web_scrape`/`rss_read`/`game` per-call client construction now reuses it with per-request timeouts.
+- **Verified already-wired (no change needed)**: IdempotencyCache (producer `record_tool_success` at tools_pack.rs:812, consumer at :493) — the scan report was a false positive; kept: failover groups and remaining pub accessors (public API surface per principle #11).
+
+#### Verification
+
+```
+cargo check 4 profiles + --workspace   → zero warnings
+cargo clippy --all-targets -D warnings (4 profiles) → zero warnings
+cargo test --lib                     → 1639 passed / 0 failed
+```
+
+## [1.5.0] - 2026-08-06
+
 ### Round 38 — Legacy 7-Item Closeout (2026-08-06)
 
 #### Docs Consistency Pass (2026-08-07)

@@ -408,6 +408,46 @@ impl DistributedMemoryBus {
         p.remote_peers = peers.len() as u32;
     }
 
+    /// Configure the HTTP transport from environment variables and start it.
+    ///
+    /// Reads:
+    /// - `GOON_MEMORY_PEERS` — comma-separated `node_id=host:port` pairs
+    ///   (e.g. `node1=10.0.0.2:8090,node2=10.0.0.3:8090`)
+    /// - `GOON_MEMORY_SYNC_INTERVAL_MS` — background sync cadence (default 30000)
+    /// - `GOON_MEMORY_AUTH_TOKEN` — bearer token sent to peer hubs
+    ///
+    /// Returns `Ok(false)` when no peers are configured (transport stays
+    /// purely local); `Ok(true)` once the transport thread is running.
+    #[cfg(feature = "multi-users-server")]
+    pub fn configure_from_env(&self) -> anyhow::Result<bool> {
+        let peers = std::env::var("GOON_MEMORY_PEERS").unwrap_or_default();
+        if peers.trim().is_empty() {
+            return Ok(false);
+        }
+        for pair in peers.split(',') {
+            let pair = pair.trim();
+            if let Some((node_id, addr)) = pair.split_once('=') {
+                self.register_peer(node_id.trim(), addr.trim());
+            }
+        }
+        let config = MemoryTransportConfig {
+            sync_interval_ms: std::env::var("GOON_MEMORY_SYNC_INTERVAL_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30_000),
+            auth_token: std::env::var("GOON_MEMORY_AUTH_TOKEN").ok(),
+            ..Default::default()
+        };
+        self.start_transport(config)?;
+        Ok(true)
+    }
+
+    /// No-op on single-node builds.
+    #[cfg(not(feature = "multi-users-server"))]
+    pub fn configure_from_env(&self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
     /// No‑op on single‑node builds.
     #[cfg(not(feature = "multi-users-server"))]
     pub fn unregister_peer(&self, _node_id: &str) {

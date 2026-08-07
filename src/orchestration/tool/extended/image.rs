@@ -19,6 +19,11 @@ impl Tool for ImageResizeTool {
     fn name(&self) -> &'static str {
         "image_resize"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -142,6 +147,11 @@ impl Tool for ImageConvertTool {
     fn name(&self) -> &'static str {
         "image_convert"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -252,6 +262,11 @@ impl Tool for ImageAnalyzeTool {
     fn name(&self) -> &'static str {
         "image_analyze"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let path = input.payload["path"]
             .as_str()
@@ -321,6 +336,11 @@ impl Tool for ImageGenerateTool {
     fn name(&self) -> &'static str {
         "image_generate"
     }
+
+    fn exposure(&self) -> crate::orchestration::tool::ToolExposure {
+        crate::orchestration::tool::ToolExposure::Deferred
+    }
+
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         let output_path = input.payload["output_path"]
             .as_str()
