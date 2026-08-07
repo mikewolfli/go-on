@@ -25,8 +25,6 @@ use crate::governance::security_governor::{
 };
 use crate::i18n::runtime::tf;
 use crate::intelligence::quality_models::QualityVerdict;
-use crate::security::content_safety::SafetyChecker;
-use crate::security::prompt_injection::InjectionDetector;
 use crate::security::severity::DetectionSeverity;
 
 use serde_json::Value;
@@ -61,14 +59,6 @@ pub struct PolicyEvaluator {
     /// gate outcome that bypasses manual review (i.e., the response indicates
     /// override of the default review requirement).
     pub(crate) review_override_occurred: AtomicBool,
-
-    /// Optional content safety checker for tool arguments and outputs.
-    /// When set, tool calls with unsafe content are blocked/flagged.
-    pub safety_checker: Option<SafetyChecker>,
-
-    /// Optional prompt injection detector for tool arguments and outputs.
-    /// When set, tool calls with injection patterns are blocked/flagged.
-    pub injection_detector: Option<InjectionDetector>,
 }
 
 impl PolicyEvaluator {
@@ -99,8 +89,6 @@ impl PolicyEvaluator {
             user_approved_tools: Mutex::new(std::collections::HashSet::new()),
             rationalization_block_occurred: AtomicBool::new(false),
             review_override_occurred: AtomicBool::new(false),
-            safety_checker: None,
-            injection_detector: None,
         }
     }
 
@@ -192,26 +180,18 @@ impl PolicyEvaluator {
     pub fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
         let _start = Instant::now();
 
-        // 1. Red-line check (hard block)
-        let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("[harness_bus] lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        if let Err(violation) = engine.check_red_lines(&format!("{:?}", ctx.task_type)) {
-            return PolicyVerdict::Deny(PolicyViolation {
-                kind: "red_line".to_string(),
-                detail: violation.detail.clone(),
-            });
-        }
-        // 2. Stage validation
-        if let Err(fail) = engine.validate_stage("default", &[]) {
-            return PolicyVerdict::Escalate(EscalationReason {
-                reason: fail.detail.clone(),
-                suggested_level: 2,
-            });
-        }
+        // NOTE: The former steps 1-2 (PUA red-line check on the TaskType
+        // Debug string and stage validation against a hard-coded "default"
+        // stage) were removed: they could never fire. The PUA red lines are
+        // natural-language sentences, while this path only had the enum Debug
+        // name (e.g. "SecurityPatch") to match against; and "default" is not
+        // a stage in the enforcement plan. Real PUA red-line / stage checks
+        // run in the ACP request layer (src/acp/impl/request.rs) where the
+        // actual method name and inferred stage are available. The tool-call
+        // red-line check below uses the configured `GovernancePolicy.red_lines`
+        // against the actual tool arguments.
 
-        // 3. Budget check (hard limit)
+        // 1. Budget check (hard limit)
         let budget = self.budget.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
             poisoned.into_inner()
@@ -485,52 +465,34 @@ impl PolicyEvaluator {
             poisoned.into_inner()
         });
 
-        // ── Content safety check on tool arguments ───────────────────────
-        if let Some(ref checker) = self.safety_checker {
+        // ── Governance red-line check on tool arguments ───────────────
+        // The configured `GovernancePolicy.red_lines` (defaults: "rm -rf /",
+        // "DROP TABLE", "DELETE FROM") are matched against the serialized
+        // tool arguments. Previously this policy field was write-only — the
+        // only red-line path matched the PUA plan's natural-language rules
+        // against an enum Debug string that never matched.
+        if !self.governance.red_lines.is_empty() {
             let args_text = serde_json::to_string(args).unwrap_or_default();
-            let violations = checker.check(&args_text);
-            if !violations.is_empty() {
-                tracing::warn!(
-                    target: "harness_bus",
-                    tool = %tool,
-                    violations = ?violations,
-                    "content safety check blocked tool call"
-                );
-                return ToolVerdict {
-                    allowed: false,
-                    require_review: true,
-                    idempotent: false,
-                    budget_ok: false,
-                    permitted: false,
-                };
+            let args_lower = args_text.to_ascii_lowercase();
+            for line in &self.governance.red_lines {
+                if !line.is_empty() && args_lower.contains(&line.to_ascii_lowercase()) {
+                    tracing::warn!(
+                        target: "harness_bus",
+                        tool = %tool,
+                        red_line = %line,
+                        "governance red-line match in tool arguments; blocked"
+                    );
+                    return ToolVerdict {
+                        allowed: false,
+                        require_review: true,
+                        idempotent: false,
+                        budget_ok: false,
+                        permitted: false,
+                    };
+                }
             }
         }
 
-        // ── Prompt injection check on tool arguments ───────────────────
-        if let Some(ref detector) = self.injection_detector {
-            let args_text = serde_json::to_string(args).unwrap_or_default();
-            let result = detector.detect(&args_text);
-            if result.detected
-                && detector.should_block(
-                    &result,
-                    crate::security::prompt_injection::InjectionSeverity::Medium,
-                )
-            {
-                tracing::warn!(
-                    target: "harness_bus",
-                    tool = %tool,
-                    violations = ?result.violations,
-                    "prompt injection check blocked tool call"
-                );
-                return ToolVerdict {
-                    allowed: false,
-                    require_review: true,
-                    idempotent: false,
-                    budget_ok: false,
-                    permitted: false,
-                };
-            }
-        }
         // ── All tools categorized by operation type ────────────────
         //
         // Each tool is classified by its dominant operation class so that
@@ -640,41 +602,6 @@ impl PolicyEvaluator {
 
         tracing::debug!("[harness_bus] verify_output: output shape={}", output_shape);
 
-        // ── Content safety check on output ─────────────────────────────
-        let mut safety_risk: f64 = 0.0;
-        if let Some(ref checker) = self.safety_checker {
-            let output_text = serde_json::to_string(output).unwrap_or_default();
-            let violations = checker.check(&output_text);
-            if !violations.is_empty() {
-                tracing::warn!(
-                    target: "harness_bus",
-                    violations = ?violations,
-                    "content safety violation detected in output"
-                );
-                // Increase risk score based on number/severity of violations
-                safety_risk = (violations.len() as f64 * 0.2).min(0.8);
-            }
-        }
-
-        // ── Prompt injection check on output ──────────────────────────
-        if let Some(ref detector) = self.injection_detector {
-            let output_text = serde_json::to_string(output).unwrap_or_default();
-            let result = detector.detect(&output_text);
-            if result.detected {
-                let high_sev_count = result
-                    .violations
-                    .iter()
-                    .filter(|v| {
-                        v.base.severity
-                            == crate::security::prompt_injection::InjectionSeverity::High
-                    })
-                    .count();
-                if high_sev_count > 0 {
-                    safety_risk = safety_risk.max(0.9);
-                }
-            }
-        }
-
         let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
             poisoned.into_inner()
@@ -692,8 +619,6 @@ impl PolicyEvaluator {
         let mut risk_score: f64 = if quality { 0.0 } else { 0.5 };
 
         // P1-11: Call SelfRationalizationGuard to evaluate confidence
-        // Fold in safety risk from content/injection checks
-        risk_score = risk_score.max(safety_risk);
         {
             let mut guard = self.guard.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("[harness_bus] lock poisoned, recovering");

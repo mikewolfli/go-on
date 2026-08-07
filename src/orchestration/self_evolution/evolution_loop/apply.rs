@@ -21,22 +21,11 @@ pub enum EvolutionLoopError {
     NoSandbox,
 
     /// A trigger source failed to poll.
-    #[error("trigger source poll error: {0}")]
-    TriggerPollError(String),
-
     /// Patch application failed.
     #[error("patch application failed: {0}")]
     PatchApplyFailed(String),
 
-    /// Build or test verification failed.
-    #[error("verification failed: {0}")]
-    VerificationFailed(String),
-
     /// Approval was rejected.
     #[error("evolution rejected: {0}")]
     Rejected(String),
-
-    /// History recording failed.
-    #[error("history error: {0}")]
-    HistoryError(String),
 }

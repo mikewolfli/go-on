@@ -774,22 +774,6 @@ impl CapabilityBus {
         }
     }
 
-    /// Register evolve action as a FaultTolerance node and send heartbeat.
-    pub(crate) async fn evolve_fault_tolerance(&self, node_id: &str) {
-        if let Err(e) = self.harness.fault_tolerance.register_node(node_id).await {
-            warn!(
-                "evolve_fault_tolerance: register_node failed for {}: {:?}",
-                node_id, e
-            );
-        }
-        if let Err(e) = self.harness.fault_tolerance.report_heartbeat(node_id).await {
-            warn!(
-                "evolve_fault_tolerance: report_heartbeat failed for {}: {:?}",
-                node_id, e
-            );
-        }
-    }
-
     /// Record an audit entry for the evolve cycle.
     pub(crate) fn evolve_harness_bus(
         &self,
@@ -921,7 +905,15 @@ impl CapabilityBus {
             (
                 "fault_tolerance",
                 Box::pin(async move {
-                    self.evolve_fault_tolerance(&node_id).await;
+                    // Intentionally no-op: the fault-tolerance engine tracks
+                    // long-lived distributed nodes via heartbeats. The evolve
+                    // cycle is a throttled in-process learning step, not a
+                    // node, so registering it here produced a heartbeat that
+                    // was never repeated — every (agent, phase) node went
+                    // Offline after one cycle, generating fake faults and a
+                    // failed recovery plan every 30s. Real nodes (e.g. hub
+                    // workers) register via FaultToleranceEngine directly.
+                    let _ = (&node_id,);
                 }),
             ),
             (
@@ -1123,12 +1115,6 @@ pub(crate) mod tests {
             reputation_snapshot: snapshot,
             recent_agents,
             learning_snapshot: Vec::new(),
-            #[cfg(feature = "sub-bus-observability")]
-            healthy_agents: Vec::new(),
-            #[cfg(feature = "sub-bus-orchestration")]
-            available_modes: Vec::new(),
-            #[cfg(feature = "sub-bus-optimization")]
-            optimization: None,
         }
     }
 

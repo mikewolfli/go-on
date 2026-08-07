@@ -215,3 +215,119 @@ fn default_true() -> bool {
 pub struct HarnessStatusResponse {
     pub harness: Value,
 }
+
+// ---------------------------------------------------------------------------
+// ACP Session Protocol types
+// ---------------------------------------------------------------------------
+
+/// Request payload for `session/new`.
+///
+/// Field names match the backend contract exactly: the backend reads
+/// `mode`, `cwd`, `work_dirs` (snake_case) and `additionalDirectories`
+/// (camelCase) from `protocol_pack/session.rs::session_new_payload`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AcpSessionNewRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub work_dirs: Vec<String>,
+    #[serde(
+        rename = "additionalDirectories",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub additional_directories: Vec<String>,
+}
+
+/// Request payload for `session/prompt`.
+///
+/// The backend reads `sessionId`, `prompt` (content blocks), `mode`, `cwd`
+/// and `additionalDirectories` (`session_state_for_prompt` + `acp_prompt_to_text`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcpSessionPromptRequest {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub prompt: Vec<PromptContentBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(
+        rename = "additionalDirectories",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub additional_directories: Vec<String>,
+}
+
+/// A single content block inside a `session/prompt` prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptContentBlock {
+    #[serde(rename = "type")]
+    pub kind: PromptContentBlockType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<PromptResourceBlock>,
+}
+
+/// The `type` discriminator of a prompt content block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(missing_docs)]
+pub enum PromptContentBlockType {
+    Text,
+    Resource,
+    ResourceLink,
+    Image,
+    Audio,
+}
+
+/// Embedded resource payload inside a resource-type prompt block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptResourceBlock {
+    pub uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(rename = "mimeType", skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+}
+
+/// Response payload for `session/list`.
+///
+/// The backend emits a minimal summary per session: `[{"id": sid}]`
+/// (`session_list_payload` in `protocol_pack/session.rs`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcpSessionListResponse {
+    pub sessions: Vec<AcpSessionSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+/// Minimal summary of an active ACP session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcpSessionSummary {
+    pub id: String,
+}
+
+// ---------------------------------------------------------------------------
+// Tools types (tools/list, tools/call)
+// ---------------------------------------------------------------------------
+
+/// Descriptor for a tool exposed via `tools/list`.
+///
+/// The backend emits the input schema under the snake_case key
+/// `input_schema` (see `tools_pack.rs::build_mcp_tool_descriptors`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub input_schema: Value,
+}

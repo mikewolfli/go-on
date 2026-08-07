@@ -40,7 +40,7 @@ use crate::orchestration::mode::ModeKind;
 
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 
-use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
+use crate::memory_module::{MemoryClass, MemoryEntry};
 use crate::reinforcement::{
     build_task_plan, build_workflow_generated_artifact, persist_workflow_generated, ArtifactLedger,
 };
@@ -1129,6 +1129,12 @@ pub(crate) async fn apply_review_gate_assemble(
     let is_full_auto = ModeKind::from(params.mode.as_str()) == ModeKind::FullAuto;
 
     // Memory policy execution integration
+    // Honest semantics: the previous implementation stored the entry in a
+    // throwaway `MemoryStore::new(Default::default())` that was dropped
+    // immediately, then reported promoted_count=1 — the data never reached
+    // the server's real memory store. Now the entry is written through
+    // bridge_store (in-memory store + persistence tiers) and the promotion
+    // report reflects the real store.
     let memory_promotion_result = if is_full_auto {
         let memory_entry = MemoryEntry {
             id: format!("task-{}-{}", conversation_id, started.elapsed().as_millis()),
@@ -1149,15 +1155,44 @@ pub(crate) async fn apply_review_gate_assemble(
             user_id: None,
         };
 
-        let mut memory_store = MemoryStore::new(MemoryPolicy::default());
-        memory_store.store(memory_entry);
-        let promotion_report = memory_store.promote();
-
+        // Write through the server's real in-memory store and promotion
+        // pipeline (previously a throwaway MemoryStore discarded the entry).
+        {
+            let mut store = server
+                .persistence
+                .memory_store
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    tracing::warn!("memory store mutex poisoned during promotion");
+                    poisoned.into_inner()
+                });
+            store.store(memory_entry);
+        }
+        // Trigger persistence tier migration (warm/cold) on the real store.
+        if let Some(mp) = server.get_or_init_memory_persistence() {
+            tokio::spawn(async move {
+                if let Err(e) = mp.auto_migrate().await {
+                    tracing::warn!("memory_promotion: auto_migrate failed: {}", e);
+                }
+            });
+        }
+        let promotion_report = {
+            let mut store = server
+                .persistence
+                .memory_store
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    tracing::warn!("memory store mutex poisoned during promotion");
+                    poisoned.into_inner()
+                });
+            store.promote()
+        };
         Some(json!({
             "memory_promotion": {
                 "promoted_count": promotion_report.promoted_count,
                 "promotion_map": promotion_report.promotion_map,
-                "task_recorded": true
+                "task_recorded": true,
+                "stored": true
             }
         }))
     } else {

@@ -195,8 +195,6 @@ pub struct DeepSeekVoter {
     model: String,
     /// API key.
     api_key: String,
-    /// HTTP client.
-    client: reqwest::Client,
 }
 
 impl DeepSeekVoter {
@@ -212,7 +210,6 @@ impl DeepSeekVoter {
             base_url: base_url.into(),
             model: model.into(),
             api_key: api_key.into(),
-            client: reqwest::Client::new(),
         }
     }
 
@@ -257,8 +254,19 @@ impl AgentVoter for DeepSeekVoter {
             };
         }
 
-        match self
-            .client
+        let client = match crate::shared::http_client::http_client() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("DeepSeekVoter: shared http client unavailable: {}", e);
+                return Vote {
+                    approves: false,
+                    reasoning: "voter http client unavailable".to_string(),
+                    confidence: 0.0,
+                };
+            }
+        };
+
+        match client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")

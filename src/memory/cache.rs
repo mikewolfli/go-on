@@ -222,9 +222,17 @@ impl ResponseCache {
                 params![cache_key, response_text, agent_name, now, expires_at],
             )?;
 
-            const SENTINEL_LIMIT: i64 = 2_147_483_647; // max INT32 — portable replacement for SQLite's LIMIT -1
-            conn.execute(
-                "
+            // Evict only when the table is over budget, and delete only the
+            // excess rows — previously every `put` ran a full-table sort +
+            // delete even when the cache was well below `max_entries`.
+            let row_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| row.get(0))?;
+            let max_entries_i64 = max_entries as i64;
+            if row_count > max_entries_i64 {
+                let excess = row_count - max_entries_i64;
+                const SENTINEL_LIMIT: i64 = 2_147_483_647; // max INT32 — portable replacement for SQLite's LIMIT -1
+                conn.execute(
+                    "
             DELETE FROM response_cache
             WHERE cache_key IN (
                 SELECT cache_key
@@ -233,8 +241,9 @@ impl ResponseCache {
                 LIMIT ?1 OFFSET ?2
             )
                 ",
-                params![SENTINEL_LIMIT, max_entries as i64],
-            )?;
+                    params![excess.min(SENTINEL_LIMIT), max_entries_i64],
+                )?;
+            }
 
             Ok(())
         })
@@ -579,14 +588,22 @@ impl ResponseCache {
                 &[&cache_key, &response_text, &agent_name, &now, &expires_at],
             )?;
 
-            client.execute(
-                "DELETE FROM response_cache
-             WHERE cache_key NOT IN (
-                 SELECT cache_key FROM response_cache
-                 ORDER BY updated_at DESC LIMIT $1
-             )",
-                &[&max_entries],
-            )?;
+            // Evict only when over budget (previously every put ran the full
+            // NOT IN subquery with a full sort even when under the limit).
+            let row_count: i64 = client
+                .query_one("SELECT COUNT(*) FROM response_cache", &[])
+                .map_err(|e| anyhow::anyhow!("count response_cache rows: {e}"))?
+                .get(0);
+            if row_count > max_entries as i64 {
+                client.execute(
+                    "DELETE FROM response_cache
+                 WHERE cache_key NOT IN (
+                     SELECT cache_key FROM response_cache
+                     ORDER BY updated_at DESC LIMIT $1
+                 )",
+                    &[&max_entries],
+                )?;
+            }
 
             Ok(())
         })

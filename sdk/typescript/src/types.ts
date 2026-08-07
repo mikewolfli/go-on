@@ -143,7 +143,10 @@ export interface StreamChunk {
 /** Request to create a new ACP session. */
 export interface AcpSessionNewRequest {
   cwd?: string;
-  workDirs?: string[];
+  /** Backend reads this key as snake_case `work_dirs`. */
+  work_dirs?: string[];
+  /** Backend reads this key as camelCase `additionalDirectories`. */
+  additionalDirectories?: string[];
   mode?: string;
 }
 
@@ -160,6 +163,8 @@ export interface AcpSessionPromptRequest {
   prompt: PromptContentBlock[];
   mode?: string;
   cwd?: string;
+  /** Backend reads this key as camelCase `additionalDirectories`. */
+  additionalDirectories?: string[];
 }
 
 /** Request to close an ACP session. */
@@ -169,16 +174,14 @@ export interface AcpSessionCloseRequest {
 
 /** Response from listing ACP sessions. */
 export interface AcpSessionListResponse {
+  /** The backend returns a minimal summary per session: `[{ "id": sid }]`. */
   sessions: AcpSessionInfo[];
+  nextCursor?: string | null;
 }
 
-/** Info about an ACP session. */
+/** Info about an ACP session, as returned by the backend `session/list`. */
 export interface AcpSessionInfo {
-  sessionId: string;
-  mode: string;
-  cwd?: string;
-  createdAt: number;
-  lastActive: number;
+  id: string;
 }
 
 /** Request to resume an ACP session. */
@@ -222,6 +225,31 @@ export interface SessionConfigGroup {
   group: string;
   name: string;
   options: SessionConfigOption[];
+}
+
+/** Descriptor for a tool exposed via tools/list. */
+export interface ToolInfo {
+  name: string;
+  description: string;
+  /** Backend emits the schema under the snake_case key `input_schema`. */
+  input_schema?: Record<string, unknown>;
+  /** MCP-spec alias; some tool entries may emit `inputSchema` instead. */
+  inputSchema?: Record<string, unknown>;
+}
+
+/** Request payload for tools/call. */
+export interface ToolsCallRequest {
+  name: string;
+  arguments: Record<string, unknown>;
+  /** Optional ACP session ID for progress streaming. */
+  sessionId?: string;
+}
+
+/** Result of a tools/call execution. */
+export interface ToolsCallResult {
+  content: Array<{ type: string; text: string }>;
+  structured?: unknown;
+  isError?: boolean;
 }
 
 /** A content block in a prompt (text, resource, image, audio, etc.). */

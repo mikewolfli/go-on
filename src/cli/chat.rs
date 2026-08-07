@@ -331,6 +331,17 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
         Arc::clone(&capability_graph),
     )?);
 
+    // ── Initialize SpawnAgentTool globals for the CLI path ──
+    // The server path initializes these in server_builder.rs; without the
+    // equivalent here, spawn_agent would fail with "AgentRegistry not
+    // initialised" / "SpawnGuard budget not initialised" in terminal chat.
+    crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_registry(registry.clone());
+    let communication_bus = Arc::new(crate::agents::communication::bus::CommunicationBus::new());
+    crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_communication_bus(
+        communication_bus,
+    );
+    crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_budget();
+
     // ── Initialize skill registry for terminal chat ──
     {
         let skill_registry = Arc::new(RwLock::new(

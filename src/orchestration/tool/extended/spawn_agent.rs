@@ -287,6 +287,15 @@ async fn execute_spawn(
     // ── BLUE70: ExecutionGovernor limit check ──────────────────────
     // Check limits via the CommunicationBus ExecutionGovernor before spawning.
     if let Some(bus) = communication_bus() {
+        // The governor's parent-path check requires the "spawn" namespace to
+        // already exist in the agent tree. Ensure it once (idempotent) so a
+        // fresh CommunicationBus (empty tree) does not deny every spawn.
+        if let Ok(spawn_path) = AgentPath::parse("spawn") {
+            let mut tree = bus.tree().write().await;
+            if tree.resolve(&spawn_path).is_none() {
+                let _ = tree.register(&spawn_path, "spawn", AgentNodeMetadata::new());
+            }
+        }
         let budget = crate::agents::communication::budget::AgentExecutionBudget::new()
             .with_max_depth(10)
             .with_max_concurrency(128);

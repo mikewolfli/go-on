@@ -522,7 +522,18 @@ impl VideoProcessor {
                     start_sec: current_start,
                     end_sec: end_ts,
                     label,
-                    confidence: if has_real_frames { 0.6 } else { 0.1 },
+                    // Honest heuristic confidence: derived from the actual
+                    // evidence — real frame data boosts confidence, and a
+                    // larger detected data difference raises it further.
+                    // Previously this was a constant 0.6/0.1 regardless of
+                    // the detected change.
+                    confidence: if has_real_frames {
+                        let diff_ratio =
+                            (data_diff as f64 / prev.data.len().max(1) as f64).clamp(0.0, 1.0);
+                        0.4 + diff_ratio * 0.5
+                    } else {
+                        0.1
+                    },
                     tags: Vec::new(),
                 });
 

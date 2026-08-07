@@ -170,14 +170,11 @@ impl TripleFusionBridge {
             });
         }
 
-        // Generate ConfigDrift trigger if the system detected unexpected state.
-        if profile.metric_count > 10 && profile.reflexion_count > 3 {
-            triggers.push(EvolutionTrigger::ConfigDrift {
-                key: "consciousness_state".to_string(),
-                expected: format!("{:?}", profile.state),
-                actual: format!("{:?}", profile.state),
-            });
-        }
+        // NOTE: The former ConfigDrift trigger was removed — it emitted
+        // `expected == actual` (both derived from the same profile state), a
+        // constant self-identical signal that claimed "drift" where none
+        // existed. Real configuration drift needs an external baseline to
+        // compare against; none is wired here.
 
         triggers
     }

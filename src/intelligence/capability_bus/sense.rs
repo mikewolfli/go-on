@@ -19,16 +19,6 @@ pub struct SensingOutput {
     pub reputation_snapshot: Vec<crate::intelligence::reputation::ReputationRecord>,
     pub recent_agents: Vec<String>,
     pub learning_snapshot: Vec<crate::intelligence::capability_bus::core::WorkflowLearningEvent>,
-    /// Phase 4: healthy agents from ObservabilityBus
-    #[cfg(feature = "sub-bus-observability")]
-    pub healthy_agents: Vec<String>,
-    /// Phase 4: available modes from OrchestrationBus
-    #[cfg(feature = "sub-bus-orchestration")]
-    pub available_modes: Vec<String>,
-    /// Phase 4: optimization recommendation
-    #[cfg(feature = "sub-bus-optimization")]
-    pub optimization:
-        Option<crate::intelligence::capability_bus::optimization_bus::OptimizationRecommendation>,
 }
 
 impl CapabilityBus {
@@ -78,31 +68,11 @@ impl CapabilityBus {
             })
             .collect();
 
-        // Phase 4: Query ObservabilityBus for healthy agents
-        #[cfg(feature = "sub-bus-observability")]
-        let healthy = self.observability_bus.healthy_agents(0.5);
-        #[cfg(not(feature = "sub-bus-observability"))]
-        let _healthy = Vec::<String>::new();
-
-        // Phase 4: Query OrchestrationBus for available modes
-        #[cfg(feature = "sub-bus-orchestration")]
-        let modes = self.orchestration_bus.available_modes();
-        #[cfg(not(feature = "sub-bus-orchestration"))]
-        let _modes = Vec::<String>::new();
-
-        // Phase 4: Get optimization recommendation
-        #[cfg(any(feature = "sub-bus-optimization", feature = "sub-bus-protocol"))]
-        let task_type_str = format!("{:?}", task.task_type);
-        #[cfg(any(feature = "sub-bus-optimization", feature = "sub-bus-protocol"))]
-        let token_estimate = (task.file_count * 512) as u64;
-        #[cfg(feature = "sub-bus-optimization")]
-        let opt =
-            self.optimization_bus
-                .recommend(&task_type_str, token_estimate.max(1024), "balanced");
-
         // Phase 4: Protocol recommendation (used for routing diagnostics)
         #[cfg(feature = "sub-bus-protocol")]
         {
+            let task_type_str = format!("{:?}", task.task_type);
+            let token_estimate = (task.file_count * 512) as u64;
             let proto_reco = self
                 .protocol_bus
                 .recommend_protocol(&task_type_str, token_estimate.max(1024));
@@ -130,12 +100,6 @@ impl CapabilityBus {
             reputation_snapshot: rep_snapshot,
             recent_agents,
             learning_snapshot,
-            #[cfg(feature = "sub-bus-observability")]
-            healthy_agents: healthy,
-            #[cfg(feature = "sub-bus-orchestration")]
-            available_modes: modes,
-            #[cfg(feature = "sub-bus-optimization")]
-            optimization: Some(opt),
         }
     }
 

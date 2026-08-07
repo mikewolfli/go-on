@@ -923,10 +923,18 @@ impl DistributedMemoryBus {
         }
 
         // Real HTTP transport: POST each batch to the peer's JSON-RPC endpoint.
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_millis(config.connect_timeout_ms.max(1000)))
-            .build()
-            .map_err(|e| anyhow::anyhow!("failed to build dmb transport client: {}", e))?;
+        // Reuse the process-global blocking client (previously a fresh client
+        // — including TLS setup — was built on every sync cycle for every peer).
+        let client = match crate::shared::http_client::blocking_http_client() {
+            Ok(c) => c,
+            Err(e) => {
+                let message = format!("failed to build dmb transport client: {}", e);
+                let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
+                s.total_errors = s.total_errors.wrapping_add(1);
+                s.last_sync_status = SyncStatus::Failed(message.clone());
+                return Err(anyhow::anyhow!("dmb sync failed: {}", message));
+            }
+        };
 
         let mut total_entries_synced = 0usize;
         let mut total_bytes_sent = 0u64;
@@ -947,6 +955,8 @@ impl DistributedMemoryBus {
                     "entries": entries_to_sync,
                 },
             }));
+            // Per-request connect timeout (the shared client has none baked in).
+            request = request.timeout(Duration::from_millis(config.connect_timeout_ms.max(1000)));
             if let Some(token) = &config.auth_token {
                 request = request.bearer_auth(token);
             }

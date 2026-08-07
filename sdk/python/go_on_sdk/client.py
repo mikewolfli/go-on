@@ -215,6 +215,46 @@ class ToolCallResult:
     duration_ms: int = 0
 
 
+# ── ACP Session Protocol types ────────────────────────────────────────────
+
+
+@dataclass
+class PromptContentBlock:
+    """A content block in a session prompt (text, resource, image, audio, etc.)."""
+
+    type: str  # "text" | "resource" | "resource_link" | "image" | "audio"
+    text: str | None = None
+    uri: str | None = None
+    name: str | None = None
+    resource: dict[str, Any] | None = None
+
+
+@dataclass
+class SessionInfo:
+    """Summary of an active ACP session as returned by session/list.
+
+    The backend emits a minimal shape: ``[{"id": sid}]``.
+    """
+
+    id: str
+
+
+def _prompt_block_to_dict(block: PromptContentBlock | dict[str, Any]) -> dict[str, Any]:
+    """Serialize a prompt content block, omitting unset optional fields."""
+    if isinstance(block, dict):
+        return block
+    out: dict[str, Any] = {"type": block.type}
+    if block.text is not None:
+        out["text"] = block.text
+    if block.uri is not None:
+        out["uri"] = block.uri
+    if block.name is not None:
+        out["name"] = block.name
+    if block.resource is not None:
+        out["resource"] = block.resource
+    return out
+
+
 # ── Client ──────────────────────────────────────────────────────────
 
 
@@ -549,16 +589,29 @@ class GoOnClient:
             },
         )
 
-    async def checkpoint_list(self) -> CheckpointListResponse:
-        """checkpoint.list — list available checkpoints."""
-        result = await self._json_rpc("checkpoint.list")
+    async def checkpoint_list(self, conversation_id: str) -> CheckpointListResponse:
+        """checkpoint.list — list available checkpoints for a conversation.
+
+        The backend requires a non-empty `conversation_id`.
+        """
+        result = await self._json_rpc(
+            "checkpoint.list", {"conversation_id": conversation_id}
+        )
         return CheckpointListResponse(
             checkpoints=cast(list[dict[str, Any]], result.get("checkpoints", []))
         )
 
-    async def conversation_rollback(self, checkpoint_id: str) -> dict[str, Any]:
-        """conversation.rollback — roll back to a checkpoint."""
-        return await self._json_rpc("conversation.rollback", {"checkpoint_id": checkpoint_id})
+    async def conversation_rollback(
+        self, conversation_id: str, checkpoint_id: str
+    ) -> dict[str, Any]:
+        """conversation.rollback — roll back to a checkpoint.
+
+        The backend requires both `conversation_id` and `checkpoint_id`.
+        """
+        return await self._json_rpc(
+            "conversation.rollback",
+            {"conversation_id": conversation_id, "checkpoint_id": checkpoint_id},
+        )
 
     # ── Workflow / Task ───────────────────────────────────────────────
 
@@ -618,6 +671,98 @@ class GoOnClient:
         """harness.status — get test harness status."""
         result = await self._json_rpc("harness.status")
         return HarnessStatusResponse(harness=cast(dict[str, Any], result.get("harness", {})))
+
+    # ── ACP Session Protocol ────────────────────────────────────────────
+
+    async def session_new(
+        self,
+        mode: str | None = None,
+        cwd: str | None = None,
+        work_dirs: list[str] | None = None,
+        additional_directories: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """session/new — create a new ACP session.
+
+        All parameters are optional; the backend reads `mode`, `cwd`,
+        `work_dirs` (snake_case) and `additionalDirectories` (camelCase).
+        """
+        params: dict[str, Any] = {}
+        if mode is not None:
+            params["mode"] = mode
+        if cwd is not None:
+            params["cwd"] = cwd
+        if work_dirs is not None:
+            params["work_dirs"] = work_dirs
+        if additional_directories is not None:
+            params["additionalDirectories"] = additional_directories
+        return await self._json_rpc("session/new", params)
+
+    async def session_prompt(
+        self,
+        session_id: str,
+        prompt: list[PromptContentBlock | dict[str, Any]],
+        mode: str | None = None,
+        cwd: str | None = None,
+        additional_directories: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """session/prompt — send a prompt in an ACP session.
+
+        The backend reads `sessionId`, `prompt` (content blocks), `mode`,
+        `cwd` and `additionalDirectories`.
+        """
+        params: dict[str, Any] = {
+            "sessionId": session_id,
+            "prompt": [_prompt_block_to_dict(block) for block in prompt],
+        }
+        if mode is not None:
+            params["mode"] = mode
+        if cwd is not None:
+            params["cwd"] = cwd
+        if additional_directories is not None:
+            params["additionalDirectories"] = additional_directories
+        return await self._json_rpc("session/prompt", params)
+
+    async def session_close(self, session_id: str) -> dict[str, Any]:
+        """session/close — close an ACP session."""
+        return await self._json_rpc("session/close", {"sessionId": session_id})
+
+    async def session_list(self) -> list[SessionInfo]:
+        """session/list — list active ACP sessions.
+
+        The backend returns a minimal summary per session:
+        ``[{"id": sid}]``.
+        """
+        result = await self._json_rpc("session/list")
+        raw_sessions = cast(list[dict[str, Any]], result.get("sessions", []))
+        return [SessionInfo(id=cast(str, raw.get("id", ""))) for raw in raw_sessions]
+
+    async def session_resume(self, session_id: str, cwd: str | None = None) -> dict[str, Any]:
+        """session/resume — resume an existing ACP session."""
+        params: dict[str, Any] = {"sessionId": session_id}
+        if cwd is not None:
+            params["cwd"] = cwd
+        return await self._json_rpc("session/resume", params)
+
+    async def session_set_mode(self, session_id: str, mode_id: str) -> dict[str, Any]:
+        """session/set_mode — set the mode of an ACP session.
+
+        The backend reads `sessionId` and `modeId`.
+        """
+        return await self._json_rpc(
+            "session/set_mode", {"sessionId": session_id, "modeId": mode_id}
+        )
+
+    async def session_set_config_option(
+        self, session_id: str, config_id: str, value: Any
+    ) -> dict[str, Any]:
+        """session/set_config_option — set a configuration option for an ACP session.
+
+        The backend reads `sessionId`, `configId` and `value`.
+        """
+        return await self._json_rpc(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": config_id, "value": value},
+        )
 
     # ── Tools ────────────────────────────────────────────────────────────
 

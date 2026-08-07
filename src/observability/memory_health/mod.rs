@@ -284,11 +284,12 @@ fn query_windows_memory() -> SystemMemoryInfo {
 
 // ── Runtime Memory Monitor ──────────────────────────────────────────────────
 
-/// Start a one-shot memory check at startup: logs warnings if
-/// memory is critically low, and evaluates AlertManager rules.
-/// (The old 30s polling loop and the runtime_free_mb/runtime_total_mb/
-/// runtime_pressure_level statics were removed — they had zero callers.)
-pub fn start_memory_monitor() {
+/// Evaluate current system memory against the AlertManager memory rules
+/// (memory_free_mb / memory_low / memory_critical / memory_jetsam_risk).
+/// Shared by the startup one-shot check and the periodic 30s alert loop so
+/// runtime memory degradation is actually observed (previously the rules
+/// were only evaluated once at startup).
+pub fn evaluate_memory_alerts() {
     let info = query_system_memory();
     let free_mb = info.free_mb();
 
@@ -328,6 +329,12 @@ pub fn start_memory_monitor() {
             "Low memory — consider reducing load",
         );
     }
+}
+
+/// Start a one-shot memory check at startup: logs warnings if
+/// memory is critically low, and evaluates AlertManager rules.
+pub fn start_memory_monitor() {
+    evaluate_memory_alerts();
 }
 
 // ── Memory Health Check ───────────────────────────────────────────────────

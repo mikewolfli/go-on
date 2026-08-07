@@ -377,7 +377,16 @@ pub async fn start_background_tasks(
                     .await,
                 );
 
-                let workdir = std::path::PathBuf::from(".goon/evolution");
+                // The evolution agent analyses the real project root (with_llm
+                // uses "."), so the sandbox workdir must point at the same
+                // root. Previously the workdir was ".goon/evolution": patches
+                // were applied to a directory that never existed (every apply
+                // failed with IoError), verify() ran `cargo build` in a
+                // directory without its own Cargo.toml (so cargo walked up to
+                // the real project — verifying the unpatched code), and
+                // EvolutionHistory::new(workdir) produced the doubly-nested
+                // path ".goon/evolution/.goon/evolution/history.ndjson".
+                let workdir = std::path::PathBuf::from(".");
                 // Wire sandbox + history so the verify/apply/record phases of
                 // the evolution cycle are real (previously `sandbox: None` made
                 // verify/apply fail and `history: None` silently skipped recording).
@@ -458,9 +467,10 @@ pub async fn start_background_tasks(
     // ── Fault-tolerance recovery cycle (heartbeat check + auto-recovery) ──
     // Schedule the engine's full recovery cycle on an interval so node
     // heartbeats, recovery plans, and auto-recovery are exercised in
-    // production (previously the cycle only ran in tests). Nodes register
-    // via CapabilityBus::evolve_fault_tolerance; this loop makes the
-    // detection/recovery path live.
+    // production (previously the cycle only ran in tests). Real nodes
+    // (e.g. hub workers) register via FaultToleranceEngine directly; the
+    // evolve cycle no longer registers itself as a fake heartbeat node
+    // (see CapabilityBus::evolve).
     if let Some(ref harness) = server.governance_deps.harness_bus {
         let ft = Arc::clone(&harness.fault_tolerance);
         let shutdown = shutdown_notify.clone();
@@ -580,6 +590,7 @@ pub async fn start_background_tasks(
         let alert_manager = Arc::clone(&server.observability.alert_manager);
         let metrics = Arc::clone(&server.observability.metrics);
         let hyper_resilience = Arc::clone(&server.resilience.hyper_resilience);
+        let lifecycle_state = Arc::clone(&server.resilience.lifecycle_state);
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
@@ -591,12 +602,23 @@ pub async fn start_background_tasks(
                         _ = interval.tick() => {}
                     }
                     let snapshot = metrics.snapshot();
+                    // Runtime memory degradation: the memory alert rules were
+                    // previously evaluated only once at startup, so a server
+                    // that later leaked memory never triggered memory_* alerts.
+                    crate::observability::memory_health::evaluate_memory_alerts();
                     // Circuit-breaker open count: the canonical source is
                     // HyperResilienceEngine (same one the Prometheus exporter
                     // reads); the RuntimeMetrics snapshot never owns this
                     // signal. Read it before taking the alert-manager lock so
                     // the non-Send guard is not held across the await.
                     let resilience_profile = hyper_resilience.profile().await;
+                    // Real lifecycle health: open circuit breakers are a
+                    // genuine degradation signal. Previously `is_healthy` was
+                    // hard-coded true at construction and never updated.
+                    let open_circuits = resilience_profile.open_circuits;
+                    if let Ok(mut lc) = lifecycle_state.write() {
+                        lc.set_healthy(open_circuits == 0);
+                    }
                     let mut mgr = alert_manager.lock().unwrap_or_else(|poisoned| {
                         tracing::warn!("alert_manager lock poisoned");
                         poisoned.into_inner()
@@ -612,10 +634,7 @@ pub async fn start_background_tasks(
                     };
                     mgr.evaluate("error_rate_high", error_rate);
                     // Circuit-breaker open count rule.
-                    mgr.evaluate(
-                        "circuit_breaker_open",
-                        resilience_profile.open_circuits as f64,
-                    );
+                    mgr.evaluate("circuit_breaker_open", open_circuits as f64);
                     // Agent timeout-rate rule (% of requests that timed out).
                     let timeout_rate = if snapshot.total_requests > 0 {
                         snapshot.agent_timeout_failures_total as f64

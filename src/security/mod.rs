@@ -1,11 +1,9 @@
 //! Security Module (GAP-B52)
 //!
 //! Provides request signing, mTLS configuration, prompt injection detection,
-//! audit integrity with hash chains, and content safety checking for the
-//! go-on runtime.
+//! and audit integrity with hash chains for the go-on runtime.
 
 pub mod audit_integrity;
-pub mod content_safety;
 pub mod mtls;
 pub mod prompt_injection;
 pub mod request_signing;

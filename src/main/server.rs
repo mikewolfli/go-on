@@ -200,18 +200,6 @@ pub(crate) async fn start_server(
         return Ok(());
     }
 
-    if cli.status {
-        let report = build_runtime_healthcheck_report(
-            Some(config_path),
-            cache.as_deref(),
-            vector_store.as_deref(),
-        )
-        .await?;
-        print_runtime_status(config_path, &report);
-        print_completeness_report(config.as_ref(), &report);
-        return Ok(());
-    }
-
     if let Some(raw_kind) = cli.action_check.as_deref() {
         let kind = ActionCheckKind::parse(raw_kind).ok_or_else(|| {
             anyhow::anyhow!(
@@ -451,44 +439,6 @@ pub(crate) async fn handle_validation_mode(
         let report = build_runtime_healthcheck_report(Some(config_path), None, None).await?;
         print_runtime_status(config_path, &report);
         print_completeness_report(&config, &report);
-        return Ok(None);
-    }
-
-    if cli.diagnose {
-        let report = build_runtime_healthcheck_report(Some(config_path), None, None).await?;
-        let error_count = report
-            .components
-            .iter()
-            .filter(|item| item.status == crate::reinforcement::CheckStatus::Error)
-            .count();
-        let warn_count = report
-            .components
-            .iter()
-            .filter(|item| item.status == crate::reinforcement::CheckStatus::Warn)
-            .count();
-        let healthy_count = report
-            .components
-            .iter()
-            .filter(|item| {
-                item.status == crate::reinforcement::CheckStatus::Healthy
-                    || item.status == crate::reinforcement::CheckStatus::Skipped
-            })
-            .count();
-        println!("=== go-on diagnose ===");
-        println!("config: {}", config_path.display());
-        println!("overall: {:?}", report.overall_status);
-        println!(
-            "summary: error={} warn={} healthy={}",
-            error_count, warn_count, healthy_count
-        );
-        if error_count > 0 {
-            println!(
-                "suggestion: run `go-on --validate-config -c {}`",
-                config_path.display()
-            );
-        } else {
-            println!("suggestion: runtime baseline looks healthy");
-        }
         return Ok(None);
     }
 

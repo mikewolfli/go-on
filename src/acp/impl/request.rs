@@ -1915,6 +1915,41 @@ pub async fn handle_request(
                     )
                     .await
                 }
+                #[cfg(feature = "multi-users-server")]
+                "memory.ingest" => {
+                    // Receiving side of the DistributedMemoryBus HTTP transport:
+                    // entries pushed by a peer node's do_sync are ingested into
+                    // this node's shared-entries buffer (previously the ACP
+                    // `/rpc` endpoint had no handler, so peer syncs were only
+                    // observable in the hub vault and never reached the bus).
+                    let params = request.params.unwrap_or_default();
+                    let entries_json = serde_json::to_string(
+                        &params
+                            .get("entries")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                    )
+                    .unwrap_or_else(|_| "[]".to_string());
+                    let ingested = match server.governance_deps.capability_bus.as_ref() {
+                        Some(cb) => match cb.distributed_memory_bus.ingest_shared(&entries_json) {
+                            Ok(n) => n as u64,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "memory.ingest: failed to ingest shared entries: {}",
+                                    e
+                                );
+                                0
+                            }
+                        },
+                        None => 0,
+                    };
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        Ok(serde_json::json!({"ok": true, "stored": ingested})),
+                    )
+                    .await
+                }
                 "task.execute" => {
                     dispatch_to_client(
                         server,

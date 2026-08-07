@@ -40,5 +40,8 @@ export type {
   StreamChunk,
   TaskPlanResponse,
   ToolCall,
+  ToolInfo,
+  ToolsCallRequest,
+  ToolsCallResult,
   Usage,
 } from "./types";

@@ -64,14 +64,6 @@ impl ContextForker {
         }
     }
 
-    /// Create a ContextForker with a KV cache provider.
-    pub fn with_kv_cache_provider(provider: Arc<dyn KvCacheProvider>) -> Self {
-        Self {
-            kv_cache_provider: Some(provider),
-            default_options: ForkOptions::default(),
-        }
-    }
-
     /// Set the default forking options.
     pub fn with_default_options(mut self, options: ForkOptions) -> Self {
         self.default_options = options;

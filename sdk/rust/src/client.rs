@@ -592,19 +592,37 @@ impl GoOnClient {
         .await
     }
 
-    /// checkpoint.list — list available checkpoints.
-    pub async fn checkpoint_list(&self) -> Result<CheckpointListResponse, SdkError> {
+    /// checkpoint.list — list available checkpoints for a conversation.
+    ///
+    /// The backend requires a non-empty `conversation_id`; without it the
+    /// `checkpoint.list` handler rejects the request.
+    pub async fn checkpoint_list(
+        &self,
+        conversation_id: &str,
+    ) -> Result<CheckpointListResponse, SdkError> {
         let result = self
-            .json_rpc("checkpoint.list", serde_json::json!({}))
+            .json_rpc(
+                "checkpoint.list",
+                serde_json::json!({ "conversation_id": conversation_id }),
+            )
             .await?;
         self.extract(result)
     }
 
     /// conversation.rollback — roll back to a checkpoint.
-    pub async fn conversation_rollback(&self, checkpoint_id: &str) -> Result<Value, SdkError> {
+    ///
+    /// The backend requires both `conversation_id` and `checkpoint_id`.
+    pub async fn conversation_rollback(
+        &self,
+        conversation_id: &str,
+        checkpoint_id: &str,
+    ) -> Result<Value, SdkError> {
         self.json_rpc(
             "conversation.rollback",
-            serde_json::json!({ "checkpoint_id": checkpoint_id }),
+            serde_json::json!({
+                "conversation_id": conversation_id,
+                "checkpoint_id": checkpoint_id,
+            }),
         )
         .await
     }
@@ -694,5 +712,139 @@ impl GoOnClient {
             .json_rpc("harness.status", serde_json::json!({}))
             .await?;
         self.extract(result)
+    }
+
+    // ── ACP Session Protocol ───────────────────────────────────────────
+
+    /// session/new — create a new ACP session.
+    ///
+    /// The backend reads `mode`, `cwd`, `work_dirs` and
+    /// `additionalDirectories` from the request params.
+    pub async fn session_new(&self, request: &AcpSessionNewRequest) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/new",
+            serde_json::to_value(request).unwrap_or_default(),
+        )
+        .await
+    }
+
+    /// session/prompt — send a prompt in an ACP session.
+    pub async fn session_prompt(
+        &self,
+        request: &AcpSessionPromptRequest,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/prompt",
+            serde_json::to_value(request).unwrap_or_default(),
+        )
+        .await
+    }
+
+    /// session/close — close an ACP session.
+    pub async fn session_close(&self, session_id: &str) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/close",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+    }
+
+    /// session/list — list active ACP sessions.
+    ///
+    /// The backend returns a minimal summary per session
+    /// (`[{ "id": sid }]`, see `session_list_payload`).
+    pub async fn session_list(&self) -> Result<AcpSessionListResponse, SdkError> {
+        let result = self.json_rpc("session/list", serde_json::json!({})).await?;
+        self.extract(result)
+    }
+
+    /// session/resume — resume an existing ACP session.
+    pub async fn session_resume(
+        &self,
+        session_id: &str,
+        cwd: Option<&str>,
+    ) -> Result<Value, SdkError> {
+        let mut params = serde_json::Map::new();
+        params.insert("sessionId".to_string(), serde_json::json!(session_id));
+        if let Some(cwd) = cwd {
+            params.insert("cwd".to_string(), serde_json::json!(cwd));
+        }
+        self.json_rpc("session/resume", serde_json::Value::Object(params))
+            .await
+    }
+
+    /// session/set_mode — set the mode of an ACP session.
+    ///
+    /// The backend reads `sessionId` and `modeId`.
+    pub async fn session_set_mode(
+        &self,
+        session_id: &str,
+        mode_id: &str,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/set_mode",
+            serde_json::json!({ "sessionId": session_id, "modeId": mode_id }),
+        )
+        .await
+    }
+
+    /// session/set_config_option — set a configuration option for an ACP session.
+    ///
+    /// The backend reads `sessionId`, `configId` and `value`.
+    pub async fn session_set_config_option(
+        &self,
+        session_id: &str,
+        config_id: &str,
+        value: Value,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/set_config_option",
+            serde_json::json!({
+                "sessionId": session_id,
+                "configId": config_id,
+                "value": value,
+            }),
+        )
+        .await
+    }
+
+    // ── Tools ─────────────────────────────────────────────────────────
+
+    /// tools/list — list all available tools with their input schemas.
+    pub async fn tools_list(&self) -> Result<Vec<ToolInfo>, SdkError> {
+        let result = self.json_rpc("tools/list", serde_json::json!({})).await?;
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut list = Vec::with_capacity(tools.len());
+        for tool in tools {
+            let info: ToolInfo = serde_json::from_value(tool).map_err(|e| {
+                SdkError::UnexpectedShape(format!("tools/list returned malformed tool entry: {e}"))
+            })?;
+            list.push(info);
+        }
+        Ok(list)
+    }
+
+    /// tools/call — execute a tool by name with the given arguments.
+    ///
+    /// `session_id` optionally enables progress streaming notifications
+    /// (the backend reads the `sessionId` param).
+    pub async fn tools_call(
+        &self,
+        name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+    ) -> Result<Value, SdkError> {
+        let mut params = serde_json::Map::new();
+        params.insert("name".to_string(), serde_json::json!(name));
+        params.insert("arguments".to_string(), arguments);
+        if let Some(session_id) = session_id {
+            params.insert("sessionId".to_string(), serde_json::json!(session_id));
+        }
+        self.json_rpc("tools/call", serde_json::Value::Object(params))
+            .await
     }
 }

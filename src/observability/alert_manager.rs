@@ -290,6 +290,7 @@ impl AlertManager {
         let _guard = span.enter();
 
         let url = self.webhook.url.clone();
+        let timeout_ms = self.webhook.timeout_ms;
         let recent_alerts_count = self.recent_alerts.len();
         let payload = serde_json::json!({
             "alert": alert,
@@ -304,7 +305,13 @@ impl AlertManager {
             });
             match crate::shared::http_client::http_client() {
                 Ok(client) => {
-                    if let Err(e) = client.post(&url).json(&payload).send().await {
+                    let mut request = client.post(&url).json(&payload);
+                    // Apply the configured webhook timeout (previously the
+                    // timeout_ms field was write-only — requests could hang).
+                    if timeout_ms > 0 {
+                        request = request.timeout(std::time::Duration::from_millis(timeout_ms));
+                    }
+                    if let Err(e) = request.send().await {
                         warn!("AlertManager webhook send failed: {e}");
                     }
                 }

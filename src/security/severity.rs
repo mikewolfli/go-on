@@ -30,9 +30,8 @@ impl DetectionSeverity {
     }
 }
 
-/// Shared base for [`SafetyViolation`](crate::security::content_safety::SafetyViolation)
-/// in [`content_safety`](crate::security::content_safety) and
-/// [`prompt_injection`](crate::security::prompt_injection).
+/// Shared base for [`SafetyViolation`](crate::security::prompt_injection::SafetyViolation)
+/// in [`prompt_injection`](crate::security::prompt_injection).
 ///
 /// The type-specific fields (e.g. `category`, `suggested_action`, `pattern_id`)
 /// are defined in each module's own `SafetyViolation` wrapper.

@@ -20,6 +20,9 @@ import type {
   SelectorStatusResponse,
   SessionModeState,
   TaskPlanResponse,
+  ToolInfo,
+  ToolsCallRequest,
+  ToolsCallResult,
   Usage,
 } from "./types";
 
@@ -408,16 +411,20 @@ export class GoOnClient {
     });
   }
 
-  /** checkpoint.list — list available checkpoints. */
-  async checkpointList(): Promise<CheckpointListResponse> {
-    return this.jsonRpc("checkpoint.list", {});
+  /** checkpoint.list — list available checkpoints for a conversation. */
+  async checkpointList(conversationId: string): Promise<CheckpointListResponse> {
+    return this.jsonRpc("checkpoint.list", {
+      conversation_id: conversationId,
+    });
   }
 
   /** conversation.rollback — roll back to a checkpoint. */
   async conversationRollback(
+    conversationId: string,
     checkpointId: string,
   ): Promise<Record<string, unknown>> {
     return this.jsonRpc("conversation.rollback", {
+      conversation_id: conversationId,
       checkpoint_id: checkpointId,
     });
   }
@@ -528,13 +535,30 @@ export class GoOnClient {
   /** session/set_config_option — set a configuration option for an ACP session. */
   async sessionSetConfigOption(
     sessionId: string,
-    optionId: string,
+    configId: string,
     value: string,
   ): Promise<void> {
     await this.jsonRpc("session/set_config_option", {
       sessionId,
-      optionId,
+      configId,
       value,
+    });
+  }
+
+  // ── Tools ────────────────────────────────────────────────────────────
+
+  /** tools/list — list all available tools with their input schemas. */
+  async toolsList(): Promise<ToolInfo[]> {
+    const result = await this.jsonRpc<{ tools?: ToolInfo[] }>("tools/list", {});
+    return result.tools ?? [];
+  }
+
+  /** tools/call — execute a tool by name with the given arguments. */
+  async toolsCall(params: ToolsCallRequest): Promise<ToolsCallResult> {
+    return this.jsonRpc<ToolsCallResult>("tools/call", {
+      name: params.name,
+      arguments: params.arguments,
+      sessionId: params.sessionId,
     });
   }
 }

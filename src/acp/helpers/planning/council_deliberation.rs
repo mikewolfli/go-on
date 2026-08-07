@@ -19,7 +19,7 @@ use tracing::warn;
 use crate::acp::helpers::autonomy_metrics::record_fallback_reason;
 use crate::agent::Agent;
 use crate::intelligence::capability_bus::core::CapabilityBus;
-use crate::orchestration::council::{CouncilMember, CouncilProposal, CouncilVote, ProposalStatus};
+use crate::orchestration::council::{CouncilMember, CouncilProposal, ProposalStatus};
 use crate::shared::option_bool;
 
 // ---------------------------------------------------------------------------
@@ -120,8 +120,12 @@ pub(crate) fn run_council_deliberation_and_fallback(
 /// Runs a council-style deliberation among candidate agents to select the
 /// best routing agent for the current request.
 ///
-/// Each candidate agent is added as a council member and casts a reputation-
-/// weighted vote. The candidate with the highest tally wins.
+/// Honest semantics: without an LLM-backed ballot, the "council" cannot
+/// produce independent per-member votes. The route is therefore selected by
+/// reputation ranking (the same outcome the previous fake ballot produced by
+/// having every member vote for the same pre-computed winner). The proposal
+/// record is kept for observability/auditing; no fictitious votes are cast
+/// and no vote-accuracy learning is simulated.
 fn run_council_route_deliberation(
     cb: &CapabilityBus,
     phase_name: &str,
@@ -138,26 +142,39 @@ fn run_council_route_deliberation(
         .unwrap_or(0);
     let proposal_id = format!("route-{}-{}", phase_name, now_ms);
 
+    // Reputation-ranked route selection (source of truth for the winner).
+    let winner = candidate_agents.iter().cloned().max_by(|a, b| {
+        let sa = reputation_scores.get(a).copied().unwrap_or(0.5);
+        let sb = reputation_scores.get(b).copied().unwrap_or(0.5);
+        sa.partial_cmp(&sb)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.cmp(a))
+    })?;
+
     let council = cb.council.lock().unwrap_or_else(|poisoned| {
         tracing::warn!("lock poisoned, recovering");
         poisoned.into_inner()
     });
     for agent in candidate_agents {
-        if let Err(e) = council.add_member(CouncilMember {
-            id: agent.clone(),
-            name: agent.clone(),
-            role: "routing_member".to_string(),
-            voting_power: 100,
-            specializations: vec![phase_name.to_string()],
-            is_active: true,
-            joined_ms: now_ms,
-        }) {
-            tracing::warn!(
-                phase = %phase_name,
-                agent = %agent,
-                error = %e,
-                "council_deliberation: failed to add council member"
-            );
+        // get-or-insert: repeated requests for the same agent must not spam
+        // "member already exists" warnings on every high-risk request.
+        if council.get_member(agent).is_err() {
+            if let Err(e) = council.add_member(CouncilMember {
+                id: agent.clone(),
+                name: agent.clone(),
+                role: "routing_member".to_string(),
+                voting_power: 100,
+                specializations: vec![phase_name.to_string()],
+                is_active: true,
+                joined_ms: now_ms,
+            }) {
+                warn!(
+                    phase = %phase_name,
+                    agent = %agent,
+                    error = %e,
+                    "council_deliberation: failed to add council member"
+                );
+            }
         }
     }
 
@@ -170,64 +187,39 @@ fn run_council_route_deliberation(
         status: ProposalStatus::Active,
         created_ms: now_ms,
     };
+    // Best-effort observability record. Expire old proposals first so the
+    // capped proposal store does not silently stop recording (the store was
+    // previously unbounded-in-effect and rejected new records at max_proposals).
     if council.submit_proposal(proposal).is_err() {
-        return None;
-    }
-
-    let winner_guess = candidate_agents.iter().cloned().max_by(|a, b| {
-        let sa = reputation_scores.get(a).copied().unwrap_or(0.5);
-        let sb = reputation_scores.get(b).copied().unwrap_or(0.5);
-        sa.partial_cmp(&sb)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.cmp(a))
-    })?;
-
-    for agent in candidate_agents {
-        let weight = (reputation_scores.get(agent).copied().unwrap_or(0.5) * 100.0)
-            .round()
-            .clamp(1.0, 100.0) as u32;
-        if let Err(e) = council.cast_vote(CouncilVote {
-            member_id: agent.clone(),
-            proposal_id: proposal_id.clone(),
-            selected_option: winner_guess.clone(),
-            weight,
-            vote_ms: now_ms,
-            rationale: Some("Reputation-weighted route deliberation".to_string()),
-        }) {
-            tracing::warn!(
+        let _ = council.expire_old_proposals();
+        let retry = CouncilProposal {
+            id: format!("{}-{}-{}", phase_name, now_ms, candidate_agents.len()),
+            title: format!("Route selection for phase {}", phase_name),
+            description: "Select the best routing agent for this high-complexity request"
+                .to_string(),
+            submitted_by: "capability_bus".to_string(),
+            options: candidate_agents.to_vec(),
+            status: ProposalStatus::Active,
+            created_ms: now_ms,
+        };
+        if council.submit_proposal(retry).is_err() {
+            warn!(
                 phase = %phase_name,
-                agent = %agent,
-                error = %e,
-                "council_deliberation: failed to cast council vote"
+                "council_deliberation: proposal store full; routing continues with reputation ranking"
             );
         }
     }
 
-    let tally = council.tally_votes(&proposal_id).ok()?;
-    let winner = tally
-        .winning_option
-        .clone()
-        .unwrap_or_else(|| winner_guess.clone());
-
-    // BLUE48 Step 17: Update council member reputations based on vote accuracy.
-    // This enables the reputation learning system to improve voting quality over time.
-    if let Err(e) = council.record_vote_accuracy(&proposal_id, &tally.winning_option) {
-        tracing::warn!(
-            phase = %phase_name,
-            proposal_id = %proposal_id,
-            error = %e,
-            "council_deliberation: failed to record vote accuracy"
-        );
-    }
     Some((
-        winner,
+        winner.clone(),
         json!({
             "proposal_id": proposal_id,
-            "winner": tally.winning_option,
-            "tie": tally.tie,
-            "passed": tally.passed,
-            "total_votes": tally.total_votes,
-            "option_tallies": tally.option_tallies,
+            "winner": winner,
+            "selection": "reputation_ranked",
+            "tie": false,
+            "passed": true,
+            "total_votes": 0,
+            "option_tallies": {},
             "candidate_count": candidate_agents.len(),
         }),
     ))

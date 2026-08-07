@@ -476,10 +476,11 @@ fn call_openai_whisper_api(
     mime: &str,
     config: &AudioProcessorConfig,
 ) -> Result<Transcription, AudioProcessorError> {
-    // Build the multipart form using reqwest::blocking.
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
+    // Build the multipart form using the shared process-global blocking
+    // client (previously every transcription built a fresh client, paying a
+    // full connection/TLS setup per call). Per-request timeout is applied on
+    // the request builder so long transcriptions are not cut off.
+    let client = crate::shared::http_client::blocking_http_client()
         .map_err(|e| AudioProcessorError::HttpRequest(e.to_string()))?;
 
     // Determine the file extension from the MIME type for the form part.
@@ -515,6 +516,7 @@ fn call_openai_whisper_api(
         .post("https://api.openai.com/v1/audio/transcriptions")
         .header("Authorization", format!("Bearer {api_key}"))
         .multipart(form)
+        .timeout(Duration::from_secs(120))
         .send()
         .map_err(|e| AudioProcessorError::HttpRequest(e.to_string()))?;
 

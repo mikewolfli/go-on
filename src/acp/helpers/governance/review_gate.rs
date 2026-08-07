@@ -38,13 +38,19 @@ pub async fn run_review_gate(
 
     match review_outcome {
         Ok(o) => o,
-        Err(_) => ReviewGateOutcome {
-            passed: false,
-            comments: vec!["review gate error: unable to complete review".to_string()],
-            reviewer: "review_gate".to_string(),
-            duration_ms: 0,
-            verdict: QualityVerdict::Invalid,
-        },
+        Err(_) => {
+            server
+                .observability
+                .metrics
+                .inc_review_gate_invalid_response();
+            ReviewGateOutcome {
+                passed: false,
+                comments: vec!["review gate error: unable to complete review".to_string()],
+                reviewer: "review_gate".to_string(),
+                duration_ms: 0,
+                verdict: QualityVerdict::Invalid,
+            }
+        }
     }
 }
 

@@ -634,9 +634,6 @@ impl CapabilityBus {
             }),
         );
 
-        #[cfg(feature = "sub-bus-observability")]
-        let _healthy_agents_count = sensing.healthy_agents.len();
-
         {
             let mut p = crate::write_or_recover!(&self.profile, "intelligence");
             p.routing_count = p.routing_count.saturating_add(1);

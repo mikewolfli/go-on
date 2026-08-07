@@ -104,7 +104,6 @@ use crate::orchestration::core_dag::TaskContext;
 use crate::orchestration::flow::ResolvedPhase;
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
 use crate::orchestration::multi_agent_pipeline::MultiAgentPipeline;
-use crate::orchestration::task_router::{TaskCharacteristics, TaskType};
 use crate::rpc_protocol::{child_trace_context, RequestTraceContext};
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1770,11 +1769,11 @@ pub(crate) async fn reflect_phase(
         "score": routing_out.risk_assessment.score,
         "is_high_risk": routing_out.risk_assessment.is_high_risk,
         "reasons": routing_out.risk_assessment.reasons,
-        "multi_model_vote_enabled": exec_out.used_multi_model_vote,
+        "multi_model_vote_enabled": routing_out.enable_high_risk_multi_agent_vote,
         "multi_model_vote_used": exec_out.used_multi_model_vote,
-        "multi_agent_vote_enabled": exec_out.used_multi_agent_vote,
+        "multi_agent_vote_enabled": routing_out.enable_high_risk_multi_agent_vote,
         "multi_agent_vote_used": exec_out.used_multi_agent_vote,
-        "escalation_enabled": exec_out.review_required,
+        "escalation_enabled": routing_out.escalation_enabled,
         "review_required": exec_out.review_required,
         "vote_report": exec_out.vote_report,
     });
@@ -2133,89 +2132,11 @@ async fn run_multi_agent_pipeline(
     _phase_name: &str,
 ) {
     let desc = extract_task_description(&params.messages);
-    let desc_lower = desc.to_lowercase();
 
-    // Basic task analysis based on description keywords
-    let task_type = if desc_lower.contains("test")
-        || desc_lower.contains("verify")
-        || desc_lower.contains("validate")
-    {
-        TaskType::TestImplementation
-    } else if desc_lower.contains("bug")
-        || desc_lower.contains("fix")
-        || desc_lower.contains("error")
-    {
-        TaskType::BugFix
-    } else if desc_lower.contains("refactor")
-        || desc_lower.contains("clean")
-        || desc_lower.contains("optimize")
-    {
-        TaskType::Refactoring
-    } else if desc_lower.contains("doc")
-        || desc_lower.contains("readme")
-        || desc_lower.contains("comment")
-    {
-        TaskType::Documentation
-    } else if desc_lower.contains("design")
-        || desc_lower.contains("architect")
-        || desc_lower.contains("plan")
-    {
-        TaskType::ArchitectureDesign
-    } else {
-        TaskType::FeatureImplementation
-    };
-
-    let complexity = if desc.len() > 500 {
-        5
-    } else if desc.len() > 200 {
-        3
-    } else {
-        1
-    };
-
-    let mut required_capabilities = vec!["coding".to_string()];
-    if desc_lower.contains("security")
-        || desc_lower.contains("vulnerability")
-        || desc_lower.contains("audit")
-    {
-        required_capabilities.push("security".to_string());
-    }
-    if desc_lower.contains("data") || desc_lower.contains("database") || desc_lower.contains("sql")
-    {
-        required_capabilities.push("data".to_string());
-    }
-    if desc_lower.contains("ui")
-        || desc_lower.contains("frontend")
-        || desc_lower.contains("gui")
-        || desc_lower.contains("web")
-    {
-        required_capabilities.push("frontend".to_string());
-    }
-
-    let involves_multiple_modules = desc_lower.contains("module")
-        || desc_lower.contains("component")
-        || desc_lower.contains("integration");
-    let is_time_critical = desc_lower.contains("urgent")
-        || desc_lower.contains("asap")
-        || desc_lower.contains("quick");
-    let needs_verification = desc_lower.contains("verify")
-        || desc_lower.contains("test")
-        || desc_lower.contains("validate")
-        || desc_lower.contains("ensure");
-    let has_safety_concerns = desc_lower.contains("security")
-        || desc_lower.contains("sensitive")
-        || desc_lower.contains("dangerous");
-
-    let task_chars = TaskCharacteristics {
-        description: desc.clone(),
-        task_type,
-        complexity,
-        required_capabilities,
-        involves_multiple_modules,
-        is_time_critical,
-        needs_verification,
-        has_safety_concerns,
-    };
+    // Single authoritative task analysis — reuse TaskRouter::analyze_task
+    // instead of maintaining a second keyword/classification implementation
+    // here (previously the two drifted on thresholds and type mapping).
+    let task_chars = crate::orchestration::task_router::TaskRouter::analyze_task(&desc);
     let registry = server
         .agent_registry()
         .unwrap_or_else(|| Arc::new(crate::agent::AgentRegistry::new()));

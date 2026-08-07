@@ -23,9 +23,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::orchestration::workflow_optimizer::{
-    CostOptimizer as WfCostOptimizer, OptimizationContext, WorkflowOptimizerPlugin,
-};
 use crate::resilience::hyper_resilience::{HyperResilienceEngine, ResilienceConfig};
 
 // ---------------------------------------------------------------------------
@@ -95,9 +92,8 @@ impl OptimizationRecommendation {
 // primitives (workflow CostOptimizer, TokenOptimizer, etc.).
 // ---------------------------------------------------------------------------
 
-/// Simple cost estimator that delegates to the workflow `CostOptimizer`.
+/// Simple cost estimator with per-agent base costs.
 struct CostEstimator {
-    inner: WfCostOptimizer,
     base_costs: HashMap<String, f64>,
 }
 
@@ -109,10 +105,7 @@ impl CostEstimator {
         Self::insert_bounded(&mut base_costs, "gpt-4o".to_string(), 2.50, 500);
         Self::insert_bounded(&mut base_costs, "gpt-4o-mini".to_string(), 0.60, 500);
 
-        Self {
-            inner: WfCostOptimizer::default(),
-            base_costs,
-        }
+        Self { base_costs }
     }
 
     #[inline]
@@ -143,19 +136,16 @@ impl CostEstimator {
 
     /// Suggest cost-optimised agent (delegates to workflow CostOptimizer logic).
     fn suggest_cheaper_agent(&self, _task_type: &str, token_count: u64) -> Option<String> {
-        let ctx = OptimizationContext {
-            workflow_type: _task_type.to_string(),
-            phases: vec![],
-            history: vec![],
-            token_usage: token_count,
-            latency_ms: 5000,
-        };
-        let recs = self.inner.optimize(&ctx);
-        if recs.suggestion_type == "downgrade_model_tier" {
-            Some("claude-haiku".to_string())
-        } else {
-            None
-        }
+        // Honest semantics: this function always builds an empty
+        // OptimizationContext (no real execution history is wired in), which
+        // makes CostOptimizer report success_rate=1.0 and always answer
+        // "downgrade_model_tier". Returning the hard-coded "claude-haiku"
+        // from that degenerate input would be a fabricated recommendation, so
+        // a no-op is returned and the caller falls back to its default agent.
+        // Real cost recommendations require actual run history, fed via
+        // `persist_workflow_learning_event`.
+        let _ = token_count;
+        None
     }
 }
 

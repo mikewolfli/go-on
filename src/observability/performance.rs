@@ -30,9 +30,10 @@ pub struct PerformanceMetrics {
     pub p95_latency_ms: f64,
     /// P99 latency in milliseconds
     pub p99_latency_ms: f64,
-    /// Memory usage in bytes
+    // Memory usage in bytes
     pub memory_usage_bytes: u64,
-    /// Cache hit rate
+    /// Cache hit rate (filled by AcpServer::get_status from real
+    /// vector/summary counters; PerformanceMonitor owns no cache stats).
     pub cache_hit_rate: f64,
     /// CPU usage percentage
     pub cpu_usage_percent: f64,
@@ -66,10 +67,6 @@ pub struct PerformanceMonitor {
     successful_ops: AtomicU64,
     /// Failed operations counter
     failed_ops: AtomicU64,
-    /// Cache hits counter
-    cache_hits: AtomicU64,
-    /// Cache misses counter
-    cache_misses: AtomicU64,
 }
 
 impl PerformanceMonitor {
@@ -81,8 +78,6 @@ impl PerformanceMonitor {
             total_ops: AtomicU64::new(0),
             successful_ops: AtomicU64::new(0),
             failed_ops: AtomicU64::new(0),
-            cache_hits: AtomicU64::new(0),
-            cache_misses: AtomicU64::new(0),
         }
     }
 
@@ -103,23 +98,11 @@ impl PerformanceMonitor {
         self.latencies.push_back(latency_ms);
     }
 
-    /// Record a cache hit
-    pub fn record_cache_hit(&self) {
-        self.cache_hits.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Record a cache miss
-    pub fn record_cache_miss(&self) {
-        self.cache_misses.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Get current metrics
     pub fn get_metrics(&self) -> PerformanceMetrics {
         let total_ops = self.total_ops.load(Ordering::Relaxed);
         let successful_ops = self.successful_ops.load(Ordering::Relaxed);
         let failed_ops = self.failed_ops.load(Ordering::Relaxed);
-        let cache_hits = self.cache_hits.load(Ordering::Relaxed);
-        let cache_misses = self.cache_misses.load(Ordering::Relaxed);
 
         // Calculate average latency
         let avg_latency = if !self.latencies.is_empty() {
@@ -154,12 +137,7 @@ impl PerformanceMonitor {
         };
 
         // Calculate cache hit rate
-        let total_cache_ops = cache_hits + cache_misses;
-        let cache_hit_rate = if total_cache_ops > 0 {
-            cache_hits as f64 / total_cache_ops as f64
-        } else {
-            0.0
-        };
+        let cache_hit_rate = 0.0; // filled by AcpServer::get_status
 
         // Get memory + CPU usage through a short-TTL cache instead of reading
         // /proc/self/status and /proc/stat on every call.
@@ -497,17 +475,5 @@ mod tests {
         assert_eq!(metrics.successful_ops, 2);
         assert_eq!(metrics.failed_ops, 1);
         assert!((metrics.avg_latency_ms - 20.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn performance_monitor_tracks_cache_hit_rate() {
-        let monitor = PerformanceMonitor::new(100);
-        monitor.record_cache_hit();
-        monitor.record_cache_hit();
-        monitor.record_cache_hit();
-        monitor.record_cache_miss();
-
-        let metrics = monitor.get_metrics();
-        assert!((metrics.cache_hit_rate - 0.75).abs() < 0.01);
     }
 }

@@ -104,12 +104,15 @@ fn build_runtime_execution_cycle(
         .map(|context| context.cycle_reports.len())
         .unwrap_or(0);
     let current_iteration = 1 + repair_iterations as u32;
+    // Real governance counters from the tool execution pipeline (see
+    // tool_governance.rs) — replaced the previous hard-coded zeros.
+    let tool_gov = crate::acp::helpers::tool_governance::tool_governance_counters();
     let repair_preview = if auto_repair_eligible {
         Some(json!({
             "iteration": current_iteration + 1,
             "plan_version": format!("v1-repair-{}", current_iteration),
             "patch_set": repair_targets,
-            "patch_set_size": build_runtime_repair_target_set(final_records).len(),
+            "patch_set_size": repair_targets.len(),
             "test_gate_result": "pending",
             "failure_taxonomy": cycle["failure_taxonomy"].clone(),
             "next_action": "retry_failed_subtasks",
@@ -134,7 +137,7 @@ fn build_runtime_execution_cycle(
             "iteration": 1,
             "plan_version": "v1",
             "patch_set": patch_set,
-            "patch_set_size": build_runtime_cycle_patch_set(initial_records).len(),
+            "patch_set_size": patch_set.len(),
             "test_gate_result": test_gate_result,
             "failure_taxonomy": obj.get("failure_taxonomy").cloned().unwrap_or_else(|| json!([])),
             "next_action": next_action,
@@ -239,9 +242,9 @@ fn build_runtime_execution_cycle(
                 "safety_gate_passed": final_failed_count == 0,
                 "confirmations_required": false,
                 "governance": {
-                    "dangerous_ops_intercepted": 0,
-                    "whitelist_bypass_count": 0,
-                    "permission_violations": 0,
+                    "dangerous_ops_intercepted": tool_gov["tool_policy_denied_total"],
+                    "whitelist_bypass_count": tool_gov["tool_rbac_denied_total"],
+                    "permission_violations": tool_gov["tool_budget_denied_total"],
                     "budget_remaining_pct": if repair_iterations == 0 { 1.0_f64 } else {
                         (1.0_f64 - repair_iterations as f64 * 0.25_f64).max(0.0_f64)
                     },

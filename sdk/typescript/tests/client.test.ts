@@ -182,6 +182,175 @@ describe("GoOnClient", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Contract parameter alignment tests
+//
+// These tests assert the exact JSON-RPC params each method sends, so the SDK
+// stays aligned with the backend ACP contract (see src/acp/impl/request/).
+// ---------------------------------------------------------------------------
+
+describe("ACP contract params", () => {
+  let client: GoOnClient;
+
+  beforeEach(() => {
+    client = new GoOnClient({ baseUrl: MOCK_BASE_URL });
+    vi.clearAllMocks();
+  });
+
+  function lastRpcBody(mock: typeof fetch): {
+    method: string;
+    params: Record<string, unknown>;
+  } {
+    const calls = (mock as ReturnType<typeof vi.fn>).mock.calls;
+    const [, init] = calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string);
+  }
+
+  it("checkpoint.list sends required conversation_id", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true, conversation_id: "conv-1", count: 0, checkpoints: [] },
+    });
+    globalThis.fetch = mock;
+
+    await client.checkpointList("conv-1");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("checkpoint.list");
+    expect(body.params).toEqual({ conversation_id: "conv-1" });
+  });
+
+  it("conversation.rollback sends conversation_id and checkpoint_id", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true },
+    });
+    globalThis.fetch = mock;
+
+    await client.conversationRollback("conv-1", "cp-42");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("conversation.rollback");
+    expect(body.params).toEqual({
+      conversation_id: "conv-1",
+      checkpoint_id: "cp-42",
+    });
+  });
+
+  it("session/new sends work_dirs (snake_case) and additionalDirectories", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { sessionId: "sess-1" },
+    });
+    globalThis.fetch = mock;
+
+    await client.sessionNew({
+      cwd: "/tmp",
+      work_dirs: ["/tmp/a"],
+      additionalDirectories: ["/tmp/b"],
+      mode: "safeguard",
+    });
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("session/new");
+    expect(body.params).toEqual({
+      cwd: "/tmp",
+      work_dirs: ["/tmp/a"],
+      additionalDirectories: ["/tmp/b"],
+      mode: "safeguard",
+    });
+  });
+
+  it("session/set_config_option uses configId (not optionId)", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { configOptions: [] },
+    });
+    globalThis.fetch = mock;
+
+    await client.sessionSetConfigOption("sess-1", "model", "gpt-4o");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("session/set_config_option");
+    expect(body.params).toEqual({
+      sessionId: "sess-1",
+      configId: "model",
+      value: "gpt-4o",
+    });
+  });
+
+  it("session/set_mode sends sessionId and modeId", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {},
+    });
+    globalThis.fetch = mock;
+
+    await client.sessionSetMode("sess-1", "edit");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("session/set_mode");
+    expect(body.params).toEqual({ sessionId: "sess-1", modeId: "edit" });
+  });
+
+  it("session/list parses the minimal { id } session shape", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { sessions: [{ id: "sess-1" }] },
+    });
+
+    const result = await client.sessionList();
+    expect(result.sessions).toEqual([{ id: "sess-1" }]);
+  });
+
+  it("tools/list sends no params and parses the tools array", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        tools: [
+          {
+            name: "read_file",
+            description: "Read a file",
+            input_schema: { type: "object" },
+          },
+        ],
+      },
+    });
+    globalThis.fetch = mock;
+
+    const tools = await client.toolsList();
+    expect(tools).toHaveLength(1);
+    expect(tools[0].name).toBe("read_file");
+    expect(tools[0].input_schema).toEqual({ type: "object" });
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("tools/list");
+  });
+
+  it("tools/call sends name, arguments and optional sessionId", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
+    globalThis.fetch = mock;
+
+    await client.toolsCall({
+      name: "read_file",
+      arguments: { path: "/tmp/a.txt" },
+      sessionId: "sess-1",
+    });
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("tools/call");
+    expect(body.params).toEqual({
+      name: "read_file",
+      arguments: { path: "/tmp/a.txt" },
+      sessionId: "sess-1",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Type definition tests
 // ---------------------------------------------------------------------------
 

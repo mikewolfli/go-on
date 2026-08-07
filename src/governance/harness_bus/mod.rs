@@ -51,9 +51,7 @@ use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::drift::drift_protection::{
     DriftPolicy, DriftProfile, DriftProtectionConfig, DriftProtectionEngine, DriftType,
 };
-use crate::governance::hardening::{
-    BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle, SandboxLevel, TaskBudget,
-};
+use crate::governance::hardening::{BudgetTracker, IdempotencyCache, SandboxLevel, TaskBudget};
 use crate::governance::pua::{PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::governance::rbac::RbacEnforcer;
@@ -332,7 +330,7 @@ impl HarnessBus {
         self.resilience_engine
             .record_execution("harness-main", success)
             .await;
-        self.audit_log.record(audit_entry);
+        self.audit(audit_entry);
 
         verdict
     }
@@ -531,41 +529,6 @@ impl HarnessBus {
             .clone()
     }
 
-    /// PolicyBundle compliance check for a GovernanceAction.
-    ///
-    /// Delegates to `SandboxPolicy::check` for sandbox-level actions (Read, Search)
-    /// and uses PolicyBundle for code-execution / write-approval actions.
-    /// This ensures a single source of truth for sandbox enforcement.
-    pub fn enforce_action(&self, action: &GovernanceAction, policy_bundle: &PolicyBundle) -> bool {
-        match action {
-            GovernanceAction::Read => {
-                let level = self
-                    .evaluator
-                    .sandbox_level
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        tracing::warn!("[harness_bus] lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
-                crate::governance::hardening::SandboxPolicy::check(*level, "read")
-            }
-            GovernanceAction::Search => {
-                let level = self
-                    .evaluator
-                    .sandbox_level
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        tracing::warn!("[harness_bus] lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
-                crate::governance::hardening::SandboxPolicy::check(*level, "search")
-            }
-            GovernanceAction::Write => !policy_bundle.require_approval_for_write,
-            GovernanceAction::Shell => policy_bundle.enable_code_execution,
-            GovernanceAction::Network => policy_bundle.enable_code_execution,
-        }
-    }
-
     /// Drift protection profile snapshot (F-GAP-26).
     pub fn drift_profile(&self) -> DriftProfile {
         self.drift_engine.profile()
@@ -641,6 +604,28 @@ impl HarnessBus {
                         );
                         if let Ok(mut p) = profile.lock() {
                             p.record_drift_detection();
+                        }
+                        // Route drift alerts into the AlertManager pipeline so
+                        // they reach recent_alerts / webhook like the other
+                        // alert producers (memory, p95, circuit, security).
+                        use crate::observability::alert_manager::alert_manager;
+                        use crate::shared::alert_severity::AlertSeverity;
+                        let alert_severity = match alert.severity {
+                            crate::governance::drift::DriftSeverity::Breach
+                            | crate::governance::drift::DriftSeverity::Critical => {
+                                AlertSeverity::Critical
+                            }
+                            crate::governance::drift::DriftSeverity::Warning => {
+                                AlertSeverity::Warning
+                            }
+                            crate::governance::drift::DriftSeverity::Notice => AlertSeverity::Info,
+                        };
+                        if let Ok(mut mgr) = alert_manager().lock() {
+                            mgr.report_direct(
+                                &format!("drift.{}", metric_name),
+                                alert.message.clone(),
+                                alert_severity,
+                            );
                         }
                     }
                 }

@@ -68,6 +68,13 @@ impl LifecycleState {
         self.healthy
     }
 
+    /// Update the health flag from real runtime signals (e.g. open circuit
+    /// breakers). Previously the flag was set once at construction and never
+    /// updated, so `/health` always reported `is_healthy: true`.
+    pub fn set_healthy(&mut self, healthy: bool) {
+        self.healthy = healthy;
+    }
+
     /// Check if shutdown has been requested
     pub fn shutdown_requested(&self) -> bool {
         self.shutdown_requested

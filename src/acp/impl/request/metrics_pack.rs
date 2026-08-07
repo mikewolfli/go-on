@@ -53,22 +53,13 @@ pub(super) async fn handle_metrics_prometheus(server: &AcpServer) -> Result<Disp
         ),
         format!("# HELP acp_chat_latency_seconds_count ACP chat latency sample count"),
         format!("# TYPE acp_chat_latency_seconds_count counter"),
-        format!(
-            "acp_chat_latency_seconds_count {}",
-            m.chat_requests_total.max(1)
-        ),
+        format!("acp_chat_latency_seconds_count {}", m.chat_requests_total),
         format!("# HELP acp_agent_latency_seconds_count ACP agent latency sample count"),
         format!("# TYPE acp_agent_latency_seconds_count counter"),
-        format!(
-            "acp_agent_latency_seconds_count {}",
-            m.total_requests.max(1)
-        ),
+        format!("acp_agent_latency_seconds_count {}", m.total_requests),
         format!("# HELP acp_review_latency_seconds_count ACP review latency sample count"),
         format!("# TYPE acp_review_latency_seconds_count counter"),
-        format!(
-            "acp_review_latency_seconds_count {}",
-            m.review_gate_total.max(1)
-        ),
+        format!("acp_review_latency_seconds_count {}", m.review_gate_total),
         format!("# HELP go_on_chat_requests_total Total chat requests"),
         format!("# TYPE go_on_chat_requests_total counter"),
         format!("go_on_chat_requests_total {}", m.chat_requests_total),

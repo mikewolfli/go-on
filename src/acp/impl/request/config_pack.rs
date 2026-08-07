@@ -1,18 +1,10 @@
 use super::*;
-use crate::config::RuntimeConfig;
-// RuntimeConfig import removed after unsafe code removal in handle_config_reload
 use crate::core::config::defaults::{
     default_runtime_entry_auth_api_key_env, default_runtime_entry_rate_limit_burst,
     default_runtime_entry_rate_limit_rpm,
 };
 use crate::protocol::access_mode::{normalize_protocol_mode, resolve_access_selection};
 use crate::shared::secret_override::get_secret;
-use std::sync::OnceLock;
-
-/// Module-level static for hot-reloaded runtime config.
-/// Shared between `handle_config_reload` (write) and future consumers.
-pub(super) static RUNTIME_CONFIG: OnceLock<std::sync::RwLock<Option<RuntimeConfig>>> =
-    std::sync::OnceLock::new();
 
 pub(super) fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
     let base_dir = config_path
@@ -368,26 +360,12 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
     // Explicit reload must observe fresh file content — bypass the mtime cache.
     let config = AppConfig::load_uncached(&config_path)?;
 
-    // Attempt to update server.runtime_config with new values.
-    // The runtime_config is behind a static OnceLock that can be swapped
-    // at runtime, allowing subsystems to pick up changes on their next
-    // read.  Full subsystem re-initialization (agent registry, cache,
-    // vector store) requires a server restart — those resources cannot
-    // be safely swapped at runtime without coordination.
-    // Store the new runtime config in the module-level static OnceLock so
-    // subsystems that support hot-reload can read the updated values in the
-    // future.  The runtime_config on AcpServer itself
-    // is not updated because a full live swap would require coordination
-    // across all request handlers.  The response explicitly warns:
-    // "agent/cache/vector changes require restart".
-    if let Some(new_config) = config.runtime.clone() {
-        if let Ok(mut lock) = RUNTIME_CONFIG
-            .get_or_init(|| std::sync::RwLock::new(None))
-            .write()
-        {
-            *lock = Some(new_config);
-        }
-    }
+    // Note: runtime policy toggles (request signing, entry auth, production
+    // strict mode, …) are read directly off `server.runtime_config`, which is
+    // fixed at startup. A live swap would require coordination across all
+    // request handlers, so changes to those toggles take effect on restart.
+    // The reload below therefore validates the file, hot-reloads i18n language
+    // files, and publishes state-sync events for the client UI.
 
     // Reload language files together with the config reload: the global i18n
     // manager (initialized in bootstrap) re-runs load_all_languages() so
@@ -464,13 +442,13 @@ pub(super) async fn config_reload_payload(server: &AcpServer) -> Result<Value> {
     let warnings = report.warning_messages();
     Ok(json!({
         "ok": true,
-        "note": "config validated; runtime_config and i18n language files reloaded; agent/cache/vector changes require restart",
+        "note": "config file validated; i18n language files hot-reloaded; runtime policy toggles and agent/cache/vector changes require restart",
         "path": config_path.display().to_string(),
         "warning_count": warnings.len(),
         "warnings": warnings,
         "profile_recommendation": report.profile_recommendation,
         "recommendations": report.recommendations,
-        "runtime_config_updated": config.runtime.is_some(),
+        "runtime_config_updated": false,
         "health": {
             "score": report.score,
             "critical_count": report.critical_count,

@@ -508,7 +508,6 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
         options,
         "optimization_modules",
         &[
-            "workflow_optimizer",
             "adaptive_selector",
             "advanced_modules",
             "cost_optimizer",

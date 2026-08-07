@@ -232,7 +232,7 @@ pub async fn dispatch_server(
     // Whether to wire the durable response cache as the token cache's L3 layer.
     persist_cache: bool,
 ) -> Result<()> {
-    let runtime_flow = flow_manager(config_path, app_config);
+    let runtime_flow = flow_manager(config_path, app_config.clone());
 
     // MCP arms need registry after new_acp_server consumes it, so clone here
     let mcp_registry = Arc::clone(&registry);
@@ -248,7 +248,7 @@ pub async fn dispatch_server(
         autotune_state_path,
         Some(config_path.to_string_lossy().to_string()),
         runtime_config,
-        None,
+        app_config,
         skill_registry,
         persist_cache,
     )

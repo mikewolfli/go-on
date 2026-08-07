@@ -16,7 +16,6 @@ use tracing::{debug, error, info, warn};
 pub trait EmbeddingProvider: Send + Sync {
     /// Embed `text` into a vector of `dimensions`.
     fn embed(&self, text: &str) -> Vec<f32>;
-
 }
 
 // ---------------------------------------------------------------------------
@@ -141,16 +140,11 @@ impl Default for OpenAiEmbeddingConfig {
 /// Embedding provider backed by the OpenAI Embeddings API.
 pub struct OpenAiEmbeddingProvider {
     config: OpenAiEmbeddingConfig,
-    client: reqwest::blocking::Client,
 }
 
 impl OpenAiEmbeddingProvider {
     pub fn new(config: OpenAiEmbeddingConfig) -> Self {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
-        Self { config, client }
+        Self { config }
     }
 
     /// Check if this provider has an API key configured (not empty).
@@ -173,13 +167,17 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
             "input": text,
         });
 
-        match self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .json(&body)
-            .send()
-        {
+        match crate::shared::http_client::blocking_http_client()
+            .map_err(|e| e.to_string())
+            .and_then(|client| {
+                client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.config.api_key))
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(30))
+                    .send()
+                    .map_err(|e| e.to_string())
+            }) {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     error!(
@@ -268,16 +266,11 @@ impl Default for OllamaEmbeddingConfig {
 /// Embedding provider backed by a local Ollama instance.
 pub struct OllamaEmbeddingProvider {
     config: OllamaEmbeddingConfig,
-    client: reqwest::blocking::Client,
 }
 
 impl OllamaEmbeddingProvider {
     pub fn new(config: OllamaEmbeddingConfig) -> Self {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap_or_default();
-        Self { config, client }
+        Self { config }
     }
 }
 
@@ -289,7 +282,16 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
             "input": text,
         });
 
-        match self.client.post(&url).json(&body).send() {
+        match crate::shared::http_client::blocking_http_client()
+            .map_err(|e| e.to_string())
+            .and_then(|client| {
+                client
+                    .post(&url)
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(60))
+                    .send()
+                    .map_err(|e| e.to_string())
+            }) {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     error!(
@@ -376,16 +378,11 @@ impl Default for Qwen3EmbeddingConfig {
 /// https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding
 pub struct Qwen3EmbeddingProvider {
     config: Qwen3EmbeddingConfig,
-    client: reqwest::blocking::Client,
 }
 
 impl Qwen3EmbeddingProvider {
     pub fn new(config: Qwen3EmbeddingConfig) -> Self {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
-        Self { config, client }
+        Self { config }
     }
 
     fn has_api_key(&self) -> bool {
@@ -411,13 +408,17 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
             }
         });
 
-        match self
-            .client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .json(&body)
-            .send()
-        {
+        match crate::shared::http_client::blocking_http_client()
+            .map_err(|e| e.to_string())
+            .and_then(|client| {
+                client
+                    .post(url)
+                    .header("Authorization", format!("Bearer {}", self.config.api_key))
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(30))
+                    .send()
+                    .map_err(|e| e.to_string())
+            }) {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     warn!(

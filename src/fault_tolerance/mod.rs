@@ -769,6 +769,22 @@ impl FaultToleranceEngine {
     /// All synchronous I/O (rusqlite, filesystem) is wrapped in `spawn_blocking`
     /// to avoid blocking the async runtime.
     async fn try_persist_state(&self) {
+        // Skip persistence entirely when the engine holds no state — the 30s
+        // recovery cycle previously wrote an empty snapshot to disk on every
+        // tick (full clone + spawn_blocking) even when no node was ever
+        // registered. With no state there is nothing to restore, so the
+        // write is pure overhead.
+        let empty = {
+            let inner = self.inner.read().await;
+            inner.faults.is_empty()
+                && inner.recovery_plans.is_empty()
+                && inner.isolation_groups.is_empty()
+                && inner.heartbeats.is_empty()
+        };
+        if empty {
+            return;
+        }
+
         #[cfg(feature = "backend-sqlite")]
         {
             let cache_path = std::path::PathBuf::from("target")

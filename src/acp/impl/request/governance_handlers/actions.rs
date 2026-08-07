@@ -64,12 +64,14 @@ pub(crate) fn governance_remediate_payload(server: &AcpServer, params: Value) ->
         }
         rid if rid.contains("config") || rid.contains("warning") => {
             let reloaded = if let Some(ref config_path) = server.config_path {
-                match crate::config::AppConfig::load(std::path::Path::new(config_path)) {
+                // Force a fresh read (bypasses the mtime cache) so the
+                // remediation genuinely validates current file content.
+                match crate::config::AppConfig::load_uncached(std::path::Path::new(config_path)) {
                     Ok(_cfg) => {
                         tracing::info!(
                             risk_id = %risk_id,
                             config_path = %config_path,
-                            "governance.remediate: config reloaded"
+                            "governance.remediate: config file re-read and validated (runtime toggles require restart)"
                         );
                         true
                     }
@@ -77,7 +79,7 @@ pub(crate) fn governance_remediate_payload(server: &AcpServer, params: Value) ->
                         tracing::warn!(
                             risk_id = %risk_id,
                             error = %e,
-                            "governance.remediate: config reload failed"
+                            "governance.remediate: config re-read failed"
                         );
                         false
                     }
@@ -90,7 +92,7 @@ pub(crate) fn governance_remediate_payload(server: &AcpServer, params: Value) ->
                 false
             };
             if reloaded {
-                "config_reloaded".to_string()
+                "config_validated".to_string()
             } else {
                 "config_reload_skipped".to_string()
             }
@@ -122,7 +124,7 @@ pub(crate) fn governance_remediate_payload(server: &AcpServer, params: Value) ->
 // governance.config.save — persist governance settings
 // ---------------------------------------------------------------------------
 
-pub(crate) fn governance_config_save_payload(server: &AcpServer, params: Value) -> Result<Value> {
+pub(crate) fn governance_config_save_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let auto_mask_sensitive = params
         .get("autoMaskSensitive")
         .and_then(Value::as_bool)
@@ -132,29 +134,20 @@ pub(crate) fn governance_config_save_payload(server: &AcpServer, params: Value) 
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let mut applied: Vec<&str> = Vec::new();
-
-    if auto_mask_sensitive {
-        if server.governance_deps.harness_bus.is_some() {
-            tracing::info!("governance.config.save: autoMaskSensitive enabled");
-        }
-        applied.push("autoMaskSensitive");
-    }
-
-    if server.governance_deps.harness_bus.is_some() {
-        tracing::info!(
-            audit_enabled = audit_enabled,
-            "governance.config.save: audit toggled"
-        );
-    }
-    applied.push("auditEnabled");
-
-    tracing::debug!(
-        "governance.config.save: runtime state updated (disk persistence is a future enhancement)"
+    // Honest semantics: this RPC acknowledges the requested governance
+    // settings. There is no runtime state store for these toggles yet, so
+    // nothing is silently claimed as "applied" (previously the response
+    // returned `applied` while only logging).
+    tracing::info!(
+        auto_mask_sensitive = auto_mask_sensitive,
+        audit_enabled = audit_enabled,
+        "governance.config.save: acknowledged (no runtime state store for these toggles)"
     );
 
     Ok(json!({
         "ok": true,
-        "applied": applied,
+        "acknowledged": true,
+        "applied": [],
+        "note": "settings acknowledged; no runtime state store is wired for these toggles",
     }))
 }

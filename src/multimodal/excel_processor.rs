@@ -93,21 +93,12 @@ pub struct CellRange {
 
 /// Parse Excel bytes (`.xlsx` or `.xls`) and return extracted content.
 ///
-/// Supports both `.xlsx` (Office Open XML) and `.xls` (legacy OLE2) formats.
-/// The format is auto-detected from the byte content.
+/// Supports `.xlsx` (Office Open XML) and `.xls` (legacy OLE2) formats.
+/// Both are opened through the same calamine `Xlsx` reader, which handles
+/// the container format; the format is not branched on here.
 #[cfg(feature = "document-excel")]
 pub fn parse_excel_bytes(bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
-    let is_xlsx = bytes.starts_with(b"PK\x03\x04");
-
-    let parsed = if is_xlsx {
-        open_workbook(bytes)
-    } else {
-        open_workbook(bytes).map_err(|e| {
-            DocumentParserError::Other(format!(
-                "Excel parse error: {e} (tried both .xlsx and .xls formats)"
-            ))
-        })
-    }?;
+    let parsed = open_workbook(bytes)?;
 
     // Convert the rich ParsedExcel into a flat ParsedContent.
     let parsed_content = parsed_excel_to_content(&parsed);

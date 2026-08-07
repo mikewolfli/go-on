@@ -35,5 +35,4 @@ pub mod task_schema;
 pub mod tool;
 pub use tool::extended as tool_extended;
 
-pub mod workflow_optimizer;
 pub mod workflow_registry;

@@ -235,6 +235,14 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Increment the counter for review gate outcomes that produced no
+    /// usable verdict (e.g. the underlying dual-review pipeline errored).
+    #[inline]
+    pub fn inc_review_gate_invalid_response(&self) {
+        self.review_gate_invalid_response_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Record one ACP request outcome with duration.
     pub fn record_request_outcome(&self, success: bool, duration_ms: f64) {
         if success {

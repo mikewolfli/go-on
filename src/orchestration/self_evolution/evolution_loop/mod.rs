@@ -241,7 +241,20 @@ impl EvolutionLoop {
                 let patch = self.propose(&analysis).await;
 
                 // Phase 4: Await approval
-                let approval = self.await_approval(&analysis, &patch).await?;
+                let approval = match self.await_approval(&analysis, &patch).await {
+                    Ok(a) => a,
+                    // A rejection (e.g. RequireApproval with no wired approval
+                    // subsystem) must not terminate the whole evolution loop —
+                    // log and continue polling other triggers.
+                    Err(e) => {
+                        info!(
+                            cycle_id = self.cycle_id,
+                            error = %e,
+                            "evolution cycle not approved; skipping"
+                        );
+                        continue;
+                    }
+                };
 
                 if !approval.is_approved() {
                     info!(
@@ -283,7 +296,7 @@ impl EvolutionLoop {
                     // Record the error pattern in the diagnostic trigger source
                     // so repeated verification failures trigger evolution cycles.
                     if let Some(ref counts) = self.diagnostic_error_counts {
-                        let mut guard = counts.blocking_lock();
+                        let mut guard = counts.lock().await;
                         *guard
                             .entry(format!(
                                 "verify_failure::{}::{}",
@@ -513,11 +526,17 @@ impl EvolutionLoop {
                 ))
             }
             validate::ApprovalMode::RequireApproval => {
-                // In production, route to a trusted subsystem for review.
-                info!("requesting system approval for evolution");
-                Ok(validate::Approval::approved(
-                    "system_approver".to_string(),
-                    Some("Approved by internal policy".to_string()),
+                // Honest semantics: no external approval subsystem is wired
+                // to the evolution loop yet. Rather than silently pretending
+                // an internal policy approved the change (previous behavior
+                // approved unconditionally, making RequireApproval identical
+                // to AutoApproval), the cycle is rejected so the failure is
+                // observable. Production uses AutoApproval (background.rs).
+                info!(
+                    "evolution cycle requires approval, but no approval subsystem is wired; rejecting"
+                );
+                Err(apply::EvolutionLoopError::Rejected(
+                    "RequireApproval: no approval subsystem wired".to_string(),
                 ))
             }
             validate::ApprovalMode::RequireHuman => {
