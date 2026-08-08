@@ -433,19 +433,14 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
         blue27_release_closure_gate && state_store_trait_gate && adversarial_verification_gate;
     let blue29_release_closure_gate = blue28_release_closure_gate
         && federated_rl_ready(open_breakers, dual_track_consistency_gate);
-    let blue30_release_closure_gate =
-        blue29_release_closure_gate && multi_channel_ready(observability_gate);
-    let blue31_release_closure_gate =
-        blue30_release_closure_gate && autonomy_boundary_ready(status.lifecycle.is_healthy);
+    let blue30_release_closure_gate = blue29_release_closure_gate && observability_gate;
+    let blue31_release_closure_gate = blue30_release_closure_gate && status.lifecycle.is_healthy;
     let blue32_release_closure_gate =
         blue31_release_closure_gate && federated_rl_v2_ready(open_breakers);
-    let blue33_release_closure_gate =
-        blue32_release_closure_gate && local_reflection_ready(dual_track_consistency_gate);
-    let blue33_remaining_closure_gate =
-        blue33_release_closure_gate && autonomy_scope_ready(status.lifecycle.is_healthy);
-    let blue34_release_closure_gate =
-        blue33_remaining_closure_gate && dual_track_boundary_freeze_ready_fn(observability_gate);
-    let custom_role_registry_gate = custom_role_registry_ready_fn(status.lifecycle.is_healthy);
+    let blue33_release_closure_gate = blue32_release_closure_gate && dual_track_consistency_gate;
+    let blue33_remaining_closure_gate = blue33_release_closure_gate && status.lifecycle.is_healthy;
+    let blue34_release_closure_gate = blue33_remaining_closure_gate && observability_gate;
+    let custom_role_registry_gate = status.lifecycle.is_healthy;
     let custom_role_dynamic_matching_gate =
         custom_role_registry_gate && dual_track_consistency_gate;
     let compliance_audit_metadata_gate = custom_role_dynamic_matching_gate && security_gate;
@@ -754,37 +749,18 @@ pub(super) async fn release_readiness_payload(server: &AcpServer, params: Value)
 }
 
 // BLUE gate helper functions (extracted inline to reduce duplication)
+//
+// The six identity functions (multi_channel_ready, autonomy_boundary_ready,
+// local_reflection_ready, autonomy_scope_ready, dual_track_boundary_freeze_ready_fn,
+// custom_role_registry_ready_fn) were removed: they only forwarded their
+// argument unchanged. The real gates below remain.
 
 fn federated_rl_ready(open_breakers: u64, dual_track: bool) -> bool {
     dual_track && open_breakers == 0
 }
 
-fn multi_channel_ready(observability: bool) -> bool {
-    observability
-}
-
-fn autonomy_boundary_ready(healthy: bool) -> bool {
-    healthy
-}
-
 fn federated_rl_v2_ready(open_breakers: u64) -> bool {
     open_breakers == 0
-}
-
-fn local_reflection_ready(dual_track: bool) -> bool {
-    dual_track
-}
-
-fn autonomy_scope_ready(healthy: bool) -> bool {
-    healthy
-}
-
-fn dual_track_boundary_freeze_ready_fn(observability: bool) -> bool {
-    observability
-}
-
-fn custom_role_registry_ready_fn(healthy: bool) -> bool {
-    healthy
 }
 
 // ---------------------------------------------------------------------------

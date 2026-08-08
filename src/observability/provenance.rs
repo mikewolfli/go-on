@@ -84,7 +84,6 @@ impl ProvenanceLedger {
 
     /// Compute a content-digest of the entire ledger (SHA-256 hex).
     pub fn ledger_digest(&self) -> String {
-        use sha2::{Digest, Sha256};
         let combined: String = {
             let inner = self.inner.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!(target: "provenance", "Mutex poisoned – recovering in ledger_digest");
@@ -102,11 +101,7 @@ impl ProvenanceLedger {
                 .collect::<Vec<_>>()
                 .join("::")
         };
-        let hash = Sha256::digest(combined.as_bytes());
-        hash.iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .concat()
+        crate::shared::sha256_hex(combined.as_bytes())
     }
 
     /// Query entries by phase (action type).

@@ -41,7 +41,6 @@ summary_trigger_messages = 4
 summary_max_chars = 800
 
 [runtime]
-protocol_mode = "acp"
 platform_mode = "universal"
 deployment_target = "local-dev"
 acp_http_bind_addr = "127.0.0.1:8090"
@@ -71,6 +70,8 @@ otel_sample_ratio = 1.0
 trace_slow_top_n = 20
 
 [startup_context]
+[protocol]
+mode = "adaptive"
 enabled = true
 readme_max_chars = 2000
 recent_commits = 5

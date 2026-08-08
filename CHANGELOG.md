@@ -42,7 +42,7 @@ cargo clippy --all-targets -D warnings → zero warnings
 cargo test --lib                     → 1590 passed / 0 failed
 ```
 
-## [1.5.0] - 2026-08-06
+---
 
 ### Round 39 — Architecture Unification & Speed Pass (2026-08-06/07, docs/log/log-20260806-7.md)
 
@@ -94,9 +94,7 @@ cargo test --lib                     → 1590 passed / 0 failed
 - README sub-bus counts unified to the 7 feature-gated sub-buses; SDK count includes Node.js; unverifiable test-count numbers removed.
 - `contracts/cross-client-sync.md` path references corrected.
 
-### Round 39 — Architecture Unification & Speed Pass (2026-08-06/07, docs/log/log-20260806-7.md)
-
-#### Legacy-Item Closeout (2026-08-07)
+### Round 39 (continued) — Legacy-Item Closeout (2026-08-07)
 
 - **ApprovalEngine deleted** (verified clean): its HITL approval queue is fully replaced by the ACP chain — `executor.rs` → `request_client_permission` → SSE `PermissionRequest` notification → `session/request_permission` / `tool.approve` → `user_approved_tools` → `require_review` gate.
 - **Fault-tolerance fault records wired**: `check_heartbeats` now creates a `FaultEvent` (NetworkTimeout, de-duplicated) when a node goes Offline, and `report_heartbeat` auto-resolves all unresolved faults when the node recovers — `active_faults()`/cluster health now reflect real outages.
@@ -114,7 +112,7 @@ cargo clippy --all-targets -D warnings (4 profiles) → zero warnings
 cargo test --lib                     → 1639 passed / 0 failed
 ```
 
-## [1.5.0] - 2026-08-06
+---
 
 ### Round 38 — Legacy 7-Item Closeout (2026-08-06)
 
@@ -203,7 +201,7 @@ Seven more super-deep + super-broad scan rounds (see `docs/log/log-20260806-{1..
 - `cargo test --all-targets`: **3486 passed / 0 failed**.
 - `scripts/gen-provider-catalog.py --check`: dual output OK (37 providers).
 
-## [1.5.0] - 2026-08-05
+---
 
 ### 24 Rounds of Deep Scan & Optimization (2026-07-24 → 2026-08-05)
 

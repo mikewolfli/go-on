@@ -400,7 +400,12 @@ pub async fn start_background_tasks(
                     crate::orchestration::self_evolution::sandbox::SandboxExecutor::new(
                         workdir.clone(),
                         3,
-                    ),
+                    )
+                    // Only Rust source files under src/ are patchable. This is
+                    // the safety whitelist for the auto-approval evolution loop
+                    // running against the real project root: configs, scripts,
+                    // generated files and non-Rust sources are never touched.
+                    .with_allowed_targets(vec!["src/**/*.rs".to_string()]),
                 )
                 .with_history(
                     crate::orchestration::self_evolution::evolution_history::EvolutionHistory::new(

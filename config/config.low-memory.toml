@@ -37,8 +37,10 @@ summary_enabled = true
 summary_trigger_messages = 10      # Reduce embedding frequency
 summary_max_chars = 600
 
+[protocol]
+mode = "adaptive"
+
 [runtime]
-protocol_mode = "acp"
 acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 120 # Less frequent maintenance
 health_interval_seconds = 300

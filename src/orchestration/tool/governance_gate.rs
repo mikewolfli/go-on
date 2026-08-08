@@ -143,27 +143,13 @@ pub fn governance_cache() -> &'static ShardedGovernanceCache {
 /// Low-risk tools are read-only, informational, or utility tools that pose
 /// minimal security or safety concern. For these tools, synchronous governance
 /// approval can be replaced by async audit logging.
+///
+/// The set is the canonical `mode::LOW_RISK_TOOL_NAMES` (single source of
+/// truth). Previously this was a third hand-maintained list that had drifted
+/// from `mode::read_only_tools()`, so read-only tools such as `web_search`
+/// were sent through the blocking approval gate in edit mode.
 pub fn is_low_risk_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "read_file"
-            | "search_files"
-            | "list_directory"
-            | "grep"
-            | "environment_info"
-            | "uuid_gen"
-            | "random_token"
-            | "encode_decode"
-            | "hash_file"
-            | "diagnostics"
-            | "file_diff"
-            | "format_code"
-            | "code_metrics"
-            | "svg_export"
-            | "rss_read"
-            | "date_time"
-            | "dns_lookup"
-    )
+    crate::orchestration::mode::low_risk_tool_names().contains(&tool_name)
 }
 
 /// Record an audit log entry for a low-risk tool access.

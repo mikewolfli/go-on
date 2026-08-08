@@ -726,15 +726,15 @@ class GoOnClient:
         """session/close — close an ACP session."""
         return await self._json_rpc("session/close", {"sessionId": session_id})
 
-    async def session_list(self) -> list[SessionInfo]:
+    async def session_list(self) -> dict[str, Any]:
         """session/list — list active ACP sessions.
 
-        The backend returns a minimal summary per session:
-        ``[{"id": sid}]``.
+        Returns the full envelope ``{"sessions": [...], "nextCursor": ..., "_meta": ...}``
+        for consistency with the Rust and TypeScript SDKs (which also return
+        the envelope, not a bare list).
         """
         result = await self._json_rpc("session/list")
-        raw_sessions = cast(list[dict[str, Any]], result.get("sessions", []))
-        return [SessionInfo(id=cast(str, raw.get("id", ""))) for raw in raw_sessions]
+        return result
 
     async def session_resume(self, session_id: str, cwd: str | None = None) -> dict[str, Any]:
         """session/resume — resume an existing ACP session."""

@@ -4,9 +4,7 @@ use super::*;
 ///
 /// Negotiates the protocol version against the client's requested version
 /// (params.protocolVersion if present): the server picks the highest version
-/// it supports that does not exceed the client's request. The negotiated
-/// version is stored process-wide so later handlers (e.g. SSE capability
-/// reporting) can honour it.
+/// it supports that does not exceed the client's request.
 pub async fn initialize_payload(_server: &AcpServer, params: &Option<Value>) -> Result<Value> {
     use crate::schema::{
         AgentCapabilities, AuthMethod, AuthMethodAgent, Implementation, InitializeResponse,
@@ -84,7 +82,7 @@ pub async fn initialize_payload(_server: &AcpServer, params: &Option<Value>) -> 
             "tools_call": true,
             "tools": true,
             "acp_stdio": true,
-            "protocol_version": env!("CARGO_PKG_VERSION"),
+            "protocol_version": negotiated_ver_num,
         });
         obj.insert("capabilities".to_string(), caps_obj);
     }

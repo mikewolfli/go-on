@@ -132,34 +132,83 @@ fn all_exec_tools() -> Vec<&'static str> {
     ]
 }
 
+/// Read-only inspection tools — the SafeGuard ReadOnly degraded set.
+static READ_ONLY_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "read_file_lines",
+    "search_files",
+    "grep",
+    "list_directory",
+    "inspect_git_diff",
+    "code_index_search",
+    "go_to_definition",
+    "find_references",
+    "file_diff",
+    "date_time",
+    "environment_info",
+    "json_query",
+    "archive_inspect",
+    "dns_lookup",
+    "ping",
+    "docker_ps",
+    "docker_logs",
+    "rss_read",
+    "jsonl_read",
+    "code_metrics",
+    "security_scan",
+    "skill_list",
+    "web_search",
+];
+
+/// Canonical low-risk tool set: read-only inspection tools plus pure
+/// informational/utility tools with no side effects. Single source of truth
+/// for `orchestration::tool::governance_gate::is_low_risk_tool` — previously
+/// three overlapping lists (plan_tools / read_only_tools / is_low_risk_tool)
+/// drifted, so read-only tools like `web_search` hit the blocking approval
+/// gate in edit mode.
+static LOW_RISK_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "read_file_lines",
+    "search_files",
+    "grep",
+    "list_directory",
+    "inspect_git_diff",
+    "code_index_search",
+    "go_to_definition",
+    "find_references",
+    "file_diff",
+    "date_time",
+    "environment_info",
+    "json_query",
+    "archive_inspect",
+    "dns_lookup",
+    "ping",
+    "docker_ps",
+    "docker_logs",
+    "rss_read",
+    "jsonl_read",
+    "code_metrics",
+    "security_scan",
+    "skill_list",
+    "web_search",
+    // Pure informational/utility tools.
+    "uuid_gen",
+    "random_token",
+    "encode_decode",
+    "hash_file",
+    "diagnostics",
+    "format_code",
+    "svg_export",
+];
+
+/// Canonical low-risk tool names (see [`LOW_RISK_TOOL_NAMES`]).
+pub(crate) fn low_risk_tool_names() -> &'static [&'static str] {
+    LOW_RISK_TOOL_NAMES
+}
+
 /// Read-only degraded tool set (SafeGuard ReadOnly).
 fn read_only_tools() -> Vec<&'static str> {
-    vec![
-        "read_file",
-        "read_file_lines",
-        "search_files",
-        "grep",
-        "list_directory",
-        "inspect_git_diff",
-        "code_index_search",
-        "go_to_definition",
-        "find_references",
-        "file_diff",
-        "date_time",
-        "environment_info",
-        "json_query",
-        "archive_inspect",
-        "dns_lookup",
-        "ping",
-        "docker_ps",
-        "docker_logs",
-        "rss_read",
-        "jsonl_read",
-        "code_metrics",
-        "security_scan",
-        "skill_list",
-        "web_search",
-    ]
+    READ_ONLY_TOOL_NAMES.to_vec()
 }
 
 /// Supported chat/agent modes

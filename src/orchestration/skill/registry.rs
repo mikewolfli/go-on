@@ -7,7 +7,6 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tokio::time::interval;
 use tracing::{info, warn};
 
@@ -717,12 +716,7 @@ impl SkillRegistry {
         // Compute content digest from the raw SKILL.md bytes for provenance tracking
         let content_digest = {
             let content = fs::read(&pf.md_path).unwrap_or_default();
-            let hash = Sha256::digest(&content);
-            Some(
-                hash.iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>(),
-            )
+            Some(crate::shared::sha256_hex(&content))
         };
 
         let provenance = Some(SkillProvenance {

@@ -353,7 +353,8 @@ pub(crate) fn handle_secret_commands(cli: &Cli, config_path: &Path) -> Result<bo
     Ok(false)
 }
 
-/// Load and validate configuration, then handle validation-only modes (--validate-config, --diagnose).
+/// Load and validate configuration, then handle validation-only modes
+/// (--validate-config; --diagnose is handled earlier in main/mod.rs).
 ///
 /// Returns `Some(config)` if validation passed and the server should start,
 /// or `None` if a validation-only command was handled and `run()` should return.

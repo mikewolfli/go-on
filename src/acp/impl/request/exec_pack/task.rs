@@ -1238,15 +1238,51 @@ pub(crate) async fn handle_task_execute(
     } else {
         execution_context.secondary_agents.clone()
     };
-    let reviews = (0..review_policy.required_reviews)
-        .map(|index| {
-            json!({
-                "reviewer": format!("reviewer_{}", index + 1),
-                "verdict": "APPROVE",
-                "response": "approved"
+    // ── Real review: deterministic verification of the actual execution
+    // summary (mirrors workflow.execute). Verdicts reflect the execution
+    // outcome; previously this fabricated `APPROVE` entries unconditionally.
+    let review_summary = format!(
+        "task.execute completed {} subtasks ({} failed, {} skipped) for task '{}'; \
+         failure_strategy={}; failover_count={}",
+        execution_report.subtasks_completed,
+        execution_report.subtasks_failed,
+        execution_report.subtasks_skipped,
+        task_text,
+        execution_report.failure_strategy,
+        execution_report.failover_count,
+    );
+    let reviews: Vec<Value> = if review_policy.required_reviews > 0 {
+        let verification =
+            crate::acp::helpers::review_gate::run_enhanced_verification(&review_summary);
+        let verification_passed = verification
+            .get("enhanced_verification")
+            .and_then(|v| v.get("verdict"))
+            .and_then(Value::as_str)
+            .map(|v| v == "Approve")
+            .unwrap_or(false);
+        let execution_passed = execution_report.subtasks_failed == 0;
+        let approved = verification_passed && execution_passed;
+        (0..review_policy.required_reviews)
+            .map(|index| {
+                json!({
+                    "reviewer": format!("reviewer_{}", index + 1),
+                    "verdict": if approved { "APPROVE" } else { "REJECT" },
+                    "response": format!(
+                        "{}: {} (execution: {} subtasks failed)",
+                        if approved { "approved" } else { "rejected" },
+                        verification["enhanced_verification"]["rationale"]
+                            .as_str()
+                            .unwrap_or("deterministic verification"),
+                        execution_report.subtasks_failed,
+                    ),
+                    "subtasks_failed": execution_report.subtasks_failed,
+                    "verification_signal": verification["enhanced_verification"].clone(),
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let clarification_metrics =
         resolve_learning_clarification_metrics(&ledger, &task_text, &params);
@@ -1375,14 +1411,23 @@ pub(crate) async fn handle_task_execute(
         "failed"
     };
 
+    // Review gate status reflects the real review verdict + execution outcome
+    // (mirrors workflow.execute's honest gate reporting).
+    let review_approved = reviews
+        .iter()
+        .all(|r| r.get("verdict").and_then(Value::as_str) == Some("APPROVE"));
+    let review_gate_status = if review_policy.required_reviews == 0 {
+        "not_required"
+    } else if review_approved && execution_report.subtasks_failed == 0 {
+        "passed"
+    } else {
+        "rejected"
+    };
+
     let gates = build_gate_matrix(
         json!({"confirmed": true}),
         execution_status,
-        if review_policy.required_reviews > 0 {
-            "passed"
-        } else {
-            "not_required"
-        },
+        review_gate_status,
         "not_run",
         None,
     );
@@ -1418,20 +1463,24 @@ pub(crate) async fn handle_task_execute(
     let approval_checkpoint = build_approval_checkpoint("task.execute", &change_bundle, &params);
     let repo_context = build_repo_native_context("task.execute", &params, &change_bundle);
     let learning_profile = build_learning_profile("task.execute", &task_text, &params);
+    // Build the execution-cycle record once and reuse it in the token economy
+    // and the response payload (previously constructed twice with identical
+    // arguments).
+    let execution_cycle = build_execution_cycle(
+        "task.execute",
+        if execution_report.subtasks_failed > 0 {
+            "repair_or_review_failures"
+        } else {
+            "complete"
+        },
+        "not_run",
+        Vec::<String>::new(),
+    );
     let token_economy = build_token_economy(
         "task.execute",
         &params,
         &governance_profile,
-        &build_execution_cycle(
-            "task.execute",
-            if execution_report.subtasks_failed > 0 {
-                "repair_or_review_failures"
-            } else {
-                "complete"
-            },
-            "not_run",
-            Vec::<String>::new(),
-        ),
+        &execution_cycle,
     );
     let knowledge_refinement =
         build_knowledge_refinement_profile("task.execute", &task_text, &params, &learning_profile);
@@ -1444,6 +1493,17 @@ pub(crate) async fn handle_task_execute(
     } else {
         None
     };
+    // Capture multi-agent summary data before policy_artifact is moved into
+    // the payload below.
+    let multi_agent_executors: Vec<String> = execution_report
+        .assignment_records
+        .iter()
+        .map(|r| r.effective_executor.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let multi_agent_primary = policy_artifact.primary_agent.clone();
+    let multi_agent_secondary = policy_artifact.secondary_agents.clone();
     let artifacts = vec![
         artifact_path.display().to_string(),
         plan_artifact_path.display().to_string(),
@@ -1462,9 +1522,7 @@ pub(crate) async fn handle_task_execute(
         "learning_artifact_path": learning_artifact_path.display().to_string(),
         "execution_mode": "runtime_execute", "stop_reason": stop_reason,
         "adaptive": { "planning": adaptive_planning, "execution_defaults": execution_context.adaptive_defaults },
-        "execution_cycle": build_execution_cycle("task.execute",
-            if execution_report.subtasks_failed > 0 { "repair_or_review_failures" } else { "complete" },
-            "not_run", Vec::<String>::new()),
+        "execution_cycle": execution_cycle,
         "sandbox_profile": sandbox_profile, "orchestration_node_decisions": {},
         "approval_checkpoint": approval_checkpoint, "repo_context": repo_context,
         "gates": gates, "lazy_load": execution_report.lazy_load,
@@ -1477,7 +1535,17 @@ pub(crate) async fn handle_task_execute(
             "primary_secondary_policy_artifact_path": primary_secondary_policy_artifact_path.display().to_string() },
         "primary_failover_artifact_path": primary_failover_artifact_path.display().to_string(),
         "primary_failover_report": { "failover_policy": failover_artifact.failover_policy, "reports": failover_artifact.reports },
-        "multi_agent": build_execution_cycle("multi_agent_summary", "complete", "passed", Vec::<String>::new()),
+        // Multi-agent summary reflects the actual executors that ran, not a
+        // copy-pasted execution cycle (previously fabricated as
+        // "multi_agent_summary" / "passed").
+        "multi_agent": {
+            "executors": multi_agent_executors,
+            "subtasks_completed": execution_report.subtasks_completed,
+            "subtasks_failed": execution_report.subtasks_failed,
+            "failover_count": execution_report.failover_count,
+            "primary_agent": multi_agent_primary,
+            "secondary_agents": multi_agent_secondary,
+        },
     });
 
     Ok(DispatchOutput::ok(response_payload))

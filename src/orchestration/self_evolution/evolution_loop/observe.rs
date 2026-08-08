@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -456,56 +455,6 @@ impl TriggerSource for DiagnosticTriggerSource {
 
         let _ = &self.name;
         triggers
-    }
-}
-
-// ---------------------------------------------------------------------------
-// TickTriggerSource
-// ---------------------------------------------------------------------------
-
-/// A simple trigger source that fires at a fixed interval.
-///
-/// This is the default trigger source that ensures the evolution loop has
-/// at least one active source, preventing `NoTriggerSources` errors.
-#[derive(Debug)]
-pub struct TickTriggerSource {
-    /// Name of this source.
-    name: String,
-    /// Interval between automatic triggers.
-    interval: Duration,
-    /// Timestamp (ms since epoch) of the last trigger.
-    last_trigger_ms: tokio::sync::Mutex<u64>,
-}
-
-impl TickTriggerSource {
-    /// Create a new tick trigger source that fires every `interval`.
-    pub fn new(name: String, interval: Duration) -> Self {
-        Self {
-            name,
-            interval,
-            last_trigger_ms: tokio::sync::Mutex::new(0),
-        }
-    }
-}
-
-#[async_trait]
-impl TriggerSource for TickTriggerSource {
-    async fn poll(&self) -> Vec<EvolutionTrigger> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        let mut last = self.last_trigger_ms.lock().await;
-        let elapsed_ms = now.saturating_sub(*last);
-
-        if elapsed_ms >= self.interval.as_millis() as u64 {
-            *last = now;
-            let instruction = format!("Scheduled evolution tick from {}", self.name);
-            vec![EvolutionTrigger::ManualRequest { instruction }]
-        } else {
-            Vec::new()
-        }
     }
 }
 

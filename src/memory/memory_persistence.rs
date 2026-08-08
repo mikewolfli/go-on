@@ -801,16 +801,26 @@ impl WarmStore {
                         &user_id,
                     ],
                 )?;
-                conn.execute(
-                    &format!(
-                        "DELETE FROM warm_memory WHERE id IN (
-                        SELECT id FROM warm_memory ORDER BY accessed_at ASC \
-                        LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - {p}1)
-                    )",
-                        p = PARAM_PREFIX
-                    ),
+                // Evict only when the table actually exceeds the cap — the
+                // DELETE+ORDER BY full-table sort is skipped on every normal
+                // write (same COUNT-gated pattern as cache.rs).
+                let over_cap: i64 = conn.query_row(
+                    &format!("SELECT COUNT(*) - {p}1 FROM warm_memory", p = PARAM_PREFIX),
                     rusqlite::params![max_entries as i64],
+                    |row| row.get(0),
                 )?;
+                if over_cap > 0 {
+                    conn.execute(
+                        &format!(
+                            "DELETE FROM warm_memory WHERE id IN (
+                            SELECT id FROM warm_memory ORDER BY accessed_at ASC \
+                            LIMIT {p}1
+                        )",
+                            p = PARAM_PREFIX
+                        ),
+                        rusqlite::params![over_cap],
+                    )?;
+                }
                 Ok(())
             })
             .await
@@ -865,16 +875,25 @@ impl WarmStore {
                         &user_id,
                     ],
                 )?;
-                conn.execute(
-                    &format!(
-                        "DELETE FROM warm_memory WHERE id IN (
-                        SELECT id FROM warm_memory ORDER BY accessed_at ASC \
-                        LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - {p}1)
-                    )",
-                        p = PARAM_PREFIX
-                    ),
+                // Evict only when the table actually exceeds the cap (see
+                // the sqlite branch above for rationale).
+                let row = conn.query_one(
+                    &format!("SELECT COUNT(*) - {p}1 FROM warm_memory", p = PARAM_PREFIX),
                     &[&(max_entries as i64)],
                 )?;
+                let over_cap: i64 = row.get(0);
+                if over_cap > 0 {
+                    conn.execute(
+                        &format!(
+                            "DELETE FROM warm_memory WHERE id IN (
+                            SELECT id FROM warm_memory ORDER BY accessed_at ASC \
+                            LIMIT {p}1
+                        )",
+                            p = PARAM_PREFIX
+                        ),
+                        &[&over_cap],
+                    )?;
+                }
                 Ok(())
             })
             .await

@@ -425,15 +425,6 @@ pub async fn new_acp_server(
     // ── BLUE71 §5: Initialise SpawnAgentTool's SpawnGuard budget ──
     crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_budget();
 
-    // Register the AgentCommunicationHook for spawn lifecycle events
-    let communication_hook =
-        Arc::new(crate::orchestration::tool::types::AgentCommunicationHook::new(communication_bus));
-    // Register hook with the global ToolHookRegistry so it fires on every tool execution.
-    // The global tool registry is lazily initialized; this call ensures it's ready.
-    let tool_registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
-    tool_registry.hooks.register(communication_hook);
-    tracing::info!("BLUE70: AgentCommunicationHook registered with ToolHookRegistry");
-
     // ── GuardianHook: config-gated model-based tool review ──────────
     // Enabled via `guardian_enabled = true` + `guardian_agent = "agent_name"` in config.
     // When enabled, every tool call dispatched through the ToolRegistry (ACP
@@ -444,6 +435,7 @@ pub async fn new_acp_server(
     // level, not at the HarnessBus level — it does NOT intercept
     // "chat.execute" or other non-tool operations.
     {
+        let tool_registry = crate::acp::r#impl::request::tools_pack::global_tool_registry();
         let guardian_enabled = app_config
             .as_ref()
             .map(|cfg| cfg.security.guardian_enabled)

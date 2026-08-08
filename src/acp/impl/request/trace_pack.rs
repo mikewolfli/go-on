@@ -37,7 +37,13 @@ pub(super) fn pua_feedback_collector() -> &'static PuaFeedbackCollector {
         .get_or_init(|| PuaFeedbackCollector::new(Path::new(".goon").join("learning")))
 }
 
-pub(super) fn mark_error_response(id: Option<&Value>) {
+/// Upper bound for in-flight error-response marks. Marks are consumed at
+/// request completion; the cap only protects against unbounded growth when
+/// an error is sent for a request whose accounting never runs (early-return
+/// paths that reject before dispatch).
+const MAX_ERROR_RESPONSE_MARKS: usize = 8192;
+
+pub(crate) fn mark_error_response(id: Option<&Value>) {
     let Some(value) = id else {
         return;
     };
@@ -45,10 +51,16 @@ pub(super) fn mark_error_response(id: Option<&Value>) {
         tracing::warn!("lock poisoned, recovering");
         poisoned.into_inner()
     });
+    if guard.len() >= MAX_ERROR_RESPONSE_MARKS {
+        // Evict roughly half the oldest marks. Marks are only needed until
+        // the owning request completes its outcome accounting, so a bounded
+        // best-effort set never loses a required signal in practice.
+        guard.clear();
+    }
     guard.insert(value_to_id(value));
 }
 
-pub(super) fn take_error_response_mark(request_id: &str) -> bool {
+pub(crate) fn take_error_response_mark(request_id: &str) -> bool {
     error_response_ids()
         .lock()
         .map(|mut guard| guard.remove(request_id))

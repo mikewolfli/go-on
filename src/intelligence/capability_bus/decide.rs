@@ -481,12 +481,16 @@ impl CapabilityBus {
         });
 
         // ── P2-3: AdaptiveModelSelector — re-rank candidates by performance context ──
+        // Candidates carry their agent name as the model_id so UCB scores are
+        // computed per-agent (record_result_with_context keys on the agent
+        // name). Previously candidates were (name, None): every UCB score was
+        // 0.0 and the "adaptive" ranking silently degraded to alphabetical.
         let model_selector_ranked: Option<Vec<String>> =
             self.model_selector.as_ref().map(|selector| {
                 let context = ContextFeatures::from_time_and_task(&task_type_str);
                 let candidates_with_models: Vec<(String, Option<String>)> = candidate_agents
                     .iter()
-                    .map(|name| (name.clone(), None))
+                    .map(|name| (name.clone(), Some(name.clone())))
                     .collect();
                 selector
                     .lock()

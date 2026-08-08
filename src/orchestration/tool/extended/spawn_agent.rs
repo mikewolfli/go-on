@@ -499,6 +499,8 @@ async fn execute_spawn(
                 let actual_tokens = (response.len() / 4).max(1) as u64;
                 let budget_exceeded = token_budget.is_some_and(|b| actual_tokens > b);
 
+                unregister_spawned_agent(child_path.as_ref()).await;
+
                 return Ok(ToolOutput {
                     success: true,
                     result: Some(serde_json::json!({
@@ -542,17 +544,24 @@ async fn execute_spawn(
                 last_error = Some(err_str.clone());
 
                 // Only retry transient failures.
-                // NOTE: "50" matches 5xx HTTP status codes (500, 502, 503, 504)
-                // without the false-positive risk of a bare `contains("5")`.
+                // 5xx status codes (500/502/503/504) and their usual wording
+                // indicate a transient upstream failure; a bare `contains("50")`
+                // previously matched any error string that happened to include
+                // "50" (line numbers, error codes), triggering spurious retries.
                 let is_transient = err_str.contains("timeout")
                     || err_str.contains("rate_limit")
                     || err_str.contains("429")
-                    || err_str.contains("50")
+                    || err_str.contains("500")
+                    || err_str.contains("502")
+                    || err_str.contains("503")
+                    || err_str.contains("504")
                     || err_str.contains("connection")
                     || err_str.contains("reset");
                 if !is_transient || attempt == MAX_RETRIES {
                     // Drain any remaining tokens to avoid sender/receiver deadlock.
                     while rx.try_recv().is_ok() {}
+
+                    unregister_spawned_agent(child_path.as_ref()).await;
 
                     return Ok(ToolOutput {
                         success: false,
@@ -596,6 +605,8 @@ async fn execute_spawn(
 
                 // Timeout is transient — retry if attempts remain.
                 if attempt == MAX_RETRIES {
+                    unregister_spawned_agent(child_path.as_ref()).await;
+
                     return Ok(ToolOutput {
                         success: false,
                         result: Some(serde_json::json!({
@@ -628,6 +639,8 @@ async fn execute_spawn(
     }
 
     // Should be unreachable — either we returned success or failure in the loop.
+    unregister_spawned_agent(child_path.as_ref()).await;
+
     Ok(ToolOutput {
         success: false,
         result: None,
@@ -646,6 +659,19 @@ async fn execute_spawn(
             Some("sub_agent_exhausted"),
         )),
     })
+}
+
+/// Remove a finished spawned agent from the CommunicationBus AgentTree so
+/// the tree does not accumulate every spawn (previously nodes were registered
+/// and never removed — a long-running leak in `governance.status` counts).
+/// The `spawn` namespace node itself is kept; only the per-fork child is
+/// removed.
+async fn unregister_spawned_agent(child_path: Option<&AgentPath>) {
+    if let Some(cp) = child_path {
+        if let Some(bus) = communication_bus() {
+            let _ = bus.remove_agent(cp).await;
+        }
+    }
 }
 
 /// Extract a named section from the response text.

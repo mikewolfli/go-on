@@ -191,7 +191,7 @@ go-on 采用**子总线能力架构** —— 7 个特性门控子总线（tool�
 
 ### 请求处理分发
 
-所有 148 个 JSON-RPC handler 返回统一的 `DispatchOutput` 枚举，dispatch 层自动序列化为对应的传输响应：
+所有 149 个 JSON-RPC handler 返回统一的 `DispatchOutput` 枚举，dispatch 层自动序列化为对应的传输响应：
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain

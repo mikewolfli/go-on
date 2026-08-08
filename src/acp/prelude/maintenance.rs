@@ -26,18 +26,6 @@ pub struct MaintenanceSnapshot {
     pub last_memory_expired_removed: u64,
     /// Last error message if any
     pub last_error: Option<String>,
-    /// Last maintenance timestamp (legacy)
-    pub last_maintenance: i64,
-    /// Maintenance interval in seconds (legacy)
-    pub maintenance_interval: i64,
-    /// Next maintenance due timestamp (legacy)
-    pub next_maintenance_due: i64,
-    /// Maintenance tasks completed (legacy)
-    pub tasks_completed: u32,
-    /// Maintenance tasks failed (legacy)
-    pub tasks_failed: u32,
-    /// Whether maintenance is in progress (legacy)
-    pub maintenance_in_progress: bool,
 }
 
 // ============================================================================
@@ -59,7 +47,6 @@ impl Default for MaintenanceTracker {
 impl MaintenanceTracker {
     /// Create a new maintenance tracker
     pub fn new() -> Self {
-        let now = now_ts();
         Self {
             snapshot: MaintenanceSnapshot {
                 running: false,
@@ -68,12 +55,6 @@ impl MaintenanceTracker {
                 last_completed_at: None,
                 last_memory_expired_removed: 0,
                 last_error: None,
-                last_maintenance: now,
-                maintenance_interval: 3600, // 1 hour default
-                next_maintenance_due: now + 3600,
-                tasks_completed: 0,
-                tasks_failed: 0,
-                maintenance_in_progress: false,
             },
         }
     }

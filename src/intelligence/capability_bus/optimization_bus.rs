@@ -346,11 +346,19 @@ impl OptimizationBus {
         profile.total_optimizations = profile.total_optimizations.wrapping_add(1);
 
         // Determine candidate agent based on priority.
+        // Production callers pass "high" (full-auto mode) and "balanced"
+        // (default). Previously those fell through to `_ => None`, so every
+        // recommendation returned the hard-coded claude-sonnet-4 fallback and
+        // the whole hot-path call produced no decision input. Map them to the
+        // real optimizers: "high" prefers the most reliable known agent,
+        // "balanced" prefers the lowest-latency known agent.
         let suggested_agent = match priority {
             "cost" => cost.suggest_cheaper_agent(task_type, token_count),
             "speed" => speed.fastest_agent(),
             "reliability" => reliability.suggest_most_reliable(),
-            _ => None, // balanced — let the caller decide.
+            "high" => reliability.suggest_most_reliable(),
+            "balanced" => speed.fastest_agent(),
+            _ => None, // unknown priority — let the caller decide.
         };
 
         let agent = suggested_agent.as_deref().unwrap_or("claude-sonnet-4");
@@ -363,6 +371,8 @@ impl OptimizationBus {
             "cost" => 0.75,
             "speed" => 0.80,
             "reliability" => 0.85,
+            "high" => 0.85,
+            "balanced" => 0.70,
             _ => 0.60,
         };
 
@@ -464,10 +474,12 @@ mod tests {
     fn test_recommend_balanced_priority() {
         let bus = OptimizationBus::new();
         let rec = bus.recommend("code_gen", 5_000, "balanced");
-        // Balanced mode may not suggest an agent.
+        // Balanced maps to the lowest-latency known agent (real suggestion,
+        // not None): costs/duration are computed for the suggested agent.
+        assert!(rec.suggested_agent.is_some());
         assert!(rec.estimated_cost > 0.0);
         assert!(rec.estimated_duration_ms > 0);
-        assert!((rec.confidence - 0.60).abs() < 1e-9);
+        assert!((rec.confidence - 0.70).abs() < 1e-9);
     }
 
     #[test]

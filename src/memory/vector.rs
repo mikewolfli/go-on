@@ -42,7 +42,6 @@ use fastrand;
 use pgvector::Vector;
 #[cfg(not(feature = "backend-postgres"))]
 use rusqlite::{ffi::sqlite3_auto_extension, params, Connection, OptionalExtension};
-use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
 
@@ -628,10 +627,15 @@ impl VectorStore {
                 params![memory_key, phase, query, response, json_value, blob_value, now,],
             )?;
 
-            // BLUE69: Combined eviction — single DELETE ... RETURNING avoids
-            // separate SELECT + DELETE round-trips.
-            const SENTINEL_LIMIT: i64 = i64::MAX;
-            let evicted_keys: Vec<String> = {
+            // Evict only when the table actually exceeds the cap. The
+            // COUNT gate avoids the full-table ORDER BY sort on every normal
+            // write (same pattern as cache.rs / warm_memory).
+            let over_cap: i64 = conn.query_row(
+                "SELECT COUNT(*) - ?1 FROM vector_memory",
+                [self.max_entries as i64],
+                |row| row.get(0),
+            )?;
+            let evicted_keys: Vec<String> = if over_cap > 0 {
                 let mut stmt = conn.prepare(
                     "DELETE FROM vector_memory WHERE memory_key IN (
                         SELECT memory_key FROM vector_memory
@@ -639,11 +643,12 @@ impl VectorStore {
                         LIMIT ?2 OFFSET ?1
                     ) RETURNING memory_key",
                 )?;
-                let rows = stmt
-                    .query_map(params![self.max_entries as i64, SENTINEL_LIMIT], |row| {
-                        row.get::<_, String>(0)
-                    })?;
+                let rows = stmt.query_map(params![self.max_entries as i64, over_cap], |row| {
+                    row.get::<_, String>(0)
+                })?;
                 rows.filter_map(|r| r.ok()).collect()
+            } else {
+                Vec::new()
             };
 
             // Update HNSW index if it exists
@@ -1307,10 +1312,7 @@ fn scored_to_hits(
 
 fn build_memory_key(phase: &str, query_text: &str) -> String {
     let payload = format!("{}|{}", phase, query_text.trim());
-    let mut hasher = Sha256::new();
-    hasher.update(payload.as_bytes());
-    let digest = hasher.finalize();
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    crate::shared::sha256_hex(payload.as_bytes())
 }
 
 #[cfg(all(test, not(feature = "backend-postgres")))]

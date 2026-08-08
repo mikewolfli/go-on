@@ -55,7 +55,7 @@ Go-On 是一个 ACP 运行时代理，集成了多智能体编排能力，可运
 
 - [VS Code 扩展](../vscode-addon/README.md) — IDE 集成（ACP/MCP）
 - [GUI 应用](../cookbook/src/zh-CN/gui.md) — 基于 EGUI/eframe 的桌面应用
-- [Rust SDK](../sdk/rust/README.md) — 程序化访问
+- [Rust SDK](../sdk/rust/src/lib.rs) — 程序化访问（用法见 `sdk/rust/examples/`）
 
 ## 部署
 

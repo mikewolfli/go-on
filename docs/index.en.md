@@ -55,7 +55,7 @@ Go-On is an ACP runtime proxy with integrated multi-agent orchestration, capable
 
 - [VS Code Extension](../vscode-addon/README.md) — IDE integration with ACP/MCP
 - [GUI Application](../cookbook/src/en/gui.md) — EGUI/eframe-based desktop application
-- [Rust SDK](../sdk/rust/README.md) — Programmatic access
+- [Rust SDK](../sdk/rust/src/lib.rs) — Programmatic access (see `sdk/rust/examples/` for usage)
 
 ## Deployment
 

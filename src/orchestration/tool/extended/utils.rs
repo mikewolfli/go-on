@@ -10,7 +10,6 @@ use rand::RngExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 use crate::orchestration::tool::{Tool, ToolInput, ToolOutput};
 
@@ -296,7 +295,7 @@ impl Tool for HashFileTool {
 
         let hash = match algorithm {
             "sha512" => {
-                use sha2::Sha512;
+                use sha2::{Digest, Sha512};
                 let mut hasher = Sha512::new();
                 hasher.update(&data);
                 hasher
@@ -306,16 +305,7 @@ impl Tool for HashFileTool {
                     .collect::<Vec<_>>()
                     .join("")
             }
-            "sha256" => {
-                let mut hasher = Sha256::new();
-                hasher.update(&data);
-                hasher
-                    .finalize()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>()
-                    .join("")
-            }
+            "sha256" => crate::shared::sha256_hex(&data),
             // Unknown algorithms are rejected instead of silently returning a
             // sha256 digest labelled with the requested algorithm name.
             other => {

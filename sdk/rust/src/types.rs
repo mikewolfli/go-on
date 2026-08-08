@@ -304,7 +304,12 @@ pub struct PromptResourceBlock {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcpSessionListResponse {
     pub sessions: Vec<AcpSessionSummary>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Backend serializes this as `nextCursor` (camelCase, schema/agent.rs).
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next_cursor: Option<String>,
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Value>,

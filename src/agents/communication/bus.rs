@@ -66,6 +66,7 @@ pub struct CommunicationBus {
 #[derive(Debug, Default)]
 struct CommunicationMetrics {
     messages_sent: u64,
+    messages_failed: u64,
     forks_created: u64,
 }
 
@@ -115,12 +116,20 @@ impl CommunicationBus {
         self.tree.write().await.register(path, agent_name, metadata)
     }
 
+    /// Remove an agent (and its descendants) from the tree once it finishes
+    /// executing, so the tree does not accumulate every spawned agent.
+    pub async fn remove_agent(&self, path: &AgentPath) -> Vec<AgentPath> {
+        self.tree.write().await.remove_subtree(path)
+    }
+
     /// Send a message.
     pub async fn send_message(&self, msg: AgentMessage) -> Result<(), String> {
         let result = self.messenger.send(msg).await;
-        if result.is_ok() {
-            if let Ok(mut metrics) = self.metrics.write() {
+        if let Ok(mut metrics) = self.metrics.write() {
+            if result.is_ok() {
                 metrics.messages_sent += 1;
+            } else {
+                metrics.messages_failed += 1;
             }
         }
         result
@@ -136,7 +145,7 @@ impl CommunicationBus {
     /// Get the current profile (for governance.status).
     pub async fn profile(&self) -> CommunicationBusProfile {
         // Read metrics first and drop the guard before any await point
-        let (messages_sent, forks_created) = {
+        let (messages_sent, messages_failed, forks_created) = {
             let m = match self.metrics.read() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
@@ -144,14 +153,16 @@ impl CommunicationBus {
                     poisoned.into_inner()
                 }
             };
-            (m.messages_sent, m.forks_created)
+            (m.messages_sent, m.messages_failed, m.forks_created)
         };
         let registered_agents = self.tree.read().await.len();
         CommunicationBusProfile {
             registered_agents,
             messages_sent,
             forks_created,
-            healthy: true,
+            // Honest health: any undelivered message marks the bus unhealthy.
+            // Previously this was hard-coded `true` (a fake metric).
+            healthy: messages_failed == 0,
         }
     }
 
@@ -159,7 +170,7 @@ impl CommunicationBus {
     /// `governance.status`). Agent count degrades to 0 when the tree lock is
     /// contended — counters are always exact.
     pub fn profile_sync(&self) -> CommunicationBusProfile {
-        let (messages_sent, forks_created) = {
+        let (messages_sent, messages_failed, forks_created) = {
             let m = match self.metrics.read() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
@@ -167,14 +178,14 @@ impl CommunicationBus {
                     poisoned.into_inner()
                 }
             };
-            (m.messages_sent, m.forks_created)
+            (m.messages_sent, m.messages_failed, m.forks_created)
         };
         let registered_agents = self.tree.try_read().map(|t| t.len()).unwrap_or(0);
         CommunicationBusProfile {
             registered_agents,
             messages_sent,
             forks_created,
-            healthy: true,
+            healthy: messages_failed == 0,
         }
     }
 }

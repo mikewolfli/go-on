@@ -19,7 +19,7 @@ pub mod validate;
 // ── Re-exports for backward compatibility ─────────────────────────────────
 pub use observe::{
     DiagnosticTriggerSource, EvolutionTrigger, MetricsPoint, MetricsSnapshot, PubsubTriggerSource,
-    RegressionDirection, TickTriggerSource, TriggerSource,
+    RegressionDirection, TriggerSource,
 };
 pub use propose::Analysis;
 pub use validate::{Approval, ApprovalMode};
@@ -97,6 +97,14 @@ impl EvolutionLoop {
     }
 
     /// Register built-in trigger sources for a fully wired evolution loop.
+    ///
+    /// Registers the **real** signal sources only: alert-manager alerts and
+    /// repeated pipeline errors. A blind wall-clock tick is deliberately NOT
+    /// registered: production runs with `AutoApproval` against the real
+    /// project root, and a periodic tick that force-analyzes `src/lib.rs`
+    /// would auto-apply LLM patches every 5 minutes without any signal that
+    /// a problem exists. Evolution must be reactive to real signals, not
+    /// proactive on a timer.
     pub fn with_default_trigger_sources(self) -> Self {
         // Create a shared error-counts map so the evolution loop can
         // inject pipeline failures into the DiagnosticTriggerSource.
@@ -108,10 +116,6 @@ impl EvolutionLoop {
             Arc::clone(&shared_counts),
         );
         let mut slf = self
-            .with_trigger_source(Box::new(TickTriggerSource::new(
-                "default_tick".to_string(),
-                Duration::from_secs(300),
-            )))
             .with_trigger_source(Box::new(observe::AlertManagerTriggerSource::new(
                 "alert_manager_trigger".to_string(),
             )))
@@ -293,6 +297,24 @@ impl EvolutionLoop {
                         result = %verified.summary(),
                         "verification failed after patch"
                     );
+                    // Roll the failed patch back immediately — a change that
+                    // breaks the build/tests must never stay applied to the
+                    // real project tree. The history system's "auto-rollback"
+                    // is advisory only (see evolution_history docs), so this
+                    // is the authoritative rollback path.
+                    if let Err(revert_err) = self.rollback(&patch).await {
+                        error!(
+                            cycle_id = self.cycle_id,
+                            error = %revert_err,
+                            "rollback of failed patch failed"
+                        );
+                    } else {
+                        info!(
+                            cycle_id = self.cycle_id,
+                            target = %patch.target_file,
+                            "rolled back patch after failed verification"
+                        );
+                    }
                     // Record the error pattern in the diagnostic trigger source
                     // so repeated verification failures trigger evolution cycles.
                     if let Some(ref counts) = self.diagnostic_error_counts {
@@ -305,8 +327,6 @@ impl EvolutionLoop {
                             ))
                             .or_insert(0) += 1;
                     }
-                    // Record the failure but don't roll back here —
-                    // the history system handles auto-rollback.
                 }
 
                 // Capture values before they are moved below.
@@ -562,6 +582,18 @@ impl EvolutionLoop {
             .map_err(|e| apply::EvolutionLoopError::PatchApplyFailed(e.to_string()))?;
 
         Ok(patch.clone())
+    }
+
+    /// Reverse a previously-applied patch, restoring the pre-patch file.
+    async fn rollback(&self, patch: &CodePatch) -> Result<u64, apply::EvolutionLoopError> {
+        let sandbox = self
+            .sandbox
+            .as_ref()
+            .ok_or(apply::EvolutionLoopError::NoSandbox)?;
+        sandbox
+            .revert_patch(patch)
+            .await
+            .map_err(|e| apply::EvolutionLoopError::PatchApplyFailed(e.to_string()))
     }
 
     /// Phase 6: Verify the change by building and testing.

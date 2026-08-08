@@ -50,9 +50,11 @@ summary_trigger_messages = 8
 summary_max_chars = 1200
 
 # ── Runtime Configuration ─────────────────────────────────────────────
+[protocol]
+mode = "adaptive"
+
 [runtime]
-protocol_mode = "acp"
-maintenance_interval_seconds = 120
+maintenance_interval_seconds = 60
 health_interval_seconds = 60
 shutdown_drain_seconds = 60
 acp_http_bind_addr = "0.0.0.0:8090"

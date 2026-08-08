@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -383,12 +383,14 @@ impl SandboxExecutor {
         // baseline. The clippy invocation is a blocking child process (can take
         // seconds), so it is offloaded to the blocking pool; a baseline health
         // score below the minimum blocks the patch.
-        let pre_quality =
-            tokio::task::spawn_blocking(crate::intelligence::code_quality::run_code_quality_scan)
-                .await
-                .map_err(|join_err| {
-                    SandboxError::QualityGate(format!("quality scan panicked: {join_err}"))
-                })?;
+        let workdir = self.workdir.clone();
+        let pre_quality = tokio::task::spawn_blocking(move || {
+            crate::intelligence::code_quality::run_code_quality_scan(&workdir)
+        })
+        .await
+        .map_err(|join_err| {
+            SandboxError::QualityGate(format!("quality scan panicked: {join_err}"))
+        })?;
         tracing::info!(
             sandbox = %self.instance_id,
             health_score = pre_quality.health_score,
@@ -413,6 +415,24 @@ impl SandboxExecutor {
         );
 
         Ok(changed)
+    }
+
+    /// Revert a previously-applied patch by re-applying its inverse.
+    ///
+    /// Restores the target file to its pre-patch content. Safe to call only
+    /// for patches applied by this sandbox: `original_lines` refers to the
+    /// pre-patch file and `patched_lines` to the post-patch file, so swapping
+    /// them yields an exact inverse diff.
+    pub async fn revert_patch(&self, patch: &CodePatch) -> Result<u64, SandboxError> {
+        let reversed = CodePatch {
+            target_file: patch.target_file.clone(),
+            original_lines: patch.patched_lines.clone(),
+            patched_lines: patch.original_lines.clone(),
+            diff: patch.diff.clone(),
+            reasoning: format!("revert of {}", patch.reasoning),
+            patch_id: patch.patch_id,
+        };
+        reversed.apply_to_file(&self.workdir).await
     }
 
     /// Build the project with the given Cargo profile.
@@ -527,12 +547,16 @@ impl SandboxExecutor {
             }
         };
 
-        let _elapsed = start.elapsed().as_millis() as u64;
+        let elapsed = start.elapsed().as_millis() as u64;
 
         if output.status.success() {
-            BuildResult::TestFailure {
-                failed: 0,
-                passed: 1,
+            // Tests passed — report a real Success so `is_success()` is true.
+            // Previously this returned `TestFailure { failed: 0, passed: 1 }`,
+            // which made every evolution cycle's verify() fail and fed
+            // verify_failure counters back into the diagnostic trigger.
+            BuildResult::Success {
+                time_ms: elapsed,
+                warnings: 0,
             }
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -610,9 +634,26 @@ impl SandboxExecutor {
         Ok(())
     }
 
+    /// True when the sandbox workdir is an isolated workspace that the sandbox
+    /// owns (e.g. a temp dir). When the workdir is the real project root the
+    /// sandbox must NOT delete build artifacts (`target/`) or evolution
+    /// history (`.goon/`) — those belong to the production tree.
+    fn is_isolated_workspace(&self) -> bool {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        self.workdir != Path::new(".") && self.workdir != cwd
+    }
+
     /// Clean up the sandbox workspace by removing temporary files.
     pub async fn cleanup(&self) {
         info!(sandbox = %self.instance_id, "cleaning up sandbox");
+
+        if !self.is_isolated_workspace() {
+            debug!(
+                sandbox = %self.instance_id,
+                "cleanup skipped: workdir is the real project root"
+            );
+            return;
+        }
 
         // Remove target directory to free disk space
         let target_dir = self.workdir.join("target");
@@ -721,7 +762,12 @@ impl SandboxExecutor {
 
 impl Drop for SandboxExecutor {
     fn drop(&mut self) {
-        // Best-effort cleanup on drop — do not block
+        // Best-effort cleanup on drop — do not block. Only removes the target
+        // dir of an ISOLATED sandbox workspace; the real project root (".")
+        // must never have its build cache deleted by a dropped sandbox.
+        if !self.is_isolated_workspace() {
+            return;
+        }
         let workdir = self.workdir.clone();
         let instance_id = self.instance_id;
         // Only spawn if a tokio runtime is active (safe during sync test teardown).

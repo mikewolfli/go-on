@@ -396,7 +396,16 @@ async fn execute_single_tool(
                 }
             }
             match tool_result {
-                Some(out) => (out, true),
+                Some(out) => {
+                    // success must reflect the tool's real outcome — a tool
+                    // that ran but returned error: Some(..) is a FAILURE.
+                    // Previously this hardcoded `true`, which defeated the
+                    // circuit breaker (failure_count never grew) and made
+                    // autonomy loops report "tools executed" even when every
+                    // tool failed.
+                    let success = out.success;
+                    (out, success)
+                }
                 None => {
                     let err_msg = last_error.unwrap_or_else(|| {
                         "tool execution stopped (retries exhausted)".to_string()

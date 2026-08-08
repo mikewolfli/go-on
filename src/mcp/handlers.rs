@@ -369,20 +369,19 @@ impl McpServer {
                         _ => "info",
                     };
 
-                    // Update RUST_LOG so any future subscribers pick it up.
-                    std::env::set_var("RUST_LOG", directive);
-
-                    // Try to reload the active tracing filter immediately.
+                    // Reload the active tracing filter immediately. The
+                    // legacy `std::env::set_var("RUST_LOG", ...)` was removed:
+                    // set_var is documented as unsound in multithreaded
+                    // programs (see src/shared/secret_override.rs) and only
+                    // affects hypothetical future subscribers, not the live
+                    // filter — reload_log_filter is the real mechanism.
                     match crate::observability::telemetry_enhanced::reload_log_filter(directive) {
                         Ok(()) => {
-                            info!(
-                                "MCP: logging level set to \"{}\" (RUST_LOG={})",
-                                lvl, directive
-                            );
+                            info!("MCP: logging level set to \"{}\" (filter reloaded)", lvl);
                         }
                         Err(e) => {
                             warn!(
-                                "MCP: logging level stored as \"{}\" but filter not reloaded: {}; RUST_LOG set for future subscribers",
+                                "MCP: logging level stored as \"{}\" but filter not reloaded: {}",
                                 lvl, e
                             );
                         }

@@ -173,14 +173,18 @@ mod test_suite {
     async fn test_maintenance_cycle() {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
-        // Test that maintenance tracker is accessible
+        // Test that maintenance tracker is accessible and starts in the
+        // idle state (the legacy `last_maintenance` field was removed — it
+        // was never updated after construction).
         let maintenance_snapshot = server
             .maintenance()
             .read()
             .map(|guard| guard.snapshot())
             .unwrap_or_default();
-        let last_maintenance = maintenance_snapshot.last_maintenance;
-        assert!(last_maintenance >= 0);
+        assert!(!maintenance_snapshot.running);
+        assert_eq!(maintenance_snapshot.cycles_total, 0);
+        assert!(maintenance_snapshot.last_started_at.is_none());
+        assert!(maintenance_snapshot.last_completed_at.is_none());
     }
 
     /// Test circuit breaker functionality

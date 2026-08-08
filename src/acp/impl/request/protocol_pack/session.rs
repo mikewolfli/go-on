@@ -404,10 +404,8 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
 }
 
 /// Send a typed session/update notification chunk.
-pub async fn send_chunk(server: &AcpServer, session_id: &str, chunk_type: &str, text: &str) {
-    use crate::schema::{
-        ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
-    };
+pub async fn send_chunk(_server: &AcpServer, session_id: &str, chunk_type: &str, text: &str) {
+    use crate::schema::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
     let update = match chunk_type {
         "agent_thought_chunk" => SessionUpdate::AgentThoughtChunk(ContentChunk::new(
             ContentBlock::Text(TextContent::new(text)),
@@ -416,10 +414,9 @@ pub async fn send_chunk(server: &AcpServer, session_id: &str, chunk_type: &str, 
             TextContent::new(text),
         ))),
     };
-    let notif = SessionNotification::new(session_id.into(), update);
-    if let Ok(value) = serde_json::to_value(&notif) {
-        let _ = crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
-    }
+    // Delegate to the single envelope writer (previously this rebuilt the
+    // jsonrpc envelope via io::send_notification).
+    send_session_update(session_id, update).await;
 }
 
 /// Send a session/update notification via the global transport (no &AcpServer needed).
@@ -441,7 +438,10 @@ async fn send_session_update_notification(session_id: &str, chunk_type: &str, te
     send_session_update(session_id, update).await;
 }
 
-async fn send_session_update(session_id: &str, update: SessionUpdate) {
+/// Single envelope writer for `session/update` notifications: serializes a
+/// `SessionNotification` and writes the jsonrpc envelope on the current
+/// transport. All session/update emissions route through this function.
+pub(crate) async fn send_session_update(session_id: &str, update: SessionUpdate) {
     use crate::schema::SessionNotification;
     let notif = SessionNotification::new(session_id.into(), update);
     if let Ok(value) = serde_json::to_value(&notif) {
@@ -453,6 +453,27 @@ async fn send_session_update(session_id: &str, update: SessionUpdate) {
         if let Some(transport) = crate::acp::transport::get_current_transport() {
             let _ = transport.write_json_line(&payload).await;
         }
+    }
+}
+
+/// Remove all permission state associated with a closed/deleted session:
+/// the granted-permission map, pending permission requests, and (in
+/// multi-users-server) the tenant rate-limiter entry. Shared by
+/// `session_close_payload` and `session_delete_payload` (previously two
+/// identical cleanup blocks).
+async fn cleanup_session_permission_state(_server: &AcpServer, session_id: &str) {
+    {
+        let mut permissions = super::acp_permission_state().write().await;
+        permissions.remove(session_id);
+    }
+    {
+        let mut pending = super::acp_pending_permission_requests().write().await;
+        pending.remove(session_id);
+    }
+
+    #[cfg(feature = "multi-users-server")]
+    if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
+        limiter.evict_tenant(session_id);
     }
 }
 
@@ -609,19 +630,7 @@ pub async fn session_close_payload(_server: &AcpServer, params: Value) -> Result
         }
 
         // 2. Clean up any permission state associated with this session
-        {
-            let mut permissions = super::acp_permission_state().write().await;
-            permissions.remove(session_id);
-        }
-        {
-            let mut pending = super::acp_pending_permission_requests().write().await;
-            pending.remove(session_id);
-        }
-
-        #[cfg(feature = "multi-users-server")]
-        if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
-            limiter.evict_tenant(session_id);
-        }
+        cleanup_session_permission_state(_server, session_id).await;
     }
     Ok(serde_json::to_value(
         &crate::schema::CloseSessionResponse { meta: None },
@@ -768,19 +777,7 @@ pub async fn session_delete_payload(_server: &AcpServer, params: Value) -> Resul
             );
 
             // Clean up permission state associated with this session
-            {
-                let mut permissions = super::acp_permission_state().write().await;
-                permissions.remove(session_id);
-            }
-            {
-                let mut pending = super::acp_pending_permission_requests().write().await;
-                pending.remove(session_id);
-            }
-
-            #[cfg(feature = "multi-users-server")]
-            if let Some(ref limiter) = _server.rate_limiting.rate_limit_middleware {
-                limiter.evict_tenant(session_id);
-            }
+            cleanup_session_permission_state(_server, session_id).await;
         } else {
             tracing::warn!(
                 target: "acp::protocol_pack",

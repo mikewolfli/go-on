@@ -38,10 +38,13 @@ pub(super) async fn send_error(
     message: String,
     data: Option<Value>,
 ) -> Result<()> {
-    mark_error_response(id.as_ref());
-    // NOTE: platform-context injection happens once in `io::send_error`
-    // (idempotent); the pua/error-contract enrichment below is applied first
-    // so the final payload carries both the contract data and the context.
+    // NOTE: the error-response accounting mark is applied centrally in
+    // `io::send_error` (the single choke point for error responses), so
+    // early-rejection paths and dispatch-phase errors are counted
+    // consistently. Platform-context injection also happens once in
+    // `io::send_error` (idempotent); the pua/error-contract enrichment below
+    // is applied first so the final payload carries both the contract data
+    // and the context.
     let data = match take_pua_report(id.as_ref()) {
         Some(encoded) => Some(inject_pua_report_into_error_data(data, encoded)),
         None => data,

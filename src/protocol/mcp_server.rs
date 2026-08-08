@@ -501,6 +501,30 @@ impl McpHttpServer {
         self.rate_limiter = Some(rate_limiter);
         self
     }
+
+    /// Wire mTLS/TLS configuration from `RuntimeConfig`.
+    ///
+    /// Previously the acceptor fields were private with no setters, so MCP
+    /// HTTP could never serve TLS/mTLS even when configured — the
+    /// `effective_acceptor` logic in `run()` was unreachable dead code.
+    /// ACP HTTP reads the same RuntimeConfig fields directly; this builder
+    /// gives MCP HTTP parity. When all three paths are non-empty the
+    /// acceptor is built lazily in `run()` (client CA verification is active
+    /// whenever `mtls_ca_cert_path` is set).
+    pub fn with_mtls_config(
+        mut self,
+        mtls_enabled: bool,
+        mtls_ca_cert_path: &str,
+        mtls_server_cert_path: &str,
+        mtls_server_key_path: &str,
+    ) -> Self {
+        if mtls_enabled && !mtls_server_cert_path.is_empty() && !mtls_server_key_path.is_empty() {
+            self.mtls_ca_cert_path = Some(mtls_ca_cert_path.to_string());
+            self.mtls_server_cert_path = Some(mtls_server_cert_path.to_string());
+            self.mtls_server_key_path = Some(mtls_server_key_path.to_string());
+        }
+        self
+    }
 }
 
 async fn handle_http_connection(

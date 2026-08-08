@@ -120,10 +120,19 @@ impl AgentMemoryBus {
         // the in-memory store while the vector fast path searched a phase that
         // nothing ever wrote — making `[AgentMemoryBus context]` always empty
         // once a vector store was attached.
+        //
+        // Multi-user isolation: the phase is namespaced per user
+        // (`agent_memory:<uid>`), matching the in-memory user_id filter.
+        // Without this, user B could retrieve user A's vector memories.
         if let Some(ref vs) = self.vector_store {
+            let effective_uid = user_id.or(self.user_id.as_deref());
+            let phase = match effective_uid {
+                Some(uid) => format!("agent_memory:{}", uid),
+                None => "agent_memory".to_string(),
+            };
             let _ = vs
                 .clone()
-                .upsert("agent_memory", task_description, &entry.content)
+                .upsert(&phase, task_description, &entry.content)
                 .await;
         }
 
@@ -203,13 +212,15 @@ impl AgentMemoryBus {
     ) -> Vec<MemoryEntry> {
         let effective_user_id = user_id.or(self.user_id.as_deref());
 
-        // Fast path: vector similarity search via VectorStore
+        // Fast path: vector similarity search via VectorStore. The phase is
+        // namespaced per user (see store_insight) so cross-user retrieval is
+        // impossible.
         if let Some(ref vs) = self.vector_store {
-            match vs
-                .clone()
-                .search("agent_memory", query, limit, 0.0, 512)
-                .await
-            {
+            let phase = match effective_user_id {
+                Some(uid) => format!("agent_memory:{}", uid),
+                None => "agent_memory".to_string(),
+            };
+            match vs.clone().search(&phase, query, limit, 0.0, 512).await {
                 Ok((hits, _)) if !hits.is_empty() => {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

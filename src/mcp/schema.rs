@@ -93,9 +93,10 @@ impl McpInitializeResult {
 /// entry points:
 /// - `tools` / `resources` / `prompts`: list+read endpoints exist in the
 ///   native handler and the ACP bridge (round-22 parity closure).
-/// - `sampling` is deliberately NOT advertised: the bridge rejects
-///   `mcp.sampling.createMessage` with "not supported" — declaring it would
-///   be a declaration-vs-implementation drift (round-23 record, fixed).
+/// - `sampling` is deliberately NOT advertised: the native MCP handler
+///   implements `mcp.sampling.createMessage`, but the ACP bridge does not
+///   expose a sampling backend, so advertising it would over-promise for
+///   bridge-routed requests.
 /// - No change-notification event source exists for resources, tools, or
 ///   prompts (lists are static), so `listChanged` is NOT advertised — a server
 ///   must not declare listChanged when it never sends the corresponding

@@ -322,9 +322,22 @@ impl AudioProcessor {
 
         result.processing_duration = start.elapsed();
 
-        // Apply diarization post-processing if enabled.
+        // Diarization is requested in the SAME transcription call via the
+        // `diarize_speaker_count` form field (see call_openai_whisper_api),
+        // so speaker labels come back in the segments directly. Previously
+        // this ran a second full transcription and zip-merged segments, which
+        // doubled API cost and mismatched segment boundaries.
         if self.config.enable_diarization && result.segments.iter().all(|s| s.speaker.is_none()) {
-            result = self.diarize_via_openai(audio, format, result);
+            result.metadata.insert(
+                "diarization".to_string(),
+                "requested but no speaker labels returned by backend".to_string(),
+            );
+        }
+        if self.config.enable_diarization {
+            result.metadata.insert(
+                "diarization_max_speakers".to_string(),
+                self.config.max_speakers.unwrap_or(2).to_string(),
+            );
         }
 
         result.metadata.insert(
@@ -373,86 +386,11 @@ impl AudioProcessor {
     // Speaker diarization
     // -----------------------------------------------------------------------
 
-    /// Diarization via OpenAI Whisper API.
-    /// Diarization via OpenAI Whisper API (if the backend is OpenAI).
-    /// The API supports `diarize_speaker_count` and `response_format=verbose_json`
-    /// to return speaker labels in the segments.
-    fn diarize_via_openai(
-        &self,
-        audio: &[u8],
-        format: AudioFormat,
-        mut result: Transcription,
-    ) -> Transcription {
-        let api_key = match &self.config.openai_api_key {
-            Some(k) if !k.is_empty() => k.clone(),
-            _ => {
-                result
-                    .metadata
-                    .insert("diarization".to_string(), "openai (skipped)".to_string());
-                result
-                    .metadata
-                    .insert("diarization_error".to_string(), "no API key".to_string());
-                return result;
-            }
-        };
-
-        let model = self
-            .config
-            .openai_model
-            .clone()
-            .unwrap_or_else(|| "whisper-1".to_string());
-        let max_speakers = self.config.max_speakers.unwrap_or(2);
-
-        // Build a config that includes diarization parameters.
-        let diarize_config = AudioProcessorConfig {
-            prompt: self.config.prompt.clone(),
-            temperature: self.config.temperature,
-            ..Default::default()
-        };
-
-        match call_openai_whisper_api(
-            &api_key,
-            &model,
-            audio,
-            format.mime_type(),
-            &AudioProcessorConfig {
-                prompt: diarize_config.prompt,
-                temperature: diarize_config.temperature,
-                // Override the language hint so it matches the original.
-                language_hint: Some(result.language.clone()),
-                ..AudioProcessorConfig {
-                    backend: SttBackend::OpenAIWhisper,
-                    ..Default::default()
-                }
-            },
-        ) {
-            Ok(diarized) => {
-                // Merge speaker labels from the diarized response into our segments.
-                for (seg, dseg) in result.segments.iter_mut().zip(diarized.segments.iter()) {
-                    if let Some(ref speaker) = dseg.speaker {
-                        seg.speaker = Some(speaker.clone());
-                    }
-                }
-                result
-                    .metadata
-                    .insert("diarization".to_string(), "openai".to_string());
-                result.metadata.insert(
-                    "diarization_max_speakers".to_string(),
-                    max_speakers.to_string(),
-                );
-            }
-            Err(e) => {
-                result
-                    .metadata
-                    .insert("diarization".to_string(), "openai (failed)".to_string());
-                result
-                    .metadata
-                    .insert("diarization_error".to_string(), e.to_string());
-            }
-        }
-
-        result
-    }
+    // Diarization is handled inside `call_openai_whisper_api`: when
+    // `enable_diarization` is set, the single transcription request includes
+    // `diarize_speaker_count`, so speaker labels arrive in the segments.
+    // The former `diarize_via_openai` second-transcription path was removed
+    // (it doubled API cost and zip-merged misaligned segments).
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +449,16 @@ fn call_openai_whisper_api(
         form = form.text("prompt", prompt.clone());
     }
     form = form.text("temperature", config.temperature.to_string());
+
+    // Diarization: request speaker labels in the SAME call. The OpenAI
+    // Whisper API returns speaker tags per segment when `diarize_speaker_count`
+    // is present with `response_format=verbose_json`. Previously diarization
+    // was a separate second transcription (2x cost) and `max_speakers` was
+    // never actually sent to the API.
+    if config.enable_diarization {
+        let speaker_count = config.max_speakers.unwrap_or(2);
+        form = form.text("diarize_speaker_count", speaker_count.to_string());
+    }
 
     let resp = client
         .post("https://api.openai.com/v1/audio/transcriptions")

@@ -41,6 +41,13 @@ pub async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -
 /// Send error response
 ///
 /// This function replaces the `AcpServer::send_error` method.
+///
+/// This is the single choke point through which every JSON-RPC error response
+/// flows, so it is also the single place that marks the request id for outcome
+/// accounting (request.rs consumes the mark at request completion). Marking
+/// here (instead of at individual call sites) guarantees that dispatch-phase
+/// errors — `io::respond` Err branches, `DispatchOutput::Error`, stream error
+/// events, chat session forwarding — are all counted as failed requests.
 pub async fn send_error(
     server: &AcpServer,
     id: Option<Value>,
@@ -48,6 +55,7 @@ pub async fn send_error(
     message: String,
     data: Option<Value>,
 ) -> Result<()> {
+    crate::acp::r#impl::request::mark_error_response(id.as_ref());
     // Inject platform context into error data for consistency with chat_pack::send_error.
     // Always inject even when data is None (creates a minimal context object).
     let data = Some(

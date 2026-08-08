@@ -90,7 +90,7 @@ mod metrics_pack;
 pub mod prompts_pack;
 pub(crate) mod protocol;
 pub(crate) mod protocol_pack;
-pub(crate) use self::trace_pack::tool_budget_trackers;
+pub(crate) use self::trace_pack::{mark_error_response, tool_budget_trackers};
 mod pua_pack;
 mod repro_handlers;
 pub(crate) use dispatch::{dispatch_to_client, DispatchOutput};
@@ -180,6 +180,15 @@ pub fn authenticate_request(
     Box<crate::acp::r#impl::session::TokenIntrospectResult>,
 > {
     use auth_middleware::{AuthMiddleware, HttpAuthProvider, JsonRpcAuthProvider};
+
+    // The `authenticate` method IS the credential handshake: it must reach
+    // its handler so credentials can be presented. Gating it here would make
+    // authentication impossible whenever user_auth_enabled is set (every
+    // request — including authenticate itself — would be rejected for
+    // missing credentials). The handler performs the real validation.
+    if request.method == "authenticate" {
+        return Ok(None);
+    }
 
     let provider: &dyn auth_middleware::AuthProvider = if let Some(headers) = http_headers {
         &HttpAuthProvider { headers }
@@ -637,7 +646,11 @@ pub async fn handle_request(
     // returns above and the dispatch below).
     let _drain_permit = server.drain_guard.acquire().await;
     if _drain_permit.is_none() {
-        // Server is draining — reject new requests immediately.
+        // Server is draining — reject new requests immediately. The
+        // active-request counter was incremented above, so it must be
+        // decremented here: this early return skips the accounting tail
+        // (request.rs request-complete path).
+        server.observability.metrics.dec_active_requests();
         return send_error(
             server,
             request.id,

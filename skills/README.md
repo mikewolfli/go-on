@@ -47,9 +47,9 @@ Every PR that modifies `skills/` triggers the `skill-market.yml` workflow:
 4. Submit a Pull Request
 4. After review and merge, the index is auto-updated
 
-## Available Skills (49 skills)
+## Available Skills (44 skills)
 
-### Built-in Skills (37)
+### Built-in Skills (35)
 
 | Skill | Tags | Description |
 |-------|------|-------------|
@@ -88,14 +88,12 @@ Every PR that modifies `skills/` triggers the `skill-market.yml` workflow:
 | [web-scraper](web-scraper/SKILL.md) | web, scraping, data-extraction | Scrapes and extracts data from websites |
 | [**workflow-optimizer**](workflow-optimizer/SKILL.md) | workflow, optimization, pipeline | Analyzes and optimizes multi-step workflows |
 
-### GRILL Skills (12)
+### GRILL Skills (10)
 
 | Skill | Source | Description |
 |-------|--------|-------------|
 | [grilling](grilling/SKILL.md) | productivity | Relentless one-at-a-time interview to stress-test plans/decisions |
-| [batch-grill-me](batch-grill-me/SKILL.md) | productivity | Batch-mode grilling — all frontier questions per round with sub-agent dispatch |
 | [grill-with-docs](grill-with-docs/SKILL.md) | engineering | Grilling + domain-modeling that produces ADRs and glossary |
-| [loop-me](loop-me/SKILL.md) | productivity | Grilling specialized for recurring life/workflow design |
 | [handoff](handoff/SKILL.md) | productivity | Compact session handoff documents for cross-session continuity |
 | [code-review](code-review/SKILL.md) | engineering | Two-axis (Standards + Spec) code review with parallel sub-agents |
 | [diagnosing-bugs](diagnosing-bugs/SKILL.md) | engineering | 6-phase structured debugging protocol |

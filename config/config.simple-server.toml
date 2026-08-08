@@ -28,8 +28,10 @@ summary_enabled = true
 summary_trigger_messages = 8
 summary_max_chars = 1200
 
+[protocol]
+mode = "adaptive"
+
 [runtime]
-protocol_mode = "acp"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 45

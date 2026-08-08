@@ -179,11 +179,6 @@ pub struct CapabilityBusProfile {
     pub memory_cache_hit_rate: f64,
     #[cfg(feature = "sub-bus-memory")]
     pub memory_total_entries: u32,
-    // BLUE70: Consolidated bus metrics
-    pub unified_knowledge_insight_count: usize,
-    pub unified_knowledge_experience_count: usize,
-    pub reinforcement_table_size: usize,
-    pub learning_optimization_event_count: usize,
     #[cfg(feature = "sub-bus-distributed-memory")]
     pub distributed_memory_peers: u32,
     #[cfg(feature = "sub-bus-distributed-memory")]
@@ -248,10 +243,6 @@ impl Default for CapabilityBusProfile {
             council_active_members: 0,
             evolve_timeout_count: 0,
             council_pending_proposals: 0,
-            unified_knowledge_insight_count: 0,
-            unified_knowledge_experience_count: 0,
-            reinforcement_table_size: 0,
-            learning_optimization_event_count: 0,
         }
     }
 }
@@ -703,21 +694,6 @@ impl CapabilityBus {
         p.evolve_timeout_count = self
             .evolve_timeout_count
             .load(std::sync::atomic::Ordering::Relaxed);
-
-        // BLUE70: Consolidated bus profile metrics
-        {
-            let ukb = crate::read_or_recover!(&self.unified_knowledge_bus, "intelligence");
-            p.unified_knowledge_insight_count = ukb.insight_count();
-            p.unified_knowledge_experience_count = ukb.experience_count();
-        }
-        {
-            let rb = crate::read_or_recover!(&self.reinforcement_bus, "intelligence");
-            p.reinforcement_table_size = rb.table_size();
-        }
-        {
-            let lob = crate::read_or_recover!(&self.learning_optimization_bus, "intelligence");
-            p.learning_optimization_event_count = lob.event_count();
-        }
 
         // Skill evolution metrics
         #[cfg(feature = "sub-bus-tool")]

@@ -17,8 +17,7 @@ use serde::{Deserialize, Serialize};
 
 /// A single step in an execution plan
 ///
-/// Note: Will eventually be unified with [`BrainLoopStep`](crate::orchestration::brain_loop::BrainLoopStep).
-/// For now, this is the canonical step type used by `Planner::plan()`.
+/// This is the canonical step type used by `Planner::plan()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
     pub step_id: String,

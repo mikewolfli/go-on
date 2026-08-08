@@ -20,7 +20,6 @@ pub enum EvolutionLoopError {
     #[error("no sandbox executor configured")]
     NoSandbox,
 
-    /// A trigger source failed to poll.
     /// Patch application failed.
     #[error("patch application failed: {0}")]
     PatchApplyFailed(String),

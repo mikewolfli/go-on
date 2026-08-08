@@ -1569,16 +1569,7 @@ impl AcpServer {
                 meta: None,
             }),
         );
-        if let Ok(value) = serde_json::to_value(&notif) {
-            let payload = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "session/update",
-                "params": value,
-            });
-            if let Some(transport) = crate::acp::transport::get_current_transport() {
-                let _ = transport.write_json_line(&payload).await;
-            }
-        }
+        emit_session_update(notif).await;
     }
 
     /// Emit a standard `ToolCallUpdate` with status `InProgress` when a tool starts executing.
@@ -1601,16 +1592,7 @@ impl AcpServer {
             meta: None,
         });
         let notif = SessionNotification::new(session_id.to_string().into(), update);
-        if let Ok(value) = serde_json::to_value(&notif) {
-            let payload = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "session/update",
-                "params": value,
-            });
-            if let Some(transport) = crate::acp::transport::get_current_transport() {
-                let _ = transport.write_json_line(&payload).await;
-            }
-        }
+        emit_session_update(notif).await;
     }
 
     /// Emit a standard `ToolCallUpdate` when a tool completes (success or failure).
@@ -1644,16 +1626,7 @@ impl AcpServer {
             meta: None,
         });
         let notif = SessionNotification::new(session_id.to_string().into(), update);
-        if let Ok(value) = serde_json::to_value(&notif) {
-            let payload = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "session/update",
-                "params": value,
-            });
-            if let Some(transport) = crate::acp::transport::get_current_transport() {
-                let _ = transport.write_json_line(&payload).await;
-            }
-        }
+        emit_session_update(notif).await;
     }
 
     /// Emit a standard `ToolCallUpdate` with status `Cancelled`
@@ -1678,17 +1651,23 @@ impl AcpServer {
             meta: None,
         });
         let notif = SessionNotification::new(session_id.to_string().into(), update);
-        if let Ok(value) = serde_json::to_value(&notif) {
-            let payload = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "session/update",
-                "params": value,
-            });
-            if let Some(transport) = crate::acp::transport::get_current_transport() {
-                let _ = transport.write_json_line(&payload).await;
-            }
-        }
+        emit_session_update(notif).await;
     }
+}
+
+/// Serialize a `SessionNotification` and write it as a `session/update`
+/// JSON-RPC notification on the current transport.
+///
+/// Single send path for all session/update emissions — previously every
+/// `emit_*` helper re-built the jsonrpc envelope by hand (five copies).
+/// The envelope itself lives in
+/// `request::protocol_pack::session::send_session_update`.
+async fn emit_session_update(notif: SessionNotification) {
+    crate::acp::r#impl::request::protocol_pack::session::send_session_update(
+        &notif.session_id.0,
+        notif.update,
+    )
+    .await;
 }
 
 fn permission_decision_from_result(result: &Value) -> bool {

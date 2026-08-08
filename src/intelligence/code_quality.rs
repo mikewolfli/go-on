@@ -45,12 +45,17 @@ impl CodeQualityReport {
 ///
 /// Runs `cargo clippy` and parses its output to produce a structured
 /// `CodeQualityReport` with per-issue entries and a health score.
-pub fn run_code_quality_scan() -> CodeQualityReport {
+///
+/// The clippy invocation runs in `project_dir` (the directory containing the
+/// Cargo.toml to scan). Previously the scan ran in the process CWD, which
+/// could scan the wrong project when invoked from a sandbox workdir.
+pub fn run_code_quality_scan(project_dir: &std::path::Path) -> CodeQualityReport {
     let mut issues = Vec::new();
     let scanned_at_ms = crate::shared::timestamps::now_ts_ms() as u64;
 
     match std::process::Command::new("cargo")
         .args(["clippy", "--message-format=short", "--quiet"])
+        .current_dir(project_dir)
         .output()
     {
         Ok(output) => {
@@ -149,7 +154,9 @@ mod tests {
 
     #[test]
     fn test_run_code_quality_scan_returns_valid_report() {
-        let report = run_code_quality_scan();
+        // Scan the crate root (same project the test binary lives in).
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let report = run_code_quality_scan(manifest_dir);
 
         // Verify the report has the expected structure.
         // Issues may or may not be present depending on the project state,

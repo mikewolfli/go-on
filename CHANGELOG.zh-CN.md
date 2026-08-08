@@ -38,7 +38,7 @@ cargo clippy --all-targets -D warnings → 零警告
 cargo test --lib                     → 1590 passed / 0 failed
 ```
 
-## [1.5.0] - 2026-08-06
+---
 
 ### 第 39 轮 — 架构统一与加速（2026-08-06/07，docs/log/log-20260806-7.md）
 
@@ -89,7 +89,7 @@ cargo test --lib                     → 1645 passed / 0 failed
 TS/Node/vscode tsc --noEmit、Python py_compile、verify-zed-integration.sh → PASS
 ```
 
-## [1.5.0] - 2026-08-06
+---
 
 ### 第 38 轮 — 遗留 7 项收口（2026-08-06）
 
@@ -178,7 +178,7 @@ TS/Node/vscode tsc --noEmit、Python py_compile、verify-zed-integration.sh → 
 - `cargo test --all-targets`：**3486 passed / 0 failed**。
 - `scripts/gen-provider-catalog.py --check`：双输出 OK（37 providers）。
 
-## [1.5.0] - 2026-08-05
+---
 
 ### 24 轮深度+广度扫描与统一优化（2026-07-24 → 2026-08-05）
 

@@ -60,10 +60,11 @@ start() {
     # Start the backend
     # API keys are managed via system keyring (configured as keyring://go-on/{provider}_api_key)
 
-    # Print current protocol mode from config file
+    # Print current protocol mode from config file ([protocol].mode — the
+    # canonical key; the legacy [runtime].protocol_mode key was removed).
     CONFIG_FILE="../config/config.toml"
-    if grep -q "^protocol_mode" "$DIR/$CONFIG_FILE" 2>/dev/null; then
-        PROTO_MODE=$(grep "^protocol_mode" "$DIR/$CONFIG_FILE" | head -n1 | cut -d'=' -f2 | tr -d ' "')
+    if grep -q "^mode" "$DIR/$CONFIG_FILE" 2>/dev/null; then
+        PROTO_MODE=$(grep "^mode" "$DIR/$CONFIG_FILE" | head -n1 | cut -d'=' -f2 | tr -d ' "')
         echo "[info] current protocol mode: $PROTO_MODE"
     fi
 

@@ -17,7 +17,7 @@ cd cookbook && mdbook serve --open
 
 | 章节 | 说明 |
 |:-----|:-----|
-| [架构总览](../cookbook/src/zh-CN/overview.md) | 系统架构、13 子总线、认知模块 |
+| [架构总览](../cookbook/src/zh-CN/overview.md) | 系统架构、7 子总线、认知模块 |
 | [快速设置](../cookbook/src/zh-CN/setup-wizard.md) | 交互式安装向导 |
 | [后端 CLI](../cookbook/src/zh-CN/backend-cli.md) | 命令行使用 |
 | [高级编排](../cookbook/src/zh-CN/advanced-orchestration.md) | DAG 执行引擎、FullAuto 等 |

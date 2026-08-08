@@ -29,8 +29,10 @@ summary_enabled = true
 summary_trigger_messages = 8
 summary_max_chars = 1200
 
+[protocol]
+mode = "adaptive"
+
 [runtime]
-protocol_mode = "acp"
 deployment_target = "local-dev"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120

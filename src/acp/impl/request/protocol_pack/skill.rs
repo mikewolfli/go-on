@@ -4,10 +4,12 @@ use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 
 use super::*;
-use crate::orchestration::skill_import::{
-    ImportedSkillRecord, SkillImportPolicy, SkillImportRequest, SkillImportStore,
-};
+use crate::orchestration::skill_import::{ImportedSkillRecord, SkillImportRequest};
 use crate::schema::{ImportedSkillRecordView, SkillActionResponse};
+
+// Reuse the single-source-of-truth helper from `request::tools_pack`
+// (the byte-identical private copies were removed).
+use super::super::tools_pack::open_skill_import_store;
 
 // ── Skill helper functions ──────────────────────────────────────────────
 
@@ -21,16 +23,9 @@ fn parse_skill_name_param(params: &Value) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("missing required param: name"))
 }
 
-fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
-    SkillImportPolicy::from_runtime(&server.runtime_config)
-}
-
-fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportStore> {
-    SkillImportStore::load(
-        skill_import_policy(server),
-        server.orchestration_deps.skill_registry.clone(),
-    )
-}
+// `skill_import_policy` / `open_skill_import_store` live in
+// `super::super::tools_pack` (single source of truth); the byte-identical
+// copies previously defined here were removed.
 
 fn normalize_imported_record(record: ImportedSkillRecord) -> Value {
     let resp = ImportedSkillRecordView {

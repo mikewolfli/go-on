@@ -278,6 +278,11 @@ pub async fn dispatch_server(
             s.run().await
         }
         "mcp_http" => {
+            // Extract mTLS config before moving acp_server into the Arc.
+            let mtls_enabled = acp_server.runtime_config.mtls_enabled;
+            let mtls_ca = acp_server.runtime_config.mtls_ca_cert_path.clone();
+            let mtls_cert = acp_server.runtime_config.mtls_server_cert_path.clone();
+            let mtls_key = acp_server.runtime_config.mtls_server_key_path.clone();
             let s = crate::protocol::mcp_server::McpHttpServer::new_with_acp(
                 mcp_registry,
                 Arc::clone(&acp_server.tool_registry),
@@ -286,6 +291,9 @@ pub async fn dispatch_server(
                 acp_http_bind.into(),
                 Some(Arc::new(acp_server)),
             )
+            // Wire the runtime mTLS config so MCP HTTP can actually serve
+            // TLS/mTLS (previously the acceptor fields were unreachable).
+            .with_mtls_config(mtls_enabled, &mtls_ca, &mtls_cert, &mtls_key)
             .with_rate_limiter(Arc::new(
                 crate::protocol::rate_limit::RateLimitMiddleware::new(
                     crate::protocol::rate_limit::TenantRateLimit::default(),

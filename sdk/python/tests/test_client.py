@@ -154,12 +154,16 @@ def test_session_set_mode_sends_mode_id():
 
 
 def test_session_list_parses_minimal_id_shape():
-    """session/list parses the minimal `[{id}]` session summary shape."""
+    """session/list returns the full envelope (sessions + nextCursor)."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            json={"jsonrpc": "2.0", "id": "1", "result": {"sessions": [{"id": "sess-1"}]}},
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"sessions": [{"id": "sess-1"}]},
+            },
         )
 
     client, captured = _client_with_mock_handler(handler)
@@ -170,7 +174,10 @@ def test_session_list_parses_minimal_id_shape():
         return result
 
     result = _run(run())
-    assert result == [SessionInfo(id="sess-1")]
+    # Envelope shape (consistent with Rust/TS SDKs), sessions parsed to
+    # SessionInfo objects.
+    assert result["sessions"] == [{"id": "sess-1"}]
+    assert SessionInfo(**result["sessions"][0]) == SessionInfo(id="sess-1")
     assert captured["requests"][0]["method"] == "session/list"
 
 

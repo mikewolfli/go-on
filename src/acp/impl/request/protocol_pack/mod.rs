@@ -15,7 +15,7 @@ mod audit;
 mod auth;
 mod core;
 pub(crate) mod mcp;
-mod session;
+pub(crate) mod session;
 mod skill;
 mod terminal;
 
@@ -155,16 +155,16 @@ pub(super) fn acp_terminal_state() -> &'static StdMutex<HashMap<String, Terminal
 
 // ── Protocol-level negotiated version ────────────────────────────────────
 
-pub(super) static NEGOTIATED_PROTOCOL_VERSION: OnceLock<ProtocolVersion> = OnceLock::new();
-
 /// Negotiate the protocol version against the client's requested version.
 ///
 /// Picks the highest supported version that does not exceed the client's
 /// request (falling back to the latest supported version when the client
-/// sends none or a version newer than anything we support). The result is
-/// memoised process-wide on first call.
+/// sends none or a version newer than anything we support). The negotiated
+/// value is returned to the caller; the former process-wide `OnceLock`
+/// memoisation was removed — it had no readers (the doc comment claiming
+/// later handlers would honour it was never true).
 pub(super) fn negotiate_protocol_version(requested: Option<ProtocolVersion>) -> ProtocolVersion {
-    let negotiated = match requested {
+    match requested {
         Some(client) => {
             let supported = ProtocolVersion::supported_versions();
             let mut best = ProtocolVersion::V1;
@@ -176,9 +176,7 @@ pub(super) fn negotiate_protocol_version(requested: Option<ProtocolVersion>) -> 
             best
         }
         None => ProtocolVersion::LATEST,
-    };
-    let _ = NEGOTIATED_PROTOCOL_VERSION.set(negotiated);
-    negotiated
+    }
 }
 
 // ── Atomic counters ──────────────────────────────────────────────────────

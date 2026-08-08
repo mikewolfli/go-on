@@ -14,11 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::agents::communication::bus::CommunicationBus;
 use futures_util::future::join_all;
-// Reserved for future AgentCommunicationHook use
-// use crate::agents::communication::path::AgentPath;
-// use crate::agents::communication::tree::AgentNodeMetadata;
 
 // ---------------------------------------------------------------------------
 // Tool lifecycle hooks — observer trait + registry
@@ -70,21 +66,6 @@ pub struct ToolHookRegistry {
     hooks: std::sync::Mutex<Vec<Arc<dyn ToolHook>>>,
 }
 
-// ── BLUE70: AgentCommunicationHook ────────────────────────────────
-
-/// Tool hook that registers spawn events in the CommunicationBus AgentTree.
-///
-/// When the `spawn_agent` tool is executed, this hook registers the spawned
-/// agent in the AgentTree before execution.
-pub struct AgentCommunicationHook;
-
-impl AgentCommunicationHook {
-    /// Create a new hook.
-    pub fn new(_bus: Arc<CommunicationBus>) -> Self {
-        Self
-    }
-}
-
 // ── BLUE71 §11: GuardianHook — async model-based tool review ───────────
 
 /// Tool hook that uses GuardianReviewer to review tool actions before execution.
@@ -119,28 +100,6 @@ impl ToolHook for GuardianHook {
                 anyhow::bail!("guardian escalated: {}", reason)
             }
         }
-    }
-}
-
-#[async_trait]
-impl ToolHook for AgentCommunicationHook {
-    fn pre_execute(&self, tool_name: &str, _input: &ToolInput) -> Result<()> {
-        if tool_name == "spawn_agent" {
-            // Registration happens inside execute_spawn() via the global
-            // SPAWN_COMMUNICATION_BUS — this hook provides observability.
-            tracing::debug!(tool = tool_name, "AgentCommunicationHook: pre_execute");
-        }
-        Ok(())
-    }
-
-    fn post_execute(
-        &self,
-        _tool_name: &str,
-        _input: &ToolInput,
-        _output: &ToolOutput,
-        _duration_ms: u64,
-    ) -> Result<()> {
-        Ok(())
     }
 }
 

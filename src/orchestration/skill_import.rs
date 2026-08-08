@@ -9,7 +9,6 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 use crate::config::RuntimeConfig;
 use crate::i18n::runtime::tf;
@@ -234,7 +233,7 @@ impl SkillImportStore {
 
         let fetched = fetch_source(&self.policy, &request.source).await?;
 
-        let computed_sha = compute_sha256_hex(&fetched.payload);
+        let computed_sha = crate::shared::sha256_hex(&fetched.payload);
         let expected_sha = request.source.expected_sha256();
         if self.policy.require_sha256 && expected_sha.is_none() {
             anyhow::bail!("{}", tf("error.missing_field", &[("field", "sha256")]));
@@ -658,13 +657,6 @@ fn validate_skill_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn compute_sha256_hex(payload: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(payload);
-    let digest = hasher.finalize();
-    digest.iter().map(|byte| format!("{:02x}", byte)).collect()
-}
-
 /// Parse a SKILL.md (Claude Code skill format) into a `SkillImportManifest`.
 ///
 /// SKILL.md format (with optional YAML frontmatter):
@@ -1030,7 +1022,7 @@ mod tests {
             "input_schema": {"type": "object", "properties": {"message": {"type": "string"}}}
         });
         let payload = serde_json::to_vec(&manifest).unwrap();
-        let sha = compute_sha256_hex(&payload);
+        let sha = crate::shared::sha256_hex(&payload);
         let manifest_path = root.join("manifest.json");
         fs::write(&manifest_path, payload).unwrap();
 

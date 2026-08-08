@@ -110,6 +110,10 @@ pub async fn dispatch_to_client(
             message,
             data,
         }) => {
+            // Mark for outcome accounting: this is an error response to the
+            // request, even though the I/O itself succeeds. The mark is
+            // consumed at request completion (request.rs).
+            crate::acp::r#impl::request::mark_error_response(Some(&id));
             crate::acp::r#impl::io::write_response(
                 server,
                 JsonRpcResponse {
@@ -181,7 +185,8 @@ pub async fn dispatch_to_client(
                         send_error(
                             server,
                             Some(id.clone()),
-                            crate::acp::r#impl::request::protocol::AcpErrorCode::InternalError as i32,
+                            crate::acp::r#impl::request::protocol::AcpErrorCode::InternalError
+                                as i32,
                             msg.to_string(),
                             None,
                         )

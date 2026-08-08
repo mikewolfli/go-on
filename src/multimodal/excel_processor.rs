@@ -65,6 +65,11 @@ pub struct ExcelSheet {
     /// Zero-based coordinate ranges for merged cell blocks.
     #[serde(default)]
     pub merged_cell_coords: Vec<CellRange>,
+    /// Tab-separated cell text per non-empty data row (the actual sheet
+    /// content). Previously this was computed and then discarded — the parsed
+    /// output carried only metadata.
+    #[serde(default)]
+    pub text_parts: Vec<String>,
 }
 
 /// A zero-based cell coordinate.
@@ -218,6 +223,9 @@ fn open_workbook(bytes: &[u8]) -> Result<ParsedExcel, DocumentParserError> {
             merged_cell_ranges,
             merged_cell_count,
             merged_cell_coords,
+            // Preserve the extracted cell text so downstream consumers
+            // receive the actual sheet content, not just metadata.
+            text_parts: sheet_text_parts,
         });
     }
 
@@ -276,6 +284,11 @@ fn parsed_excel_to_content(parsed: &ParsedExcel) -> ParsedContent {
         // Build a text representation similar to the original approach but
         // enriched with formula and merge annotations.
         let mut parts = Vec::new();
+
+        // Actual cell content: tab-separated rows, one line per row.
+        if !sheet.text_parts.is_empty() {
+            parts.push(sheet.text_parts.join("\n"));
+        }
 
         if !sheet.formula_cells.is_empty() {
             parts.push(format!(
