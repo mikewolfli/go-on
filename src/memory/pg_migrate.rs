@@ -1,10 +1,10 @@
 //! Versioned database migrations for PostgreSQL (backend-postgres only).
 //!
-//! Each migration is an ordered SQL string stored in the [`MIGRATIONS`] slice.
+//! Each migration is an ordered SQL string stored in the `MIGRATIONS` slice.
 //! The runner tracks applied versions in a `_schema_version` table and applies
 //! any pending migrations up to the requested target version.
 //!
-//! **Important:** The DDL strings in [`MIGRATIONS`] serve as the canonical schema
+//! **Important:** The DDL strings in `MIGRATIONS` serve as the canonical schema
 //! baseline. Each `new()` method in `cache.rs` / `vector.rs` may also run
 //! additional dynamic DDL (e.g. vector dimensions, HNSW indexes) that is
 //! applied *in addition* to the migration DDL.  Because all DDL uses

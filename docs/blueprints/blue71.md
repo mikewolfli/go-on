@@ -207,9 +207,9 @@ pub enum SessionInput {
 | **沙箱测试** | cargo build + test (600s timeout) | 无 | 无 | **go-on独有** |
 | **历史追踪** | EvolutionHistory (NDJSON持久化) | 无 | 无 | **go-on独有** |
 | **回滚** | rollback() + 自动回滚(20%退化) | 无 | 无 | **go-on独有** |
-| **人工审批** | RequireHuman "not implemented yet" | 无 | 无 | **go-on待完善** |
+| **人工审批** | ApprovalBroker + evolution.approval.* + SSE (BLUE72 已实现) | 无 | 无 | **go-on独有** |
 
-> **关键发现**: 自进化是go-on最强的差异化能力，Codex和Harness完全不具备。唯一缺口是`RequireHuman`审批模式尚未实现（已标记TODO）。
+> **关键发现**: 自进化是go-on最强的差异化能力，Codex和Harness完全不具有。人工审批链路（`ApprovalBroker` + `evolution.approval.list/respond` + state-sync SSE 推送至 GUI/vscode）已于 BLUE72 实施完成（2026-08-09）。
 
 ### 2.6 事件与通信
 
@@ -611,7 +611,7 @@ hooks.register(HookEvent::PreToolUse, |event| async move {
 | 领域 | 领先幅度 | 保持策略 |
 |------|---------|---------|
 | **治理体系** | 超越Codex 3x, Harness 5x | 继续完善HarnessBus策略，补充Guardian式的独立模型审查 |
-| **自进化** | 竞品完全不具有 | 实现RequireHuman审批，增加更多触发源 |
+| **自进化** | 竞品完全不具有 | ✅ RequireHuman审批已实现（BLUE72），可增加更多触发源 |
 | **AI模型集成** | 25+ vs Codex集中式 | 保持广度，增加模型选择智能 |
 | **记忆系统** | 5级分类+语义+向量+缓存 | 增加迁移系统，支持记忆导出 |
 | **韧性/容错** | HyperResilience + Chaos | 增加分布式韧性（借鉴Harness锁） |
@@ -1332,7 +1332,7 @@ Harness的Pipeline Scheduler/Runner。**不引入**：go-on的Planner-Executor�
 |------|------|
 | Feedback系统（RingBuffer+Sentry） | 用户反馈闭环 |
 | Hub多进程架构激活 | 分布式部署 |
-| EvolutionLoop RequireHuman审批 | 人工审核自进化 |
+| EvolutionLoop RequireHuman审批 | ✅ 已实现（BLUE72: ApprovalBroker + evolution.approval.* + SSE） |
 | Redis事件系统 + TypedEventBus集成 | 分布式事件 |
 | AdaptiveCompactor 学习型 | 自适应压缩策略 |
 | HookRegistry 24事件钩子 | 全生命周期扩展 |

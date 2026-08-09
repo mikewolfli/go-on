@@ -15,9 +15,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, warn};
 
-use crate::acp::r#impl::cors::{
-    build_cors_headers, build_preflight_response_headers, is_origin_allowed,
-};
+use crate::acp::r#impl::cors::{build_preflight_response_headers, is_origin_allowed};
 use crate::acp::r#impl::request::inject_platform_profiles_if_absent;
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
@@ -622,7 +620,13 @@ async fn handle_http_connection(
     let content_length =
         crate::acp::r#impl::runtime::protocol::extract_content_length(header_part).unwrap_or(0);
     // ── CORS headers (computed once, reused by every error/response path) ──
-    let cors_headers = compute_mcp_cors_headers(header_part, &acp_server);
+    let cors_headers = match acp_server {
+        Some(ref server) => crate::acp::r#impl::runtime::http::compute_cors_response_headers(
+            header_part,
+            server.as_ref(),
+        ),
+        None => String::new(),
+    };
     if content_length > MAX_BODY_SIZE {
         let error_body = inject_platform_profiles_if_absent(
             serde_json::json!({
@@ -1122,29 +1126,6 @@ async fn write_http_json_response(
         extra_headers,
     )
     .await
-}
-
-/// Compute CORS response headers for the MCP HTTP server.
-/// Returns an empty string when no CORS config is present or the origin
-/// is not allowed.
-fn compute_mcp_cors_headers(headers: &str, acp_server: &Option<Arc<AcpServer>>) -> String {
-    let config = match acp_server {
-        Some(ref server) => server.runtime_config.cors_config(),
-        None => return String::new(),
-    };
-    let config = match config {
-        Some(c) => c,
-        None => return String::new(),
-    };
-    let origin = crate::acp::r#impl::runtime::protocol::extract_header_value(headers, "origin");
-    let cors_headers = build_cors_headers(origin.as_deref(), &config);
-    if cors_headers.is_empty() {
-        return String::new();
-    }
-    cors_headers
-        .iter()
-        .map(|(k, v)| format!("{}: {}\r\n", k, v))
-        .collect()
 }
 
 #[cfg(test)]

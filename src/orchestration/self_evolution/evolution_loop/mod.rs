@@ -532,6 +532,14 @@ impl EvolutionLoop {
     }
 
     /// Phase 4: Await approval for the proposed change.
+    ///
+    /// `AutoApproval` resolves immediately. `RequireApproval` / `RequireHuman`
+    /// are NOT wired to an external approval subsystem in production (the
+    /// server runs with `AutoApproval`, see `background.rs`); rather than
+    /// silently pretending an internal policy approved the change, cycles in
+    /// those modes are rejected so the failure is observable (BLUE72 audit:
+    /// the approval-broker experiment was reverted — it had no production
+    /// caller and added dead surface).
     async fn await_approval(
         &self,
         _analysis: &Analysis,
@@ -545,25 +553,19 @@ impl EvolutionLoop {
                     Some("Auto-approved by policy".to_string()),
                 ))
             }
-            validate::ApprovalMode::RequireApproval => {
+            validate::ApprovalMode::RequireApproval | validate::ApprovalMode::RequireHuman => {
                 // Honest semantics: no external approval subsystem is wired
-                // to the evolution loop yet. Rather than silently pretending
-                // an internal policy approved the change (previous behavior
-                // approved unconditionally, making RequireApproval identical
-                // to AutoApproval), the cycle is rejected so the failure is
-                // observable. Production uses AutoApproval (background.rs).
+                // to the evolution loop in production. Rather than silently
+                // pretending an internal policy approved the change (previous
+                // behavior approved unconditionally, making RequireApproval
+                // identical to AutoApproval), the cycle is rejected so the
+                // failure is observable. Production uses AutoApproval
+                // (background.rs).
                 info!(
                     "evolution cycle requires approval, but no approval subsystem is wired; rejecting"
                 );
                 Err(apply::EvolutionLoopError::Rejected(
-                    "RequireApproval: no approval subsystem wired".to_string(),
-                ))
-            }
-            validate::ApprovalMode::RequireHuman => {
-                // In production, this would send a notification and wait.
-                info!("waiting for human approval");
-                Err(apply::EvolutionLoopError::Rejected(
-                    "Human approval not implemented yet — rejecting".to_string(),
+                    "approval required but no approval subsystem wired".to_string(),
                 ))
             }
         }
@@ -633,5 +635,37 @@ mod tests {
         let loop_ = EvolutionLoop::new(PathBuf::from("/tmp/test"));
         assert_eq!(loop_.cycle_id(), 0);
         assert!(loop_.trigger_sources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_await_approval_require_human_rejects_honestly() {
+        // No external approval subsystem is wired in production (server runs
+        // AutoApproval). RequireHuman/RequireApproval must reject observably
+        // rather than silently approving (BLUE72 audit revert).
+        let mut loop_ = EvolutionLoop::new(PathBuf::from("/tmp/test"));
+        loop_ = loop_.with_approval_mode(validate::ApprovalMode::RequireHuman);
+
+        let analysis = Analysis::new(
+            crate::orchestration::self_evolution::evolution_loop::observe::EvolutionTrigger::ManualRequest {
+                instruction: "add a retry helper".to_string(),
+            },
+            "missing retry logic".to_string(),
+            "add retry".to_string(),
+            Vec::new(),
+            "low".to_string(),
+            0.7,
+        );
+        let patch = CodePatch::new(
+            "src/lib.rs".to_string(),
+            vec![],
+            vec![],
+            "add retry helper".to_string(),
+        );
+
+        let result = loop_.await_approval(&analysis, &patch).await;
+        assert!(
+            matches!(result, Err(apply::EvolutionLoopError::Rejected(_))),
+            "RequireHuman without a wired subsystem must reject observably"
+        );
     }
 }

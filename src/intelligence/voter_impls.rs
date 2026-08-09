@@ -44,11 +44,11 @@ pub struct CapabilityBusVoter {
 impl CapabilityBusVoter {
     /// Create a new voter wrapping the given capability bus.
     ///
-    /// **Wiring status**: The async `AgentVoter` trait is now integrated via
+    /// **Wiring status**: The async `AgentVoter` trait is integrated via
     /// `#[async_trait]`, and this voter is registered in `hub::init_intelligence_hub()`.
     /// The Delphi debate path (`consensus_vote_with_reputation` with
-    /// `VoteMode::DelphiDebate`) delegates to the stored voters. The TODO-BLUE64
-    /// wiring is **complete**.
+    /// `VoteMode::DelphiDebate`) delegates to the stored voters (BLUE64 wiring
+    /// complete).
     pub fn new(name: impl Into<String>, bus: Arc<CapabilityBus>) -> Self {
         Self {
             name: name.into(),

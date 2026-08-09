@@ -30,24 +30,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
 use crate::orchestration::skill::SkillRegistry;
-use crate::orchestration::tool::{ToolRegistry, ToolRiskLevel};
-
-// ---------------------------------------------------------------------------
-// Descriptor – one item in the combined capability matrix
-// ---------------------------------------------------------------------------
-
-/// A unified descriptor for both tools and skills.
-///
-/// Returned by `capability_matrix()` so callers see a homogeneous list.
-#[derive(Debug, Clone)]
-pub struct ToolDescriptor {
-    pub name: String,
-    pub capability: String,
-    pub risk_level: String,
-    pub timeout_ms: u64,
-    pub fallback_chain: Vec<String>,
-    pub is_skill: bool,
-}
+use crate::orchestration::tool::ToolRegistry;
 
 // ---------------------------------------------------------------------------
 // ToolBus profile
@@ -87,60 +70,6 @@ impl ToolBus {
             tool_registry,
             skill_registry,
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // Capability matrix
-    // -----------------------------------------------------------------------
-
-    /// Return a combined list of all tools and skills with their capability
-    /// profiles.  Skills are always listed with a risk level of `"medium"` and
-    /// an empty fallback chain because those concepts are not part of the
-    /// `Skill` trait.
-    pub fn capability_matrix(&self) -> Vec<ToolDescriptor> {
-        let mut descriptors: Vec<ToolDescriptor> = Vec::new();
-
-        // Tools
-        for name in self.tool_registry.names() {
-            let profile = self.tool_registry.profile(name);
-            descriptors.push(ToolDescriptor {
-                name: name.to_string(),
-                capability: profile
-                    .map(|p| p.capability.clone())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                risk_level: profile
-                    .map(|p| match p.risk_level {
-                        ToolRiskLevel::Low => "low",
-                        ToolRiskLevel::Medium => "medium",
-                        ToolRiskLevel::High => "high",
-                    })
-                    .unwrap_or("medium")
-                    .to_string(),
-                timeout_ms: profile.map(|p| p.timeout_budget_ms).unwrap_or(30_000),
-                fallback_chain: profile
-                    .map(|p| p.fallback_chain.clone())
-                    .unwrap_or_default(),
-                is_skill: false,
-            });
-        }
-
-        // Skills
-        let reg = self.skill_registry.read().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        for desc in reg.list(false) {
-            descriptors.push(ToolDescriptor {
-                name: desc.name.clone(),
-                capability: format!("skill:{}", desc.name),
-                risk_level: "medium".to_string(),
-                timeout_ms: 30_000,
-                fallback_chain: Vec::new(),
-                is_skill: true,
-            });
-        }
-
-        descriptors
     }
 
     // -----------------------------------------------------------------------
@@ -249,41 +178,6 @@ mod tests {
             let _ = skill_guard.register(Arc::new(EchoSkill));
         }
         ToolBus::new(tool_registry, skill_registry)
-    }
-
-    #[test]
-    fn capability_matrix_includes_tools_and_skills() {
-        let bus = make_bus();
-        let matrix = bus.capability_matrix();
-
-        // At least the 6 built-in tools.
-        assert!(
-            matrix.len() >= 6,
-            "expected at least 6 tools, got {}",
-            matrix.len()
-        );
-
-        let tool_names: Vec<&str> = matrix.iter().map(|d| d.name.as_str()).collect();
-        assert!(tool_names.contains(&"read_file"), "read_file missing");
-        assert!(tool_names.contains(&"write_file"), "write_file missing");
-        assert!(tool_names.contains(&"search_files"), "search_files missing");
-        assert!(tool_names.contains(&"apply_patch"), "apply_patch missing");
-        assert!(tool_names.contains(&"run_tests"), "run_tests missing");
-        assert!(
-            tool_names.contains(&"inspect_git_diff"),
-            "inspect_git_diff missing"
-        );
-
-        // Also includes the echo skill.
-        assert!(tool_names.contains(&"builtin.echo"), "builtin.echo missing");
-
-        // Non-skills are marked correctly.
-        for desc in &matrix {
-            if desc.name == "read_file" {
-                assert!(!desc.is_skill, "read_file should not be a skill");
-                assert_eq!(desc.risk_level, "low");
-            }
-        }
     }
 
     #[test]

@@ -1158,9 +1158,33 @@ pub(crate) async fn apply_review_gate_assemble(
             user_id: None,
         };
 
-        // Write through the server's real in-memory store and promotion
-        // pipeline (previously a throwaway MemoryStore discarded the entry).
-        {
+        // Write through the server's real in-memory store AND the persistence
+        // tiers via bridge_store — the entry carries session_id so
+        // session/load + session/resume can restore it (D2: previously only
+        // the in-memory MemoryStore was written, so search_by_session on the
+        // warm tier always returned empty).
+        if let Some(mp) = server.get_or_init_memory_persistence() {
+            let mp = Arc::clone(&mp);
+            let memory_store = Arc::clone(&server.persistence.memory_store);
+            tokio::spawn(async move {
+                if let Err(e) = crate::memory::memory_bridge::bridge_store(
+                    &memory_store,
+                    mp.as_ref(),
+                    memory_entry,
+                )
+                .await
+                {
+                    tracing::warn!("memory_promotion: bridge_store failed: {}", e);
+                    return;
+                }
+                // Trigger persistence tier migration (warm/cold) on the real store.
+                if let Err(e) = mp.auto_migrate().await {
+                    tracing::warn!("memory_promotion: auto_migrate failed: {}", e);
+                }
+            });
+        } else {
+            // No persistence available (e.g. no backend feature) — fall back
+            // to the in-memory store only.
             let mut store = server
                 .persistence
                 .memory_store
@@ -1170,14 +1194,6 @@ pub(crate) async fn apply_review_gate_assemble(
                     poisoned.into_inner()
                 });
             store.store(memory_entry);
-        }
-        // Trigger persistence tier migration (warm/cold) on the real store.
-        if let Some(mp) = server.get_or_init_memory_persistence() {
-            tokio::spawn(async move {
-                if let Err(e) = mp.auto_migrate().await {
-                    tracing::warn!("memory_promotion: auto_migrate failed: {}", e);
-                }
-            });
         }
         let promotion_report = {
             let mut store = server

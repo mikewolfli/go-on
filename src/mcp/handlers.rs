@@ -11,15 +11,13 @@ use crate::acp::r#impl::request::{
     tools_pack::build_mcp_tool_descriptors,
 };
 use crate::acp::server::AcpServer;
-use crate::governance::pua::PuaRuleEngine;
 
 use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
     McpListToolsResult, McpServer, JSONRPC_VERSION, MCP_VERSION, SUPPORTED_MCP_VERSIONS,
 };
 use crate::protocol::rpc_protocol::RequestTraceContext;
-use crate::shared::tool_descriptors::validate_required_arguments;
-use crate::tool::{ToolInput, ToolOutput};
+use crate::tool::ToolInput;
 
 /// Signals an invalid / missing parameter in an MCP request.
 /// Dispatched as JSON-RPC INVALID_PARAMS (-32602).
@@ -751,164 +749,59 @@ impl McpServer {
                         Some(json!({"ok": true, "task": task})),
                     ))?);
                 }
-                _ => {} // Fall through to tool_registry + skill_registry
+                _ => {} // Fall through to unified tool execution chain
             }
         }
 
-        // Step 1: Try tool_registry first (existing behavior)
-        // Use `get_arc` so the owned `Arc<dyn Tool>` can be moved into
-        // `run_async` (a plain `get` borrow cannot outlive the method).
-        if let Some(tool) = self.tool_registry.get_arc(&tool_name) {
-            // ── Governance check (unified with the ACP route) ────────────
-            // Previously, tool.run() was called directly without any
-            // HarnessBus sandbox/budget/RBAC check. This meant tools
-            // invoked via MCP stdio bypassed ALL governance (AUTON-05).
-            // `validate_action` runs PolicyEvaluator::check_tool_call
-            // (sandbox / require_review / idempotency / budget / RBAC) and
-            // updates the governance profile (sandbox_denials,
-            // idempotency_hits) plus drift metrics.
-            //
-            // IMPORTANT: Only check budget & RBAC for registered tools.
-            // The require_review/whitelist check is skipped because the
-            // tool is already explicitly registered in the tool_registry.
-            let mut verdict: Option<crate::governance::harness_bus::ToolVerdict> = None;
-            if let Some(ref acp) = self.acp_server {
-                if let Some(ref harness_bus) = acp.governance_deps.harness_bus {
-                    let v = harness_bus.validate_action(&tool_name, &tool_input).await;
-                    // Skip require_review for registered tools — they are
-                    // explicitly registered and trusted.
-                    if !v.allowed && !v.require_review {
-                        anyhow::bail!(
-                            "tool '{}' denied by harness sandbox policy (sandbox_allowed={})",
-                            tool_name,
-                            v.allowed
-                        );
+        // Steps 1-4: Delegate to the unified tool-execution chain shared with
+        // the ACP bridge (`execute_tool_call`). This single chain performs:
+        //  1. HarnessBus sandbox / require_review / budget / RBAC checks
+        //     (or the default-governance fallback when no HarnessBus is wired)
+        //  2. Idempotency dedup via the IdempotencyCache
+        //  3. Budget accounting (wall-clock / call-count / PUA tokens)
+        //  4. Pre-execute hook chain (async) then `run_async` execution
+        //  5. Tool registry → skill registry → imported-skill fallback
+        // It used to be re-implemented here (~350 lines), which let the two
+        // paths drift (e.g. `tools/list` advertised bridge-only tools that
+        // this arm could not execute). The MCP arm now passes its own tool
+        // registry so registered tools resolve exactly like on the ACP side.
+        if let Some(ref acp) = self.acp_server {
+            let structured = match crate::acp::r#impl::request::tools_pack::execute_tool_call(
+                acp,
+                &self.tool_registry,
+                &tool_name,
+                &tool_input,
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(e) => {
+                    // Keep the MCP error-code contract: an unknown tool or
+                    // skill is a parameter problem (INVALID_PARAMS), not an
+                    // internal error. Governance denials keep their original
+                    // (non-param) code so callers can distinguish policy
+                    // blocks from bad input.
+                    if e.to_string().contains("unknown tool or skill") {
+                        return Err(invalid_params(e.to_string()));
                     }
-                    if !v.budget_ok {
-                        anyhow::bail!("tool '{}' denied by harness budget gate", tool_name);
-                    }
-                    if !v.permitted {
-                        anyhow::bail!(
-                            "tool '{}' denied by harness RBAC permission gate",
-                            tool_name
-                        );
-                    }
-                    verdict = Some(v);
-                } else {
-                    // No HarnessBus — apply default tool governance policy
-                    // to prevent "default allow all" blind spot.
-                    let classification =
-                        crate::acp::helpers::tool_governance_defaults::evaluate_default_tool_policy(
-                            &tool_name,
-                            false,
-                            false,
-                            acp.runtime_config.deployment_target.as_deref(),
-                        );
-                    if !classification.allowed {
-                        anyhow::bail!(
-                            "tool '{}' blocked by default governance policy: {} (risk_class={:?})",
-                            tool_name,
-                            classification.reason,
-                            classification.risk_class,
-                        );
-                    }
+                    return Err(e);
                 }
-            } else {
-                // No ACP server — governance delegated to server-side enforcement.
-            }
-
-            validate_required_arguments(&tool_name, &tool_input)
-                .map_err(|e| invalid_params(e.to_string()))?;
-
-            // ── Idempotency dedup (standard semantics) ────────────────────
-            // A repeated (tool, args) call that hits the IdempotencyCache
-            // skips re-execution and returns the cached result (the cache is
-            // populated by `record_tool_success` on the success path below).
-            if let Some(v) = verdict {
-                if v.idempotent {
-                    if let Some(harness_bus) = self
-                        .acp_server
-                        .as_ref()
-                        .and_then(|a| a.governance_deps.harness_bus.clone())
-                    {
-                        if let Some(cached) =
-                            harness_bus.cached_tool_result(&tool_name, &tool_input)
-                        {
-                            info!(
-                                "MCP: idempotency hit for tool '{}' — returning cached result",
-                                tool_name
-                            );
-                            record_tool_call_audit_with_protocol(
-                                &tool_name,
-                                &tool_input,
-                                true,
-                                "cached idempotency hit via mcp",
-                                "mcp_stdio",
-                            );
-                            let result: ToolOutput = serde_json::from_value(cached)?;
-                            let result_value: Value = serde_json::to_value(&result)?;
-                            return Ok(serde_json::to_value(
-                                McpCallToolResult::new(
-                                    vec![json!({
-                                        "type": "text",
-                                        "text": serde_json::to_string(&result)?,
-                                    })],
-                                    Some(result_value),
-                                )
-                                .with_is_error(false),
-                            )?);
-                        }
-                    }
-                }
-            }
-
-            // ── Budget accounting (matches the ACP tool path) ────────────
-            // Wall-clock, tool-call-count and PUA token consumption are tracked
-            // per budget scope so MCP tool calls cannot bypass the same limits
-            // enforced on the ACP route.
-            let budget_scope =
-                crate::acp::r#impl::request::tools_pack::budget_scope_key(&tool_name, &tool_input);
-            let estimated_tokens =
-                crate::acp::r#impl::request::tools_pack::estimate_argument_tokens(&tool_input);
-            let pua_engine = PuaRuleEngine::new(
-                self.acp_server
-                    .as_ref()
-                    .map(|a| a.governance_deps.pua_enforcement_plan.clone())
-                    .unwrap_or_default(),
-            );
-            let remaining_tokens = {
-                let mut trackers = crate::acp::r#impl::request::tool_budget_trackers()
-                    .lock()
-                    .await;
-                let tracker = trackers.entry(budget_scope.clone()).or_insert_with(|| {
-                    crate::governance::hardening::BudgetTracker::new(
-                        crate::governance::hardening::task_budget_for_target(
-                            self.acp_server
-                                .as_ref()
-                                .and_then(|a| a.runtime_config.deployment_target.as_deref()),
-                        ),
-                    )
-                });
-                tracker.check_wall_clock().map_err(|err| {
-                    anyhow::anyhow!(
-                        "tool '{tool_name}' denied by budget in scope '{budget_scope}': {err}"
-                    )
-                })?;
-                tracker.record_tool_call().map_err(|err| {
-                    anyhow::anyhow!(
-                        "tool '{tool_name}' denied by budget in scope '{budget_scope}': {err}"
-                    )
-                })?;
-                tracker
-                    .consume_with_pua(estimated_tokens, &pua_engine)
-                    .map_err(|err| {
-                        anyhow::anyhow!(
-                            "tool '{tool_name}' denied by budget in scope '{budget_scope}': {err}"
-                        )
-                    })?;
-                tracker.remaining_tokens()
             };
+            return Ok(serde_json::to_value(McpCallToolResult::new(
+                vec![json!({
+                    "type": "text",
+                    "text": serde_json::to_string(&structured)?,
+                })],
+                Some(structured),
+            ))?);
+        }
 
+        // Minimal server (no ACP server): fall back to the local tool registry
+        // and skill registry without governance (governance is delegated to the
+        // server side when an ACP server is present).
+        if let Some(tool) = self.tool_registry.get_arc(&tool_name) {
+            crate::shared::tool_descriptors::validate_required_arguments(&tool_name, &tool_input)
+                .map_err(|e| invalid_params(e.to_string()))?;
             let input = ToolInput {
                 task_id: request
                     .id
@@ -923,71 +816,33 @@ impl McpServer {
                 payload: tool_input.clone(),
                 allowed_base_dir: None,
             };
-
-            // ── Pre-execute hooks (unified async chain) ───────────────────
-            // `run_pre_async` invokes every hook's `async_pre_execute` — sync
-            // hooks are covered via the trait's default delegation, and async
-            // hooks such as GuardianHook (config-gated LLM review) run
-            // directly. A denying hook aborts the call (fail-fast).
             self.tool_registry
                 .hooks
                 .run_pre_async(&tool_name, &input)
                 .await?;
-
-            // ── Execute via the async path ────────────────────────────────
-            // `run_async`'s default implementation offloads the synchronous
-            // `run` to `spawn_blocking` internally so long-running tools
-            // (e.g. shell_exec) cannot stall the tokio worker; I/O-bound
-            // tools may override it with a fully async implementation.
             let result = tool.run_async(input).await?;
-
-            // ── Record successful execution for idempotency dedup ─────────
-            if result.success {
-                if let Some(harness_bus) = self
-                    .acp_server
-                    .as_ref()
-                    .and_then(|a| a.governance_deps.harness_bus.clone())
-                {
-                    harness_bus.record_tool_success(
-                        &tool_name,
-                        &tool_input,
-                        &serde_json::to_value(&result)?,
-                    );
-                }
-            }
-
-            info!(
-                "MCP: Tool '{}' returned: {:?} (budget_scope={} remaining_tokens={})",
-                tool_name, result, budget_scope, remaining_tokens
-            );
             record_tool_call_audit_with_protocol(
                 &tool_name,
                 &tool_input,
                 true,
-                "tool executed via mcp",
+                "tool executed via mcp (minimal server)",
                 "mcp_stdio",
             );
             let result_value: Value = serde_json::to_value(&result)?;
-            return Ok(serde_json::to_value(
-                McpCallToolResult::new(
-                    vec![json!({
-                        "type": "text",
-                        "text": serde_json::to_string(&result)?,
-                    })],
-                    Some(result_value),
-                )
-                .with_is_error(false),
-            )?);
+            return Ok(serde_json::to_value(McpCallToolResult::new(
+                vec![json!({
+                    "type": "text",
+                    "text": serde_json::to_string(&result)?,
+                })],
+                Some(result_value),
+            ))?);
         }
 
-        // Step 2: Try skill registry fallback
+        // Skill registry fallback (minimal server)
         if let Some(registry) = self.skill_registry() {
-            // Extract skill from lock, then drop the guard before async execution
             let skill_to_call = match registry.read() {
                 Ok(guard) => {
-                    // Try exact name match first
                     if let Some(skill) = guard.get(&tool_name) {
-                        // Clone while lock is held so skill is fully owned data
                         Some((tool_name.clone(), skill.clone()))
                     } else if let Some(best_match) =
                         guard.best_match_with_input(&tool_name, &tool_input)
@@ -1003,31 +858,21 @@ impl McpServer {
             };
 
             if let Some((resolved_name, skill)) = skill_to_call {
-                info!(
-                    "MCP: Calling skill '{}' with input: {:?}",
-                    resolved_name, tool_input
-                );
                 let result = skill.execute(&tool_input).await?;
-
                 record_tool_call_audit_with_protocol(
                     &resolved_name,
                     &tool_input,
                     true,
-                    "skill executed via mcp",
+                    "skill executed via mcp (minimal server)",
                     "mcp_stdio",
                 );
-
-                info!("MCP: Skill '{}' returned: {:?}", resolved_name, result);
-
-                let mut response = serde_json::to_value(
-                    McpCallToolResult::new(
-                        vec![
-                            json!({"type": "text", "text": serde_json::to_string_pretty(&result)?}),
-                        ],
-                        Some(result),
-                    )
-                    .with_is_error(false),
-                )?;
+                let mut response = serde_json::to_value(McpCallToolResult::new(
+                    vec![json!({
+                        "type": "text",
+                        "text": serde_json::to_string_pretty(&result)?,
+                    })],
+                    Some(result),
+                ))?;
                 if resolved_name != tool_name {
                     response["x_resolved_skill"] = json!(resolved_name);
                 }
@@ -1035,7 +880,7 @@ impl McpServer {
             }
         }
 
-        // Step 4: Not found — error
+        // Not found — error
         warn!("MCP: Unknown tool or skill '{}'", tool_name);
         Err(invalid_params(format!(
             "Unknown tool or skill: {}",
@@ -1088,6 +933,22 @@ impl McpServer {
 
     async fn handle_list_models(&self, _request: &JsonRpcRequest) -> Value {
         info!("MCP: Listing available models");
+        // Unify with the ACP bridge `models.list` / `models/list` payload so
+        // both entries return the same rich structure (id/name/provider/
+        // is_default/capabilities/context_window) instead of two divergent
+        // schemas that confused clients depending on the entry point.
+        if let Some(ref acp) = self.acp_server {
+            if let Ok(payload) = crate::acp::r#impl::request::protocol_pack::models_list_payload(
+                acp.as_ref(),
+                Value::Null,
+            )
+            .await
+            {
+                return payload;
+            }
+        }
+        // Fallback (minimal server without an ACP server): keep the previous
+        // per-agent grouping so `models/list` still returns useful data.
         let models = self
             .agent_registry
             .models()
@@ -1400,7 +1261,7 @@ mod tests {
 
     use crate::acp::server::ServerBuilder;
     use crate::governance::harness_bus::default_harness_bus;
-    use crate::tool::{Tool, ToolHook, ToolRegistry as OrchestrationToolRegistry};
+    use crate::tool::{Tool, ToolHook, ToolOutput, ToolRegistry as OrchestrationToolRegistry};
 
     // ── Test doubles ─────────────────────────────────────────────────────
 

@@ -74,19 +74,6 @@ pub struct OptimizationRecommendation {
     pub confidence: f64,
 }
 
-impl OptimizationRecommendation {
-    /// A neutral / no-change recommendation.
-    pub fn no_op() -> Self {
-        Self {
-            suggested_agent: None,
-            estimated_cost: 0.0,
-            estimated_duration_ms: 0,
-            reliability_score: 0.5,
-            confidence: 0.0,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Lightweight delegating wrappers that forward to the core optimization
 // primitives (workflow CostOptimizer, TokenOptimizer, etc.).

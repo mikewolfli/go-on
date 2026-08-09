@@ -11,12 +11,12 @@ use crate::agents::agent::{Agent, Message, StreamingSender};
 /// A thread-safe handle for injecting an agent into the ContinuousLearningCenter
 /// after it has been moved into a background task.
 pub type AgentInjector = Arc<Mutex<Option<Arc<dyn Agent>>>>;
-use crate::i18n::{t, tf};
+use crate::i18n::tf;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -30,59 +30,8 @@ fn lock_guard<T>(mtx: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 // ---------------------------------------------------------------------------
-// Enums
-// ---------------------------------------------------------------------------
-
-/// The category of a learning task.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum LearningTaskType {
-    /// Learning from labeled data with teacher signals.
-    Supervised,
-    /// Learning through trial-and-error with reward feedback.
-    Reinforcement,
-    /// Learning by mimicking expert demonstrations.
-    Imitation,
-    /// Applying knowledge from a source domain to a target domain.
-    Transfer,
-    /// Actively selecting the most informative data to learn from.
-    Active,
-}
-
-/// The lifecycle status of a learning task.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum LearningStatus {
-    /// Task is queued and waiting to begin.
-    Pending,
-    /// Task is currently being processed.
-    Active,
-    /// Task finished successfully.
-    Completed,
-    /// Task terminated with an error.
-    Failed,
-    /// Task has been archived and is no longer active.
-    Archived,
-}
-
-// ---------------------------------------------------------------------------
 // Core data structures
 // ---------------------------------------------------------------------------
-
-/// A discrete learning task submitted to the continuous learning center.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LearningTask {
-    /// Unique identifier for this task.
-    pub id: String,
-    /// Human-readable name.
-    pub name: String,
-    /// The category of learning this task belongs to.
-    pub task_type: LearningTaskType,
-    /// Epoch millisecond timestamp when the task was created.
-    pub created_ms: u64,
-    /// Priority from 0 (lowest) to 10 (highest).
-    pub priority: u8,
-    /// Current lifecycle status.
-    pub status: LearningStatus,
-}
 
 /// A consolidated memory that the system retains for future reuse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,30 +113,6 @@ impl ForgettingRiskRecord {
     }
 }
 
-/// A stage in the curriculum schedule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CurriculumStage {
-    /// Sequential stage number (0-based).
-    pub stage: u32,
-    /// Human-readable stage name.
-    pub name: String,
-    /// Difficulty level of this stage (0.0 – 1.0).
-    pub difficulty: f64,
-    /// How many tasks in this stage have been completed.
-    pub tasks_completed: u32,
-    /// The mastery threshold required to advance (0.0 – 1.0).
-    pub mastery_threshold: f64,
-}
-
-/// A recorded agent task result used for adaptive curriculum adjustment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentResult {
-    /// Whether the task was completed successfully.
-    pub success: bool,
-    /// Epoch millisecond when the result was recorded.
-    pub timestamp_ms: u64,
-}
-
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -220,35 +145,6 @@ impl Default for ContinuousLearningConfig {
             tasks_per_stage: 10,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Profile (read-only snapshot)
-// ---------------------------------------------------------------------------
-
-/// A snapshot of the centre's current state, useful for monitoring.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContinuousLearningProfile {
-    /// Number of tasks currently tracked.
-    pub total_tasks: usize,
-    /// Number of tasks pending execution.
-    pub pending_tasks: usize,
-    /// Number of tasks currently active.
-    pub active_tasks: usize,
-    /// Number of completed tasks.
-    pub completed_tasks: usize,
-    /// Number of failed tasks.
-    pub failed_tasks: usize,
-    /// Number of archived tasks.
-    pub archived_tasks: usize,
-    /// Number of consolidated memories.
-    pub total_memories: usize,
-    /// Current curriculum stage index.
-    pub current_stage: u32,
-    /// Number of tasks completed in the current stage.
-    pub current_stage_tasks_done: u32,
-    /// Tasks per stage from config.
-    pub tasks_per_stage: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -296,16 +192,11 @@ impl Clone for ContinuousLearningCenter {
 /// Internal mutable state held by the centre.
 #[derive(Debug, Default)]
 struct CenterState {
-    tasks: HashMap<String, LearningTask>,
     memories: HashMap<String, ConsolidatedMemory>,
     forgetting_curves: HashMap<String, ForgettingCurve>,
     forgetting_risks: HashMap<String, ForgettingRiskRecord>,
-    curriculum: Vec<CurriculumStage>,
-    /// Per-agent historical results for adaptive curriculum thresholds.
-    agent_history: HashMap<String, Vec<AgentResult>>,
     /// Extracted semantic patterns from LLM distillation
     semantic_patterns: HashMap<String, SemanticPattern>,
-    next_task_id: u64,
     next_memory_id: u64,
     next_pattern_id: u64,
 }
@@ -313,30 +204,13 @@ struct CenterState {
 impl ContinuousLearningCenter {
     /// Creates a new centre with the given configuration.
     pub fn new(config: ContinuousLearningConfig) -> Self {
-        let curriculum = (0..config.curriculum_stages)
-            .map(|stage| CurriculumStage {
-                stage,
-                name: tf(
-                    "status.continuous_learning.stage_format",
-                    &[("number", &(stage + 1).to_string())],
-                ),
-                difficulty: (stage as f64 + 1.0) / config.curriculum_stages as f64,
-                tasks_completed: 0,
-                mastery_threshold: 0.8,
-            })
-            .collect();
-
         Self {
             config,
             state: Arc::new(Mutex::new(CenterState {
-                tasks: HashMap::new(),
                 memories: HashMap::new(),
                 forgetting_curves: HashMap::new(),
                 forgetting_risks: HashMap::new(),
-                curriculum,
-                agent_history: HashMap::new(),
                 semantic_patterns: HashMap::new(),
-                next_task_id: 1,
                 next_memory_id: 1,
                 next_pattern_id: 1,
             })),
@@ -350,85 +224,6 @@ impl ContinuousLearningCenter {
     pub fn inject_agent(&self, agent: Arc<dyn Agent>) {
         let mut guard = self.agent.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(agent);
-    }
-
-    /// Returns a clone of the agent handle so callers can inject the agent
-    /// after the center has been moved into a background task.
-    pub fn agent_handle(&self) -> AgentInjector {
-        Arc::clone(&self.agent)
-    }
-
-    /// Builder-style setter (consumes self) for ergonomic construction.
-    pub fn with_agent(self, agent: Arc<dyn Agent>) -> Self {
-        self.inject_agent(agent);
-        self
-    }
-
-    // ── Task management ────────────────────────────────────────────────────
-
-    /// Submits a new learning task and returns its generated ID.
-    pub fn submit_task(
-        &self,
-        name: &str,
-        task_type: LearningTaskType,
-        priority: u8,
-    ) -> Result<String> {
-        if priority > 10 {
-            bail!(
-                "{}",
-                tf(
-                    "error.continuous_learning.priority_out_of_range",
-                    &[("value", &priority.to_string())]
-                )
-            );
-        }
-        let mut state = lock_guard(&self.state);
-        // Evict the oldest (lowest priority) task when at capacity.
-        if state.tasks.len() >= self.config.max_tasks {
-            if let Some(oldest_id) = state
-                .tasks
-                .iter()
-                .min_by_key(|(_, t)| (t.priority, t.created_ms))
-                .map(|(id, _)| id.clone())
-            {
-                state.tasks.remove(&oldest_id);
-            }
-        }
-
-        let id = format!("task-{}", state.next_task_id);
-        state.next_task_id += 1;
-
-        let task = LearningTask {
-            id: id.clone(),
-            name: name.to_string(),
-            task_type,
-            created_ms: crate::shared::timestamps::now_ts_ms() as u64,
-            priority,
-            status: LearningStatus::Pending,
-        };
-        state.tasks.insert(id.clone(), task);
-        Ok(id)
-    }
-
-    /// Updates the status of an existing task.
-    pub fn update_task_status(&self, task_id: &str, status: LearningStatus) -> Result<()> {
-        let was_completed = status == LearningStatus::Completed;
-        let mut state = lock_guard(&self.state);
-        let task = state.tasks.get_mut(task_id).with_context(|| {
-            tf(
-                "error.continuous_learning.task_not_found",
-                &[("id", task_id)],
-            )
-        })?;
-        task.status = status;
-
-        // If the task completed, advance the curriculum.
-        if was_completed {
-            if let Some(stage) = state.curriculum.first_mut() {
-                stage.tasks_completed += 1;
-            }
-        }
-        Ok(())
     }
 
     // ── Memory consolidation ───────────────────────────────────────────────
@@ -796,31 +591,19 @@ Memories:
         Ok(())
     }
 
-    // ── Query ──────────────────────────────────────────────────────────────
-
-    /// Returns memories matching the given pattern key with at least the
-    /// specified minimum importance.
-    pub fn query_memories(
-        &self,
-        pattern_key: &str,
-        min_importance: f64,
-    ) -> Vec<ConsolidatedMemory> {
-        let state = lock_guard(&self.state);
-        let mut results: Vec<_> = state
-            .memories
-            .values()
-            .filter(|m| m.pattern_key == pattern_key && m.importance >= min_importance)
-            .cloned()
-            .collect();
-        results.sort_by(|a, b| {
-            b.importance
-                .partial_cmp(&a.importance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        results
-    }
-
     // ── Forgetting detection ───────────────────────────────────────────────
+
+    /// Ebbinghaus exponential-decay retention strength (single implementation).
+    ///
+    /// `strength = base * exp(-decay_rate * elapsed_hours)`. All four callers
+    /// (detect_forgetting / estimate_retention / retention_score /
+    /// detect_forgetting_risk) previously inlined this formula with subtly
+    /// different data sources; this is now the one shared helper.
+    fn retention_strength(base: f64, decay_rate: f64, now_ms: u64, last_ms: u64) -> f64 {
+        let elapsed_ms = now_ms.saturating_sub(last_ms);
+        let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
+        base * (-decay_rate * elapsed_hours).exp()
+    }
 
     /// Detects all memories whose current forgetting-curve strength has
     /// dropped below `min_retention_importance` and returns them.
@@ -831,92 +614,15 @@ Memories:
             .forgetting_curves
             .values()
             .filter(|curve| {
-                let elapsed_ms = now.saturating_sub(curve.last_reinforced_ms);
-                let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
-                let strength = curve.original_strength * (-curve.decay_rate * elapsed_hours).exp();
-                strength < self.config.min_retention_importance
+                Self::retention_strength(
+                    curve.original_strength,
+                    curve.decay_rate,
+                    now,
+                    curve.last_reinforced_ms,
+                ) < self.config.min_retention_importance
             })
             .cloned()
             .collect()
-    }
-
-    // ── Curriculum ─────────────────────────────────────────────────────────
-
-    /// Records an agent task result for adaptive curriculum adjustment.
-    pub fn record_agent_result(&self, agent: &str, success: bool) {
-        let mut state = lock_guard(&self.state);
-        state
-            .agent_history
-            .entry(agent.to_string())
-            .or_default()
-            .push(AgentResult {
-                success,
-                timestamp_ms: crate::shared::timestamps::now_ts_ms() as u64,
-            });
-    }
-
-    /// Computes an adaptive mastery threshold based on the agent's historical
-    /// performance. High-performing agents get a lower (harder) threshold;
-    /// struggling agents get a higher (easier) threshold.
-    pub fn compute_adaptive_threshold(&self, agent: &str) -> f64 {
-        let state = lock_guard(&self.state);
-        Self::compute_adaptive_threshold_impl(&state, agent)
-    }
-
-    /// Inner implementation that takes the state by reference (no locking).
-    fn compute_adaptive_threshold_impl(state: &CenterState, agent: &str) -> f64 {
-        let history = state.agent_history.get(agent);
-        let history = match history {
-            Some(h) if !h.is_empty() => h,
-            _ => return 0.5, // default for unknown agents
-        };
-        let avg_success: f64 = history
-            .iter()
-            .map(|r| if r.success { 1.0 } else { 0.0 })
-            .sum::<f64>()
-            / history.len() as f64;
-        // Lower threshold for high-performing agents (harder curriculum)
-        // Higher threshold for struggling agents (easier curriculum)
-        1.0 - avg_success
-    }
-
-    /// Returns the current curriculum stage, advancing to the next stage if
-    /// the current one has reached the mastery threshold.
-    ///
-    /// Uses adaptive difficulty: the mastery threshold is computed from the
-    /// named agent's historical performance rather than a fixed constant.
-    pub fn apply_curriculum(&self, agent: &str) -> Result<CurriculumStage> {
-        let mut state = lock_guard(&self.state);
-        if state.curriculum.is_empty() {
-            // All stages completed; return a terminal stage.
-            return Ok(CurriculumStage {
-                stage: self.config.curriculum_stages,
-                name: t("status.continuous_learning.stage_completed"),
-                difficulty: 1.0,
-                tasks_completed: self.config.tasks_per_stage,
-                mastery_threshold: 1.0,
-            });
-        }
-
-        let current = &state.curriculum[0];
-        if current.tasks_completed >= self.config.tasks_per_stage {
-            // Advance to the next stage.
-            state.curriculum.remove(0);
-            if state.curriculum.is_empty() {
-                return Ok(CurriculumStage {
-                    stage: self.config.curriculum_stages,
-                    name: t("status.continuous_learning.stage_completed"),
-                    difficulty: 1.0,
-                    tasks_completed: self.config.tasks_per_stage,
-                    mastery_threshold: 1.0,
-                });
-            }
-        }
-
-        // Apply adaptive mastery threshold based on agent performance.
-        let mut stage = state.curriculum[0].clone();
-        stage.mastery_threshold = Self::compute_adaptive_threshold_impl(&state, agent);
-        Ok(stage)
     }
 
     // ── Experience replay ──────────────────────────────────────────────────
@@ -948,9 +654,12 @@ Memories:
         match state.forgetting_curves.get(memory_id) {
             Some(curve) => {
                 let now = crate::shared::timestamps::now_ts_ms() as u64;
-                let elapsed_ms = now.saturating_sub(curve.last_reinforced_ms);
-                let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
-                curve.original_strength * (-curve.decay_rate * elapsed_hours).exp()
+                Self::retention_strength(
+                    curve.original_strength,
+                    curve.decay_rate,
+                    now,
+                    curve.last_reinforced_ms,
+                )
             }
             None => 0.0,
         }
@@ -976,19 +685,20 @@ Memories:
     pub fn retention_score(&self, entry: &ConsolidatedMemory, now: u64) -> f64 {
         let state = lock_guard(&self.state);
         match state.forgetting_curves.get(&entry.id) {
-            Some(curve) => {
-                let elapsed_ms = now.saturating_sub(curve.last_reinforced_ms);
-                let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
-                // Ebbinghaus: R = e^(-Δt/S) where S = 1/decay_rate (stability)
-                // We model as: score = importance * exp(-decay_rate * elapsed_hours)
-                entry.importance * (-curve.decay_rate * elapsed_hours).exp()
-            }
+            Some(curve) => Self::retention_strength(
+                entry.importance,
+                curve.decay_rate,
+                now,
+                curve.last_reinforced_ms,
+            ),
             None => {
                 // No curve → score based purely on recency of consolidation.
-                let elapsed_ms = now.saturating_sub(entry.consolidated_ms);
-                let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
-                let default_decay = self.config.default_decay_rate;
-                entry.importance * (-default_decay * elapsed_hours).exp()
+                Self::retention_strength(
+                    entry.importance,
+                    self.config.default_decay_rate,
+                    now,
+                    entry.consolidated_ms,
+                )
             }
         }
     }
@@ -1019,15 +729,14 @@ Memories:
             // Compute retention score using the Ebbinghaus formula.
             let score = match state.forgetting_curves.get(&id) {
                 Some(c) => {
-                    let elapsed_ms = now.saturating_sub(c.last_reinforced_ms);
-                    let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
-                    importance * (-c.decay_rate * elapsed_hours).exp()
+                    Self::retention_strength(importance, c.decay_rate, now, c.last_reinforced_ms)
                 }
-                None => {
-                    let elapsed_ms = now.saturating_sub(consolidated_ms);
-                    let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
-                    importance * (-self.config.default_decay_rate * elapsed_hours).exp()
-                }
+                None => Self::retention_strength(
+                    importance,
+                    self.config.default_decay_rate,
+                    now,
+                    consolidated_ms,
+                ),
             };
 
             // Update or create the forgetting risk record.
@@ -1082,33 +791,29 @@ Memories:
 
     /// Perform a forgetting review cycle with full learning loop integration:
     /// 1. LLM distillation — create semantic summaries from consolidated memories.
-    /// 2. Apply curriculum — manage learning stage progression with adaptive thresholds.
-    /// 3. Detect forgetting (raw `detect_forgetting`) and reinforce decaying memories.
-    /// 4. Replay important memories via `replay_important_memories()` for spaced repetition.
-    /// 5. Detect forgetting risks and reinforce at-risk memories (original logic).
-    /// 6. Fast-evict memories with 3+ consecutive critical scores.
+    /// 2. Detect forgetting (raw `detect_forgetting`) and reinforce decaying memories.
+    /// 3. Replay important memories via `replay_important_memories()` for spaced repetition.
+    /// 4. Detect forgetting risks and reinforce at-risk memories (original logic).
+    /// 5. Fast-evict memories with 3+ consecutive critical scores.
     ///
     /// Returns `(replayed, evicted, patterns_extracted)`.
-    pub async fn review_cycle(&self, agent: &str) -> (usize, usize, usize) {
+    pub async fn review_cycle(&self, _agent: &str) -> (usize, usize, usize) {
         // Step 1: LLM distillation — semantic summarisation instead of JSON string rotation.
         let patterns = self.llm_distill().await;
 
-        // Step 2: Apply curriculum — manage learning progression with adaptive thresholds.
-        let _ = self.apply_curriculum(agent);
-
-        // Step 3: Detect forgetting (raw forgetting-curve check) and reinforce.
+        // Step 2: Detect forgetting (raw forgetting-curve check) and reinforce.
         let forgotten = self.detect_forgetting();
         for curve in &forgotten {
             let _ = self.reinforce_memory(&curve.memory_id);
         }
 
-        // Step 4: Replay important memories (spaced repetition).
+        // Step 3: Replay important memories (spaced repetition).
         let _important = self.replay_important_memories(5);
 
-        // Step 5: Detect forgetting risks.
+        // Step 4: Detect forgetting risks.
         let at_risk = self.detect_forgetting_risk();
 
-        // Step 6: Replay important at-risk memories.
+        // Step 5: Replay important at-risk memories.
         let mut replayed = 0usize;
         for record in &at_risk {
             if record.flagged_for_eviction {
@@ -1119,7 +824,7 @@ Memories:
             }
         }
 
-        // Step 7: Fast-evict memories flagged for eviction.
+        // Step 6: Fast-evict memories flagged for eviction.
         let evict_ids = self.fast_evict_candidates();
         let evicted = evict_ids.len();
         {
@@ -1132,62 +837,6 @@ Memories:
         }
 
         (replayed, evicted, patterns)
-    }
-
-    // ── Profile ────────────────────────────────────────────────────────────
-
-    /// Returns a snapshot of the centre's current state.
-    pub fn profile(&self) -> ContinuousLearningProfile {
-        let state = lock_guard(&self.state);
-        let total_tasks = state.tasks.len();
-        let pending_tasks = state
-            .tasks
-            .values()
-            .filter(|t| t.status == LearningStatus::Pending)
-            .count();
-        let active_tasks = state
-            .tasks
-            .values()
-            .filter(|t| t.status == LearningStatus::Active)
-            .count();
-        let completed_tasks = state
-            .tasks
-            .values()
-            .filter(|t| t.status == LearningStatus::Completed)
-            .count();
-        let failed_tasks = state
-            .tasks
-            .values()
-            .filter(|t| t.status == LearningStatus::Failed)
-            .count();
-        let archived_tasks = state
-            .tasks
-            .values()
-            .filter(|t| t.status == LearningStatus::Archived)
-            .count();
-        let current_stage = state
-            .curriculum
-            .first()
-            .map(|s| s.stage)
-            .unwrap_or(self.config.curriculum_stages);
-        let current_stage_tasks_done = state
-            .curriculum
-            .first()
-            .map(|s| s.tasks_completed)
-            .unwrap_or(self.config.tasks_per_stage);
-
-        ContinuousLearningProfile {
-            total_tasks,
-            pending_tasks,
-            active_tasks,
-            completed_tasks,
-            failed_tasks,
-            archived_tasks,
-            total_memories: state.memories.len(),
-            current_stage,
-            current_stage_tasks_done,
-            tasks_per_stage: self.config.tasks_per_stage,
-        }
     }
 }
 
@@ -1210,61 +859,11 @@ mod tests {
     #[test]
     fn test_empty_state() {
         let center = test_center();
-        let p = center.profile();
-        assert_eq!(p.total_tasks, 0);
-        assert_eq!(p.total_memories, 0);
-        assert_eq!(p.current_stage, 0);
         assert!(center.detect_forgetting().is_empty());
         assert!(center.replay_important_memories(10).is_empty());
     }
 
-    // ── 2. Submit task ─────────────────────────────────────────────────────
-
-    #[test]
-    fn test_submit_task() -> Result<()> {
-        let center = test_center();
-        let id = center.submit_task("test-supervised", LearningTaskType::Supervised, 5)?;
-        assert!(id.starts_with("task-"));
-
-        let p = center.profile();
-        assert_eq!(p.total_tasks, 1);
-        assert_eq!(p.pending_tasks, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn test_submit_task_invalid_priority() {
-        let center = test_center();
-        let result = center.submit_task("bad", LearningTaskType::Active, 11);
-        assert!(result.is_err());
-    }
-
-    // ── 3. Update task status ──────────────────────────────────────────────
-
-    #[test]
-    fn test_update_task_status() -> Result<()> {
-        let center = test_center();
-        let id = center.submit_task("update-me", LearningTaskType::Reinforcement, 3)?;
-
-        center.update_task_status(&id, LearningStatus::Active)?;
-        let p = center.profile();
-        assert_eq!(p.active_tasks, 1);
-
-        center.update_task_status(&id, LearningStatus::Completed)?;
-        let p = center.profile();
-        assert_eq!(p.completed_tasks, 1);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_update_task_status_not_found() {
-        let center = test_center();
-        let result = center.update_task_status("nonexistent", LearningStatus::Failed);
-        assert!(result.is_err());
-    }
-
-    // ── 4. Consolidate / Reinforce / Query memories ────────────────────────
+    // ── 2. Consolidate / Reinforce memories ─────────────────────────────────
 
     #[test]
     fn test_consolidate_experience() -> Result<()> {
@@ -1272,8 +871,9 @@ mod tests {
         let mem_id = center.consolidate_experience("pattern-a", "some data", 0.9)?;
         assert!(mem_id.starts_with("mem-"));
 
-        let p = center.profile();
-        assert_eq!(p.total_memories, 1);
+        let replayed = center.replay_important_memories(10);
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0].data, "some data");
         Ok(())
     }
 
@@ -1290,20 +890,6 @@ mod tests {
         let after = center.estimate_retention(&mem_id);
         assert!((after - 0.7).abs() < 0.01);
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_query_memories() -> Result<()> {
-        let center = test_center();
-        center.consolidate_experience("topic-x", "data high", 0.9)?;
-        center.consolidate_experience("topic-x", "data medium", 0.5)?;
-        center.consolidate_experience("topic-x", "data low", 0.1)?;
-
-        let results = center.query_memories("topic-x", 0.5);
-        assert_eq!(results.len(), 2);
-        // Should be ordered by importance descending.
-        assert!(results[0].importance >= results[1].importance);
         Ok(())
     }
 
@@ -1389,34 +975,6 @@ mod tests {
         Ok(())
     }
 
-    // ── 6. Curriculum ──────────────────────────────────────────────────────
-
-    #[test]
-    fn test_apply_curriculum() -> Result<()> {
-        let config = ContinuousLearningConfig {
-            tasks_per_stage: 2,
-            curriculum_stages: 3,
-            ..ContinuousLearningConfig::default()
-        };
-        let center = ContinuousLearningCenter::new(config);
-
-        // Stage 0 should be current initially.
-        let stage = center.apply_curriculum("test_agent")?;
-        assert_eq!(stage.stage, 0);
-        assert_eq!(stage.tasks_completed, 0);
-
-        // Complete 2 tasks (advances to stage 1).
-        let t1 = center.submit_task("t1", LearningTaskType::Supervised, 1)?;
-        let t2 = center.submit_task("t2", LearningTaskType::Supervised, 1)?;
-        center.update_task_status(&t1, LearningStatus::Completed)?;
-        center.update_task_status(&t2, LearningStatus::Completed)?;
-
-        let stage = center.apply_curriculum("test_agent")?;
-        assert_eq!(stage.stage, 1);
-
-        Ok(())
-    }
-
     // ── 7. Replay ──────────────────────────────────────────────────────────
 
     #[test]
@@ -1459,37 +1017,5 @@ mod tests {
         let strength = original * (-decay_rate * elapsed_hours).exp();
         let expected = (-1.0_f64).exp(); // e^-1 ≈ 0.3679
         assert!((strength - expected).abs() < 0.001);
-    }
-
-    // ── 10. Profile ────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_profile() -> Result<()> {
-        let center = test_center();
-
-        // Submit a variety of tasks with different statuses.
-        let _id1 = center.submit_task("pending", LearningTaskType::Supervised, 1)?;
-        let id2 = center.submit_task("active", LearningTaskType::Reinforcement, 2)?;
-        let id3 = center.submit_task("completed", LearningTaskType::Imitation, 3)?;
-        let id4 = center.submit_task("failed", LearningTaskType::Transfer, 4)?;
-
-        center.update_task_status(&id2, LearningStatus::Active)?;
-        center.update_task_status(&id3, LearningStatus::Completed)?;
-        center.update_task_status(&id4, LearningStatus::Failed)?;
-
-        // Consolidate some memories.
-        center.consolidate_experience("k1", "v1", 0.8)?;
-        center.consolidate_experience("k2", "v2", 0.6)?;
-
-        let p = center.profile();
-        assert_eq!(p.total_tasks, 4);
-        assert_eq!(p.pending_tasks, 1);
-        assert_eq!(p.active_tasks, 1);
-        assert_eq!(p.completed_tasks, 1);
-        assert_eq!(p.failed_tasks, 1);
-        assert_eq!(p.total_memories, 2);
-        assert_eq!(p.current_stage, 0);
-
-        Ok(())
     }
 }

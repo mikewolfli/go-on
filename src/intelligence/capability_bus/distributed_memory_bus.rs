@@ -8,12 +8,11 @@
 //!
 //! 1. `store_local` records an entry locally; `share_with_peers` copies it
 //!    into the local `shared_entries` view.
-//! 2. The transport loop (`start_transport` / `sync_now`) serialises local
+//! 2. The transport loop (`start_transport`) serialises local
 //!    entries and pushes them to each registered peer over real HTTP
 //!    (JSON-RPC `memory.ingest` against the peer's `/rpc` endpoint).
 //! 3. On receipt, the peer's hub stores the entries (`hub` `memory.ingest`
 //!    method); the node's own bus can ingest them via `ingest_shared`.
-//! 4. Expired entries are pruned periodically by `prune_expired`.
 //!
 //! The transport is only active when a deployment calls `start_transport`
 //! and registers peers via `register_peer`; until then the bus is purely
@@ -87,6 +86,7 @@ impl Default for MemoryTransportConfig {
 
 /// Represents the current status of a sync operation.
 #[derive(Debug, Clone, Default)]
+#[cfg(feature = "multi-users-server")]
 pub enum SyncStatus {
     /// No sync operation is in progress.
     #[default]
@@ -106,6 +106,7 @@ pub enum SyncStatus {
 
 /// Statistics collected by the transport layer.
 #[derive(Debug, Clone, Default)]
+#[cfg(feature = "multi-users-server")]
 pub struct TransportStats {
     /// Total number of sync operations sent to peers.
     pub total_syncs_sent: u64,
@@ -224,6 +225,7 @@ pub struct DistributedMemoryBus {
     #[cfg(feature = "multi-users-server")]
     transport_config: Arc<Mutex<Option<MemoryTransportConfig>>>,
     /// Transport statistics.
+    #[cfg(feature = "multi-users-server")]
     transport_stats: Arc<Mutex<TransportStats>>,
     /// Handle for the background sync thread.
     #[cfg(feature = "multi-users-server")]
@@ -251,6 +253,7 @@ impl DistributedMemoryBus {
             transport_running: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "multi-users-server")]
             transport_config: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "multi-users-server")]
             transport_stats: Arc::new(Mutex::new(TransportStats::default())),
             #[cfg(feature = "multi-users-server")]
             sync_thread: Arc::new(Mutex::new(None)),
@@ -288,7 +291,7 @@ impl DistributedMemoryBus {
         };
 
         // Compute shared length inside the local_entries lock scope.
-        // Lock order: local → shared (consistent with share_with_peers / prune_expired).
+        // Lock order: local → shared (consistent with share_with_peers).
         let mut entries = self.local_entries.lock().unwrap_or_else(|e| e.into_inner());
         let shared_len = self.shared_entries.lock().map(|g| g.len()).unwrap_or(0);
         entries.push_back(entry);
@@ -302,70 +305,6 @@ impl DistributedMemoryBus {
         p.local_entries = entries.len() as u32;
 
         id
-    }
-
-    // ------------------------------------------------------------------
-    // Query
-    // ------------------------------------------------------------------
-
-    /// Find all entries (local + shared) whose `key` matches exactly.
-    pub fn find_by_key(&self, key: &str) -> Vec<MemoryBusEntry> {
-        let mut results = Vec::new();
-
-        let local = self.local_entries.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        for e in local.iter() {
-            if e.key == key {
-                results.push(e.clone());
-            }
-        }
-        drop(local);
-
-        let shared = self.shared_entries.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        for se in shared.iter() {
-            if se.entry.key == key {
-                results.push(se.entry.clone());
-            }
-        }
-
-        results
-    }
-
-    /// Find all entries (local + shared) that have **any** of the given tags.
-    pub fn find_by_tags(&self, tags: &[String]) -> Vec<MemoryBusEntry> {
-        let mut results = Vec::new();
-
-        if tags.is_empty() {
-            return results;
-        }
-
-        let local = self.local_entries.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        for e in local.iter() {
-            if e.tags.iter().any(|t| tags.contains(t)) {
-                results.push(e.clone());
-            }
-        }
-        drop(local);
-
-        let shared = self.shared_entries.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        for se in shared.iter() {
-            if se.entry.tags.iter().any(|t| tags.contains(t)) {
-                results.push(se.entry.clone());
-            }
-        }
-
-        results
     }
 
     // ------------------------------------------------------------------
@@ -442,6 +381,83 @@ impl DistributedMemoryBus {
         Ok(true)
     }
 
+    /// Discover remote peers from the local Hub discovery file (BLUE72 P2).
+    ///
+    /// When a Hub daemon is running on this machine it writes a discovery
+    /// file (`HubDiscovery::default_path`) carrying its loopback endpoint.
+    /// Other instances on the same host can auto-register that endpoint as a
+    /// peer instead of manually listing `GOON_MEMORY_PEERS`. Returns the
+    /// number of peers discovered from the file.
+    #[cfg(feature = "multi-users-server")]
+    pub fn discover_peers_from_hub(&self) -> usize {
+        use crate::hub::discovery::HubDiscovery;
+        let path = HubDiscovery::default_path();
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return 0;
+        };
+        let Ok(discovery) = serde_json::from_str::<HubDiscovery>(&content) else {
+            tracing::warn!("hub discovery file unreadable: {}", path.display());
+            return 0;
+        };
+        // The hub advertises itself with a stable id; register its endpoint.
+        let endpoint = discovery.endpoint.trim().to_string();
+        if endpoint.is_empty() {
+            return 0;
+        }
+        // Strip any scheme so register_peer receives a bare host:port.
+        let addr = endpoint
+            .strip_prefix("http://")
+            .or_else(|| endpoint.strip_prefix("https://"))
+            .unwrap_or(&endpoint)
+            .trim_end_matches('/')
+            .to_string();
+        self.register_peer(&discovery.hub_id, &addr);
+        1
+    }
+
+    /// Configure cluster membership and start the transport.
+    ///
+    /// Combines (in priority order):
+    /// 1. Hub discovery file (auto-discovered local peers)
+    /// 2. `GOON_MEMORY_PEERS` env var (explicit peer list)
+    ///
+    /// Starts the HTTP transport once at least one peer is registered.
+    /// Returns `Ok(true)` when the transport is running, `Ok(false)` when no
+    /// peers were found (purely local mode).
+    #[cfg(feature = "multi-users-server")]
+    pub fn configure_cluster(&self) -> anyhow::Result<bool> {
+        let discovered = self.discover_peers_from_hub();
+        let configured = self.configure_from_env()?;
+        if configured {
+            return Ok(true);
+        }
+        if discovered > 0 {
+            let config = MemoryTransportConfig {
+                sync_interval_ms: std::env::var("GOON_MEMORY_SYNC_INTERVAL_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30_000),
+                auth_token: std::env::var("GOON_MEMORY_AUTH_TOKEN").ok(),
+                ..Default::default()
+            };
+            self.start_transport(config)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Single-node fallback.
+    #[cfg(not(feature = "multi-users-server"))]
+    pub fn discover_peers_from_hub(&self) -> usize {
+        0
+    }
+
+    /// Single-node fallback.
+    #[cfg(not(feature = "multi-users-server"))]
+    pub fn configure_cluster(&self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
     /// No-op on single-node builds.
     #[cfg(not(feature = "multi-users-server"))]
     pub fn configure_from_env(&self) -> anyhow::Result<bool> {
@@ -470,7 +486,7 @@ impl DistributedMemoryBus {
     /// Mark a local entry (by `entry_id`) as shared with all known peers.
     ///
     /// Copies the entry into the local `shared_entries` view; the transport
-    /// loop (`start_transport` / `sync_now`) fan‑outs the data to each
+    /// loop (`start_transport`) fan‑outs the data to each
     /// peer's network address over HTTP.
     ///
     /// Returns `true` if the entry was found and shared, `false` otherwise.
@@ -532,59 +548,6 @@ impl DistributedMemoryBus {
         }
 
         true
-    }
-
-    // ------------------------------------------------------------------
-    // Maintenance
-    // ------------------------------------------------------------------
-
-    /// Remove expired entries from both local and shared stores.
-    ///
-    /// An entry is considered expired when `created_ms + ttl_ms < now` and
-    /// `ttl_ms > 0`.
-    pub fn prune_expired(&self) {
-        let now = crate::shared::timestamps::now_ts_ms() as u64;
-        let mut pruned = 0u64;
-
-        // Prune local entries
-        let mut local = self.local_entries.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        let before = local.len();
-        local.retain(|e| e.ttl_ms == 0 || e.created_ms + e.ttl_ms >= now);
-        pruned += (before - local.len()) as u64;
-        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        p.local_entries = local.len() as u32;
-        drop(p);
-        drop(local);
-
-        // Prune shared entries
-        let mut shared = self.shared_entries.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        let before = shared.len();
-        shared.retain(|se| se.entry.ttl_ms == 0 || se.entry.created_ms + se.entry.ttl_ms >= now);
-        pruned += (before - shared.len()) as u64;
-        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        p.shared_entries = shared.len() as u32;
-        drop(p);
-        drop(shared);
-
-        if pruned > 0 {
-            let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned");
-                poisoned.into_inner()
-            });
-            p.entries_pruned = p.entries_pruned.wrapping_add(pruned);
-        }
     }
 
     // ------------------------------------------------------------------
@@ -736,83 +699,6 @@ impl DistributedMemoryBus {
     #[cfg(not(feature = "multi-users-server"))]
     pub fn start_transport(&self, _config: MemoryTransportConfig) -> anyhow::Result<()> {
         anyhow::bail!("{}", tf("error.transport_single_node", &[]));
-    }
-
-    /// Stop the background transport sync thread.
-    #[cfg(feature = "multi-users-server")]
-    pub fn stop_transport(&self) -> anyhow::Result<()> {
-        if !self.transport_running.load(Ordering::SeqCst) {
-            anyhow::bail!("{}", tf("error.transport_not_running", &[]));
-        }
-
-        self.transport_running.store(false, Ordering::SeqCst);
-
-        // Join the background thread
-        if let Some(handle) = self
-            .sync_thread
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
-            let _ = handle.join();
-        }
-
-        // Update profile
-        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned");
-            poisoned.into_inner()
-        });
-        p.transport_running = false;
-
-        Ok(())
-    }
-
-    /// Single‑node fallback (multi‑user feature not enabled)
-    #[cfg(not(feature = "multi-users-server"))]
-    pub fn stop_transport(&self) -> anyhow::Result<()> {
-        anyhow::bail!("{}", tf("error.transport_single_node", &[]));
-    }
-
-    /// Trigger an immediate sync operation.
-    ///
-    /// Returns the [`SyncStatus`] of the operation.
-    #[cfg(feature = "multi-users-server")]
-    pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
-        let config = self
-            .transport_config
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .unwrap_or_default();
-        Self::do_sync(
-            &self.local_entries,
-            &self.remote_peers,
-            &self.profile,
-            &self.transport_stats,
-            &config,
-        )?;
-
-        let status = self
-            .transport_stats
-            .lock()
-            .map(|s| s.last_sync_status.clone())
-            .unwrap_or(SyncStatus::Idle);
-
-        Ok(status)
-    }
-
-    /// Single‑node fallback (multi‑user feature not enabled)
-    #[cfg(not(feature = "multi-users-server"))]
-    pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
-        anyhow::bail!("Transport is not available in single-node mode");
-    }
-
-    /// Return a snapshot of the current transport statistics.
-    pub fn transport_stats(&self) -> TransportStats {
-        self.transport_stats
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default()
     }
 
     /// Ingest shared entries received from a remote peer (JSON payload).
@@ -1103,48 +989,6 @@ mod tests {
     }
 
     #[test]
-    fn find_by_key_local() {
-        let bus = make_bus(100);
-        bus.store_local("color", "red", vec![], 1.0, 0);
-        let results = bus.find_by_key("color");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].value, "red");
-    }
-
-    #[test]
-    fn find_by_key_no_match() {
-        let bus = make_bus(100);
-        let results = bus.find_by_key("nope");
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn find_by_tags() {
-        let bus = make_bus(100);
-        bus.store_local(
-            "car",
-            "tesla",
-            vec!["ev".to_string(), "fast".to_string()],
-            0.9,
-            0,
-        );
-        bus.store_local("bike", "canyon", vec!["slow".to_string()], 0.5, 0);
-
-        let tag_filter = vec!["ev".to_string()];
-        let results = bus.find_by_tags(&tag_filter);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].key, "car");
-    }
-
-    #[test]
-    fn find_by_tags_empty_input() {
-        let bus = make_bus(100);
-        bus.store_local("a", "1", vec!["x".to_string()], 1.0, 0);
-        let results = bus.find_by_tags(&[]);
-        assert!(results.is_empty());
-    }
-
-    #[test]
     fn register_and_unregister_peer() {
         let bus = make_bus(100);
         bus.register_peer("node-alpha", "10.0.0.1:9000");
@@ -1164,55 +1008,19 @@ mod tests {
         let id = bus.store_local("secret", "sauce", vec![], 0.8, 0);
         assert!(bus.share_with_peers(&id));
 
-        // Should appear in both local and shared queries
-        let all = bus.find_by_key("secret");
-        assert_eq!(all.len(), 2, "expected local + shared copy");
+        // The shared view should contain exactly one copy of the entry.
+        let shared_len = bus
+            .shared_entries
+            .lock()
+            .expect("lock shared_entries")
+            .len();
+        assert_eq!(shared_len, 1, "expected one shared copy");
     }
 
     #[test]
     fn share_with_peers_unknown_id() {
         let bus = make_bus(100);
         assert!(!bus.share_with_peers("does-not-exist"));
-    }
-
-    #[test]
-    fn prune_expired_removes_old_entries() {
-        let bus = make_bus(100);
-
-        // Insert an entry with a TTL that is already expired
-        let past = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64
-            - 10_000; // 10 seconds ago
-
-        // We cheat by storing directly so we can set created_ms
-        {
-            let mut local = bus.local_entries.lock().expect("lock local_entries");
-            local.push_back(MemoryBusEntry {
-                id: "expired-id".into(),
-                node_id: local_node_id(),
-                key: "expired".into(),
-                value: "gone".into(),
-                tags: vec![],
-                confidence: 1.0,
-                created_ms: past,
-                ttl_ms: 1, // expired (1 ms TTL ~ 10 s ago)
-            });
-        }
-
-        bus.prune_expired();
-        let results = bus.find_by_key("expired");
-        assert!(results.is_empty(), "expired entry should have been pruned");
-    }
-
-    #[test]
-    fn prune_expired_keeps_immortal_entries() {
-        let bus = make_bus(100);
-        bus.store_local("keep", "me", vec![], 1.0, 0); // ttl_ms = 0 → immortal
-        bus.prune_expired();
-        let results = bus.find_by_key("keep");
-        assert_eq!(results.len(), 1);
     }
 
     #[test]
@@ -1237,11 +1045,12 @@ mod tests {
         bus.store_local("c", "3", vec![], 1.0, 0);
         bus.store_local("d", "4", vec![], 1.0, 0); // should evict "a"
 
-        let results = bus.find_by_key("a");
-        assert!(
-            results.is_empty(),
+        let local = bus.local_entries.lock().expect("lock local_entries");
+        let keys: Vec<String> = local.iter().map(|e| e.key.clone()).collect();
+        assert_eq!(
+            keys,
+            vec!["b", "c", "d"],
             "oldest entry 'a' should have been evicted"
         );
-        assert_eq!(bus.find_by_key("d").len(), 1);
     }
 }

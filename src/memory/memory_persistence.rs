@@ -5,13 +5,11 @@
 //! - **Warm (L2)**: SQLite-backed vector store (30-day retention)
 //! - **Cold (L3)**: gzip-compressed NDJSON files on disk for long-term archival
 //!
-//! Provides automatic migration (promotion/demotion) between tiers and
-//! metadata indexing on startup.
+//! Provides automatic migration (promotion/demotion) between tiers.
 
 use anyhow::{Context, Result};
 use tokio::task::spawn_blocking;
 
-use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use indexmap::IndexSet;
@@ -20,9 +18,8 @@ use postgres::{Client as PgClient, NoTls as PgNoTls};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Once;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -181,17 +178,6 @@ impl HotCache {
         }
     }
 
-    fn get(&mut self, id: &str) -> Option<&mut MemoryEntry> {
-        // Promote to MRU position
-        if self.lru_order.shift_remove(id) {
-            self.lru_order.insert(id.to_string());
-        }
-        self.entries.get_mut(id).map(|he| {
-            he.inserted_at = Instant::now();
-            &mut he.entry
-        })
-    }
-
     fn insert(&mut self, mut entry: MemoryEntry) {
         entry.tier = MemoryTier::Hot;
 
@@ -250,17 +236,9 @@ impl HotCache {
         self.remove(&lru_id)
     }
 
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-
     fn clear(&mut self) {
         self.entries.clear();
         self.lru_order.clear();
-    }
-
-    fn iter_entries(&self) -> impl Iterator<Item = &MemoryEntry> {
-        self.entries.values().map(|he| &he.entry)
     }
 }
 
@@ -293,16 +271,6 @@ impl ColdStorageIndex {
             (uid, memory_id.to_string()),
             (year_month.to_string(), shard_name.to_string(), line_offset),
         );
-    }
-
-    /// Look up the cold storage location for a memory entry.
-    pub fn retrieve(
-        &self,
-        user_id: Option<&str>,
-        memory_id: &str,
-    ) -> Option<&(String, String, u64)> {
-        let uid = user_id.unwrap_or("").to_string();
-        self.entries.get(&(uid, memory_id.to_string()))
     }
 }
 
@@ -464,79 +432,6 @@ impl ColdStorage {
         for shard in shards.into_iter().take(count) {
             let _ = fs::remove_file(&shard);
         }
-    }
-
-    /// Read all entries from a specific shard.
-    fn read_shard(&self, path: &Path) -> Result<Vec<MemoryEntry>> {
-        let file = fs::File::open(path).context("failed to open cold storage shard")?;
-        let decoder = GzDecoder::new(file);
-        let reader = BufReader::new(decoder);
-        let mut entries = Vec::new();
-        for line in reader.lines() {
-            let line = line.context("failed to read cold storage line")?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let entry: MemoryEntry =
-                serde_json::from_str(&line).context("failed to deserialize cold entry")?;
-            entries.push(entry);
-        }
-        Ok(entries)
-    }
-
-    /// Look up an entry by ID using the sidecar index for O(1) shard resolution.
-    /// Falls back to full scan when the ID is not in the index.
-    ///
-    /// `user_id` is required for correct index lookup since entries are keyed
-    /// by `(user_id, memory_id)` in the sidecar index.
-    fn retrieve_by_id(&self, user_id: Option<&str>, id: &str) -> Result<Option<MemoryEntry>> {
-        // Fast path: check index to find which shard contains this entry.
-        if let Ok(idx) = self.index.lock() {
-            if let Some((year_month, shard_name, _line_offset)) = idx.retrieve(user_id, id) {
-                let path = self
-                    .base_path
-                    .join(year_month)
-                    .join(format!("{}.ndjson.gz", shard_name));
-                if path.exists() {
-                    let entries = self.read_shard(&path)?;
-                    if let Some(entry) = entries.into_iter().find(|e| e.id == id) {
-                        return Ok(Some(entry));
-                    }
-                }
-            }
-        }
-
-        // Fallback: full scan when index miss or lock poisoned.
-        let all = self.read_all()?;
-        Ok(all.into_iter().find(|e| e.id == id))
-    }
-
-    /// Iterate all shards across all months, returning (path, entries).
-    fn read_all(&self) -> Result<Vec<MemoryEntry>> {
-        let mut all = Vec::new();
-        if !self.base_path.exists() {
-            return Ok(all);
-        }
-        for dir_entry in
-            fs::read_dir(&self.base_path).context("failed to read cold storage base")?
-        {
-            let dir_entry = dir_entry.context("failed to read cold storage directory entry")?;
-            let path = dir_entry.path();
-            if path.is_dir() {
-                for file_entry in
-                    fs::read_dir(&path).context("failed to read cold storage month directory")?
-                {
-                    let file_entry =
-                        file_entry.context("failed to read cold storage file entry")?;
-                    let file_path = file_entry.path();
-                    if file_path.extension().and_then(|e| e.to_str()) == Some("gz") {
-                        let entries = self.read_shard(&file_path)?;
-                        all.extend(entries);
-                    }
-                }
-            }
-        }
-        Ok(all)
     }
 }
 
@@ -901,49 +796,6 @@ impl WarmStore {
         }
     }
 
-    async fn get(&self, id: &str) -> Result<Option<MemoryEntry>> {
-        #[cfg(feature = "backend-sqlite")]
-        let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let conn = self.conn.clone();
-        let id = id.to_string();
-        spawn_blocking(move || {
-            #[cfg(not(feature = "backend-sqlite"))]
-            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("warm store mutex poisoned, recovering");
-                poisoned.into_inner()
-            });
-            #[cfg(feature = "backend-sqlite")]
-            let conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("warm store mutex poisoned, recovering");
-                poisoned.into_inner()
-            });
-            let sql = format!(
-                "SELECT {} FROM warm_memory WHERE id = {p}1",
-                WARM_MEMORY_COLUMNS,
-                p = PARAM_PREFIX
-            );
-            #[cfg(feature = "backend-sqlite")]
-            {
-                let mut stmt = conn.prepare(&sql)?;
-                let mut rows = stmt.query(rusqlite::params![id])?;
-                match rows.next()? {
-                    Some(row) => Ok(Some(row_to_memory_entry(row)?)),
-                    None => Ok(None),
-                }
-            }
-            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-            {
-                let rows = conn.query(&sql, &[&id])?;
-                match rows.first() {
-                    Some(row) => Ok(Some(row_to_memory_entry(row))),
-                    None => Ok(None),
-                }
-            }
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-    }
-
     async fn remove(&self, id: &str) -> Result<bool> {
         #[cfg(feature = "backend-sqlite")]
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
@@ -965,74 +817,6 @@ impl WarmStore {
             {
                 let affected = conn.execute(&sql, &[&id])?;
                 Ok(affected > 0)
-            }
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-    }
-
-    pub async fn search_by_usefulness(
-        &self,
-        min_usefulness: f32,
-        limit: usize,
-    ) -> Result<Vec<MemoryEntry>> {
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            #[cfg(not(feature = "backend-sqlite"))]
-            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("warm store mutex poisoned, recovering");
-                poisoned.into_inner()
-            });
-            #[cfg(feature = "backend-sqlite")]
-            let conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("warm store mutex poisoned, recovering");
-                poisoned.into_inner()
-            });
-            let sql = format!(
-                "SELECT {} FROM warm_memory WHERE usefulness >= {p}1 \
-                 ORDER BY usefulness DESC LIMIT {p}2",
-                WARM_MEMORY_COLUMNS,
-                p = PARAM_PREFIX
-            );
-            #[cfg(feature = "backend-sqlite")]
-            {
-                query_all(&conn, &sql, &[&min_usefulness, &(limit as i64)])
-            }
-            #[cfg(not(feature = "backend-sqlite"))]
-            {
-                query_all(&mut conn, &sql, &[&min_usefulness, &(limit as i64)])
-            }
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-    }
-
-    async fn count(&self) -> Result<usize> {
-        #[cfg(feature = "backend-sqlite")]
-        let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            #[cfg(not(feature = "backend-sqlite"))]
-            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("warm store mutex poisoned, recovering");
-                poisoned.into_inner()
-            });
-            #[cfg(feature = "backend-sqlite")]
-            let conn = conn.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("warm store mutex poisoned, recovering");
-                poisoned.into_inner()
-            });
-            #[cfg(feature = "backend-sqlite")]
-            {
-                let count: i64 =
-                    conn.query_row("SELECT COUNT(*) FROM warm_memory", [], |row| row.get(0))?;
-                Ok(count as usize)
-            }
-            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-            {
-                let row = conn.query_one("SELECT COUNT(*) FROM warm_memory", &[])?;
-                let count: i64 = row.get(0);
-                Ok(count as usize)
             }
         })
         .await
@@ -1125,22 +909,6 @@ impl WarmStore {
         ))
     }
 
-    fn get(&self, _id: &str) -> Result<Option<MemoryEntry>> {
-        Err(anyhow::anyhow!(
-            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
-        ))
-    }
-
-    pub fn search_by_usefulness(
-        &self,
-        _min_usefulness: f32,
-        _limit: usize,
-    ) -> Result<Vec<MemoryEntry>> {
-        Err(anyhow::anyhow!(
-            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
-        ))
-    }
-
     fn remove(&self, _id: &str) -> Result<bool> {
         Err(anyhow::anyhow!(
             "No storage backend configured: enable backend-sqlite or backend-postgres feature"
@@ -1158,20 +926,12 @@ impl WarmStore {
             "No storage backend configured: enable backend-sqlite or backend-postgres feature"
         ))
     }
-
-    fn count(&self) -> Result<usize> {
-        Err(anyhow::anyhow!(
-            "No storage backend configured: enable backend-sqlite or backend-postgres feature"
-        ))
-    }
 }
 
 /// Manages memory persistence across three tiers: hot, warm, cold.
 ///
 /// - Insert entries into the appropriate tier.
 /// - Promote hot → warm and warm → cold based on policy.
-/// - Demote cold → warm and warm → hot when accessed.
-/// - Load metadata index from L2 + L3 on startup.
 #[derive(Debug)]
 pub struct MemoryPersistence {
     /// L1: hot cache (in-memory LRU)
@@ -1216,20 +976,6 @@ impl MemoryPersistence {
         })
     }
 
-    /// Load metadata index for all entries from L2 (warm) and L3 (cold) tiers.
-    ///
-    /// Returns a summary with counts per tier.
-    pub async fn load_metadata_index(&self) -> Result<MetadataIndex> {
-        let warm_entries = self.warm.iterate_all().await?;
-        let cold_entries = self.cold.read_all()?;
-
-        Ok(MetadataIndex {
-            warm_count: warm_entries.len(),
-            cold_count: cold_entries.len(),
-            total: warm_entries.len() + cold_entries.len(),
-        })
-    }
-
     /// Insert or update a memory entry.
     ///
     /// The entry is placed in the hot tier by default and will be promoted
@@ -1243,68 +989,6 @@ impl MemoryPersistence {
         // Always insert/refresh in hot tier.
         hot.insert(entry);
         Ok(())
-    }
-
-    /// Retrieve an entry by ID, checking hot → warm → cold in order.
-    ///
-    /// `user_id` is required for correct cold-storage index lookup; pass `None`
-    /// only when the caller has no user context (entries stored without a user_id
-    /// will still be found).
-    pub async fn retrieve(&self, user_id: Option<&str>, id: &str) -> Result<Option<MemoryEntry>> {
-        // Check hot first.
-        {
-            let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("hot cache mutex poisoned in 'retrieve', recovering");
-                poisoned.into_inner()
-            });
-            if let Some(entry) = hot.get(id) {
-                entry.touch();
-                return Ok(Some(entry.clone()));
-            }
-        }
-
-        // Check warm.
-        if let Some(mut entry) = self.warm.get(id).await? {
-            entry.touch();
-            entry.tier = MemoryTier::Hot;
-            // Promote back to hot on access.
-            self.promote_to_hot(entry.clone())?;
-            return Ok(Some(entry));
-        }
-
-        // Check cold.
-        // Uses the ColdStorageIndex sidecar for O(1) shard lookup instead of
-        // scanning all shards. Falls back to full scan on index miss.
-        if let Some(mut entry) = self.cold.retrieve_by_id(user_id, id)? {
-            entry.touch();
-            entry.tier = MemoryTier::Warm;
-            // Promote back to warm on access.
-            self.promote_to_warm(entry.clone()).await?;
-            return Ok(Some(entry));
-        }
-
-        Ok(None)
-    }
-
-    /// Remove an entry from all tiers.
-    pub async fn remove(&self, id: &str) -> Result<bool> {
-        let mut removed = false;
-        // Remove from hot.
-        {
-            let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("hot cache mutex poisoned in 'remove', recovering");
-                poisoned.into_inner()
-            });
-            if hot.remove(id).is_some() {
-                removed = true;
-            }
-        }
-        // Remove from warm.
-        if self.warm.remove(id).await? {
-            removed = true;
-        }
-        // Remove from cold is not supported (append-only archival).
-        Ok(removed)
     }
 
     /// Promote an entry from hot → warm tier.
@@ -1330,20 +1014,6 @@ impl MemoryPersistence {
 
         // Remove from warm.
         self.warm.remove(&entry.id).await?;
-        Ok(())
-    }
-
-    /// Promote an entry to the hot tier (from warm or cold).
-    pub fn promote_to_hot(&self, entry: MemoryEntry) -> Result<()> {
-        let mut entry = entry;
-        entry.tier = MemoryTier::Hot;
-        {
-            let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("hot cache mutex poisoned in 'promote_to_hot', recovering");
-                poisoned.into_inner()
-            });
-            hot.insert(entry);
-        }
         Ok(())
     }
 
@@ -1412,59 +1082,6 @@ impl MemoryPersistence {
         Ok(report)
     }
 
-    /// Explicitly promote a single entry up one tier.
-    pub async fn promote(&self, entry: &MemoryEntry) -> Result<Option<MemoryEntry>> {
-        match entry.tier {
-            MemoryTier::Hot => {
-                let mut e = entry.clone();
-                e.tier = MemoryTier::Warm;
-                self.warm.upsert(&e).await?;
-                {
-                    let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("hot cache mutex poisoned in 'promote', recovering");
-                        poisoned.into_inner()
-                    });
-                    hot.remove(&entry.id);
-                }
-                Ok(Some(e))
-            }
-            MemoryTier::Warm => {
-                let mut e = entry.clone();
-                e.tier = MemoryTier::Cold;
-                self.cold.append_entry(&e)?;
-                self.warm.remove(&entry.id).await?;
-                Ok(Some(e))
-            }
-            MemoryTier::Cold => {
-                // Already at highest tier; cannot promote further.
-                Ok(None)
-            }
-        }
-    }
-
-    /// Explicitly demote a single entry down one tier.
-    pub async fn demote(&self, entry: &MemoryEntry) -> Result<Option<MemoryEntry>> {
-        match entry.tier {
-            MemoryTier::Hot => {
-                // Fall directly to warm (hot→cold would be too aggressive).
-                self.promote_to_warm(entry.clone()).await?;
-                let mut e = entry.clone();
-                e.tier = MemoryTier::Warm;
-                Ok(Some(e))
-            }
-            MemoryTier::Warm => {
-                self.promote_to_cold(entry.clone()).await?;
-                let mut e = entry.clone();
-                e.tier = MemoryTier::Cold;
-                Ok(Some(e))
-            }
-            MemoryTier::Cold => {
-                // Cannot demote from cold; stays in cold.
-                Ok(None)
-            }
-        }
-    }
-
     /// Attach an optional `MemorySummarizer` that compresses excess hot
     /// entries during automatic tier migration.
     pub fn with_summarizer(mut self, summarizer: MemorySummarizer) -> Self {
@@ -1528,78 +1145,11 @@ impl MemoryPersistence {
 
         Ok(())
     }
-
-    /// Returns the count of entries in each tier.
-    pub async fn tier_counts(&self) -> Result<TierCounts> {
-        static COLD_COUNT_WARN: Once = Once::new();
-        COLD_COUNT_WARN.call_once(|| {
-            tracing::warn!(
-                target: "memory_persistence",
-                "cold tier count not tracked in tier_counts() — requires linear shard scan; persist count after compaction"
-            );
-        });
-
-        let hot_count = self
-            .hot
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("hot cache mutex poisoned in 'tier_counts', recovering");
-                poisoned.into_inner()
-            })
-            .len();
-        let warm_count = self.warm.count().await.unwrap_or(0);
-        Ok(TierCounts {
-            hot: hot_count,
-            warm: warm_count,
-            cold: 0, // Cold count requires a linear scan of all shards, too expensive for this hot path.
-                     // After the next cold storage compaction / scan, persist the count and load it here.
-        })
-    }
-
-    /// Returns a snapshot of all entries currently in the hot cache.
-    ///
-    /// This enables the retrieval engine to scan L1 (hot cache) entries
-    /// without exposing the internal `HotCache` type.
-    pub fn hot_entries(&self) -> Vec<MemoryEntry> {
-        self.hot
-            .lock()
-            .map(|guard| guard.iter_entries().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// Returns a reference to the warm store for direct querying.
-    pub fn warm_store(&self) -> &WarmStore {
-        &self.warm
-    }
-
-    /// Read all entries from cold storage.
-    ///
-    /// This is an expensive operation (linear scan of all shards).
-    /// Prefer the `ColdStorageIndex` when available for O(1) lookups.
-    pub fn cold_entries(&self) -> Result<Vec<MemoryEntry>> {
-        self.cold.read_all()
-    }
 }
 
 // ===========================================================================
 // Reports & Index
 // ===========================================================================
-
-/// Summary of metadata loaded at startup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetadataIndex {
-    pub warm_count: usize,
-    pub cold_count: usize,
-    pub total: usize,
-}
-
-/// Count of entries in each tier.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TierCounts {
-    pub hot: usize,
-    pub warm: usize,
-    pub cold: usize,
-}
 
 /// Report from a migration cycle.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1669,34 +1219,16 @@ mod tests {
     }
 
     #[test]
-    fn test_hot_cache_insert_and_get() {
-        let mut cache = HotCache::new(10, 300);
-        let entry = make_entry("e1", 0.8);
-        cache.insert(entry.clone());
-
-        let retrieved = cache.get("e1");
-        assert!(retrieved.is_some());
-        assert_eq!(
-            retrieved
-                .expect("hot cache should contain the inserted entry")
-                .id,
-            "e1"
-        );
-    }
-
-    #[test]
     fn test_hot_cache_lru_eviction() {
         let mut cache = HotCache::new(3, 300);
-        for i in 1..=3 {
-            cache.insert(make_entry(&format!("e{}", i), 0.5));
-        }
-        assert_eq!(cache.len(), 3);
+        cache.insert(make_entry("e1", 0.5));
+        cache.insert(make_entry("e2", 0.5));
+        cache.insert(make_entry("e3", 0.5));
 
-        // Insert a 4th entry → evicts LRU (e1)
+        // Inserting a 4th entry at capacity evicts the LRU entry (e1).
         cache.insert(make_entry("e4", 0.5));
-        assert_eq!(cache.len(), 3);
-        assert!(cache.get("e1").is_none());
-        assert!(cache.get("e4").is_some());
+        let evicted = cache.evict_lru_one().expect("eviction should succeed");
+        assert_eq!(evicted.id, "e2", "expected e1 to already be evicted");
     }
 
     #[test]
@@ -1732,34 +1264,45 @@ mod tests {
         let entry = make_entry("cold1", 0.7);
         cold.append_entry(&entry).expect("append should succeed");
 
-        let all = cold.read_all().expect("read all should succeed");
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].id, "cold1");
+        // The write path must produce exactly one gzip shard on disk.
+        assert_eq!(cold.total_shard_count(), 1);
     }
 
     #[tokio::test]
-    async fn test_persistence_store_and_retrieve() {
+    async fn test_persistence_store_auto_migrate_and_search_by_session() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
-            .expect("persistence should initialize");
-        let entry = make_entry("p1", 0.8);
+        let persistence = MemoryPersistence::new(
+            &db_path,
+            &cold_path,
+            Some(MemoryTieringPolicy {
+                hot_ttl_secs: 0,
+                ..Default::default()
+            }),
+        )
+        .expect("persistence should initialize");
+        let mut entry = make_entry("p1", 0.8);
+        entry.session_id = Some("sess-1".to_string());
         persistence
             .store(entry)
             .await
             .expect("store should succeed");
 
-        let retrieved = persistence
-            .retrieve(None, "p1")
+        // Auto-migrate evicts the expired hot entry into the warm tier.
+        persistence
+            .auto_migrate()
             .await
-            .expect("retrieve should succeed for previously stored entry");
-        assert!(retrieved.is_some());
-        assert_eq!(
-            retrieved.expect("retrieved entry should be present").id,
-            "p1"
-        );
+            .expect("auto_migrate should succeed");
+
+        // The entry is now durable in the warm tier, retrievable by session.
+        let hits = persistence
+            .search_by_session("sess-1", 16)
+            .await
+            .expect("search_by_session should succeed");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "p1");
     }
 
     #[tokio::test]
@@ -1770,7 +1313,8 @@ mod tests {
 
         let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
             .expect("persistence should initialize");
-        let entry = make_entry("promo1", 0.9);
+        let mut entry = make_entry("promo1", 0.9);
+        entry.session_id = Some("sess-promo".to_string());
         persistence
             .store(entry.clone())
             .await
@@ -1780,17 +1324,14 @@ mod tests {
             .await
             .expect("promote to warm should succeed");
 
-        // Should no longer be in hot (but still retrievable from warm).
-        let retrieved = persistence
-            .retrieve(None, "promo1")
+        // The entry should now live in the durable warm tier.
+        let hits = persistence
+            .search_by_session("sess-promo", 16)
             .await
-            .expect("retrieve should succeed for previously stored entry");
-        assert!(retrieved.is_some());
-        // Access brings it back to hot
-        assert_eq!(
-            retrieved.expect("retrieved entry should be present").tier,
-            MemoryTier::Hot
-        );
+            .expect("search_by_session should succeed");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "promo1");
+        assert_eq!(hits[0].tier, MemoryTier::Warm);
     }
 
     #[tokio::test]
@@ -1827,90 +1368,5 @@ mod tests {
             .expect("auto migration should run");
         assert_eq!(report.promoted_hot_to_warm, 1);
         assert_eq!(report.demoted_hot_to_cold, 1);
-    }
-
-    #[tokio::test]
-    async fn test_metadata_index_load() {
-        let dir = TempDir::new().expect("temp dir creation should succeed");
-        let db_path = dir.path().join("warm.db");
-        let cold_path = dir.path().join("cold");
-
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
-            .expect("persistence should initialize");
-
-        // Seed some entries
-        let entry = make_entry("idx1", 0.5);
-        persistence
-            .store(entry)
-            .await
-            .expect("store should succeed");
-
-        let index = persistence
-            .load_metadata_index()
-            .await
-            .expect("load metadata index should succeed");
-        // Hot-only entries don't appear in the index (only warm + cold).
-        assert_eq!(index.warm_count, 0);
-        assert_eq!(index.cold_count, 0);
-    }
-
-    #[tokio::test]
-    async fn test_demote_entry() {
-        let dir = TempDir::new().expect("temp dir creation should succeed");
-        let db_path = dir.path().join("warm.db");
-        let cold_path = dir.path().join("cold");
-
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
-            .expect("persistence should initialize");
-
-        let entry = make_entry("dem1", 0.5);
-        persistence
-            .store(entry.clone())
-            .await
-            .expect("store should succeed");
-        let demoted = persistence
-            .demote(&entry)
-            .await
-            .expect("demote should succeed");
-        assert!(demoted.is_some());
-        assert_eq!(
-            demoted.expect("demoted entry should be present").tier,
-            MemoryTier::Warm
-        );
-    }
-
-    #[tokio::test]
-    async fn test_promote_entry() {
-        let dir = TempDir::new().expect("temp dir creation should succeed");
-        let db_path = dir.path().join("warm.db");
-        let cold_path = dir.path().join("cold");
-
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
-            .expect("persistence should initialize");
-
-        let entry = make_entry("prom2", 0.5);
-        persistence
-            .store(entry.clone())
-            .await
-            .expect("store should succeed");
-        // Move to warm first, then promote to cold.
-        // retrieve() brings entries back to hot on access, so promote
-        // a warm entry directly without going through retrieve.
-        persistence
-            .promote_to_warm(entry.clone())
-            .await
-            .expect("promote to warm should succeed");
-
-        let mut warm_entry = entry;
-        warm_entry.tier = MemoryTier::Warm;
-        let promoted = persistence
-            .promote(&warm_entry)
-            .await
-            .expect("promote should succeed");
-        assert!(promoted.is_some());
-        assert_eq!(
-            promoted.expect("promoted entry should be present").tier,
-            MemoryTier::Cold
-        );
     }
 }

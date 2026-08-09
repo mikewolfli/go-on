@@ -1,9 +1,9 @@
 //! PostgreSQL connection pool (backend-postgres only).
 //!
-//! Provides a [`PgPoolPair`] that holds separate read/write pools, enabling
-//! read-replica support. Both pools share the same [`PgClientManager`] factory.
+//! Provides a `PgPoolPair` that holds separate read/write pools, enabling
+//! read-replica support. Both pools share the same `PgClientManager` factory.
 //!
-//! All pool operations must go through [`pool_get`] inside `spawn_blocking`
+//! All pool operations must go through `pool_get` inside `spawn_blocking`
 //! closures to bridge deadpool's async API with the synchronous `postgres::Client`.
 
 use std::borrow::Cow;

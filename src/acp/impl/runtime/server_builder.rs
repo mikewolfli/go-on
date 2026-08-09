@@ -174,8 +174,8 @@ pub async fn new_acp_server(
     .with_capability_graph(registry.get_capability_graph())
     .with_provenance_ledger(Arc::clone(&provenance_ledger))
     .with_live_performance(Arc::clone(&perf_feed));
-    let cb_builder = if let Some(agent) = first_agent {
-        cb_builder.with_metacognitive_llm(agent)
+    let cb_builder = if let Some(ref agent) = first_agent {
+        cb_builder.with_metacognitive_llm(agent.clone())
     } else {
         cb_builder
     };
@@ -197,6 +197,20 @@ pub async fn new_acp_server(
                 tags: vec!["acp".to_string(), "intelligence".to_string()],
             });
         tracing::info!("self_model: system identity set from package metadata");
+
+        // D1: Inject the first available LLM agent into ContinuousLearningCenter
+        // so `review_cycle` → `llm_distill` uses a real LLM for semantic
+        // pattern extraction instead of always falling back to TF-IDF.
+        // (Previously the injection went through a throwaway handle created in
+        // main/mod.rs that was never read by the center — a dead pipeline.)
+        if let Some(agent) = &first_agent {
+            cb_mut
+                .continuous_learning
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .inject_agent(agent.clone());
+            tracing::info!("continuous_learning: injected LLM agent for semantic distillation");
+        }
     }
 
     // BLUE56-C15: Warn if default credentials are still in use
@@ -361,6 +375,26 @@ pub async fn new_acp_server(
     server.governance_deps.provenance_ledger = Some(provenance_ledger);
     server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
 
+    // Register each agent as a monitored node in the fault-tolerance engine so
+    // the 30s recovery cycle in start_background_tasks has a real node set to
+    // check (previously the engine was created but no node was ever registered
+    // — the recovery loop ran against an always-empty heartbeat table). The
+    // heartbeat task in start_background_tasks keeps these nodes Online; if an
+    // agent's heartbeat lapses the engine reports it Offline / creates a
+    // FaultEvent and the recovery cycle can plan a reintegration.
+    if let Some(hb) = server.governance_deps.harness_bus.as_ref() {
+        for name in registry.names() {
+            if let Err(e) = hb.fault_tolerance.register_node(&name).await {
+                // A duplicate registration (e.g. re-init) is benign.
+                tracing::debug!(
+                    target: "fault_tolerance",
+                    node = %name,
+                    "fault-tolerance node registration skipped: {e}"
+                );
+            }
+        }
+    }
+
     // P2-3 wiring: give CapabilityBus::decide the server's shared adaptive
     // model selector so candidate re-ranking + learned outcomes are visible
     // to provider tests / autotune (previously the field was always None and
@@ -379,18 +413,19 @@ pub async fn new_acp_server(
             ),
         ));
         // Activate the distributed-memory transport (cross-node memory sync).
-        // Peers come from GOON_MEMORY_PEERS; with no peers the bus stays
-        // purely local and no transport thread is spawned.
+        // Peers come from GOON_MEMORY_PEERS or the local Hub discovery file
+        // (BLUE72 P2 auto-discovery); with no peers the bus stays purely
+        // local and no transport thread is spawned.
         if let Some(cb) = server.governance_deps.capability_bus.as_ref() {
-            match cb.distributed_memory_bus.configure_from_env() {
+            match cb.distributed_memory_bus.configure_cluster() {
                 Ok(true) => {
                     tracing::info!(
-                        "distributed memory transport started (peers from GOON_MEMORY_PEERS)"
+                        "distributed memory transport started (peers from env or hub discovery)"
                     );
                 }
                 Ok(false) => {
                     tracing::info!(
-                        "distributed memory transport: no GOON_MEMORY_PEERS configured — local only"
+                        "distributed memory transport: no peers configured — local only"
                     );
                 }
                 Err(e) => {

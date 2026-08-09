@@ -155,9 +155,4 @@ impl McpCallToolResult {
             is_error: None,
         }
     }
-
-    pub fn with_is_error(mut self, is_error: bool) -> Self {
-        self.is_error = Some(is_error);
-        self
-    }
 }

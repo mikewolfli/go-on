@@ -417,7 +417,14 @@ impl CapabilityBus {
             profile: Arc::new(RwLock::new(CapabilityBusProfile::default())),
             workflow_registry: None,
             provenance_ledger,
-            schema_registry: Arc::new(Mutex::new(SchemaRegistry::new())),
+            schema_registry: Arc::new(Mutex::new({
+                let mut sr = SchemaRegistry::new();
+                // F-GAP-07: register the five built-in role schemas so task
+                // envelope validation in resolve_request_phase has data in
+                // production (previously the registry was empty — silent no-op).
+                sr.register_defaults();
+                sr
+            })),
             tenant_budget: Arc::new(Mutex::new(TenantBudgetEnforcer::new())),
             // BLUE70: Consolidated buses
             unified_knowledge_bus: Arc::new(RwLock::new(UnifiedKnowledgeBus::new())),

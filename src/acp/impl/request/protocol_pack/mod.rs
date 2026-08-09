@@ -29,9 +29,10 @@ pub(super) use auth::{authenticate_payload, logout_payload};
 pub(super) use audit::{is_rate_limited_message, normalize_rate_limited_message};
 
 // Core handlers (initialize, mcp_initialize, handle_chat, phase, models_list)
-pub(super) use core::{
-    handle_chat, initialize_payload, mcp_initialize_payload, models_list_payload, phase_payload,
-};
+pub(super) use core::{handle_chat, initialize_payload, mcp_initialize_payload, phase_payload};
+// models_list_payload is shared with the native MCP arm (src/mcp/handlers.rs)
+// so both `models.list` entries return the same structure.
+pub(crate) use core::models_list_payload;
 
 // MCP protocol handlers
 pub(super) use mcp::{

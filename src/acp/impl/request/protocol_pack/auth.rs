@@ -10,44 +10,23 @@ use super::*;
 /// no-op that always returned success while the pre-dispatch auth gate made
 /// the method unreachable whenever `user_auth_enabled` was set.
 pub async fn authenticate_payload(server: &AcpServer, params: Value) -> Result<Value> {
-    if !server.runtime_config.user_auth_enabled {
-        // Auth disabled (local profile) — a default user-level session
-        // applies; report success as before.
-        return Ok(serde_json::to_value(
-            crate::schema::AuthenticateResponse::new(),
-        )?);
-    }
+    // Delegate to the unified auth middleware (JsonRpcAuthProvider) so the
+    // `authenticate` method and the pre-dispatch auth gate share one
+    // credential-extraction + validation chain (previously duplicated here).
+    use crate::acp::r#impl::request::auth_middleware::{AuthProvider as _, JsonRpcAuthProvider};
 
-    let session_manager = match server.session.session_manager.as_ref() {
-        Some(sm) => sm,
-        None => {
-            anyhow::bail!("Session manager not initialized — cannot authenticate")
-        }
+    let provider = JsonRpcAuthProvider {
+        params: &Some(params),
     };
-
-    let token = params
-        .get("bearer_token")
-        .and_then(Value::as_str)
-        .or_else(|| params.get("api_key").and_then(Value::as_str))
-        .filter(|t| !t.is_empty());
-
-    match token {
-        Some(token) => {
-            let result = session_manager.authenticate(token);
-            if result.valid {
-                Ok(serde_json::to_value(
-                    crate::schema::AuthenticateResponse::new(),
-                )?)
-            } else {
-                anyhow::bail!(
-                    "Authentication failed: {}",
-                    result.reason.unwrap_or_else(|| "invalid token".to_string())
-                )
-            }
+    match provider.authenticate(server) {
+        Ok(_session) => {
+            // Auth disabled (returns Ok(None)) or a valid session (Ok(Some)):
+            // both report success. Auth failure surfaces as Err below.
+            Ok(serde_json::to_value(
+                crate::schema::AuthenticateResponse::new(),
+            )?)
         }
-        None => anyhow::bail!(
-            "Authentication required: provide `bearer_token` (or `api_key`) in params"
-        ),
+        Err(reason) => anyhow::bail!("Authentication failed: {reason}"),
     }
 }
 

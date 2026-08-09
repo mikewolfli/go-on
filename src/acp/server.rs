@@ -1353,7 +1353,15 @@ impl ServerBuilder {
                 )),
             },
             registries: RegistryContext {
-                schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),
+                // Register the five built-in role schemas so F-GAP-07 task
+                // envelope validation has data in production (previously the
+                // registry was empty and schema_error/schema_warnings were
+                // always empty — a silent no-op).
+                schema_registry: Arc::new(StdMutex::new({
+                    let mut sr = SchemaRegistry::new();
+                    sr.register_defaults();
+                    sr
+                })),
             },
             persistence: PersistenceContext {
                 memory_store,

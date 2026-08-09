@@ -10,6 +10,8 @@ use crate::tool::ToolRegistry;
 mod handlers;
 mod schema;
 
+pub mod client;
+
 #[cfg(test)]
 mod tests;
 

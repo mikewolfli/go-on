@@ -117,15 +117,6 @@ impl MetacognitivePersistence {
     pub fn has_saved_state(&self) -> bool {
         self.snapshot_path().exists()
     }
-
-    /// Remove the saved snapshot from disk.
-    pub fn clear(&self) -> std::io::Result<()> {
-        let path = self.snapshot_path();
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -185,7 +176,10 @@ mod tests {
     }
 
     #[test]
-    fn test_persistence_clear() {
+    fn test_persistence_clear_removed() {
+        // The clear-on-shutdown behavior was removed in D6 (snapshots must
+        // survive clean restarts), so the clear() method no longer exists.
+        // This placeholder asserts the persistence module still round-trips.
         let tmp = TempDir::new().unwrap();
         let persistence = MetacognitivePersistence::new(tmp.path().to_path_buf()).unwrap();
         let controller = make_controller();
@@ -194,7 +188,5 @@ mod tests {
             .unwrap();
         persistence.save(&controller).unwrap();
         assert!(persistence.has_saved_state());
-        persistence.clear().unwrap();
-        assert!(!persistence.has_saved_state());
     }
 }

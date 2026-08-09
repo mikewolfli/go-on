@@ -47,12 +47,6 @@ impl LearningOptimizationBus {
         }
     }
 
-    /// Set a custom max events limit.
-    pub fn with_max_events(mut self, max: usize) -> Self {
-        self.max_events = max.max(100);
-        self
-    }
-
     // ── Record ────────────────────────────────────────────────────────
 
     /// Record an execution event (bounded FIFO ring).
@@ -64,52 +58,6 @@ impl LearningOptimizationBus {
     }
 
     // ── Query ─────────────────────────────────────────────────────────
-
-    /// Get agent success rate.
-    pub fn agent_success_rate(&self, agent: &str) -> Option<f64> {
-        let (total, successes) = self
-            .events
-            .iter()
-            .filter(|e| e.agent == agent)
-            .fold((0usize, 0usize), |(t, s), e| {
-                (t + 1, s + e.success as usize)
-            });
-        if total == 0 {
-            None
-        } else {
-            Some(successes as f64 / total as f64)
-        }
-    }
-
-    /// Get task type success rate.
-    pub fn task_type_success_rate(&self, task_type: &str) -> Option<f64> {
-        let (total, successes) = self
-            .events
-            .iter()
-            .filter(|e| e.task_type == task_type)
-            .fold((0usize, 0usize), |(t, s), e| {
-                (t + 1, s + e.success as usize)
-            });
-        if total == 0 {
-            None
-        } else {
-            Some(successes as f64 / total as f64)
-        }
-    }
-
-    /// Get average duration for an agent on a task type.
-    pub fn avg_duration_ms(&self, agent: &str, task_type: &str) -> Option<u64> {
-        let events: Vec<_> = self
-            .events
-            .iter()
-            .filter(|e| e.agent == agent && e.task_type == task_type)
-            .collect();
-        if events.is_empty() {
-            return None;
-        }
-        let total: u64 = events.iter().map(|e| e.duration_ms).sum();
-        Some(total / events.len() as u64)
-    }
 
     /// Get event count.
     pub fn event_count(&self) -> usize {
@@ -161,30 +109,9 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_success_rate() {
-        let mut bus = LearningOptimizationBus::new();
-        bus.record_and_optimize(make_event("t1", "agent_a", true, 100));
-        bus.record_and_optimize(make_event("t2", "agent_a", true, 200));
-        bus.record_and_optimize(make_event("t3", "agent_a", false, 150));
-
-        let rate = bus.agent_success_rate("agent_a").unwrap();
-        assert!((rate - 2.0 / 3.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_task_type_success_rate() {
-        let mut bus = LearningOptimizationBus::new();
-        bus.record_and_optimize(make_event("research", "a1", true, 100));
-        bus.record_and_optimize(make_event("research", "a2", false, 100));
-        bus.record_and_optimize(make_event("research", "a3", true, 100));
-
-        let rate = bus.task_type_success_rate("research").unwrap();
-        assert!((rate - 2.0 / 3.0).abs() < 0.01);
-    }
-
-    #[test]
     fn test_events_evict_oldest_when_over_limit() {
-        let mut bus = LearningOptimizationBus::with_max_events(LearningOptimizationBus::new(), 100);
+        let mut bus = LearningOptimizationBus::new();
+        bus.max_events = 100;
         for i in 0..150 {
             bus.record_and_optimize(make_event("t", "a", true, i));
         }
@@ -196,16 +123,6 @@ mod tests {
     }
 
     #[test]
-    fn test_avg_duration() {
-        let mut bus = LearningOptimizationBus::new();
-        bus.record_and_optimize(make_event("research", "agent_a", true, 1000));
-        bus.record_and_optimize(make_event("research", "agent_a", true, 2000));
-
-        let avg = bus.avg_duration_ms("agent_a", "research");
-        assert_eq!(avg, Some(1500));
-    }
-
-    #[test]
     fn test_events_snapshot() {
         let mut bus = LearningOptimizationBus::new();
         bus.record_and_optimize(make_event("t1", "a1", true, 100));
@@ -213,24 +130,5 @@ mod tests {
 
         let snapshot = bus.events_snapshot();
         assert_eq!(snapshot.len(), 2);
-    }
-
-    #[test]
-    fn test_custom_max_events() {
-        let bus = LearningOptimizationBus::with_max_events(LearningOptimizationBus::new(), 50);
-        // Events will be limited to 50
-        assert!(bus.max_events >= 100); // Clamped to min 100
-    }
-
-    #[test]
-    fn test_unknown_agent_rate() {
-        let bus = LearningOptimizationBus::new();
-        assert!(bus.agent_success_rate("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_unknown_task_rate() {
-        let bus = LearningOptimizationBus::new();
-        assert!(bus.task_type_success_rate("nonexistent").is_none());
     }
 }

@@ -48,9 +48,3 @@ pub struct QualitySignal {
     pub confidence: f32,
     pub details: Option<String>,
 }
-
-impl QualitySignal {
-    pub fn is_sufficient_for_distillation(&self) -> bool {
-        self.passed && self.confidence >= 0.7
-    }
-}

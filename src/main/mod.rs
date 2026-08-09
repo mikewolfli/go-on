@@ -274,16 +274,10 @@ async fn run() -> Result<()> {
         sig_shutdown.notify_waiters();
     });
 
-    // ── Agent injector handle for ContinuousLearningCenter ────────────
-    // The ContinuousLearningCenter itself is created inside CapabilityBus::new()
-    // (in ServerBuilder::build → new_acp_server). We only need the agent
-    // injector handle here so start_server() can write the first agent into
-    // the center's agent field for LLM-based semantic distillation.
-    // Creating the full center here would be wasteful since it's never used;
-    // its review loop starts inside run_acp_server() via the CapabilityBus.
-    let cl_agent_handle: std::sync::Arc<
-        std::sync::Mutex<Option<std::sync::Arc<dyn crate::agents::agent::Agent>>>,
-    > = std::sync::Arc::new(std::sync::Mutex::new(None));
+    // Note: ContinuousLearningCenter agent injection happens inside
+    // ServerBuilder::build (server_builder.rs) with the first available
+    // agent — the previous throwaway cl_agent_handle pipeline was removed
+    // because the center never read it.
 
     // Delegate interactive agent onboarding to the onboarding module
     let onboarding_cfg = crate::core::onboarding::OnboardingConfig {
@@ -299,7 +293,7 @@ async fn run() -> Result<()> {
         let config =
             Arc::new(tokio::task::spawn_blocking(move || AppConfig::load_uncached(&cp)).await??);
         tokio::select! {
-            result = server::start_server(config.clone(), &cli, &config_path, Some(cl_agent_handle.clone()), skill_registry.clone()) => {
+            result = server::start_server(config.clone(), &cli, &config_path, skill_registry.clone()) => {
                 result?;
             }
             _ = shutdown_notify.notified() => {
@@ -316,7 +310,7 @@ async fn run() -> Result<()> {
 
     // Start the server with top-level graceful shutdown signal handling
     tokio::select! {
-        result = server::start_server(config, &cli, &config_path, Some(cl_agent_handle), skill_registry) => {
+        result = server::start_server(config, &cli, &config_path, skill_registry) => {
             result?;
         }
         _ = shutdown_notify.notified() => {

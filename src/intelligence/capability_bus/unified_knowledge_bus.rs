@@ -43,14 +43,6 @@ pub struct ExperienceCase {
     pub timestamp_ms: u64,
 }
 
-/// Unified result from a knowledge query.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnifiedKnowledgeResult {
-    pub reputation: Option<ReputationScore>,
-    pub relevant_experiences: Vec<ExperienceCase>,
-    pub applicable_knowledge: Vec<KnowledgeInsight>,
-}
-
 const MAX_KNOWLEDGE_INSIGHTS: usize = 500;
 const MAX_EXPERIENCE_CASES: usize = 1000;
 /// Maximum matching insights per task type before we stop recording new ones.
@@ -86,33 +78,6 @@ impl UnifiedKnowledgeBus {
             experience_cases: Vec::with_capacity(MAX_EXPERIENCE_CASES.min(128)),
             knowledge_by_task: HashMap::new(),
             ema_alpha: 0.3,
-        }
-    }
-
-    /// Set a custom EMA alpha factor.
-    pub fn with_ema_alpha(mut self, alpha: f64) -> Self {
-        self.ema_alpha = alpha.clamp(0.01, 0.99);
-        self
-    }
-
-    // ── Unified Query ─────────────────────────────────────────────
-
-    /// Unified query: retrieve reputation, experiences, and knowledge in one call.
-    pub fn query(&self, agent: &str, task_type: &str) -> UnifiedKnowledgeResult {
-        UnifiedKnowledgeResult {
-            reputation: self.reputation_scores.get(agent).cloned(),
-            relevant_experiences: self
-                .experience_cases
-                .iter()
-                .filter(|e| e.agent == agent || e.task_type == task_type)
-                .take(5)
-                .cloned()
-                .collect(),
-            applicable_knowledge: self
-                .knowledge_by_task
-                .get(task_type)
-                .cloned()
-                .unwrap_or_default(),
         }
     }
 
@@ -171,14 +136,6 @@ impl UnifiedKnowledgeBus {
         self.insights.push(insight);
     }
 
-    /// Find matching insights by tags (equivalent to KnowledgeBus::find_matching).
-    pub fn find_matching(&self, tags: &[String]) -> Vec<&KnowledgeInsight> {
-        self.insights
-            .iter()
-            .filter(|i| tags.iter().any(|t| i.applicability_tags.contains(t)))
-            .collect()
-    }
-
     // ── Reputation ────────────────────────────────────────────────
 
     /// Get the reputation score for an agent.
@@ -186,59 +143,12 @@ impl UnifiedKnowledgeBus {
         self.reputation_scores.get(agent).map(|r| r.score)
     }
 
-    /// Get full reputation info for an agent.
-    pub fn reputation_info(&self, agent: &str) -> Option<&ReputationScore> {
-        self.reputation_scores.get(agent)
-    }
-
     /// Get all reputation scores.
     pub fn all_reputations(&self) -> Vec<ReputationScore> {
         self.reputation_scores.values().cloned().collect()
     }
 
-    // ── Experience ────────────────────────────────────────────────
-
-    /// Get recent experience cases for an agent.
-    pub fn agent_experiences(&self, agent: &str) -> Vec<&ExperienceCase> {
-        self.experience_cases
-            .iter()
-            .filter(|e| e.agent == agent)
-            .collect()
-    }
-
-    /// Get recent experience cases for a task type.
-    pub fn task_experiences(&self, task_type: &str) -> Vec<&ExperienceCase> {
-        self.experience_cases
-            .iter()
-            .filter(|e| e.task_type == task_type)
-            .collect()
-    }
-
-    /// Calculate success rate for an agent.
-    pub fn agent_success_rate(&self, agent: &str) -> Option<f64> {
-        let cases: Vec<_> = self
-            .experience_cases
-            .iter()
-            .filter(|e| e.agent == agent)
-            .collect();
-        if cases.is_empty() {
-            return None;
-        }
-        let successes = cases.iter().filter(|e| e.success).count();
-        Some(successes as f64 / cases.len() as f64)
-    }
-
-    // ── Snapshots ─────────────────────────────────────────────────
-
-    /// Full snapshot of all knowledge insights.
-    pub fn knowledge_snapshot(&self) -> Vec<KnowledgeInsight> {
-        self.insights.clone()
-    }
-
-    /// Full snapshot of all experience cases.
-    pub fn experience_snapshot(&self) -> Vec<ExperienceCase> {
-        self.experience_cases.clone()
-    }
+    // ── Counts ────────────────────────────────────────────────────
 
     /// Number of insights stored.
     pub fn insight_count(&self) -> usize {
@@ -253,11 +163,6 @@ impl UnifiedKnowledgeBus {
     /// Number of agents with reputation scores.
     pub fn reputation_count(&self) -> usize {
         self.reputation_scores.len()
-    }
-
-    /// Total number of tasks tracked across all agents.
-    pub fn total_tasks(&self) -> u64 {
-        self.reputation_scores.values().map(|r| r.total_tasks).sum()
     }
 
     // ── Private helpers ──────────────────────────────────────────
@@ -351,10 +256,7 @@ mod tests {
         let mut bus = UnifiedKnowledgeBus::new();
         bus.record_outcome("agent_a", "coding", true, "Wrote feature X".to_string());
         assert_eq!(bus.experience_count(), 1);
-
-        let experiences = bus.agent_experiences("agent_a");
-        assert_eq!(experiences.len(), 1);
-        assert!(experiences[0].success);
+        assert!(bus.experience_cases[0].success);
     }
 
     #[test]
@@ -367,9 +269,14 @@ mod tests {
             "Found pattern: use BFS for graph traversal".to_string(),
         );
         assert_eq!(bus.insight_count(), 1);
-
-        let matching = bus.find_matching(&["research".to_string()]);
-        assert!(!matching.is_empty());
+        assert_eq!(
+            bus.knowledge_by_task
+                .get("research")
+                .map(|v| v.len())
+                .unwrap_or(0),
+            1,
+            "insight should be indexed by its applicability tag"
+        );
     }
 
     #[test]
@@ -380,83 +287,9 @@ mod tests {
     }
 
     #[test]
-    fn test_unified_query() {
-        let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome(
-            "agent_a",
-            "research",
-            true,
-            "Found useful pattern".to_string(),
-        );
-
-        let result = bus.query("agent_a", "research");
-        assert!(result.reputation.is_some());
-        assert!(!result.relevant_experiences.is_empty());
-    }
-
-    #[test]
-    fn test_agent_success_rate() {
-        let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_a", "t1", true, "ok".to_string());
-        bus.record_outcome("agent_a", "t2", true, "ok".to_string());
-        bus.record_outcome("agent_a", "t3", false, "fail".to_string());
-
-        let rate = bus.agent_success_rate("agent_a").unwrap();
-        assert!((rate - 2.0 / 3.0).abs() < 0.01);
-    }
-
-    #[test]
     fn test_default_ema_alpha() {
         let bus = UnifiedKnowledgeBus::new();
         assert!((bus.ema_alpha - 0.3).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_custom_ema_alpha() {
-        let bus = UnifiedKnowledgeBus::with_ema_alpha(UnifiedKnowledgeBus::new(), 0.5);
-        assert!((bus.ema_alpha - 0.5).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_ema_alpha_clamped() {
-        let bus = UnifiedKnowledgeBus::with_ema_alpha(UnifiedKnowledgeBus::new(), 1.5);
-        assert!((bus.ema_alpha - 0.99).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_knowledge_snapshot() {
-        let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_a", "research", true, "Pattern A".to_string());
-        bus.record_outcome("agent_b", "coding", true, "Pattern B".to_string());
-        assert_eq!(bus.knowledge_snapshot().len(), 2);
-    }
-
-    #[test]
-    fn test_experience_snapshot() {
-        let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_a", "research", true, "done".to_string());
-        bus.record_outcome("agent_b", "coding", false, "failed".to_string());
-        assert_eq!(bus.experience_snapshot().len(), 2);
-    }
-
-    #[test]
-    fn test_task_experiences() {
-        let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_a", "research", true, "ok".to_string());
-        bus.record_outcome("agent_b", "research", false, "fail".to_string());
-        bus.record_outcome("agent_c", "coding", true, "ok".to_string());
-
-        let research_exp = bus.task_experiences("research");
-        assert_eq!(research_exp.len(), 2);
-    }
-
-    #[test]
-    fn test_reputation_info() {
-        let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("agent_x", "test", true, "done".to_string());
-        let info = bus.reputation_info("agent_x");
-        assert!(info.is_some());
-        assert_eq!(info.unwrap().total_tasks, 1);
     }
 
     #[test]
@@ -465,23 +298,5 @@ mod tests {
         bus.record_outcome("a1", "t1", true, "ok".to_string());
         bus.record_outcome("a2", "t2", true, "ok".to_string());
         assert_eq!(bus.all_reputations().len(), 2);
-    }
-
-    #[test]
-    fn test_query_unknown_agent() {
-        let bus = UnifiedKnowledgeBus::new();
-        let result = bus.query("nonexistent", "unknown");
-        assert!(result.reputation.is_none());
-        assert!(result.relevant_experiences.is_empty());
-        assert!(result.applicable_knowledge.is_empty());
-    }
-
-    #[test]
-    fn test_total_tasks() {
-        let mut bus = UnifiedKnowledgeBus::new();
-        bus.record_outcome("a1", "t1", true, "ok".to_string());
-        bus.record_outcome("a1", "t2", false, "fail".to_string());
-        bus.record_outcome("a2", "t3", true, "ok".to_string());
-        assert_eq!(bus.total_tasks(), 3);
     }
 }

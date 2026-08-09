@@ -138,29 +138,6 @@ impl ProtocolBus {
         }
     }
 
-    /// Set the currently active transport mode.
-    ///
-    /// Supported transports: `acp-stdio`, `acp-http`, `mcp-stdio`, `mcp-http`, `auto`.
-    /// If the transport differs from the current one, the protocol switch counter
-    /// is incremented.
-    pub fn set_active_transport(&self, transport: &str) {
-        {
-            let mut current =
-                crate::write_or_recover!(self.active_transport.as_ref(), "intelligence");
-            if *current != transport {
-                *current = transport.to_string();
-            } else {
-                // No change; nothing to update.
-                return;
-            }
-        }
-
-        // Update profile outside of the transport lock to avoid nested locking.
-        let mut profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
-        profile.active_transport = transport.to_string();
-        profile.total_protocol_switches += 1;
-    }
-
     /// Return the currently active transport mode.
     pub fn active_transport(&self) -> String {
         crate::read_or_recover!(self.active_transport.as_ref(), "intelligence").clone()
@@ -270,16 +247,6 @@ impl ProtocolBus {
         health.entry(protocol.to_string()).or_insert(true);
     }
 
-    /// Check whether a protocol is currently considered healthy.
-    ///
-    /// Unknown protocols are assumed healthy by default.
-    pub fn is_protocol_healthy(&self, protocol: &str) -> bool {
-        crate::read_or_recover!(self.protocol_health.as_ref(), "intelligence")
-            .get(protocol)
-            .copied()
-            .unwrap_or(true)
-    }
-
     /// Return a snapshot of the current `ProtocolBusProfile`.
     pub fn profile(&self) -> ProtocolBusProfile {
         let transport = self.active_transport();
@@ -331,26 +298,6 @@ fn compute_confidence(avg_latency_ms: u64, _payload_size: u64, is_active: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_set_active_transport() {
-        let bus = ProtocolBus::new();
-        bus.set_active_transport("acp-http");
-        assert_eq!(bus.active_transport(), "acp-http");
-
-        let profile = bus.profile();
-        assert_eq!(profile.total_protocol_switches, 1);
-        assert_eq!(profile.active_transport, "acp-http");
-    }
-
-    #[test]
-    fn test_set_active_transport_same_value_no_switch() {
-        let bus = ProtocolBus::new();
-        bus.set_active_transport("auto");
-        let profile = bus.profile();
-        // Default is already "auto", so no switch should be counted.
-        assert_eq!(profile.total_protocol_switches, 0);
-    }
 
     #[test]
     fn test_record_latency_and_stats() {
@@ -446,18 +393,5 @@ mod tests {
             .min()
             .expect("measurements should not be empty");
         assert_eq!(min_val, 10);
-    }
-
-    #[test]
-    fn test_profile_snapshot() {
-        let bus = ProtocolBus::new();
-        bus.set_active_transport("mcp-stdio");
-        bus.record_protocol_latency("mcp-stdio", 15);
-
-        let profile = bus.profile();
-        assert!(profile.enabled);
-        assert_eq!(profile.active_transport, "mcp-stdio");
-        assert_eq!(profile.healthy_protocols, 5);
-        assert_eq!(profile.total_protocol_switches, 1);
     }
 }

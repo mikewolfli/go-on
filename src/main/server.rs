@@ -10,7 +10,6 @@ use crate::core::config_validation;
 use crate::core::setup;
 use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
-use crate::intelligence::continuous_learning::AgentInjector;
 use crate::protocol::access_mode::resolve_access_selection;
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
@@ -26,18 +25,12 @@ use super::report::{emit_config_warnings, print_completeness_report, print_runti
 
 /// Start the server with the given configuration and CLI options.
 ///
-/// `cl_agent_handle` — when `Some`, the first available agent from the registry
-/// is injected into the `ContinuousLearningCenter` for LLM-based semantic
-/// distillation (replacing the TF-IDF fallback).  Pass `None` or an empty handle
-/// to skip injection.
-///
 /// `skill_registry` — an optional pre-populated skill registry from bootstrap,
 /// avoiding a redundant scan of `~/.agents/skills/` on server startup.
 pub(crate) async fn start_server(
     config: Arc<AppConfig>,
     cli: &Cli,
     config_path: &Path,
-    cl_agent_handle: Option<AgentInjector>,
     skill_registry: Option<Arc<std::sync::RwLock<crate::orchestration::skill::SkillRegistry>>>,
 ) -> Result<()> {
     // Create HTTP client with timeout
@@ -69,21 +62,10 @@ pub(crate) async fn start_server(
     let agent_names = registry.names();
     info!("Registered {} agents: {:?}", agent_names.len(), agent_names);
 
-    // ── Inject the first available agent into ContinuousLearningCenter ──
-    // This enables true LLM-based semantic distillation during review cycles
-    // (otherwise the center falls back to TF-IDF keyword extraction).
-    if let Some(handle) = cl_agent_handle {
-        if let Some(first_name) = registry.names().first().cloned() {
-            if let Some(agent) = registry.get(&first_name) {
-                let mut guard = handle.lock().unwrap_or_else(|e| e.into_inner());
-                info!(
-                    "ContinuousLearningCenter: injecting agent '{}' for LLM-based semantic distillation",
-                    first_name
-                );
-                *guard = Some(agent);
-            }
-        }
-    }
+    // Note: the first available LLM agent is now injected into the
+    // ContinuousLearningCenter inside new_acp_server()/ServerBuilder::build
+    // (server_builder.rs) — the previous throwaway cl_agent_handle pipeline
+    // in main/ was never read by the center and has been removed.
 
     // ── Memory-aware resource limiting ───────────────────────────────────────
     // Adjust cache/vector limits based on available system memory.

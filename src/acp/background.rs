@@ -175,13 +175,13 @@ pub async fn start_background_tasks(
                     loop {
                         tokio::select! {
                             _ = shutdown.notified() => {
-                                // Clean up snapshot on graceful shutdown.
-                                if let Err(e) = persistence.clear() {
-                                    tracing::warn!(
-                                        target: "metacognitive_persistence",
-                                        "failed to clear metacognitive snapshot: {e}"
-                                    );
-                                }
+                                // Preserve the snapshot on graceful shutdown so
+                                // cross-session state survives clean restarts
+                                // (GAP-B53-56). Previously clear() deleted the
+                                // snapshot on clean shutdown, making restore
+                                // only work after crashes — the opposite of
+                                // intent. The periodic save above already
+                                // persisted the latest state.
                                 break;
                             }
                             _ = interval.tick() => {}
@@ -478,6 +478,10 @@ pub async fn start_background_tasks(
     // (see CapabilityBus::evolve).
     if let Some(ref harness) = server.governance_deps.harness_bus {
         let ft = Arc::clone(&harness.fault_tolerance);
+        let node_names: Vec<String> = server
+            .agent_registry()
+            .map(|r| r.names())
+            .unwrap_or_default();
         let shutdown = shutdown_notify.clone();
         spawn_background_task(
             async move {
@@ -489,6 +493,20 @@ pub async fn start_background_tasks(
                     tokio::select! {
                         _ = shutdown.notified() => break,
                         _ = interval.tick() => {}
+                    }
+                    // Report heartbeats for every registered node (agents were
+                    // registered in ServerBuilder::build). This keeps nodes
+                    // Online so the recovery cycle below has real data: a node
+                    // whose heartbeats stop (e.g. a hung worker) is detected
+                    // as Offline and a FaultEvent is created.
+                    for name in &node_names {
+                        if let Err(e) = ft.report_heartbeat(name).await {
+                            tracing::debug!(
+                                target: "fault_tolerance",
+                                node = %name,
+                                "heartbeat skipped (node not registered): {e}"
+                            );
+                        }
                     }
                     let summary = ft.run_recovery_cycle().await;
                     if summary.offenders.is_empty() && summary.plans_created == 0 {

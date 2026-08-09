@@ -86,6 +86,7 @@ mod health_pack;
 mod learning_pack;
 mod lifecycle_handlers;
 mod lifecycle_pack;
+mod mcp_client_pack;
 mod metrics_pack;
 pub mod prompts_pack;
 pub(crate) mod protocol;
@@ -922,6 +923,37 @@ pub async fn handle_request(
                     dispatch_to_client(server, request_id, Ok(DispatchOutput::silent())).await
                 }
                 // MCP methods bridged through ACP dispatch
+                "mcp.client.connect" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        crate::acp::r#impl::request::mcp_client_pack::mcp_client_connect_payload(
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
+                "mcp.client.list" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        crate::acp::r#impl::request::mcp_client_pack::mcp_client_list_payload()
+                            .await,
+                    )
+                    .await
+                }
+                "mcp.client.call" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        crate::acp::r#impl::request::mcp_client_pack::mcp_client_call_payload(
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
                 "mcp.initialize" => {
                     crate::acp::r#impl::io::respond(
                         server,

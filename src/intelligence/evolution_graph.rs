@@ -122,16 +122,6 @@ impl EvolutionGraph {
         }
     }
 
-    /// Returns the current trend tolerance.
-    pub fn trend_tolerance(&self) -> f64 {
-        self.trend_tolerance
-    }
-
-    /// Sets the trend tolerance threshold.
-    pub fn set_trend_tolerance(&mut self, tolerance: f64) {
-        self.trend_tolerance = tolerance;
-    }
-
     /// Register a new capability for an agent at the given initial stage.
     pub fn register_capability(
         &mut self,
@@ -251,24 +241,6 @@ impl EvolutionGraph {
     pub fn get_history(&self, agent: &str, capability: &str) -> Option<&EvolutionRecord> {
         self.records
             .get(&(agent.to_string(), capability.to_string()))
-    }
-
-    /// Get a reference to the evolution record (BLUE48 Step 3).
-    pub fn get_record(&self, agent: &str, capability: &str) -> Result<&EvolutionRecord> {
-        self.records
-            .get(&(agent.to_string(), capability.to_string()))
-            .ok_or_else(|| {
-                anyhow!(
-                    "Capability '{}' not found for agent '{}'",
-                    capability,
-                    agent
-                )
-            })
-    }
-
-    /// Return all (agent, capability) keys currently tracked (BLUE48 Step 3).
-    pub fn all_keys(&self) -> Vec<(String, String)> {
-        self.records.keys().cloned().collect()
     }
 
     /// Find all capabilities with a Degrading trend.

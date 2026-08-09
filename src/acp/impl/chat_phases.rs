@@ -100,7 +100,6 @@ use crate::intelligence::token_cache::{
     estimate_messages_token_count, messages_to_text, ContextLengthClass,
 };
 use crate::observability::performance::record_global_operation;
-use crate::orchestration::core_dag::TaskContext;
 use crate::orchestration::flow::ResolvedPhase;
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
 use crate::orchestration::multi_agent_pipeline::MultiAgentPipeline;
@@ -1105,7 +1104,6 @@ pub(crate) async fn act_phase(
     };
 
     // Autonomy round
-    let mut task_contexts: Vec<TaskContext> = Vec::new();
     let progress_sse_tx = stream_observer.as_ref().and_then(|o| o.sse_sender());
     let autonomy_outcome = if review_passed {
         execute_autonomy_round(
@@ -1145,27 +1143,6 @@ pub(crate) async fn act_phase(
             .hyper_resilience
             .record_execution(&selected_agent, success)
             .await;
-    }
-
-    // TaskContext propagation
-    if autonomy_loop_executed && !response_text.is_empty() {
-        let mut ctx = TaskContext::new(format!(
-            "acp-{}-{}",
-            resolve_out.phase_name, trace.request_id
-        ));
-        ctx.reasoning_trace.push(format!(
-            "Autonomy round for phase '{}' using agent '{}'",
-            resolve_out.phase_name, selected_agent
-        ));
-        ctx.intermediate_findings.insert(
-            "response_length".into(),
-            Value::Number(serde_json::Number::from(response_text.len() as u64)),
-        );
-        ctx.intermediate_findings
-            .insert("mode".into(), Value::String(params.mode.clone()));
-        ctx.intermediate_findings
-            .insert("agent".into(), Value::String(selected_agent.clone()));
-        task_contexts.push(ctx);
     }
 
     // Fallback + vote
@@ -1907,7 +1884,10 @@ pub(crate) async fn reflect_phase(
             }
         },
         async {
-            // Memory bridge: persist reflection outcome (GAP-B54-011)
+            // Memory bridge: persist reflection outcome (GAP-B54-011).
+            // The entry carries the conversation id so session/load and
+            // session/resume can restore it (D2: previously session_id was
+            // always None, so the warm-tier session lookup found nothing).
             if let Some(mp) = server.get_or_init_memory_persistence() {
                 use crate::memory::memory::{MemoryClass, MemoryEntry};
                 let entry = MemoryEntry {
@@ -1926,7 +1906,7 @@ pub(crate) async fn reflect_phase(
                     usefulness: 0.5,
                     staleness: 0,
                     user_id: None,
-                    session_id: None,
+                    session_id: Some(routing_out.conversation_id.clone()),
                 };
                 let _ = crate::memory::memory_bridge::bridge_store(
                     &server.persistence.memory_store,

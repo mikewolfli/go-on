@@ -1684,6 +1684,48 @@ pub(crate) fn governance_status_payload(server: &AcpServer, params: Value) -> Re
                 "blue33_remaining_closure": blue33_remaining_closure_profile,
                 "blue34_release_closure": blue34_release_closure_profile,
                 "blue35_release_closure": blue35_release_closure_profile,
+                "evolution_graph": {
+                    "ready": true,
+                    "profile": server
+                        .governance_deps
+                        .capability_bus
+                        .as_ref()
+                        .map(|cb| {
+                            let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
+                            let p = g.profile();
+                            json!({
+                                "total": p.total_capabilities,
+                                "mature": p.mature_count,
+                                "degrading": p.degrading_count,
+                                "deprecated": p.deprecated_count,
+                            })
+                        })
+                        .unwrap_or_else(|| json!({ "total": 0, "mature": 0, "degrading": 0, "deprecated": 0 })),
+                    "degrading_capabilities": server
+                        .governance_deps
+                        .capability_bus
+                        .as_ref()
+                        .map(|cb| {
+                            let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
+                            g.find_degrading_capabilities()
+                                .into_iter()
+                                .map(|(a, c, s)| json!({"agent": a, "capability": c, "slope": s}))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                    "promotion_candidates": server
+                        .governance_deps
+                        .capability_bus
+                        .as_ref()
+                        .map(|cb| {
+                            let g = cb.evolution_graph.lock().unwrap_or_else(|e| e.into_inner());
+                            g.find_candidates_for_promotion()
+                                .into_iter()
+                                .map(|(a, c)| json!({"agent": a, "capability": c}))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                },
             },
             "blue_gates": {
                 "blue27_release_closure": blue27_release_closure_ready,

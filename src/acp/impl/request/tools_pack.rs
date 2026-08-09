@@ -434,8 +434,56 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
     tools
 }
 
+/// Returns true if the tool name is handled by the built-in bridge-only
+/// special-tool match arm (acp_trace_get, goon_*, prompts_*, skill-finder,
+/// import_skill, github_search_skills, …). These are not registered `Tool`
+/// implementations but are executed by the match in `execute_tool_call`.
+pub(crate) fn is_bridge_special_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "acp_trace_get"
+            | "acp_debug_panel_get"
+            | "goon_workflow_run_list"
+            | "goon_workflow_run_get"
+            | "goon_workflow_run_cancel"
+            | "goon_workflow_run_pause"
+            | "goon_workflow_run_resume"
+            | "goon_provider_test_connection"
+            | "goon_provider_test_completion"
+            | "goon_provider_capabilities"
+            | "goon_metrics_window_query"
+            | "goon_metrics_errors_summary"
+            | "goon_skill_update"
+            | "goon_skill_version_list"
+            | "goon_skill_version_rollback"
+            | "prompts_list"
+            | "prompts_get"
+            | "skill-finder"
+            | "import_skill"
+            | "github_search_skills"
+    )
+}
+
 pub(crate) async fn execute_mcp_tool_call(
     server: &AcpServer,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value> {
+    execute_tool_call(server, &server.tool_registry, name, arguments).await
+}
+
+/// Core tool-execution chain shared by the ACP bridge (`mcp.tools.call` /
+/// `tools/call`) and the native MCP arm (`tools/call` via `McpServer`).
+///
+/// The `registry` parameter is the tool registry the caller wants to search
+/// (the ACP bridge uses the server's own registry, the native MCP arm uses
+/// the registry it was constructed with). This keeps one governance chain
+/// (sandbox / require_review / budget / RBAC + idempotency dedup + budget
+/// accounting + pre-execute hooks + `run_async` + skill fallback) instead of
+/// two parallel copies that could drift.
+pub(crate) async fn execute_tool_call(
+    server: &AcpServer,
+    registry: &crate::orchestration::tool::ToolRegistry,
     name: &str,
     arguments: &Value,
 ) -> Result<Value> {
@@ -446,6 +494,15 @@ pub(crate) async fn execute_mcp_tool_call(
     let tool_name = name.to_string();
 
     let result = async {
+    // Fast-path: unknown tool/skill resolves to one consistent error BEFORE
+    // any governance check, so the ACP bridge and the native MCP arm both
+    // surface "unknown tool or skill" (mapped to INVALID_PARAMS on the MCP
+    // arm). Previously governance ran first and an unknown tool was rejected
+    // by the sandbox require_review gate (a confusing -32603 for callers).
+    let known = registry.get(name).is_some() || is_bridge_special_tool(name);
+    if !known {
+        anyhow::bail!("unknown tool or skill: {name}");
+    }
     if let Some(harness_bus) = server.governance_deps.harness_bus.as_ref() {
         // `validate_action` runs PolicyEvaluator::check_tool_call
         // (sandbox / require_review / idempotency / budget / RBAC) and
@@ -455,7 +512,7 @@ pub(crate) async fn execute_mcp_tool_call(
         let verdict = harness_bus.validate_action(&tool_name, arguments).await;
         // Skip require_review for tools that are registered in the
         // tool_registry — they are explicitly registered and trusted.
-        let is_registered = server.tool_registry.get(name).is_some();
+        let is_registered = registry.get(name).is_some();
         if verdict.require_review && !is_registered {
             // Unknown tool — not in sandbox whitelist. The AI should ask
             // the user for approval before using this tool (inline
@@ -777,7 +834,6 @@ pub(crate) async fn execute_mcp_tool_call(
             }))
         }
         _ => {
-            let registry = global_tool_registry();
             // `get_arc` so the owned `Arc<dyn Tool>` can be moved into
             // `run_async` (a plain `get` borrow cannot outlive the method).
             if let Some(tool) = registry.get_arc(name) {
