@@ -62,7 +62,7 @@ pub struct PromptManager {
     base_path: PathBuf,
     /// In-memory cache: language_code -> PromptCollection
     cache: Mutex<HashMap<String, PromptCollection>>,
-    /// Custom prompts cache: language_code -> Vec<PromptTemplate>
+    /// Custom prompts cache: language_code -> `Vec<PromptTemplate>`
     custom_cache: Mutex<HashMap<String, Vec<PromptTemplate>>>,
 }
 

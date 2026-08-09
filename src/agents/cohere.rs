@@ -3,7 +3,7 @@
 //! This module provides an implementation for the Cohere API.
 //! Uses Cohere's native Chat API format (not OpenAI-compatible).
 //!
-//! API reference: https://docs.cohere.com/reference/chat
+//! API reference: <https://docs.cohere.com/reference/chat>
 
 use std::collections::HashMap;
 

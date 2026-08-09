@@ -28,6 +28,10 @@ pub struct MemoryEntry {
     pub staleness: u32,
     /// Optional user_id for multi-user isolation.
     pub user_id: Option<String>,
+    /// Optional conversation/session id, enabling session-scoped retrieval
+    /// from the durable tiers (session/load, session/resume).
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 /// Memory policy governs storage, promotion, retrieval, and GC

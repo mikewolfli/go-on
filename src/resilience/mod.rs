@@ -8,7 +8,7 @@
 //! failures, routing requests to healthy replicas, and applying self-healing
 //! retry/backoff policies.  It does **not** manage node-level health tracking,
 //! heartbeat detection, isolation groups, or recovery plans — those belong
-//! to the [`fault_tolerance`] module.
+//! to the `fault_tolerance` module.
 //!
 //! Both modules are complementary: `resilience` answers *"how do we keep
 //! serving through transient failures?"* while `fault_tolerance` answers

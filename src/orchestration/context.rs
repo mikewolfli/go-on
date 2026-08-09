@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// Create one early in your request lifecycle and pass it to orchestrator
 /// functions such as `select_model_for_task` and `select_model_semantic`.
 ///
-/// The feed is shared process-wide via [`global_live_performance`] so that
+/// The feed is shared process-wide via [`crate::observability::live_performance::global_live_performance`] so that
 /// outcome recording in the chat pipeline and estimation here observe the
 /// same data (a per-context empty feed made the dynamic estimates dead).
 pub struct OrchestrationContext {

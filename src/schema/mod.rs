@@ -4,7 +4,7 @@
 //! and Model Context Protocol (MCP), mirroring the official
 //! `agent-client-protocol-schema` v0.13.2 crate.
 //!
-//! Source of truth: https://github.com/agentclientprotocol/agent-client-protocol
+//! Source of truth: <https://github.com/agentclientprotocol/agent-client-protocol>
 //!
 //! Many types are defined here for future use and may trigger dead_code
 //! warnings until they are adopted by the ACP handlers.

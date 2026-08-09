@@ -1926,6 +1926,7 @@ pub(crate) async fn reflect_phase(
                     usefulness: 0.5,
                     staleness: 0,
                     user_id: None,
+                    session_id: None,
                 };
                 let _ = crate::memory::memory_bridge::bridge_store(
                     &server.persistence.memory_store,

@@ -1152,6 +1152,9 @@ pub(crate) async fn apply_review_gate_assemble(
             ),
             usefulness: 0.8,
             staleness: 0,
+            // Carry the conversation id so the durable tiers can serve
+            // session-scoped retrieval (session/load, session/resume).
+            session_id: Some(conversation_id.to_string()),
             user_id: None,
         };
 

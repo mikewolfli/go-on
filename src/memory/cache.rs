@@ -594,7 +594,7 @@ impl ResponseCache {
                 .query_one("SELECT COUNT(*) FROM response_cache", &[])
                 .map_err(|e| anyhow::anyhow!("count response_cache rows: {e}"))?
                 .get(0);
-            if row_count > max_entries as i64 {
+            if row_count > max_entries {
                 client.execute(
                     "DELETE FROM response_cache
                  WHERE cache_key NOT IN (

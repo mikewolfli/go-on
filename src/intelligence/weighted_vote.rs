@@ -2,7 +2,7 @@
 //!
 //! Upgrades the simple-majority voting system to:
 //! 1. **Weighted reputation voting** – votes are weighted by each agent's
-//!    reputation score from [`ReputationStore`], so high-reputation agents
+//!    reputation score from the reputation store, so high-reputation agents
 //!    have proportionally greater influence on the outcome.
 //! 2. **Delphi-method debate rounds** – agents participate in up to `N`
 //!    rounds where they see each other's reasoning and may update their

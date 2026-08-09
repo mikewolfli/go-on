@@ -26,7 +26,7 @@ use anyhow::Result;
 
 /// A [`Manager`] that creates and recycles `postgres::Client` connections.
 ///
-/// deadpool 0.12's `Manager` trait uses `impl Future` return types, so we
+/// deadpool's `Manager` trait uses `impl Future` return types, so we
 /// perform the synchronous connection creation inline and wrap the result
 /// in an immediately-resolved future via `async move { }`.
 #[cfg(feature = "backend-postgres")]

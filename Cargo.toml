@@ -273,14 +273,14 @@ postgres = { version = "0.19", optional = true }
 tokio-postgres-rustls = { version = "0.14", features = ["ring", "webpki-roots"], optional = true }
 webpki-roots = { version = "1", optional = true }
 pgvector = { version = "0.4", features = ["postgres"], optional = true }
-deadpool = { version = "0.12", features = ["managed"], optional = true }
+deadpool = { version = "0.13", features = ["managed"], optional = true }
 sqlite-vec = { version = "0.1.9", optional = true }
 flate2 = "1"
 fastrand = "2"
 subtle = "2"
 
 # ── Security / Signing / mTLS (GAP-B52) ────────────────────────────────────
-ed25519-dalek = { version = "2", default-features = false, features = ["signature", "rand_core"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["signature", "rand_core"] }
 hmac = "0.13"
 rand = "0.10"
 hex = "0.4"
@@ -299,13 +299,13 @@ dxf = { version = "0.6", optional = true }
 svg = { version = "0.18", optional = true }
 
 # ── Multimodal document parsing (optional) ──────────────────────────────────
-lopdf = { version = "0.41", optional = true }
+lopdf = { version = "0.44", optional = true }
 docx-rs = { version = "0.4", optional = true }
 scraper = { version = "0.27", optional = true }
-comrak = { version = "0.52", optional = true }
-calamine = { version = "0.26", optional = true }
-rust_xlsxwriter = { version = "0.82", optional = true }
-quick-xml = { version = "0.37", features = ["serialize"], optional = true }
+comrak = { version = "0.54", optional = true }
+calamine = { version = "0.36", optional = true }
+rust_xlsxwriter = { version = "0.97", optional = true }
+quick-xml = { version = "0.41", features = ["serialize"], optional = true }
 minijinja = { version = "2", optional = true }
 
 zip = "2"
@@ -319,10 +319,10 @@ windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win
 
 [dev-dependencies]
 # ── Note: Contract tests live in tests/contract_tests/ ──────────────────
-serial_test = "3"
+serial_test = "4"
 temp-env = "0.3"
 criterion = { version = "0.5", features = ["html_reports"] }
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 
 # Benchmarks use the default test harness, but both criterion benchmarks
 # provide their own main() via the criterion_main! macro. Setting harness = false

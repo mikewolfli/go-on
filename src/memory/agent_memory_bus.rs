@@ -112,6 +112,7 @@ impl AgentMemoryBus {
             usefulness: importance,
             staleness: 0,
             user_id: None, // will be set by store_memory below
+            session_id: None,
         };
 
         // Mirror the insight into the attached VectorStore under the
@@ -200,7 +201,7 @@ impl AgentMemoryBus {
 
     /// Retrieve up to `limit` memories relevant to the given query.
     ///
-    /// When a [`VectorStore`] is attached (via [`with_vector_store`]), this
+    /// When a `VectorStore` is attached (via `with_vector_store`), this
     /// uses vector similarity search via [`VectorStore::search`] with the
     /// `"agent_memory"` phase.  Otherwise falls back to the original linear
     /// substring/tag scan of the in-memory `Semantic` class.
@@ -242,6 +243,7 @@ impl AgentMemoryBus {
                             usefulness: hit.similarity.clamp(0.0, 1.0),
                             staleness: 0,
                             user_id: effective_user_id.map(|s| s.to_string()),
+                            session_id: None,
                         })
                         .collect();
                 }

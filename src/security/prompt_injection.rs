@@ -89,7 +89,7 @@ pub struct InjectionResult {
 /// Prompt injection violation.
 ///
 /// Shared fields (`severity`, `match_text`, `start_pos`, `end_pos`, `description`)
-/// are stored in the [`SafetyViolationBase`] embed.
+/// are stored in the `crate::security::severity::SafetyViolationBase` embed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SafetyViolation {
     pub category: InjectionCategory,

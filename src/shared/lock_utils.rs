@@ -1,6 +1,6 @@
 //! Lock utility helpers for recovering from poisoned mutexes.
 //!
-//! Provides a convenience macro [`lock_or_recover`] that reduces the
+//! Provides a convenience macro `lock_or_recover` that reduces the
 //! ~5-line `lock().unwrap_or_else(|poisoned| { ... })` pattern to a
 //! single line, eliminating ~40+ near-identical occurrences across
 //! the codebase.

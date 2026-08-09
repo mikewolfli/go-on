@@ -6,8 +6,8 @@
 //! | Module | Description |
 //! |--------|-------------|
 //! | [`document_parser`] | Extracts text, images, tables, and metadata from PDF, DOCX, HTML, Markdown, Excel, PPT |
-//! | [`excel_processor`] | Excel (.xlsx / .xls) workbook text extraction using `calamine` |
-//! | [`ppt_processor`] | PowerPoint (.pptx) slide text extraction using `quick-xml` |
+//! | `excel_processor` (feature `document-excel`) | Excel (.xlsx / .xls) workbook text extraction using `calamine` |
+//! | `ppt_processor` (feature `document-ppt`) | PowerPoint (.pptx) slide text extraction using `quick-xml` |
 //! | [`audio_processor`] | Speech-to-text transcription with speaker diarization support |
 //!
 //! # Re-exports

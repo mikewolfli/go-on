@@ -325,29 +325,6 @@ impl I18nManager {
         info!("Languages reloaded");
         Ok(())
     }
-
-    /// Export translatable keys (for translation work)
-    pub fn export_keys(&self) -> Result<Vec<String>> {
-        let state = read_guard(&self.inner.state, "i18n.state");
-        if let Some(en_messages) = state.translations.get(&Language::EnUS) {
-            Ok(en_messages.keys().cloned().collect())
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    /// Get available languages
-    pub fn available_languages(&self) -> Vec<(Language, usize)> {
-        let state = read_guard(&self.inner.state, "i18n.state");
-        let mut languages: Vec<_> = state
-            .translations
-            .iter()
-            .map(|(lang, messages)| (*lang, messages.len()))
-            .collect();
-
-        languages.sort_by_key(|(lang, _)| lang.code());
-        languages
-    }
 }
 
 /// Global i18n manager instance

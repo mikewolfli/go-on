@@ -1,7 +1,8 @@
 //! State sync event types and broadcaster for cross-client state synchronization.
 //!
-//! The backend exposes a [`StateSyncBroadcaster`] that publishes state change events
-//! so that connected clients (GUI, VSCode addon) can react without polling.
+//! The backend exposes a state-sync [`publish_event`]/[`subscribe`] pair that
+//! publishes state change events so that connected clients (GUI, VSCode addon)
+//! can react without polling.
 //!
 //! # Architecture
 //!
@@ -95,7 +96,7 @@ pub fn publish_event(event: StateSyncEvent) {
 /// Subscribe to state sync events.
 ///
 /// Returns a `broadcast::Receiver` that will receive all future events.
-/// If the receiver falls behind (more than [`BROADCAST_CAPACITY`] events
+/// If the receiver falls behind (more than `BROADCAST_CAPACITY` events
 /// queued), old events will be dropped. The receiver should be polled
 /// frequently or recreated.
 pub fn subscribe() -> broadcast::Receiver<StateSyncEvent> {

@@ -315,6 +315,10 @@ mod tests {
             }
             let ca_cert = ca_params.self_signed(&ca_key).unwrap();
 
+            // rcgen 0.14: `signed_by` takes an `Issuer` (CA params + key)
+            // instead of separate issuer-cert / issuer-key arguments.
+            let issuer = Issuer::from_params(&ca_params, ca_key);
+
             // ── Server certificate ──────────────────────────────────────
             let server_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
             let mut server_params = CertificateParams::default();
@@ -325,9 +329,7 @@ mod tests {
                 dn.push(DnType::CommonName, "localhost");
                 server_params.distinguished_name = dn;
             }
-            let server_cert = server_params
-                .signed_by(&server_key, &ca_cert, &ca_key)
-                .unwrap();
+            let server_cert = server_params.signed_by(&server_key, &issuer).unwrap();
 
             // ── Client certificate ──────────────────────────────────────
             let client_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
@@ -339,9 +341,7 @@ mod tests {
                 dn.push(DnType::CommonName, "test-client-01");
                 client_params.distinguished_name = dn;
             }
-            let client_cert = client_params
-                .signed_by(&client_key, &ca_cert, &ca_key)
-                .unwrap();
+            let client_cert = client_params.signed_by(&client_key, &issuer).unwrap();
 
             // ── Write PEM files to temp dir ─────────────────────────────
             let dir = TempDir::new().unwrap();

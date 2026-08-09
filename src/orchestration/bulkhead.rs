@@ -25,7 +25,7 @@ impl Bulkhead {
     /// Create a new `Bulkhead` with the given default per-provider limit.
     ///
     /// The `default_limit` is used when `acquire()` is called for a provider
-    /// that has no explicit limit set via [`set_limit`](Self::set_limit).
+    /// that has no explicit limit set via `set_limit`.
     pub fn new(default_limit: usize) -> Self {
         Self {
             semaphores: RwLock::new(HashMap::new()),

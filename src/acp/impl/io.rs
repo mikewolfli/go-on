@@ -100,7 +100,7 @@ pub async fn write_response(server: &AcpServer, response: JsonRpcResponse) -> Re
     write_json_line(server, &value).await
 }
 
-/// Respond with a Result<Value>, writing the JSON-RPC response directly.
+/// Respond with a `Result<Value>`, writing the JSON-RPC response directly.
 /// Skips send_result/send_error to reduce indirection for the pure-handler dispatch path.
 pub async fn respond(
     server: &AcpServer,

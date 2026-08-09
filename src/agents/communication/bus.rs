@@ -122,6 +122,24 @@ impl CommunicationBus {
         self.tree.write().await.remove_subtree(path)
     }
 
+    /// Set the lifecycle state of the node at `path` (watch-channel notify).
+    pub async fn set_lifecycle(
+        &self,
+        path: &AgentPath,
+        state: crate::agents::communication::lifecycle::AgentLifecycle,
+    ) {
+        if let Some(node) = self.tree.read().await.resolve(path) {
+            node.set_lifecycle(state);
+        }
+    }
+
+    /// Remove all communication state for a finished agent: tree node,
+    /// descendants, and the messenger inbox.
+    pub async fn cleanup_agent(&self, path: &AgentPath) {
+        self.remove_agent(path).await;
+        self.messenger.remove_inbox(path).await;
+    }
+
     /// Send a message.
     pub async fn send_message(&self, msg: AgentMessage) -> Result<(), String> {
         let result = self.messenger.send(msg).await;

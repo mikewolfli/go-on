@@ -7,7 +7,7 @@
 //! silent, isolating it from traffic, and coordinating automated recovery
 //! plans (escalation, reintegration).  It does **not** implement service-level
 //! patterns such as circuit breaking, failover routing, or self-healing
-//! retry logic — those belong to the [`resilience`] module.
+//! retry logic — those belong to the `resilience` module.
 //!
 //! Both modules are complementary: `fault_tolerance` answers *"is the node
 //! alive?"* and *"how do we bring it back?"* while `resilience` answers

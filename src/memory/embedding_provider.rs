@@ -116,7 +116,7 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
 
 /// Configuration for the OpenAI embedding provider.
 pub struct OpenAiEmbeddingConfig {
-    /// API base URL (default: https://api.openai.com/v1).
+    /// API base URL (default: <https://api.openai.com/v1>).
     pub api_base: String,
     /// Model name (default: text-embedding-3-small).
     pub model: String,
@@ -352,7 +352,7 @@ impl OllamaEmbeddingProvider {
 
 /// Configuration for the Qwen3 (DashScope) embedding provider.
 pub struct Qwen3EmbeddingConfig {
-    /// DashScope API key (from https://dashscope.aliyun.com/).
+    /// DashScope API key (from <https://dashscope.aliyun.com/>).
     pub api_key: String,
     /// Model name, e.g. "text-embedding-v3" (Qwen3 official embedding).
     pub model: String,
@@ -375,7 +375,7 @@ impl Default for Qwen3EmbeddingConfig {
 }
 
 /// Embedding provider backed by Alibaba Cloud DashScope API (Qwen3).
-/// https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding
+/// <https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding>
 pub struct Qwen3EmbeddingProvider {
     config: Qwen3EmbeddingConfig,
 }

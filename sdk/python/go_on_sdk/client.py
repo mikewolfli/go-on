@@ -764,6 +764,52 @@ class GoOnClient:
             {"sessionId": session_id, "configId": config_id, "value": value},
         )
 
+    async def session_load(self, session_id: str) -> dict[str, Any]:
+        """session/load — load an existing ACP session (modes + config options).
+
+        The backend reads `sessionId` and returns `{modes, configOptions, _meta}`.
+        """
+        return await self._json_rpc("session/load", {"sessionId": session_id})
+
+    async def session_delete(self, session_id: str) -> dict[str, Any]:
+        """session/delete — delete an ACP session (and its permission state).
+
+        The backend returns ``{deleted: bool, sessionId}``.
+        """
+        return await self._json_rpc("session/delete", {"sessionId": session_id})
+
+    async def session_config_get(self, session_id: str) -> dict[str, Any]:
+        """session/config/get — read the per-session config options.
+
+        The backend returns ``{configOptions: {...}, sessionId}``.
+        """
+        return await self._json_rpc("session/config/get", {"sessionId": session_id})
+
+    async def session_config_set(
+        self, session_id: str, config_id: str, value: Any
+    ) -> dict[str, Any]:
+        """session/config/set — set a per-session config option.
+
+        The backend reads `sessionId`, `configId` and `value`, and returns the
+        updated ``{configOptions: [...]}``.
+        """
+        return await self._json_rpc(
+            "session/config/set",
+            {"sessionId": session_id, "configId": config_id, "value": value},
+        )
+
+    async def session_request_permission(
+        self, session_id: str, option_id: str
+    ) -> dict[str, Any]:
+        """session/request_permission — respond to a pending permission request.
+
+        The backend reads `sessionId` and `optionId` (e.g. ``"approve"`` / ``"deny"``).
+        """
+        return await self._json_rpc(
+            "session/request_permission",
+            {"sessionId": session_id, "optionId": option_id},
+        )
+
     # ── Tools ────────────────────────────────────────────────────────────
 
     async def tools_list(self) -> list[ToolInfo]:
@@ -835,3 +881,48 @@ class GoOnClient:
             error=None,
             duration_ms=elapsed_ms,
         )
+
+    # ── OpenAI-compatible endpoints ─────────────────────────────────────
+
+    async def chat_completions(self, request: dict[str, Any]) -> dict[str, Any]:
+        """POST /v1/chat/completions — OpenAI-compatible chat completions.
+
+        The request body follows the OpenAI chat completions wire format
+        (``model``, ``messages``, ``temperature``, ``stream``, ...) and is
+        forwarded verbatim to the backend's OpenAI-compat handler
+        (``src/acp/impl/runtime/openai_compat.rs``).
+        """
+        resp = await self._client.post(
+            f"{self.base_url}/v1/chat/completions", json=request
+        )
+        _ = resp.raise_for_status()
+        return cast(dict[str, Any], resp.json())
+
+    async def responses_create(self, request: dict[str, Any]) -> dict[str, Any]:
+        """POST /v1/responses — OpenAI Responses API create.
+
+        The request body follows the Responses API wire format
+        (``model``, ``input``, ``instructions``, ...) and is forwarded
+        verbatim to ``handle_responses_api``.
+        """
+        resp = await self._client.post(f"{self.base_url}/v1/responses", json=request)
+        _ = resp.raise_for_status()
+        return cast(dict[str, Any], resp.json())
+
+    async def responses_get(self, response_id: str) -> dict[str, Any]:
+        """GET /v1/responses/{id} — retrieve a single Responses API response."""
+        resp = await self._client.get(
+            f"{self.base_url}/v1/responses/{response_id}"
+        )
+        _ = resp.raise_for_status()
+        return cast(dict[str, Any], resp.json())
+
+    async def models_list(self) -> dict[str, Any]:
+        """GET /v1/models — list models exposed by the OpenAI-compat surface.
+
+        The backend returns ``{"object": "list", "data": [{"id": "go-on", ...}]}``
+        (see ``build_openai_models_response``).
+        """
+        resp = await self._client.get(f"{self.base_url}/v1/models")
+        _ = resp.raise_for_status()
+        return cast(dict[str, Any], resp.json())

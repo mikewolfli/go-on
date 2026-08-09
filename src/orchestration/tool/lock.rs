@@ -7,7 +7,7 @@
 //! # Thread safety
 //!
 //! The lock table is protected by a [`std::sync::Mutex`]. Lock acquisition
-//! is non-blocking — only [`try_acquire`] is exposed.
+//! is non-blocking — only `try_acquire` is exposed.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

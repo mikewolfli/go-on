@@ -200,8 +200,8 @@ impl TenantBudgetEnforcer {
 
     /// Record that a tenant started a task.
     ///
-    /// Prefer [`check_and_start_task`] over calling this separately after
-    /// [`check_can_start`] to avoid TOCTOU races.
+    /// Prefer `check_and_start_task` over calling this separately after
+    /// `check_can_start` to avoid TOCTOU races.
     pub fn start_task(&mut self, tenant_id: &str) {
         let mut guard = self.state.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("budget state lock poisoned: recovering");

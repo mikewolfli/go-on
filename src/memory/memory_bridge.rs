@@ -2,9 +2,9 @@
 //!
 //! Coordinates operations between the two parallel memory subsystems:
 //!
-//! - [`MemoryStore`](crate::memory::memory::MemoryStore) — in-memory per-class memory store
+//! - [`MemoryStore`] — in-memory per-class memory store
 //!   with promotion between `MemoryClass` levels (Observation → Episodic → Semantic → ProjectState).
-//! - [`MemoryPersistence`](crate::memory::memory_persistence::MemoryPersistence) — three-tier
+//! - [`MemoryPersistence`] — three-tier
 //!   persistence (Hot / Warm / Cold) with automatic tier migration.
 //!
 //! # Bridge functions
@@ -57,7 +57,7 @@ impl From<CanonicalEntry> for PersistenceEntry {
             usefulness: entry.usefulness,
             embedding: None,
             access_count: 1,
-            session_id: None,
+            session_id: entry.session_id,
             user_id: entry.user_id,
         }
     }
@@ -174,6 +174,7 @@ mod tests {
             usefulness,
             staleness: 0,
             user_id: None,
+            session_id: None,
         }
     }
 

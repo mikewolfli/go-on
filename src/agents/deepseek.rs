@@ -146,7 +146,7 @@ impl Agent for DeepSeekAgent {
     }
 
     /// Returns the currently available DeepSeek models per their official API docs:
-    ///   https://api-docs.deepseek.com/quick_start/pricing
+    ///   <https://api-docs.deepseek.com/quick_start/pricing>
     ///
     /// As of 2025, DeepSeek offers exactly two production models:
     ///   - deepseek-v4-flash  (fast, non-thinking, function calling)

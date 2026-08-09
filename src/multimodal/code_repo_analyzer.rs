@@ -112,7 +112,7 @@ pub struct RepoContext {
 pub struct RepoMap {
     /// Root-relative file paths indexed by a short unique ID.
     pub files: Vec<String>,
-    /// Adjacency list: dependencies[file_id] = set of file_ids this file imports.
+    /// Adjacency list: `dependencies[file_id]` = set of file_ids this file imports.
     pub dependencies: HashMap<usize, HashSet<usize>>,
     /// Reverse dependency list.
     pub dependents: HashMap<usize, HashSet<usize>>,

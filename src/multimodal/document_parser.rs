@@ -264,7 +264,7 @@ impl DocumentParser {
     /// Parse bytes with an explicit extension hint (no I/O).
     ///
     /// This is useful when the document data is already in memory (e.g. from
-    /// a [`MultimodalInput::Document`]).
+    /// a `MultimodalInput::Document`).
     pub fn parse_bytes(
         &self,
         bytes: &[u8],

@@ -127,8 +127,8 @@ pub use health::{
 };
 pub use learning::{
     persist_knowledge_insight_event, persist_workflow_learning_event, KnowledgeBusArtifact,
-    KnowledgeInsightArtifact, LearningFeedbackSystem, LearningPattern, RewardFunction,
-    RlTaskExecutionMetrics, WorkflowLearningBusArtifact, WorkflowLearningEvent,
+    KnowledgeInsightArtifact, RewardFunction, RlTaskExecutionMetrics, WorkflowLearningBusArtifact,
+    WorkflowLearningEvent,
 };
 
 pub use task_plan::{

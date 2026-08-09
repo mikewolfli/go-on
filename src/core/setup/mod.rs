@@ -32,7 +32,7 @@ pub use config_gen::{
 
 // Re-export prompt functions.
 pub use prompts::{
-    add_local_model, parse_setup_level, parse_setup_profile, run_setup, run_setup_with_options,
+    add_local_model, parse_setup_level, parse_setup_profile, run_setup_with_options,
 };
 pub(crate) use prompts::{
     ensure_table, prompt_secret_pool_deletion_selection, prompt_secret_pool_values, prompt_yes_no,

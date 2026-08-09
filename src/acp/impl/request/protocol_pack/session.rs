@@ -95,11 +95,46 @@ pub async fn session_load_payload(server: &AcpServer, params: Value) -> Result<V
     let current_model = stored.config_options.get("model").and_then(Value::as_str);
     let config_options = super::build_model_config_options(server, current_model);
 
-    Ok(serde_json::to_value(&crate::schema::LoadSessionResponse {
+    let mut value = serde_json::to_value(&crate::schema::LoadSessionResponse {
         modes: Some(modes),
         config_options: Some(config_options),
         meta: None,
-    })?)
+    })?;
+
+    // ── Read side of the durable memory tiers: restore the session's
+    // persisted memories so a resumed session is memory-aware (previously the
+    // persistence layer was write-only in production — nothing ever read the
+    // hot/warm tiers back).
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(mp) = server.get_or_init_memory_persistence() {
+            match mp.search_by_session(session_id, 16).await {
+                Ok(entries) => {
+                    obj.insert(
+                        "memory_context".to_string(),
+                        serde_json::json!(entries
+                            .iter()
+                            .map(|e| e.content.clone())
+                            .collect::<Vec<_>>()),
+                    );
+                    obj.insert(
+                        "memory_restored_count".to_string(),
+                        serde_json::json!(entries.len()),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "acp::protocol_pack",
+                        session_id = %session_id,
+                        error = %e,
+                        "session/load: memory context load failed"
+                    );
+                    obj.insert("memory_restored_count".to_string(), serde_json::json!(0));
+                }
+            }
+        }
+    }
+
+    Ok(value)
 }
 
 /// Handle `session/prompt` — processes a user prompt within a session.
@@ -609,11 +644,44 @@ pub async fn session_resume_payload(server: &AcpServer, params: Value) -> Result
     };
     let config_options = super::build_model_config_options(server, current_model.as_deref());
 
-    Ok(serde_json::to_value(&ResumeSessionResponse {
+    let mut value = serde_json::to_value(&ResumeSessionResponse {
         modes: Some(modes),
         config_options: Some(config_options),
         meta: None,
-    })?)
+    })?;
+
+    // ── Restore the session's persisted memory context (read side of the
+    // durable tiers; see session_load_payload).
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(mp) = server.get_or_init_memory_persistence() {
+            match mp.search_by_session(session_id, 16).await {
+                Ok(entries) => {
+                    obj.insert(
+                        "memory_context".to_string(),
+                        serde_json::json!(entries
+                            .iter()
+                            .map(|e| e.content.clone())
+                            .collect::<Vec<_>>()),
+                    );
+                    obj.insert(
+                        "memory_restored_count".to_string(),
+                        serde_json::json!(entries.len()),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "acp::protocol_pack",
+                        session_id = %session_id,
+                        error = %e,
+                        "session/resume: memory context load failed"
+                    );
+                    obj.insert("memory_restored_count".to_string(), serde_json::json!(0));
+                }
+            }
+        }
+    }
+
+    Ok(value)
 }
 
 /// Handle `session/close` — closes and cleans up a session.

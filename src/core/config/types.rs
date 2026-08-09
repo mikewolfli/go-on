@@ -122,10 +122,10 @@ pub struct UrlPolicyConfig {
     /// If false (default), all http/https URLs are permitted unless blocked.
     #[serde(default)]
     pub restrict_to_allowed: bool,
-    /// Glob-style URL patterns that are always allowed (e.g. "https://api.deepseek.com/*").
+    /// Glob-style URL patterns that are always allowed (e.g. `https://api.deepseek.com/*`).
     #[serde(default)]
     pub allowed_patterns: Vec<String>,
-    /// Glob-style URL patterns that are always blocked (e.g. "*.malicious.com/*").
+    /// Glob-style URL patterns that are always blocked (e.g. `*.malicious.com/*`).
     #[serde(default)]
     pub blocked_patterns: Vec<String>,
     /// Maximum response body size in bytes (default: 10MB).
@@ -276,14 +276,6 @@ pub struct AdaptiveConfig {
 
     /// Minimum configuration required for operation
     pub minimal_config: MinimalConfig,
-
-    /// Learning preferences for AI adaptation
-    #[serde(default)]
-    pub learning_preferences: LearningPreferences,
-
-    /// Conversation history for context-aware adaptation
-    #[serde(default)]
-    pub conversation_context: Vec<ConversationContext>,
 }
 
 /// Minimal configuration required for operation
@@ -304,43 +296,6 @@ pub struct MinimalConfig {
     /// Whether to enable vector memory
     #[serde(default = "super::defaults::default_true")]
     pub enable_vector_memory: bool,
-}
-
-/// Learning preferences for AI adaptation
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LearningPreferences {
-    /// Preferred communication style
-    #[serde(default = "super::defaults::default_communication_style")]
-    pub communication_style: String,
-
-    /// Preferred level of detail
-    #[serde(default = "super::defaults::default_detail_level")]
-    pub detail_level: String,
-
-    /// Learning speed preference
-    #[serde(default = "super::defaults::default_learning_speed")]
-    pub learning_speed: String,
-
-    /// Whether to ask for clarification when uncertain
-    #[serde(default = "super::defaults::default_true")]
-    pub ask_for_clarification: bool,
-
-    /// Whether to adapt based on conversation history
-    #[serde(default = "super::defaults::default_true")]
-    pub adapt_from_history: bool,
-}
-
-/// Conversation context for adaptive configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversationContext {
-    /// Conversation ID
-    pub conversation_id: String,
-    /// User preferences expressed in conversation
-    pub expressed_preferences: Vec<String>,
-    /// Successful adaptations from this conversation
-    pub successful_adaptations: Vec<String>,
-    /// Timestamp of last interaction
-    pub last_interaction: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -591,7 +546,7 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    /// Build a [`CorsConfig`] from the configured origins, or return `None` if
+    /// Build a `crate::acp::r#impl::cors::CorsConfig` from the configured origins, or return `None` if
     /// CORS is disabled (empty list).
     pub fn cors_config(&self) -> Option<crate::acp::r#impl::cors::CorsConfig> {
         if self.cors_allowed_origins.is_empty() {
@@ -604,7 +559,7 @@ impl RuntimeConfig {
         Some(cfg)
     }
 
-    /// Build a [`DetectionConfig`] from the RuntimeConfig (BLUE56-GAP-D08).
+    /// Build a `crate::security::prompt_injection::DetectionConfig` from the RuntimeConfig (BLUE56-GAP-D08).
     /// Uses a production-sensible threshold and enables model check when
     /// governance is active.
     pub fn detection_config(&self) -> crate::security::prompt_injection::DetectionConfig {

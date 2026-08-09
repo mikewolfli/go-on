@@ -453,8 +453,8 @@ impl VectorStore {
     /// Create a new vector store with the built-in minhash fallback for embeddings.
     ///
     /// ⚠️  The minhash fallback is only suitable for development/testing.
-    ///     Production deployments should call [`new_with_env()`] or
-    ///     [`with_embedding_provider()`] to use real embeddings.
+    ///     Production deployments should call [`Self::new_with_env`] or
+    ///     [`Self::with_embedding_provider`] to use real embeddings.
     ///
     /// # Arguments
     /// * `path` - Path to the SQLite database file
@@ -553,8 +553,8 @@ impl VectorStore {
     /// Create a new vector store configured from environment variables.
     ///
     /// Reads `GO_ON_EMBEDDING_BACKEND` (and provider-specific env vars)
-    /// via [`embedding_provider_from_env()`] and passes the result to
-    /// [`with_embedding_provider()`].
+    /// via [`crate::memory::embedding_provider::embedding_provider_from_env`] and
+    /// passes the result to [`Self::with_embedding_provider`].
     ///
     /// This is the recommended entry point for production deployments.
     pub fn new_with_env(path: &Path, max_entries: usize) -> Result<Self> {

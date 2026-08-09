@@ -202,7 +202,7 @@ impl RbacEnforcer {
 
     /// Return the lexicographically smallest registered tenant ID, or `None`
     /// when no tenants are registered. Hot-path permission checks use this
-    /// instead of cloning + sorting the full tenant set via [`tenant_ids`].
+    /// instead of cloning + sorting the full tenant set via `tenant_ids`.
     pub fn default_tenant_id(&self) -> Option<String> {
         self.tenants.iter().min().cloned()
     }

@@ -160,7 +160,7 @@ impl AuditEntry {
     /// Verify this entry's Ed25519 signature against the provided public key.
     ///
     /// The signature must have been created by [`AuditEntry::sign`] (i.e., it covers
-    /// the entry's canonical hash returned by [`compute_hash`]).
+    /// the entry's canonical hash returned by [`Self::compute_hash`]).
     pub fn verify_signature(&self, public_key: &[u8]) -> Result<(), AuditError> {
         let sig_b64 = self.signature.as_ref().ok_or_else(|| {
             AuditError::SignatureVerificationFailed("entry has no signature".to_string())

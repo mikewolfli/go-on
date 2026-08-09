@@ -32,7 +32,7 @@ struct LivePerformanceInner {
 
 /// EMA-smoothed live performance feed for model monitoring.
 ///
-/// When an optional [`SelfModelCore`] is provided, every recorded execution
+/// When an optional `self_model` recorder is provided, every recorded execution
 /// is also forwarded to the self-model for dynamic capability scoring.
 pub struct LivePerformanceFeed {
     /// Inner state protected by a single mutex.
@@ -77,7 +77,7 @@ impl LivePerformanceFeed {
 
     /// Record a successful request for `model` with observed latency.
     ///
-    /// If a [`SelfModelCore`] is attached, the result is also forwarded for
+    /// If a `self_model` recorder is attached, the result is also forwarded for
     /// dynamic capability scoring.
     pub fn record_success(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;
@@ -118,7 +118,7 @@ impl LivePerformanceFeed {
 
     /// Record a failed request for `model` with observed latency.
     ///
-    /// If a [`SelfModelCore`] is attached, the result is also forwarded for
+    /// If a `self_model` recorder is attached, the result is also forwarded for
     /// dynamic capability scoring.
     pub fn record_failure(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;

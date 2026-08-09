@@ -340,7 +340,7 @@ impl HyperResilienceEngine {
 
     /// Create a new hyper-resilience engine wrapped in `Arc` for shared ownership.
     ///
-    /// This is a convenience wrapper around [`new`] that makes it easier to inject
+    /// This is a convenience wrapper around [`Self::new`] that makes it easier to inject
     /// the engine via `ServerBuilder` or other shared-state patterns.
     pub fn new_shared(config: ResilienceConfig) -> Arc<Self> {
         Arc::new(Self::new(config))

@@ -8,8 +8,8 @@
 //! Architecture
 //! ------------
 //! The [`SecurityGovernor`] wraps interior state in `Arc<Mutex<…>>` so it can
-//! be shared across threads and embedded inside a [`CapabilityBus`] or
-//! [`HarnessBus`] just like the other governance sub-components.
+//! be shared across threads and embedded inside a capability-bus or
+//! harness-bus component just like the other governance sub-components.
 //!
 //! Usage
 //! -----
@@ -175,7 +175,7 @@ pub struct SecurityPolicy {
     pub name: String,
     /// Description of what this policy enforces.
     pub description: String,
-    /// Severity level (shared [`DetectionSeverity`](crate::security::severity::DetectionSeverity)).
+    /// Severity level (shared [`DetectionSeverity`]).
     pub severity: DetectionSeverity,
     /// Action to take when this policy matches.
     pub action: PolicyAction,

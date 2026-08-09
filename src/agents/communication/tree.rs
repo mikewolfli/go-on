@@ -70,7 +70,7 @@ impl Default for AgentNodeMetadata {
 /// Design notes:
 /// - Uses `Vec<AgentPath>` for children instead of recursive HashMap.
 /// - The flat `AgentTree.nodes` map contains ALL nodes; `children` is just an index.
-/// - Clone is O(1) since AgentPath is a small Vec<String>.
+/// - Clone is O(1) since AgentPath is a small `Vec<String>`.
 /// - `lifecycle_tx` is a watch channel sender for event-driven status propagation (BLUE71 §7).
 #[derive(Debug, Clone)]
 pub struct AgentNode {

@@ -18,8 +18,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::signal;
 use tracing::info;
 
-/// Signal watcher for graceful shutdown (SIGINT, SIGTERM on Unix).
-async fn shutdown_signal() {
+/// Signal watcher for graceful shutdown (SIGINT, SIGTERM on Unix; Ctrl-C
+/// everywhere). Shared by the HTTP accept loop and the MCP stdio server so
+/// platform gates live in one place.
+pub(crate) async fn shutdown_signal() {
     let ctrl_c = signal::ctrl_c();
     #[cfg(unix)]
     {

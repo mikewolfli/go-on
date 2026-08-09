@@ -26,7 +26,7 @@ def _client_with_mock_handler(
     captured: dict[str, list[dict[str, Any]]] = {"requests": []}
 
     def _handler(request: httpx.Request) -> httpx.Response:
-        captured["requests"].append(json.loads(request.content))
+        captured["requests"].append(json.loads(request.content) if request.content else {})
         return handler(request)
 
     client = GoOnClient(base_url="http://localhost:8090", max_retries=0)
@@ -153,6 +153,101 @@ def test_session_set_mode_sends_mode_id():
     assert payload["params"] == {"sessionId": "sess-1", "modeId": "edit"}
 
 
+def test_session_load_sends_session_id():
+    """session/load must send sessionId."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"modes": {}, "configOptions": {}},
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        result = await client.session_load("sess-1")
+        await client.aclose()
+        return result
+
+    result = _run(run())
+    assert captured["requests"][0]["method"] == "session/load"
+    assert captured["requests"][0]["params"] == {"sessionId": "sess-1"}
+    assert result["configOptions"] == {}
+
+
+def test_session_config_get_sends_session_id():
+    """session/config/get must send sessionId."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"configOptions": {"model": "gpt-4o"}, "sessionId": "sess-1"},
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.session_config_get("sess-1")
+        await client.aclose()
+
+    _run(run())
+    payload = captured["requests"][0]
+    assert payload["method"] == "session/config/get"
+    assert payload["params"] == {"sessionId": "sess-1"}
+
+
+def test_session_request_permission_sends_option_id():
+    """session/request_permission must send sessionId and optionId."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {}})
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.session_request_permission("sess-1", "approve")
+        await client.aclose()
+
+    _run(run())
+    payload = captured["requests"][0]
+    assert payload["method"] == "session/request_permission"
+    assert payload["params"] == {"sessionId": "sess-1", "optionId": "approve"}
+
+
+def test_session_delete_sends_session_id():
+    """session/delete must send sessionId."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"deleted": True, "sessionId": "sess-1"},
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        result = await client.session_delete("sess-1")
+        await client.aclose()
+        return result
+
+    result = _run(run())
+    assert captured["requests"][0]["method"] == "session/delete"
+    assert captured["requests"][0]["params"] == {"sessionId": "sess-1"}
+    assert result["deleted"] is True
+
+
 def test_session_list_parses_minimal_id_shape():
     """session/list returns the full envelope (sessions + nextCursor)."""
 
@@ -207,6 +302,216 @@ def test_session_prompt_serializes_content_blocks():
         "sessionId": "sess-1",
         "prompt": [{"type": "text", "text": "Hello"}],
     }
+
+
+def test_session_resume_sends_session_id_and_cwd():
+    """session/resume must send sessionId and optional cwd."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"sessionId": "sess-1", "modes": {}},
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.session_resume("sess-1", cwd="/tmp")
+        await client.aclose()
+
+    _run(run())
+    payload = captured["requests"][0]
+    assert payload["method"] == "session/resume"
+    assert payload["params"] == {"sessionId": "sess-1", "cwd": "/tmp"}
+
+
+def test_session_config_set_sends_config_id_and_value():
+    """session/config/set must send sessionId, configId and value."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"configOptions": [{"id": "model", "value": "gpt-4o"}]},
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.session_config_set("sess-1", "model", "gpt-4o")
+        await client.aclose()
+
+    _run(run())
+    payload = captured["requests"][0]
+    assert payload["method"] == "session/config/set"
+    assert payload["params"] == {
+        "sessionId": "sess-1",
+        "configId": "model",
+        "value": "gpt-4o",
+    }
+
+
+def test_session_close_sends_session_id():
+    """session/close must send sessionId."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "result": {"ok": True}}
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.session_close("sess-1")
+        await client.aclose()
+
+    _run(run())
+    payload = captured["requests"][0]
+    assert payload["method"] == "session/close"
+    assert payload["params"] == {"sessionId": "sess-1"}
+
+
+# ── OpenAI-compatible endpoint contract tests ──────────────────────────
+
+
+def test_chat_completions_posts_openai_wire_format():
+    """chat_completions POSTs the OpenAI body verbatim to /v1/chat/completions."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.chat_completions(
+            {"model": "go-on", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        await client.aclose()
+
+    _run(run())
+    # OpenAI-compat calls bypass the JSON-RPC envelope: the raw request body
+    # IS the OpenAI wire format, POSTed to /v1/chat/completions.
+    assert captured["requests"][0]["model"] == "go-on"
+    assert captured["requests"][0]["messages"] == [
+        {"role": "user", "content": "hi"}
+    ]
+
+
+def test_chat_completions_posts_to_v1_endpoint():
+    """chat_completions must target the /v1/chat/completions path."""
+
+    captured_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_paths.append(str(request.url.path))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "choices": [],
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.chat_completions({"model": "go-on", "messages": []})
+        await client.aclose()
+
+    _run(run())
+    assert captured_paths == ["/v1/chat/completions"]
+
+
+def test_responses_create_posts_to_v1_responses():
+    """responses_create POSTs the Responses API body to /v1/responses."""
+
+    captured_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_paths.append(str(request.url.path))
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "output": [],
+                "status": "completed",
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.responses_create({"model": "go-on", "input": "hi"})
+        await client.aclose()
+
+    _run(run())
+    assert captured_paths == ["/v1/responses"]
+    assert captured["requests"][0] == {"model": "go-on", "input": "hi"}
+
+
+def test_responses_get_targets_v1_responses_id():
+    """responses_get GETs /v1/responses/{id}."""
+
+    captured_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_paths.append(str(request.url.path))
+        return httpx.Response(
+            200,
+            json={"id": "resp_1", "object": "response", "status": "completed"},
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.responses_get("resp_1")
+        await client.aclose()
+
+    _run(run())
+    assert captured_paths == ["/v1/responses/resp_1"]
+
+
+def test_models_list_targets_v1_models():
+    """models_list GETs /v1/models and returns the data array."""
+
+    captured_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_paths.append(str(request.url.path))
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"id": "go-on", "object": "model"}],
+            },
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        result = await client.models_list()
+        await client.aclose()
+        return result
+
+    result = _run(run())
+    assert captured_paths == ["/v1/models"]
+    assert result["data"][0]["id"] == "go-on"
 
 
 # ── Client initialization ────────────────────────────────────────────────

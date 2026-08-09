@@ -73,24 +73,6 @@ fn default_autotune_summary_trigger_max() -> usize {
     20
 }
 
-pub(crate) fn default_autotune_config() -> AutoTuneConfig {
-    AutoTuneConfig {
-        enabled: false,
-        evaluate_interval: default_autotune_evaluate_interval(),
-        min_query_chars_step: default_autotune_min_query_chars_step(),
-        min_query_chars_min: default_autotune_min_query_chars_min(),
-        min_query_chars_max: default_autotune_min_query_chars_max(),
-        max_top_k: default_autotune_max_top_k(),
-        low_precision_threshold: default_autotune_low_precision(),
-        high_precision_threshold: default_autotune_high_precision(),
-        state_path: default_autotune_state_path(),
-        cooldown_windows: default_autotune_cooldown_windows(),
-        min_vector_searches: default_autotune_min_vector_searches(),
-        summary_trigger_min: default_autotune_summary_trigger_min(),
-        summary_trigger_max: default_autotune_summary_trigger_max(),
-    }
-}
-
 /// Runtime autotune state: tracks current parameter values and precision feedback metrics.
 /// Persisted to JSON file at state_path to survive across server restarts.
 #[derive(Debug, Clone, Deserialize, Serialize)]

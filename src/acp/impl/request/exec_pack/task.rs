@@ -662,6 +662,7 @@ pub(crate) async fn execute_runtime_subtasks(
                     usefulness: 0.8,
                     staleness: 0,
                     user_id: None,
+                    session_id: None,
                 });
                 memory_entries_written += 1;
             }

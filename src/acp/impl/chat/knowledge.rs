@@ -93,6 +93,7 @@ pub(crate) async fn persist_chat_knowledge(
             usefulness: confidence as f32,
             staleness: 0,
             user_id: None,
+            session_id: None,
         });
         store.gc();
         let promotion = store.promote();

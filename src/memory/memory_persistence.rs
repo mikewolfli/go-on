@@ -1347,6 +1347,19 @@ impl MemoryPersistence {
         Ok(())
     }
 
+    /// Search the durable warm tier for entries belonging to a session,
+    /// most recently accessed first. This is the read side of the
+    /// persistence layer — used by `session/load` and `session/resume` to
+    /// restore a session's memory context. (Previously the persistence layer
+    /// was write-only in production.)
+    pub async fn search_by_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        self.warm.search_by_session(session_id, limit).await
+    }
+
     /// Run automatic tier migration based on policy.
     ///
     /// 1. Evict expired hot entries → promote useful ones to warm, discard stale ones.

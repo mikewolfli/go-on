@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::config::{AgentConfig, AppConfig, PhaseConfig};
@@ -302,24 +302,11 @@ impl ValidationResult {
             .any(|e| e.severity == ErrorSeverity::Critical)
     }
 
-    /// Check if there are any errors (critical or regular)
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
     /// Get only critical errors
     pub fn critical_errors(&self) -> Vec<&ValidationError> {
         self.errors
             .iter()
             .filter(|e| e.severity == ErrorSeverity::Critical)
-            .collect()
-    }
-
-    /// Get only regular errors (non-critical)
-    pub fn regular_errors(&self) -> Vec<&ValidationError> {
-        self.errors
-            .iter()
-            .filter(|e| e.severity != ErrorSeverity::Critical)
             .collect()
     }
 }
@@ -329,8 +316,6 @@ impl ValidationResult {
 pub enum ErrorSeverity {
     /// Critical error - configuration cannot be used
     Critical,
-    /// Error - configuration has issues but might work
-    Error,
     /// Warning - configuration has minor issues
     Warning,
 }
@@ -795,7 +780,6 @@ impl ConfigValidator {
                     ErrorSeverity::Critical => {
                         tr(i18n.as_ref(), lang, "severity.critical", "CRITICAL")
                     }
-                    ErrorSeverity::Error => tr(i18n.as_ref(), lang, "severity.error", "ERROR"),
                     ErrorSeverity::Warning => {
                         tr(i18n.as_ref(), lang, "severity.warning", "WARNING")
                     }
@@ -918,17 +902,6 @@ impl ConfigValidator {
 
         report
     }
-}
-
-/// Validate configuration file
-pub fn validate_config_file(config_path: &Path) -> Result<ValidationResult> {
-    info!("Validating configuration: {}", config_path.display());
-
-    // Load configuration
-    let config = crate::config::AppConfig::load(config_path)
-        .with_context(|| format!("failed to load config from {}", config_path.display()))?;
-
-    validate_config_with(config_path, config)
 }
 
 /// Validate an already-loaded configuration (avoids a second `AppConfig::load`

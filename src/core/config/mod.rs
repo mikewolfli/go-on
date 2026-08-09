@@ -24,8 +24,8 @@ pub use load::{
     validate_runtime_readiness, ConfigHealthReport, ConfigWarning, ConfigWarningSeverity,
 };
 pub use types::{
-    AdaptiveConfig, AgentConfig, AppConfig, CacheConfig, ComplianceConfig, ConversationContext,
-    FeatureConfig, FlowConfig, LearningPreferences, MinimalConfig, PhaseConfig, PhaseOptions,
-    ProviderConfig, ReputationConfig, RuntimeConfig, SecurityConfig, StartupContextConfig,
-    UrlPolicyConfig, VectorConfig, WorkflowType,
+    AdaptiveConfig, AgentConfig, AppConfig, CacheConfig, ComplianceConfig, FeatureConfig,
+    FlowConfig, MinimalConfig, PhaseConfig, PhaseOptions, ProviderConfig, ReputationConfig,
+    RuntimeConfig, SecurityConfig, StartupContextConfig, UrlPolicyConfig, VectorConfig,
+    WorkflowType,
 };

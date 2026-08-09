@@ -193,7 +193,7 @@ impl Default for VoteConfig {
 /// 1. Collects votes from the 3 internal nodes (capability-bus, local-agent,
 ///    rationalization-guard).
 /// 2. **Weighted mode**: each vote is weighted by the agent's reputation score
-///    from [`ReputationStore`] (passed via `reputations`).
+///    from the reputation store (passed via `reputations`).
 /// 3. **DelphiDebate mode**: runs up to `config.delphi.max_rounds` debate rounds
 ///    where agents see each other's reasoning before the final weighted vote.
 ///

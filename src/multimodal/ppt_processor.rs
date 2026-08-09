@@ -281,7 +281,7 @@ fn extract_text_from_slide_xml(xml: &str) -> String {
             }
             Ok(Event::Text(ref e)) => {
                 if in_text_tag {
-                    if let Ok(t) = e.unescape() {
+                    if let Ok(t) = e.decode() {
                         let trimmed = t.trim().to_string();
                         if !trimmed.is_empty() {
                             current_paragraph.push(trimmed);
@@ -371,7 +371,7 @@ fn extract_tables_from_slide_xml(xml: &str) -> Vec<Table> {
             }
             Ok(Event::Text(ref e)) => {
                 if in_cell_text {
-                    if let Ok(t) = e.unescape() {
+                    if let Ok(t) = e.decode() {
                         let trimmed = t.trim().to_string();
                         if !trimmed.is_empty() {
                             current_cells.push(trimmed);

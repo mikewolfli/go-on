@@ -158,8 +158,11 @@ fn open_workbook(bytes: &[u8]) -> Result<ParsedExcel, DocumentParserError> {
         let mut merged_cell_ranges: Vec<String> = Vec::new();
         let mut merged_cell_count: usize = 0;
         let mut merged_cell_coords: Vec<CellRange> = Vec::new();
-        // `worksheet_merge_cells` is a method on `Xlsx` (calamine 0.26.1).
-        if let Some(Ok(merge_cells)) = workbook.worksheet_merge_cells(sheet_name) {
+        // `worksheet_range` above already proved the sheet exists, so the
+        // merged-cell lookup cannot fail here (calamine 0.36 renamed
+        // `worksheet_merge_cells` → `merge_cells_by_sheet_name` and dropped
+        // the outer Option).
+        if let Ok(merge_cells) = workbook.merge_cells_by_sheet_name(sheet_name) {
             for dim in &merge_cells {
                 merged_cell_ranges.push(format!(
                     "{}:{}",

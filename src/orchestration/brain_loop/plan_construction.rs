@@ -57,7 +57,7 @@ pub struct Planner;
 impl Planner {
     /// Decompose a task envelope into an execution plan.
     ///
-    /// Classifies the task exactly once via [`Self::analyze_task`] (keyword +
+    /// Classifies the task exactly once via `Self::analyze_task` (keyword +
     /// subtask-hint heuristics) and feeds the resulting context into the
     /// adaptive DAG planner. The former `EmbeddingTaskClassifier` pass was
     /// removed: its rules had diverged from `analyze_task` (it ignored

@@ -452,6 +452,21 @@ async fn execute_spawn(
     let mut last_error: Option<String> = None;
     let timeout_duration = Duration::from_secs(timeout_secs);
 
+    // ── BLUE71 §7: lifecycle transition to Active ─────────────────────
+    if let Some(cp) = child_path.as_ref() {
+        if let Some(bus) = communication_bus() {
+            bus.set_lifecycle(
+                cp,
+                crate::agents::communication::lifecycle::AgentLifecycle::Active {
+                    phase: crate::agents::communication::lifecycle::AgentPhase::Executing,
+                    started_at_ms: crate::shared::timestamps::now_ts_ms() as u64,
+                    tokens_used: 0,
+                },
+            )
+            .await;
+        }
+    }
+
     for attempt in 0..=MAX_RETRIES {
         if attempt > 0 {
             let delay = Duration::from_millis(RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1));
@@ -498,6 +513,22 @@ async fn execute_spawn(
                 // Estimate actual token usage (~4 chars per token for English text)
                 let actual_tokens = (response.len() / 4).max(1) as u64;
                 let budget_exceeded = token_budget.is_some_and(|b| actual_tokens > b);
+
+                // ── BLUE71 §7: lifecycle Completed ──
+                if let Some(cp) = child_path.as_ref() {
+                    if let Some(bus) = communication_bus() {
+                        bus.set_lifecycle(
+                            cp,
+                            crate::agents::communication::lifecycle::AgentLifecycle::Completed {
+                                result: summary.clone().unwrap_or_default(),
+                                tokens_used: actual_tokens,
+                                wall_time_ms: 0,
+                                completed_at_ms: crate::shared::timestamps::now_ts_ms() as u64,
+                            },
+                        )
+                        .await;
+                    }
+                }
 
                 unregister_spawned_agent(child_path.as_ref()).await;
 
@@ -561,6 +592,7 @@ async fn execute_spawn(
                     // Drain any remaining tokens to avoid sender/receiver deadlock.
                     while rx.try_recv().is_ok() {}
 
+                    mark_spawned_agent_errored(child_path.as_ref(), &err_str).await;
                     unregister_spawned_agent(child_path.as_ref()).await;
 
                     return Ok(ToolOutput {
@@ -605,6 +637,11 @@ async fn execute_spawn(
 
                 // Timeout is transient — retry if attempts remain.
                 if attempt == MAX_RETRIES {
+                    mark_spawned_agent_errored(
+                        child_path.as_ref(),
+                        &format!("timed out after {} seconds", timeout_secs),
+                    )
+                    .await;
                     unregister_spawned_agent(child_path.as_ref()).await;
 
                     return Ok(ToolOutput {
@@ -639,6 +676,13 @@ async fn execute_spawn(
     }
 
     // Should be unreachable — either we returned success or failure in the loop.
+    mark_spawned_agent_errored(
+        child_path.as_ref(),
+        &last_error
+            .clone()
+            .unwrap_or_else(|| "retries exhausted".to_string()),
+    )
+    .await;
     unregister_spawned_agent(child_path.as_ref()).await;
 
     Ok(ToolOutput {
@@ -661,15 +705,33 @@ async fn execute_spawn(
     })
 }
 
-/// Remove a finished spawned agent from the CommunicationBus AgentTree so
-/// the tree does not accumulate every spawn (previously nodes were registered
-/// and never removed — a long-running leak in `governance.status` counts).
+/// Remove a finished spawned agent from the CommunicationBus AgentTree and
+/// messenger inbox so neither accumulates entries per spawn (previously nodes
+/// were registered and never removed — a long-running leak in
+/// `governance.status` counts, and inboxes never had a cleanup path).
 /// The `spawn` namespace node itself is kept; only the per-fork child is
 /// removed.
 async fn unregister_spawned_agent(child_path: Option<&AgentPath>) {
     if let Some(cp) = child_path {
         if let Some(bus) = communication_bus() {
-            let _ = bus.remove_agent(cp).await;
+            bus.cleanup_agent(cp).await;
+        }
+    }
+}
+
+/// Transition the spawned agent's lifecycle node to Errored.
+async fn mark_spawned_agent_errored(child_path: Option<&AgentPath>, error: &str) {
+    if let Some(cp) = child_path {
+        if let Some(bus) = communication_bus() {
+            bus.set_lifecycle(
+                cp,
+                crate::agents::communication::lifecycle::AgentLifecycle::Errored {
+                    error: error.to_string(),
+                    tokens_used: 0,
+                    wall_time_ms: 0,
+                },
+            )
+            .await;
         }
     }
 }

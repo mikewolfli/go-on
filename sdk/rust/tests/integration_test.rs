@@ -193,3 +193,164 @@ fn test_tool_info_parses_backend_descriptor() {
     assert_eq!(info.description, "Read a file");
     assert_eq!(info.input_schema["type"], "object");
 }
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible endpoint contract tests
+//
+// The Rust SDK has no HTTP mock facility, so these tests spin up a minimal
+// in-process TCP HTTP server that captures the request line + body and answers
+// with a canned OpenAI-shaped response. This verifies the real wire contract:
+// method, path and verbatim body forwarding.
+// ---------------------------------------------------------------------------
+
+/// Result of capturing one HTTP request on the in-process test server.
+struct CapturedRequest {
+    method: String,
+    path: String,
+    body: String,
+}
+
+/// Spawn a minimal HTTP server on 127.0.0.1:0 that captures the first request
+/// and answers with `response_json`. Returns (base_url, captured_receiver).
+/// Must be called from inside a tokio runtime (tokio::net::TcpListener).
+async fn spawn_capture_server(
+    response_json: serde_json::Value,
+) -> (String, tokio::sync::oneshot::Receiver<CapturedRequest>) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener local addr");
+    let response_body = response_json.to_string();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept test connection");
+        let mut buffer = [0u8; 8192];
+        let n = tokio::io::AsyncReadExt::read(&mut socket, &mut buffer)
+            .await
+            .expect("read request head");
+        let head = String::from_utf8_lossy(&buffer[..n]).to_string();
+        let mut lines = head.lines();
+        let request_line = lines.next().unwrap_or_default();
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or_default().to_string();
+        let path = parts.next().unwrap_or_default().to_string();
+
+        // Extract the body after the blank line (single-shot test server:
+        // the whole request is assumed to arrive in one read).
+        let body = match head.find("\r\n\r\n") {
+            Some(idx) => head[idx + 4..].to_string(),
+            None => String::new(),
+        };
+
+        let _ = tx.send(CapturedRequest { method, path, body });
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
+    });
+
+    (format!("http://{}", addr), rx)
+}
+
+#[tokio::test]
+async fn test_chat_completions_posts_openai_wire_format() {
+    let response = serde_json::json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .chat_completions(serde_json::json!({
+            "model": "go-on",
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .await
+        .expect("chat_completions should succeed");
+
+    assert_eq!(result["object"], "chat.completion");
+    let captured = rx.await.expect("server should capture one request");
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.path, "/v1/chat/completions");
+    let sent: serde_json::Value =
+        serde_json::from_str(&captured.body).expect("request body should be JSON");
+    assert_eq!(sent["model"], "go-on");
+    assert_eq!(sent["messages"][0]["role"], "user");
+    assert_eq!(sent["messages"][0]["content"], "hi");
+}
+
+#[tokio::test]
+async fn test_responses_create_posts_to_v1_responses() {
+    let response = serde_json::json!({
+        "id": "resp_1",
+        "object": "response",
+        "status": "completed",
+        "output": [],
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .responses_create(serde_json::json!({
+            "model": "go-on",
+            "input": "hi",
+        }))
+        .await
+        .expect("responses_create should succeed");
+
+    assert_eq!(result["status"], "completed");
+    let captured = rx.await.expect("server should capture one request");
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.path, "/v1/responses");
+    let sent: serde_json::Value =
+        serde_json::from_str(&captured.body).expect("request body should be JSON");
+    assert_eq!(sent["model"], "go-on");
+    assert_eq!(sent["input"], "hi");
+}
+
+#[tokio::test]
+async fn test_responses_get_targets_v1_responses_id() {
+    let response = serde_json::json!({
+        "id": "resp_1",
+        "object": "response",
+        "status": "completed",
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .responses_get("resp_1")
+        .await
+        .expect("responses_get should succeed");
+
+    assert_eq!(result["id"], "resp_1");
+    let captured = rx.await.expect("server should capture one request");
+    assert_eq!(captured.method, "GET");
+    assert_eq!(captured.path, "/v1/responses/resp_1");
+}
+
+#[tokio::test]
+async fn test_models_list_targets_v1_models() {
+    let response = serde_json::json!({
+        "object": "list",
+        "data": [{"id": "go-on", "object": "model"}],
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .models_list()
+        .await
+        .expect("models_list should succeed");
+
+    assert_eq!(result["data"][0]["id"], "go-on");
+    let captured = rx.await.expect("server should capture one request");
+    assert_eq!(captured.method, "GET");
+    assert_eq!(captured.path, "/v1/models");
+}

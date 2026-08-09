@@ -99,7 +99,7 @@ pub struct ExecutionObservation {
 
 /// A structured, actionable insight with an impact score.
 ///
-/// Used by [`get_actionable_insights()`] and [`get_structured_feedback()`]
+/// Used by `get_actionable_insights` and `get_structured_feedback`
 /// to return machine-parseable suggestions to the autonomy loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuggestedAction {
@@ -894,7 +894,7 @@ impl MetacognitiveController {
     /// high-severity observations under the given task.
     ///
     /// This is the production-friendly counterpart of
-    /// [`get_actionable_insights`] that enriches each action with an
+    /// [`Self::get_actionable_insights`] that enriches each action with an
     /// `impact_score` and can be serialized to JSON for downstream consumers.
     pub fn get_structured_feedback(&self, task_id: &str) -> Vec<SuggestedAction> {
         self.get_actionable_insights(task_id)
@@ -1045,16 +1045,16 @@ impl MetacognitiveController {
     ///
     /// Returns (adjusted_reward_multiplier, suggested_exploration_rate, key_insights).
     pub fn reflect_for_rl(&self) -> (f64, f64, Vec<String>) {
+        // Aggregate inside the lock instead of cloning the entire Inner state
+        // (observations + actions + reports) on every evolve cycle.
         let guard = crate::lock_or_recover!(&self.inner, "intelligence");
-        let state = Inner::clone(&guard);
-        drop(guard);
 
-        if state.observations.is_empty() {
+        if guard.observations.is_empty() {
             return (1.0, 0.1, vec![t("status.metacognitive.rl.no_observations")]);
         }
 
-        let total = state.observations.len();
-        let failures = state
+        let total = guard.observations.len();
+        let failures = guard
             .observations
             .iter()
             .filter(|o| o.severity == "high" || o.severity == "critical")
@@ -1064,6 +1064,34 @@ impl MetacognitiveController {
         } else {
             1.0
         };
+
+        // Observation diversity (unique observation types).
+        let unique_actions: HashSet<&str> = guard
+            .observations
+            .iter()
+            .map(|o| o.observation_type.as_str())
+            .collect();
+        let diversity = unique_actions.len() as f64 / total.max(1) as f64;
+        // Total corrective actions (for the over-correction insight).
+        let total_actions = guard.actions.len();
+
+        // Recurring failure patterns (only entries with >= 3 failures).
+        let failure_patterns: Vec<(String, usize)> = {
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            for obs in &guard.observations {
+                if obs.severity == "high" || obs.severity == "critical" {
+                    *counts.entry(obs.observation_type.as_str()).or_insert(0) += 1;
+                }
+            }
+            counts
+                .into_iter()
+                .filter(|(_, c)| *c >= 3)
+                .map(|(k, c)| (k.to_string(), c))
+                .collect()
+        };
+        // Whether corrective actions outnumber observations (over-correction).
+        let actions_over_correction_threshold = guard.actions.len() > guard.observations.len() / 3;
+        drop(guard);
 
         let mut insights: Vec<String> = Vec::new();
 
@@ -1085,12 +1113,6 @@ impl MetacognitiveController {
         };
 
         // Suggest exploration rate based on observation diversity
-        let unique_actions: HashSet<&str> = state
-            .observations
-            .iter()
-            .map(|o| o.observation_type.as_str())
-            .collect();
-        let diversity = unique_actions.len() as f64 / total.max(1) as f64;
         let exploration_rate = if diversity < 0.2 {
             insights.push(tf(
                 "status.metacognitive.rl.low_diversity",
@@ -1104,16 +1126,7 @@ impl MetacognitiveController {
             0.1
         };
 
-        // Detect recurring failure patterns
-        let mut failure_patterns: HashMap<String, usize> = HashMap::new();
-        for obs in &state.observations {
-            if obs.severity == "high" || obs.severity == "critical" {
-                *failure_patterns
-                    .entry(obs.observation_type.clone())
-                    .or_insert(0) += 1;
-            }
-        }
-        for (category, count) in failure_patterns.iter().filter(|(_, c)| **c >= 3) {
+        for (category, count) in &failure_patterns {
             insights.push(tf(
                 "status.metacognitive.rl.recurring_failure",
                 &[("category", category), ("count", &count.to_string())],
@@ -1121,11 +1134,11 @@ impl MetacognitiveController {
         }
 
         // Check if corrective actions are addressing root causes
-        if state.actions.len() > state.observations.len() / 3 {
+        if actions_over_correction_threshold {
             insights.push(tf(
                 "status.metacognitive.rl.correction_loop",
                 &[
-                    ("actions", &state.actions.len().to_string()),
+                    ("actions", &total_actions.to_string()),
                     ("total", &total.to_string()),
                 ],
             ));

@@ -30,7 +30,7 @@ pub struct PlanStep {
 
 /// An execution plan produced by the Planner
 ///
-/// Note: Will eventually be unified with [`BrainLoopPlan`](crate::orchestration::brain_loop::BrainLoopPlan).
+/// Note: Will eventually be unified with the `brain_loop` plan type.
 /// For now, this is the canonical plan type returned by `Planner::plan()`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPlan {

@@ -443,29 +443,21 @@ pub(crate) async fn handle_validation_mode(
         return Ok(None);
     }
 
-    // Check if configuration is valid before proceeding
+    // Check if configuration is valid before proceeding.
+    // Note: `is_valid` is `!has_critical_errors()` (see ValidationResult::validate),
+    // so an invalid result always carries critical errors — the former
+    // `has_errors()` (non-critical) and "unknown reasons" branches were dead.
     if !validation_result.is_valid {
         error!("Configuration validation failed. Cannot start server.");
         let report = config_validation::ConfigValidator::new(config_path, config.as_ref().clone())
             .generate_report(&validation_result);
         error!("Validation report:\n{}", report);
 
-        // Provide more detailed error information
-        if validation_result.has_critical_errors() {
-            error!("Critical errors detected:");
-            for err in validation_result.critical_errors() {
-                error!("  [CRITICAL] {}: {}", err.section, err.message);
-            }
-            anyhow::bail!("Configuration has critical errors that must be fixed");
-        } else if validation_result.has_errors() {
-            error!("Configuration errors detected (non-critical):");
-            for err in validation_result.regular_errors() {
-                error!("  [ERROR] {}: {}", err.section, err.message);
-            }
-            warn!("Configuration has errors but may still work. Consider fixing them.");
-        } else {
-            anyhow::bail!("Configuration validation failed for unknown reasons");
+        error!("Critical errors detected:");
+        for err in validation_result.critical_errors() {
+            error!("  [CRITICAL] {}: {}", err.section, err.message);
         }
+        anyhow::bail!("Configuration has critical errors that must be fixed");
     } else {
         // Configuration is valid, log warnings and recommendations if any
         if !validation_result.warnings.is_empty() {

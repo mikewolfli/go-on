@@ -5,8 +5,8 @@
 //!
 //! ## Functions
 //!
-//! * [`filter_agents_by_model`] — filters the agent list to match a user-specified model option.
-//! * [`build_high_risk_vote_config`] — computes all high-risk vote and escalation parameters
+//! * `filter_agents_by_model` — filters the agent list to match a user-specified model option.
+//! * `build_high_risk_vote_config` — computes all high-risk vote and escalation parameters
 //!   from the risk assessment and agent options.
 
 use std::collections::HashMap;

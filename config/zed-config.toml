@@ -102,7 +102,7 @@ global_max_inflight = 32
 
 [phases.act]
 description = "Act — generate code, implement changes"
-agents = ["deepseek", "copilot"]
+agents = ["deepseek"]
 fallback = true
 
 [phases.act.options]

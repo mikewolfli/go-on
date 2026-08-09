@@ -3,7 +3,7 @@
 //! The ObservabilityBus coordinates observability data so that the CapabilityBus can
 //! query latency and error metrics when making routing decisions. It maintains:
 //!
-//! - A ring buffer of recent [`TraceEvent`] entries
+//! - A ring buffer of recent trace events
 //! - Per-agent latency statistics with percentile calculations (P50, P95, P99)
 //! - Per-agent error rate tracking
 //! - A summary profile for system-level health queries
@@ -37,40 +37,11 @@ use std::sync::{Arc, Mutex};
 // Supporting types
 // ---------------------------------------------------------------------------
 
-/// A single recorded trace event.
-#[derive(Clone, Debug)]
-pub struct TraceEvent {
-    /// Monotonic timestamp in milliseconds (e.g. from `std::time::Instant`).
-    pub timestamp_ms: u64,
-    /// Agent that handled (or attempted to handle) the task.
-    pub agent: String,
-    /// High-level category of the task (e.g. "code_gen", "chat", "embedding").
-    pub task_type: String,
-    /// Wall-clock duration of the operation in milliseconds.
-    pub duration_ms: u64,
-    /// Whether the operation completed without error.
-    pub success: bool,
-    /// If `success` is `false`, the error message (if available).
-    pub error: Option<String>,
-    /// Approximate token cost incurred by the operation.
-    pub token_cost: u64,
-}
-
 /// Per-agent latency statistics.
 #[derive(Clone, Debug)]
 pub struct LatencyStats {
     /// Arithmetic mean of recorded durations (ms).
     pub avg_duration_ms: f64,
-    /// 50th percentile (median) duration (ms).
-    pub p50_ms: f64,
-    /// 95th percentile duration (ms).
-    pub p95_ms: f64,
-    /// 99th percentile duration (ms).
-    pub p99_ms: f64,
-    /// Number of samples used to compute the above statistics.
-    pub sample_count: u64,
-    /// Timestamp (ms) of the most recent sample that contributed.
-    pub last_updated_ms: u64,
 }
 
 /// Per-agent error rate statistics.
@@ -160,20 +131,6 @@ impl DurationWindow {
         let sum: u64 = self.sorted.iter().copied().sum();
         sum as f64 / n as f64
     }
-
-    /// Returns the p-th percentile (p in [0.0, 100.0]).
-    ///
-    /// Uses the **nearest-rank** method: the value at the smallest index
-    /// whose rank is ≥ the desired percentile.
-    fn percentile(&self, p: f64) -> f64 {
-        let n = self.len();
-        if n == 0 {
-            return 0.0;
-        }
-        // rank = ceil(p / 100.0 * n), 1-based
-        let rank = (p / 100.0 * n as f64).ceil().max(1.0).min(n as f64) as usize;
-        self.sorted[rank - 1] as f64
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +140,6 @@ impl DurationWindow {
 /// Unified observability sub-bus that CapabilityBus can query for latency /
 /// error metrics when making routing decisions.
 pub struct ObservabilityBus {
-    /// Recent trace events in insertion order (ring buffer).
-    trace_events: Arc<Mutex<VecDeque<TraceEvent>>>,
     /// Per-agent latency statistics.
     agent_latency: Arc<Mutex<HashMap<String, LatencyStats>>>,
     /// Per-agent error rate statistics.
@@ -211,7 +166,6 @@ impl ObservabilityBus {
     /// Create a new `ObservabilityBus` with a specific ring-buffer capacity.
     pub fn with_capacity(max_events: usize) -> Self {
         Self {
-            trace_events: Arc::new(Mutex::new(VecDeque::with_capacity(max_events))),
             agent_latency: Arc::new(Mutex::new(HashMap::new())),
             agent_error_rates: Arc::new(Mutex::new(HashMap::new())),
             max_events,
@@ -228,50 +182,24 @@ impl ObservabilityBus {
     }
 
     /// Record an execution trace and update all derived statistics.
-    pub fn record_trace(
-        &self,
-        agent: &str,
-        task_type: &str,
-        duration_ms: u64,
-        success: bool,
-        error: Option<String>,
-        token_cost: u64,
-    ) {
+    ///
+    /// The signature carries only the signals the derived statistics consume
+    /// (agent identity, duration, success). The former per-event trace ring
+    /// (and its task_type / error / token_cost fields) was removed — nothing
+    /// in production ever read it back.
+    pub fn record_trace(&self, agent: &str, duration_ms: u64, success: bool) {
         let now = crate::shared::timestamps::now_ts_ms() as u64;
 
-        // --- 1. Push trace event into the ring buffer ---
-        {
-            let mut events = crate::lock_or_recover!(self.trace_events.as_ref(), "intelligence");
-            if events.len() == self.max_events {
-                events.pop_front();
-            }
-            events.push_back(TraceEvent {
-                timestamp_ms: now,
-                agent: agent.to_string(),
-                task_type: task_type.to_string(),
-                duration_ms,
-                success,
-                error: error.clone(),
-                token_cost,
-            });
-        }
-
-        // --- 2. Update per-agent latency ---
+        // --- 1. Update per-agent latency ---
         {
             let mut windows = crate::lock_or_recover!(self.windows.as_ref(), "intelligence");
             let window = windows
                 .entry(agent.to_string())
                 .or_insert_with(|| DurationWindow::new(self.max_events));
             window.push(duration_ms);
-            let n = window.len();
 
             let stats = LatencyStats {
                 avg_duration_ms: window.avg(),
-                p50_ms: window.percentile(50.0),
-                p95_ms: window.percentile(95.0),
-                p99_ms: window.percentile(99.0),
-                sample_count: n as u64,
-                last_updated_ms: now,
             };
 
             let mut latency = crate::lock_or_recover!(self.agent_latency.as_ref(), "intelligence");
@@ -349,60 +277,16 @@ impl ObservabilityBus {
         }
     }
 
-    /// Return latency statistics for a specific agent, or `None` if unknown.
-    pub fn agent_latency(&self, agent: &str) -> Option<LatencyStats> {
-        let latency = crate::lock_or_recover!(self.agent_latency.as_ref(), "intelligence");
-        latency.get(agent).cloned()
-    }
-
     /// Return error-rate statistics for a specific agent, or `None` if unknown.
     pub fn agent_error_rate(&self, agent: &str) -> Option<ErrorRateStats> {
         let error_rates = crate::lock_or_recover!(self.agent_error_rates.as_ref(), "intelligence");
         error_rates.get(agent).cloned()
     }
 
-    /// Return the names of all agents whose error rate is strictly **below**
-    /// `max_error_rate`.
-    ///
-    /// Agents with zero recorded calls are **excluded** since there is
-    /// insufficient data for a routing decision.
-    pub fn healthy_agents(&self, max_error_rate: f64) -> Vec<String> {
-        let error_rates = crate::lock_or_recover!(self.agent_error_rates.as_ref(), "intelligence");
-        error_rates
-            .iter()
-            .filter(|(_, s)| s.total_calls > 0 && s.error_rate < max_error_rate)
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
-    /// Return the names of all agents whose **average** latency exceeds
-    /// `threshold_ms`.
-    ///
-    /// Agents with zero recorded calls are excluded.
-    pub fn slow_agents(&self, threshold_ms: f64) -> Vec<String> {
-        let latency = crate::lock_or_recover!(self.agent_latency.as_ref(), "intelligence");
-        latency
-            .iter()
-            .filter(|(_, s)| s.sample_count > 0 && s.avg_duration_ms > threshold_ms)
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-
     /// Return a high-level profile snapshot of the bus.
     pub fn system_health(&self) -> ObservabilityBusProfile {
         let profile = crate::lock_or_recover!(self.profile.as_ref(), "intelligence");
         profile.clone()
-    }
-
-    /// Return the `count` most recent trace events.
-    ///
-    /// If fewer than `count` events have been recorded, all available events
-    /// are returned.
-    pub fn recent_traces(&self, count: usize) -> Vec<TraceEvent> {
-        let events = crate::lock_or_recover!(self.trace_events.as_ref(), "intelligence");
-        let len = events.len();
-        let start = len.saturating_sub(count);
-        events.range(start..).cloned().collect()
     }
 }
 
@@ -423,26 +307,14 @@ mod tests {
     #[test]
     fn test_record_trace_basic() {
         let bus = ObservabilityBus::new();
-        bus.record_trace("agent-a", "chat", 100, true, None, 50);
-        bus.record_trace("agent-a", "chat", 200, true, None, 30);
+        bus.record_trace("agent-a", 100, true);
+        bus.record_trace("agent-a", 200, true);
 
-        let traces = bus.recent_traces(5);
-        assert_eq!(traces.len(), 2);
-        assert_eq!(traces[0].agent, "agent-a");
-        assert_eq!(traces[0].duration_ms, 100);
-        assert!(traces[0].success);
-
-        let latency = bus
-            .agent_latency("agent-a")
-            .expect("agent-a should have latency stats");
-        assert_eq!(latency.sample_count, 2);
-        assert!((latency.avg_duration_ms - 150.0).abs() < 0.01);
-        // With only 2 samples all percentiles land on actual values.
-        assert!(
-            (latency.p50_ms - 150.0).abs() < 0.01
-                || (latency.p50_ms - 100.0).abs() < 0.01
-                || (latency.p50_ms - 200.0).abs() < 0.01
-        );
+        // Per-agent average latency is consumed by the system_health profile.
+        let health = bus.system_health();
+        assert_eq!(health.total_traces, 2);
+        assert_eq!(health.tracked_agents, 1);
+        assert!((health.avg_system_latency_ms - 150.0).abs() < 0.01);
 
         let err_rate = bus
             .agent_error_rate("agent-a")
@@ -455,16 +327,9 @@ mod tests {
     #[test]
     fn test_error_rate_tracking() {
         let bus = ObservabilityBus::new();
-        bus.record_trace("agent-b", "embed", 50, true, None, 10);
-        bus.record_trace(
-            "agent-b",
-            "embed",
-            60,
-            false,
-            Some("timeout".to_string()),
-            10,
-        );
-        bus.record_trace("agent-b", "embed", 55, false, Some("panic".to_string()), 10);
+        bus.record_trace("agent-b", 50, true);
+        bus.record_trace("agent-b", 60, false);
+        bus.record_trace("agent-b", 55, false);
 
         let err = bus
             .agent_error_rate("agent-b")
@@ -476,43 +341,11 @@ mod tests {
     }
 
     #[test]
-    fn test_healthy_and_slow_agents() {
-        let bus = ObservabilityBus::new();
-        bus.record_trace("fast", "chat", 10, true, None, 1);
-        bus.record_trace("fast", "chat", 12, true, None, 1);
-        bus.record_trace("slow", "chat", 500, true, None, 1);
-        bus.record_trace("erratic", "chat", 30, false, Some("err".to_string()), 1);
-
-        let healthy = bus.healthy_agents(0.5);
-        assert!(healthy.contains(&"fast".to_string()));
-        assert!(healthy.contains(&"slow".to_string()));
-        assert!(!healthy.contains(&"erratic".to_string()));
-
-        let slow = bus.slow_agents(100.0);
-        assert!(slow.contains(&"slow".to_string()));
-        assert!(!slow.contains(&"fast".to_string()));
-        assert!(!slow.contains(&"erratic".to_string()));
-    }
-
-    #[test]
-    fn test_ring_buffer_eviction() {
-        let bus = ObservabilityBus::with_capacity(5);
-        for i in 0..10 {
-            bus.record_trace("a", "test", i * 10, true, None, i);
-        }
-        let traces = bus.recent_traces(10);
-        assert_eq!(traces.len(), 5);
-        // The oldest retained duration should be 50 (index 5 * 10).
-        assert_eq!(traces[0].duration_ms, 50);
-        assert_eq!(traces[4].duration_ms, 90);
-    }
-
-    #[test]
     fn test_system_health() {
         let bus = ObservabilityBus::new();
-        bus.record_trace("x", "chat", 100, true, None, 5);
-        bus.record_trace("y", "embed", 200, false, Some("err".to_string()), 10);
-        bus.record_trace("x", "chat", 300, true, None, 5);
+        bus.record_trace("x", 100, true);
+        bus.record_trace("y", 200, false);
+        bus.record_trace("x", 300, true);
 
         let health = bus.system_health();
         assert_eq!(health.total_traces, 3);

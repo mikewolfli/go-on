@@ -890,10 +890,13 @@ impl DistributedMemoryBus {
     ) -> anyhow::Result<SyncStatus> {
         let start = Instant::now();
 
-        // Collect local entries that haven't been synced yet
+        // Collect local entries that haven't been synced yet. The deque is
+        // drained so each entry is sent exactly once: entries added while we
+        // are sending stay queued for the NEXT cycle (incremental sync —
+        // previously the whole deque was re-sent on every 30s cycle).
         let entries_to_sync: Vec<MemoryBusEntry> = {
-            let guard = local_entries.lock().unwrap_or_else(|e| e.into_inner());
-            guard.iter().cloned().collect()
+            let mut guard = local_entries.lock().unwrap_or_else(|e| e.into_inner());
+            guard.drain(..).collect()
         };
 
         if entries_to_sync.is_empty() {
@@ -940,50 +943,81 @@ impl DistributedMemoryBus {
         let mut total_bytes_sent = 0u64;
         let mut failures: Vec<String> = Vec::new();
 
-        for (node_id, address) in &peers {
-            let endpoint = if address.contains("://") {
-                format!("{}/rpc", address.trim_end_matches('/'))
-            } else {
-                format!("http://{}/rpc", address)
-            };
-            let mut request = client.post(&endpoint).json(&json!({
-                "jsonrpc": "2.0",
-                "id": format!("dmb-sync-{}", node_id),
-                "method": "memory.ingest",
-                "params": {
-                    "source": node_id,
-                    "entries": entries_to_sync,
-                },
-            }));
-            // Per-request connect timeout (the shared client has none baked in).
-            request = request.timeout(Duration::from_millis(config.connect_timeout_ms.max(1000)));
-            if let Some(token) = &config.auth_token {
-                request = request.bearer_auth(token);
-            }
-            match request.send() {
-                Ok(resp) if resp.status().is_success() => {
-                    total_entries_synced += entries_to_sync.len();
+        // Push to all peers in parallel (previously serial: with several peers
+        // each taking up to the connect timeout, a cycle could stall for
+        // `peers × timeout` before failing).
+        let results: Vec<(String, Result<usize, String>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = peers
+                .iter()
+                .map(|(node_id, address)| {
+                    let client = &client;
+                    let endpoint = if address.contains("://") {
+                        format!("{}/rpc", address.trim_end_matches('/'))
+                    } else {
+                        format!("http://{}/rpc", address)
+                    };
+                    let payload = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": format!("dmb-sync-{}", node_id),
+                        "method": "memory.ingest",
+                        "params": {
+                            "source": node_id,
+                            "entries": &entries_to_sync,
+                        },
+                    });
+                    let entries_for_peer = entries_to_sync.clone();
+                    scope.spawn(move || {
+                        let mut request = client.post(&endpoint).json(&payload);
+                        request = request
+                            .timeout(Duration::from_millis(config.connect_timeout_ms.max(1000)));
+                        if let Some(token) = &config.auth_token {
+                            request = request.bearer_auth(token);
+                        }
+                        let result = request.send().map(|resp| {
+                            if resp.status().is_success() {
+                                Ok(entries_for_peer.len())
+                            } else {
+                                Err(format!("HTTP {}", resp.status()))
+                            }
+                        });
+                        (
+                            node_id.clone(),
+                            result.unwrap_or_else(|e| Err(e.to_string())),
+                        )
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("dmb peer sync thread panicked"))
+                .collect()
+        });
+
+        for (node_id, result) in results {
+            match result {
+                Ok(count) => {
+                    total_entries_synced += count;
                     total_bytes_sent += payload_bytes as u64;
                     tracing::info!(
                         "[dmb-transport] synced {} entries to peer {} @ {}",
-                        entries_to_sync.len(),
+                        count,
                         node_id,
-                        address
+                        peers.get(&node_id).map(String::as_str).unwrap_or("?")
                     );
                 }
-                Ok(resp) => failures.push(format!(
-                    "peer {} @ {}: HTTP {}",
-                    node_id,
-                    address,
-                    resp.status()
-                )),
-                Err(e) => failures.push(format!("peer {} @ {}: {}", node_id, address, e)),
+                Err(reason) => failures.push(format!("peer {}: {}", node_id, reason)),
             }
         }
 
         if total_entries_synced == 0 && !failures.is_empty() {
-            // No peer acknowledged the batch — report the failure instead of
+            // No peer acknowledged the batch — re-queue the entries so they
+            // are retried on the next cycle, and report the failure instead of
             // pretending the entries were delivered.
+            let mut guard = local_entries.lock().unwrap_or_else(|e| e.into_inner());
+            for entry in entries_to_sync {
+                guard.push_front(entry);
+            }
+            drop(guard);
             let message = failures.join("; ");
             {
                 let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());

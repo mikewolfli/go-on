@@ -155,7 +155,7 @@ impl AdaptiveModelSelector {
 
     /// Create a new selector with a static fallback strategy for cold starts.
     ///
-    /// When UCB data is insufficient, [`select_with_static_fallback`] will
+    /// When UCB data is insufficient, `select_with_static_fallback` will
     /// delegate to [`ModelSelector::select_model`] using the given strategy.
     pub fn with_static_strategy(strategy: ModelSelectionStrategy) -> Self {
         Self {

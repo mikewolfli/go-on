@@ -20,15 +20,6 @@ use super::{SetupLevel, SetupOptions, SetupProfile, ADAPTIVE_TEMPLATE};
 // Public entry points
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Run setup with default options.
-///
-/// This helper is a thin wrapper around `run_setup_with_options`.
-#[must_use]
-#[allow(clippy::double_must_use)]
-pub fn run_setup(config_path: &Path) -> Result<()> {
-    run_setup_with_options(config_path, SetupOptions::default())
-}
-
 /// Entry point for setup logic.
 ///
 /// Handles profile selection, secret mode, writing config template, writing RULES files,

@@ -99,14 +99,8 @@ impl CapabilityBus {
 
         // 3. Write to ObservabilityBus
         #[cfg(feature = "sub-bus-observability")]
-        self.observability_bus.record_trace(
-            agent,
-            task_type,
-            duration_ms,
-            success,
-            None,
-            token_cost,
-        );
+        self.observability_bus
+            .record_trace(agent, duration_ms, success);
 
         // 4. Write to OptimizationBus
         #[cfg(feature = "sub-bus-optimization")]

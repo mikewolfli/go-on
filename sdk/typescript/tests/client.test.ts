@@ -116,6 +116,63 @@ describe("GoOnClient", () => {
     await expect(noRetryClient.governanceStatus()).rejects.toThrow();
   });
 
+  // ── Session methods (contract coverage) ───────────────────────────────
+
+  it("should call session/load with sessionId", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 4,
+      result: { modes: {}, configOptions: { model: "gpt-4o" } },
+    });
+
+    const result = await client.sessionLoad("sess-1");
+    expect(result.configOptions.model).toBe("gpt-4o");
+    const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!.body as string);
+    expect(body.method).toBe("session/load");
+    expect(body.params).toEqual({ sessionId: "sess-1" });
+  });
+
+  it("should call session/config/get with sessionId", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 5,
+      result: { configOptions: { model: "gpt-4o" }, sessionId: "sess-1" },
+    });
+
+    const result = await client.sessionConfigGet("sess-1");
+    expect(result.configOptions.model).toBe("gpt-4o");
+    const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!.body as string);
+    expect(body.method).toBe("session/config/get");
+    expect(body.params).toEqual({ sessionId: "sess-1" });
+  });
+
+  it("should call session/request_permission with sessionId and optionId", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 6,
+      result: {},
+    });
+
+    await client.sessionRequestPermission("sess-1", "approve");
+    const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!.body as string);
+    expect(body.method).toBe("session/request_permission");
+    expect(body.params).toEqual({ sessionId: "sess-1", optionId: "approve" });
+  });
+
+  it("should call session/delete with sessionId", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 7,
+      result: { deleted: true, sessionId: "sess-1" },
+    });
+
+    const result = await client.sessionDelete("sess-1");
+    expect(result.deleted).toBe(true);
+    const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!.body as string);
+    expect(body.method).toBe("session/delete");
+    expect(body.params).toEqual({ sessionId: "sess-1" });
+  });
+
   // ── Chat streaming ────────────────────────────────────────────────────
 
   it("should handle chat stream with SSE chunks", async () => {
@@ -347,6 +404,141 @@ describe("ACP contract params", () => {
       arguments: { path: "/tmp/a.txt" },
       sessionId: "sess-1",
     });
+  });
+
+  it("session/resume sends sessionId and optional cwd", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { sessionId: "sess-1", modes: {} },
+    });
+    globalThis.fetch = mock;
+
+    await client.sessionResume({ sessionId: "sess-1", cwd: "/tmp" });
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("session/resume");
+    expect(body.params).toEqual({ sessionId: "sess-1", cwd: "/tmp" });
+  });
+
+  it("session/config/set sends configId and value", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { configOptions: [{ id: "model", value: "gpt-4o" }] },
+    });
+    globalThis.fetch = mock;
+
+    await client.sessionConfigSet("sess-1", "model", "gpt-4o");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("session/config/set");
+    expect(body.params).toEqual({
+      sessionId: "sess-1",
+      configId: "model",
+      value: "gpt-4o",
+    });
+  });
+
+  it("session/close sends sessionId", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true },
+    });
+    globalThis.fetch = mock;
+
+    await client.sessionClose({ sessionId: "sess-1" });
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("session/close");
+    expect(body.params).toEqual({ sessionId: "sess-1" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible endpoint contract tests
+//
+// These endpoints return plain OpenAI wire-format JSON (no JSON-RPC envelope),
+// so the tests assert the URL path and the raw request body instead.
+// ---------------------------------------------------------------------------
+
+describe("OpenAI-compat contracts", () => {
+  let client: GoOnClient;
+
+  beforeEach(() => {
+    client = new GoOnClient({ baseUrl: MOCK_BASE_URL });
+    vi.clearAllMocks();
+  });
+
+  function lastRequest(): [string, RequestInit] {
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    return calls[0] as [string, RequestInit];
+  }
+
+  it("chatCompletions POSTs the OpenAI body to /v1/chat/completions", async () => {
+    const mock = createMockFetch(true, {
+      id: "chatcmpl-1",
+      object: "chat.completion",
+      choices: [{ index: 0, message: { role: "assistant", content: "hi" } }],
+    });
+    globalThis.fetch = mock;
+
+    const result = await client.chatCompletions({
+      model: "go-on",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(result.object).toBe("chat.completion");
+    const [url, init] = lastRequest();
+    expect(url).toBe(`${MOCK_BASE_URL}/v1/chat/completions`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      model: "go-on",
+      messages: [{ role: "user", content: "hi" }],
+    });
+  });
+
+  it("responsesCreate POSTs the Responses API body to /v1/responses", async () => {
+    const mock = createMockFetch(true, {
+      id: "resp_1",
+      object: "response",
+      output: [],
+      status: "completed",
+    });
+    globalThis.fetch = mock;
+
+    const result = await client.responsesCreate({ model: "go-on", input: "hi" });
+    expect(result.status).toBe("completed");
+    const [url, init] = lastRequest();
+    expect(url).toBe(`${MOCK_BASE_URL}/v1/responses`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ model: "go-on", input: "hi" });
+  });
+
+  it("responsesGet GETs /v1/responses/{id}", async () => {
+    const mock = createMockFetch(true, {
+      id: "resp_1",
+      object: "response",
+      status: "completed",
+    });
+    globalThis.fetch = mock;
+
+    const result = await client.responsesGet("resp_1");
+    expect(result.id).toBe("resp_1");
+    const [url, init] = lastRequest();
+    expect(url).toBe(`${MOCK_BASE_URL}/v1/responses/resp_1`);
+    expect(init.method).toBe("GET");
+  });
+
+  it("modelsList GETs /v1/models and returns the list", async () => {
+    const mock = createMockFetch(true, {
+      object: "list",
+      data: [{ id: "go-on", object: "model" }],
+    });
+    globalThis.fetch = mock;
+
+    const result = await client.modelsList();
+    expect(result.data).toHaveLength(1);
+    const [url, init] = lastRequest();
+    expect(url).toBe(`${MOCK_BASE_URL}/v1/models`);
+    expect(init.method).toBe("GET");
   });
 });
 

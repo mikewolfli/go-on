@@ -231,11 +231,16 @@ mod test_suite {
     /// Test server builder
     #[tokio::test]
     async fn test_server_builder() {
-        // Use adaptive configuration
+        // Adaptive auto-detection yields a minimal config with provider
+        // auto-detection (the former `to_app_config` conversion was removed
+        // with the un-wired adaptive-learning chain).
         let adaptive_config = AdaptiveConfig::auto_detect();
-        let config = adaptive_config.to_app_config();
-        assert_eq!(config.model_selection_mode(), "adaptive");
-        assert!(config.phases.contains_key("coding"));
+        assert!(adaptive_config.adaptive_mode);
+        assert!(!adaptive_config
+            .minimal_config
+            .available_providers
+            .is_empty());
+        assert_eq!(adaptive_config.minimal_config.default_phase, "coding");
 
         let builder = ServerBuilder::new();
         let server = builder.build();

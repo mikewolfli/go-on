@@ -545,6 +545,44 @@ export class GoOnClient {
     });
   }
 
+  /** session/load — load an existing ACP session (modes + config options). */
+  async sessionLoad(sessionId: string): Promise<Record<string, unknown>> {
+    return this.jsonRpc("session/load", { sessionId });
+  }
+
+  /** session/delete — delete an ACP session (and its permission state). */
+  async sessionDelete(sessionId: string): Promise<{
+    deleted: boolean;
+    sessionId: string;
+  }> {
+    return this.jsonRpc("session/delete", { sessionId });
+  }
+
+  /** session/config/get — read the per-session config options. */
+  async sessionConfigGet(sessionId: string): Promise<{
+    configOptions: Record<string, unknown>;
+    sessionId: string;
+  }> {
+    return this.jsonRpc("session/config/get", { sessionId });
+  }
+
+  /** session/config/set — set a per-session config option. */
+  async sessionConfigSet(
+    sessionId: string,
+    configId: string,
+    value: string,
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc("session/config/set", { sessionId, configId, value });
+  }
+
+  /** session/request_permission — respond to a pending permission request. */
+  async sessionRequestPermission(
+    sessionId: string,
+    optionId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc("session/request_permission", { sessionId, optionId });
+  }
+
   // ── Tools ────────────────────────────────────────────────────────────
 
   /** tools/list — list all available tools with their input schemas. */
@@ -560,5 +598,64 @@ export class GoOnClient {
       arguments: params.arguments,
       sessionId: params.sessionId,
     });
+  }
+
+  // ── OpenAI-compatible endpoints ─────────────────────────────────────
+
+  /**
+   * POST /v1/chat/completions — OpenAI-compatible chat completions.
+   * The body follows the OpenAI wire format and is forwarded verbatim.
+   */
+  async chatCompletions(
+    request: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.httpJson("POST", "/v1/chat/completions", request);
+  }
+
+  /**
+   * POST /v1/responses — OpenAI Responses API create.
+   * The body follows the Responses API wire format and is forwarded verbatim.
+   */
+  async responsesCreate(
+    request: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.httpJson("POST", "/v1/responses", request);
+  }
+
+  /** GET /v1/responses/{id} — retrieve a single Responses API response. */
+  async responsesGet(responseId: string): Promise<Record<string, unknown>> {
+    return this.httpJson("GET", `/v1/responses/${encodeURIComponent(responseId)}`);
+  }
+
+  /** GET /v1/models — list models exposed by the OpenAI-compat surface. */
+  async modelsList(): Promise<Record<string, unknown>> {
+    return this.httpJson("GET", "/v1/models");
+  }
+
+  /**
+   * Low-level JSON HTTP helper for the OpenAI-compatible surface
+   * (plain JSON in/out — no JSON-RPC envelope, no result unwrapping).
+   */
+  private async httpJson(
+    method: "GET" | "POST",
+    path: string,
+    body?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const init: RequestInit = {
+      method,
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(this.timeout),
+    };
+    if (body !== undefined) {
+      init.body = JSON.stringify(body);
+    }
+    const response = await fetch(`${this.baseUrl}${path}`, init);
+    if (!response.ok) {
+      throw new GoOnError(
+        response.status,
+        `HTTP ${response.status}: ${response.statusText}`,
+      );
+    }
+    return (await response.json()) as Record<string, unknown>;
   }
 }

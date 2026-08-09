@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::signal;
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, warn};
 
@@ -71,15 +70,13 @@ impl McpStdioServer {
         let stdout = Arc::new(Mutex::new(stdout));
 
         // ── Shutdown coordination ──────────────────────────────────────
+        // Reuse the platform-gated signal watcher (SIGINT/SIGTERM on Unix,
+        // Ctrl-C elsewhere) — the previous inline `signal::unix::signal`
+        // calls did not compile on Windows.
         let shutdown_notify = Arc::new(Notify::new());
         let sig_notify = shutdown_notify.clone();
         tokio::spawn(async move {
-            let mut term_signal = signal::unix::signal(signal::unix::SignalKind::terminate()).ok();
-            let mut int_signal = signal::unix::signal(signal::unix::SignalKind::interrupt()).ok();
-            tokio::select! {
-                _ = async { if let Some(ref mut s) = term_signal { s.recv().await; info!("MCP stdio: received SIGTERM"); } } => {}
-                _ = async { if let Some(ref mut s) = int_signal { s.recv().await; info!("MCP stdio: received SIGINT"); } } => {}
-            }
+            crate::shared::tcp_accept_loop::shutdown_signal().await;
             sig_notify.notify_one();
         });
 

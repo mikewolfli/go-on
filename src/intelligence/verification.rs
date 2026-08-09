@@ -6,8 +6,8 @@
 //!
 //! ## Relationship to `quality_models`
 //!
-//! - [`VerificationVerdict`] is a type alias for [`QualityVerdict`](crate::quality_models::QualityVerdict).
-//! - [`VerificationSignal`] is a type alias for [`QualitySignal`](crate::quality_models::QualitySignal).
+//! - [`VerificationVerdict`] is a type alias for [`QualityVerdict`].
+//! - [`VerificationSignal`] is a type alias for [`QualitySignal`].
 //! - This ensures a single source of truth for categorical verdicts; the aliases
 //!   exist only for semantic naming within the verification domain.
 
@@ -16,19 +16,18 @@ use crate::pua::{quality_compass, PuaExecutionReport};
 use crate::quality_models::{QualitySignal, QualitySignalType, QualityVerdict};
 use serde::{Deserialize, Serialize};
 
-/// Type alias for [`QualityVerdict`](crate::quality_models::QualityVerdict).
+/// Type alias for [`QualityVerdict`].
 ///
 /// The verification pipeline uses this alias for semantic clarity — a
 /// `VerificationVerdict` is the outcome of running structured checks.
-/// It delegates to the canonical [`QualityVerdict`](crate::quality_models::QualityVerdict)
-/// enum defined in [`quality_models`](crate::quality_models).
+/// It delegates to the canonical [`QualityVerdict`] enum defined in the
+/// `crate::quality_models` module.
 pub type VerificationVerdict = QualityVerdict;
 
-/// Type alias for [`QualitySignal`](crate::quality_models::QualitySignal).
+/// Type alias for [`QualitySignal`].
 ///
 /// Provides a semantic name within the verification context for the canonical
-/// [`QualitySignal`](crate::quality_models::QualitySignal) type from
-/// [`quality_models`](crate::quality_models).
+/// [`QualitySignal`] type from the `crate::quality_models` module.
 pub type VerificationSignal = QualitySignal;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

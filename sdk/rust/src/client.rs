@@ -808,6 +808,75 @@ impl GoOnClient {
         .await
     }
 
+    /// session/load — load an existing ACP session (modes + config options).
+    ///
+    /// The backend reads `sessionId`.
+    pub async fn session_load(&self, session_id: &str) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/load",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+    }
+
+    /// session/delete — delete an ACP session (and its permission state).
+    ///
+    /// The backend returns `{deleted: bool, sessionId}`.
+    pub async fn session_delete(&self, session_id: &str) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/delete",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+    }
+
+    /// session/config/get — read the per-session config options.
+    ///
+    /// The backend returns `{configOptions: {...}, sessionId}`.
+    pub async fn session_config_get(&self, session_id: &str) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/config/get",
+            serde_json::json!({ "sessionId": session_id }),
+        )
+        .await
+    }
+
+    /// session/config/set — set a per-session config option.
+    ///
+    /// The backend reads `sessionId`, `configId` and `value`, and returns the
+    /// updated `{configOptions: [...]}`.
+    pub async fn session_config_set(
+        &self,
+        session_id: &str,
+        config_id: &str,
+        value: Value,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/config/set",
+            serde_json::json!({
+                "sessionId": session_id,
+                "configId": config_id,
+                "value": value,
+            }),
+        )
+        .await
+    }
+
+    /// session/request_permission — respond to a pending permission request.
+    ///
+    /// The backend reads `sessionId` and `optionId` (e.g. "approve" / "deny").
+    pub async fn session_request_permission(
+        &self,
+        session_id: &str,
+        option_id: &str,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "session/request_permission",
+            serde_json::json!({ "sessionId": session_id, "optionId": option_id }),
+        )
+        .await
+    }
+
     // ── Tools ─────────────────────────────────────────────────────────
 
     /// tools/list — list all available tools with their input schemas.
@@ -846,5 +915,72 @@ impl GoOnClient {
         }
         self.json_rpc("tools/call", serde_json::Value::Object(params))
             .await
+    }
+
+    // ── OpenAI-compatible endpoints ────────────────────────────────────
+
+    /// POST /v1/chat/completions — OpenAI-compatible chat completions.
+    ///
+    /// The request body follows the OpenAI chat completions wire format
+    /// (`model`, `messages`, `temperature`, `stream`, ...) and is forwarded
+    /// verbatim to the backend's OpenAI-compat handler
+    /// (`src/acp/impl/runtime/openai_compat.rs`). The response is returned
+    /// as-is (OpenAI shape, no JSON-RPC envelope).
+    pub async fn chat_completions(&self, request: Value) -> Result<Value, SdkError> {
+        self.http_json("POST", "/v1/chat/completions", Some(request))
+            .await
+    }
+
+    /// POST /v1/responses — OpenAI Responses API create.
+    ///
+    /// The request body follows the Responses API wire format (`model`,
+    /// `input`, `instructions`, ...) and is forwarded verbatim to
+    /// `handle_responses_api`.
+    pub async fn responses_create(&self, request: Value) -> Result<Value, SdkError> {
+        self.http_json("POST", "/v1/responses", Some(request)).await
+    }
+
+    /// GET /v1/responses/{id} — retrieve a single Responses API response.
+    pub async fn responses_get(&self, response_id: &str) -> Result<Value, SdkError> {
+        self.http_json("GET", &format!("/v1/responses/{}", response_id), None)
+            .await
+    }
+
+    /// GET /v1/models — list models exposed by the OpenAI-compat surface.
+    ///
+    /// The backend returns `{"object": "list", "data": [...]}`
+    /// (see `build_openai_models_response`).
+    pub async fn models_list(&self) -> Result<Value, SdkError> {
+        self.http_json("GET", "/v1/models", None).await
+    }
+
+    /// Low-level JSON HTTP helper for the OpenAI-compatible surface
+    /// (plain JSON in/out — no JSON-RPC envelope, no result unwrapping).
+    async fn http_json(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, SdkError> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = match method {
+            "POST" => self.http.post(&url),
+            _ => self.http.get(&url),
+        };
+        if let Some(timeout) = self.timeout {
+            req = req.timeout(timeout);
+        }
+        if let Some(body) = body {
+            req = req.json(&body);
+        }
+        let resp = req.send().await.map_err(SdkError::Http)?;
+        if !resp.status().is_success() {
+            return Err(SdkError::UnexpectedShape(format!(
+                "HTTP {} {}: OpenAI-compat request failed",
+                resp.status().as_u16(),
+                resp.status().canonical_reason().unwrap_or(""),
+            )));
+        }
+        resp.json::<Value>().await.map_err(SdkError::Http)
     }
 }

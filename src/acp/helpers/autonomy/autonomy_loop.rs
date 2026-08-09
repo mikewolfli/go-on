@@ -5,7 +5,7 @@
 //! collect results → loop.  It is a self-contained agent-driven tool executor.
 //!
 //! For structured plan management (DAG, deep reasoning, reflection, replanning),
-//! see [`BrainLoop`](crate::orchestration::brain_loop::BrainLoop).  The two
+//! see the `brain_loop` planner.  The two
 //! are packaged together via `autonomy_loop_adapter::run_acp_autonomy_loop()`
 //! which provides a single entry point for the real execution loop.
 //!

@@ -183,6 +183,15 @@ impl AgentMessenger {
         let inboxes = self.inboxes.read().await;
         inboxes.get(path).map(|q| q.len()).unwrap_or(0)
     }
+
+    /// Remove the inbox for `path` (and any retained messages).
+    ///
+    /// Called when a spawned agent finishes so the inbox map does not
+    /// accumulate one entry per completed spawn forever.
+    pub async fn remove_inbox(&self, path: &AgentPath) {
+        let mut inboxes = self.inboxes.write().await;
+        inboxes.remove(path);
+    }
 }
 
 #[cfg(test)]
