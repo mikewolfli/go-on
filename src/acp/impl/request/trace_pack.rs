@@ -29,12 +29,15 @@ pub(crate) fn tool_budget_trackers() -> &'static tokio::sync::Mutex<HashMap<Stri
 }
 
 pub(super) fn mcp_audit_logger() -> &'static AuditLogger {
-    MCP_AUDIT_LOGGER.get_or_init(|| AuditLogger::new(Path::new(".goon").join("audit")))
+    // The global sink (`~/.goon/audit.ndjson`) is the single persistence
+    // layer; AuditLogger is a unit struct (see hardening.rs).
+    MCP_AUDIT_LOGGER.get_or_init(AuditLogger::new)
 }
 
 pub(super) fn pua_feedback_collector() -> &'static PuaFeedbackCollector {
-    PUA_FEEDBACK_COLLECTOR
-        .get_or_init(|| PuaFeedbackCollector::new(Path::new(".goon").join("learning")))
+    PUA_FEEDBACK_COLLECTOR.get_or_init(|| {
+        PuaFeedbackCollector::new(crate::shared::goon_paths::goon_subdir("learning"))
+    })
 }
 
 /// Upper bound for in-flight error-response marks. Marks are consumed at

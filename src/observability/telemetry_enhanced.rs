@@ -244,8 +244,8 @@ impl Default for TelemetryConfig {
 }
 
 /// Guard against double-initialization of the global tracer provider.
-/// Shared between the legacy and enhanced telemetry modules to prevent
-/// both from racing to set the global tracer provider.
+/// Shared between the early telemetry init and the config-driven
+/// `init_otel_export` path so both cannot race to set the global provider.
 pub(crate) static TRACER_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Guard to prevent `init_telemetry` from running more than once,
@@ -286,7 +286,8 @@ pub fn reload_log_filter(directive: &str) -> Result<(), String> {
 /// This function is safe to call multiple times — only the first call performs initialization.
 /// Subsequent calls are no-ops that return `Ok(())`. This prevents double initialization of
 /// the global tracing subscriber and the OTLP tracer provider, which could otherwise
-/// overwrite a provider already set by `telemetry.rs::init_otel_provider`.
+/// overwrite a provider already set by `init_otel_export` (the config-driven late
+/// wiring in main/mod.rs).
 pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
     let mut result = Ok(());
     INIT_TELEMETRY.call_once(|| {
@@ -350,7 +351,89 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
     result
 }
 
-/// Initialize metrics collection using OpenTelemetry.
+/// Initialize OpenTelemetry export from parsed runtime config.
+///
+/// Wired in `main/mod.rs` after config load (the export path needs
+/// `[runtime] otel_*` values, so it cannot run at the early telemetry init
+/// which only knows env defaults). Unlike `init_telemetry`, this does NOT go
+/// through the `INIT_TELEMETRY: Once` gate — it is a deliberate late,
+/// config-driven export wiring for the tracing side.
+///
+/// - `exporter` — "otlp" or "jaeger" (both export via OTLP).
+/// - `endpoint` — explicit endpoint from config; falls back to
+///   `OTEL_EXPORTER_OTLP_ENDPOINT` env, then logs a warning.
+/// - `sample_ratio` — batch exporter sampling hint (0.0–1.0).
+pub fn init_otel_export(
+    exporter: &str,
+    endpoint: Option<&str>,
+    service_name: &str,
+    sample_ratio: f64,
+) -> anyhow::Result<()> {
+    use opentelemetry::global;
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::resource::Resource;
+    use tracing::info;
+
+    if TRACER_INITIALIZED.load(Ordering::Acquire) {
+        info!("OpenTelemetry tracer provider already initialized; skipping export wiring");
+        return Ok(());
+    }
+
+    let effective_endpoint = endpoint
+        .map(|e| e.to_string())
+        .or_else(|| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok());
+
+    let Some(endpoint) = effective_endpoint else {
+        tracing::warn!(
+            "otel_enabled=true but no endpoint configured: set [runtime] otel_endpoint \
+             or OTEL_EXPORTER_OTLP_ENDPOINT; traces will not be exported"
+        );
+        return Ok(());
+    };
+
+    let exporter_str = exporter.to_string();
+
+    let resource = Resource::builder()
+        .with_attribute(KeyValue::new("service.name", service_name.to_string()))
+        .with_attribute(KeyValue::new(
+            "service.version",
+            env!("CARGO_PKG_VERSION").to_string(),
+        ))
+        .build();
+
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(&endpoint)
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to build OTLP span exporter: {}", e))?;
+
+    // The SDK sampler stays AlwaysOn: sampling is the in-process
+    // `TelemetryRuntime::should_sample` gate (deterministic hash on the
+    // sample key), which already applies `otel_sample_ratio` before a root
+    // span is created. Adding a second SDK-level ratio sampler here would
+    // compound the two independent 0..1 filters and under-export at
+    // non-1.0 ratios (effective rate ≈ ratio²).
+    let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_resource(resource)
+        .with_batch_exporter(exporter)
+        .build();
+
+    global::set_tracer_provider(tracer_provider);
+    TRACER_INITIALIZED.store(true, Ordering::Release);
+
+    info!(
+        service_name = %service_name,
+        exporter = %exporter_str,
+        otlp_endpoint = %endpoint,
+        sample_ratio = sample_ratio,
+        "OpenTelemetry tracing export initialized via OTLP"
+    );
+
+    Ok(())
+}
+
+/// OpenTelemetry metrics collection via stdout exporter.
 ///
 /// Sets up a meter provider with stdout exporter for development/demo use.
 /// In production, configure an OTLP endpoint to send metrics to a backend

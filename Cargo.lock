@@ -2907,8 +2907,6 @@ name = "go-on-latex"
 version = "1.5.1"
 dependencies = [
  "anyhow",
- "serde",
- "serde_json",
 ]
 
 [[package]]

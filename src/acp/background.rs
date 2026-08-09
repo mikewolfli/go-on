@@ -141,8 +141,7 @@ pub async fn start_background_tasks(
     // Save metacognitive state to disk every 60 seconds.
     if let Some(ref cb) = server.governance_deps.capability_bus {
         use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
-        use std::path::PathBuf;
-        let storage_dir = PathBuf::from(".goon/metacognitive");
+        let storage_dir = crate::shared::goon_paths::goon_subdir("metacognitive");
         if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
             // ── Cross-session state restoration (GAP-B53-56) ────────────
             // Restore any previously saved metacognitive state into the

@@ -15,7 +15,6 @@ use crate::orchestration::skill::SkillRegistry;
 /// in `main/mod.rs`. Reserved for future expansion of init-time parameters.
 #[derive(Debug, Clone)]
 pub struct BootstrapConfig {
-    pub enable_telemetry: bool,
     pub enable_i18n: bool,
     pub config_path: std::path::PathBuf,
 }
@@ -23,7 +22,6 @@ pub struct BootstrapConfig {
 impl Default for BootstrapConfig {
     fn default() -> Self {
         Self {
-            enable_telemetry: true,
             enable_i18n: true,
             config_path: Path::new("config/config.toml").to_path_buf(),
         }
@@ -35,22 +33,10 @@ impl Default for BootstrapConfig {
 /// Returns a `SkillRegistry` populated with locally discovered skills
 /// from `~/.agents/skills/` so the caller can pass it to the server.
 pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry> {
-    // 1. Initialize telemetry (tracing subscriber, OpenTelemetry)
-    if config.enable_telemetry {
-        let telemetry_cfg = crate::observability::telemetry_enhanced::TelemetryConfig {
-            enable_logging: true,
-            enable_tracing: true,
-            enable_metrics: true,
-            service_name: "go-on".to_string(),
-            ..Default::default()
-        };
-        if let Err(e) = crate::observability::telemetry_enhanced::init_telemetry(&telemetry_cfg)
-            .map_err(|e| anyhow::anyhow!("telemetry init: {e}"))
-        {
-            tracing::warn!("telemetry initialization skipped: {e}");
-        }
-        info!("Telemetry initialized");
-    }
+    // 1. Telemetry is initialized earlier in main/mod.rs run() so startup
+    //    logs are captured; OTLP export is wired after config load. No
+    //    telemetry step here (the previous enable_telemetry branch was an
+    //    unreachable duplicate of that init — see log-20260809-3).
 
     // 2. Initialize i18n (internationalization)
     if config.enable_i18n {

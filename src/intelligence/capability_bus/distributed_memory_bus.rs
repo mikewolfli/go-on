@@ -45,7 +45,7 @@ use std::thread;
 #[cfg(feature = "multi-users-server")]
 use std::thread::JoinHandle;
 #[cfg(feature = "multi-users-server")]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Transport data types
@@ -82,44 +82,6 @@ impl Default for MemoryTransportConfig {
             auth_token: None,
         }
     }
-}
-
-/// Represents the current status of a sync operation.
-#[derive(Debug, Clone, Default)]
-#[cfg(feature = "multi-users-server")]
-pub enum SyncStatus {
-    /// No sync operation is in progress.
-    #[default]
-    Idle,
-    /// A sync operation is currently running.
-    Syncing,
-    /// The last sync operation failed with the given error message.
-    Failed(String),
-    /// The last sync operation completed successfully.
-    Completed {
-        /// Number of entries that were synced.
-        entries_synced: usize,
-        /// Duration of the sync operation in milliseconds.
-        duration_ms: u64,
-    },
-}
-
-/// Statistics collected by the transport layer.
-#[derive(Debug, Clone, Default)]
-#[cfg(feature = "multi-users-server")]
-pub struct TransportStats {
-    /// Total number of sync operations sent to peers.
-    pub total_syncs_sent: u64,
-    /// Total number of sync operations received from peers.
-    pub total_syncs_received: u64,
-    /// Total number of transport-level errors encountered.
-    pub total_errors: u64,
-    /// Status of the last sync operation.
-    pub last_sync_status: SyncStatus,
-    /// Total bytes sent over the transport.
-    pub bytes_sent: u64,
-    /// Total bytes received over the transport.
-    pub bytes_received: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -224,9 +186,6 @@ pub struct DistributedMemoryBus {
     /// Transport configuration.
     #[cfg(feature = "multi-users-server")]
     transport_config: Arc<Mutex<Option<MemoryTransportConfig>>>,
-    /// Transport statistics.
-    #[cfg(feature = "multi-users-server")]
-    transport_stats: Arc<Mutex<TransportStats>>,
     /// Handle for the background sync thread.
     #[cfg(feature = "multi-users-server")]
     sync_thread: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -253,8 +212,6 @@ impl DistributedMemoryBus {
             transport_running: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "multi-users-server")]
             transport_config: Arc::new(Mutex::new(None)),
-            #[cfg(feature = "multi-users-server")]
-            transport_stats: Arc::new(Mutex::new(TransportStats::default())),
             #[cfg(feature = "multi-users-server")]
             sync_thread: Arc::new(Mutex::new(None)),
         }
@@ -639,7 +596,6 @@ impl DistributedMemoryBus {
         let local_entries = Arc::clone(&self.local_entries);
         let remote_peers = Arc::clone(&self.remote_peers);
         let profile = Arc::clone(&self.profile);
-        let stats = Arc::clone(&self.transport_stats);
 
         let handle = thread::Builder::new()
             .name("dmb-transport".into())
@@ -659,8 +615,7 @@ impl DistributedMemoryBus {
                     // Perform sync
                     let cfg = transport_config.lock().unwrap_or_else(|e| e.into_inner());
                     let config = cfg.as_ref().cloned().unwrap_or_default();
-                    let result =
-                        Self::do_sync(&local_entries, &remote_peers, &profile, &stats, &config);
+                    let result = Self::do_sync(&local_entries, &remote_peers, &profile, &config);
 
                     // Update profile with transport state
                     let mut p = profile.lock().unwrap_or_else(|poisoned| {
@@ -673,12 +628,6 @@ impl DistributedMemoryBus {
 
                     if let Err(e) = result {
                         tracing::warn!("[dmb-transport] Sync error: {}", e);
-                        let mut s = stats.lock().unwrap_or_else(|poisoned| {
-                            tracing::warn!("lock poisoned");
-                            poisoned.into_inner()
-                        });
-                        s.total_errors = s.total_errors.wrapping_add(1);
-                        s.last_sync_status = SyncStatus::Failed(e.to_string());
                     }
                 }
             })?;
@@ -766,16 +715,15 @@ impl DistributedMemoryBus {
     /// Perform a single sync cycle: collect local entries and push them
     /// to all known peers over real HTTP (JSON-RPC `memory.ingest` against
     /// each peer's `/rpc` endpoint).
+    ///
+    /// Returns the number of entries acknowledged by peers.
     #[cfg(feature = "multi-users-server")]
     fn do_sync(
         local_entries: &Arc<Mutex<VecDeque<MemoryBusEntry>>>,
         remote_peers: &Arc<RwLock<HashMap<String, String>>>,
         profile: &Arc<Mutex<DistributedMemoryBusProfile>>,
-        stats: &Arc<Mutex<TransportStats>>,
         config: &MemoryTransportConfig,
-    ) -> anyhow::Result<SyncStatus> {
-        let start = Instant::now();
-
+    ) -> anyhow::Result<usize> {
         // Collect local entries that haven't been synced yet. The deque is
         // drained so each entry is sent exactly once: entries added while we
         // are sending stay queued for the NEXT cycle (incremental sync —
@@ -786,9 +734,7 @@ impl DistributedMemoryBus {
         };
 
         if entries_to_sync.is_empty() {
-            let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
-            s.last_sync_status = SyncStatus::Idle;
-            return Ok(SyncStatus::Idle);
+            return Ok(0);
         }
 
         // Serialise all entries to JSON
@@ -800,15 +746,8 @@ impl DistributedMemoryBus {
             remote_peers.read().map(|r| r.clone()).unwrap_or_default();
 
         if peers.is_empty() {
-            // No peers to sync to — still track as completed.
-            let duration = start.elapsed().as_millis() as u64;
-            let status = SyncStatus::Completed {
-                entries_synced: 0,
-                duration_ms: duration,
-            };
-            let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
-            s.last_sync_status = status.clone();
-            return Ok(status);
+            // No peers to sync to — nothing to do this cycle.
+            return Ok(0);
         }
 
         // Real HTTP transport: POST each batch to the peer's JSON-RPC endpoint.
@@ -818,9 +757,6 @@ impl DistributedMemoryBus {
             Ok(c) => c,
             Err(e) => {
                 let message = format!("failed to build dmb transport client: {}", e);
-                let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
-                s.total_errors = s.total_errors.wrapping_add(1);
-                s.last_sync_status = SyncStatus::Failed(message.clone());
                 return Err(anyhow::anyhow!("dmb sync failed: {}", message));
             }
         };
@@ -905,30 +841,11 @@ impl DistributedMemoryBus {
             }
             drop(guard);
             let message = failures.join("; ");
-            {
-                let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
-                s.total_errors = s.total_errors.wrapping_add(1);
-                s.last_sync_status = SyncStatus::Failed(message.clone());
-            }
             return Err(anyhow::anyhow!("dmb sync failed: {}", message));
         }
 
-        let duration = start.elapsed().as_millis() as u64;
-        let status = SyncStatus::Completed {
-            entries_synced: total_entries_synced,
-            duration_ms: duration,
-        };
-
-        // Update stats
-        {
-            let mut s = stats.lock().unwrap_or_else(|e| e.into_inner());
-            s.total_syncs_sent = s.total_syncs_sent.wrapping_add(1);
-            s.total_syncs_received = s.total_syncs_received.wrapping_add(peers.len() as u64);
-            s.bytes_sent = s.bytes_sent.wrapping_add(total_bytes_sent);
-            s.last_sync_status = status.clone();
-        }
-
-        // Update profile
+        // Update profile (observable via `profile()` — the transport-level
+        // TransportStats were write-only and have been removed, principle §11).
         let mut p = profile.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned");
             poisoned.into_inner()
@@ -937,7 +854,7 @@ impl DistributedMemoryBus {
         p.transport_peers_reachable = peers.len() as u32;
         p.total_bytes_synced = p.total_bytes_synced.wrapping_add(total_bytes_sent);
 
-        Ok(status)
+        Ok(total_entries_synced)
     }
 }
 

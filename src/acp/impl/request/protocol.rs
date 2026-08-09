@@ -126,6 +126,7 @@ pub(crate) fn is_acp_request(method: &str) -> bool {
 pub(crate) const ACP_METHODS: &[&str] = &[
     "$/cancel_request",
     "action.check",
+    "approval.list",
     "authenticate",
     "autotune.get",
     "autotune.reset",

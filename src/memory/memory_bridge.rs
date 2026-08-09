@@ -139,11 +139,14 @@ pub async fn bridge_promote(
 
 // ── Memory base path ─────────────────────────────────────────────────────
 
-/// Return the memory base directory, sourced from the `GO_ON_MEMORY_PATH`
-/// environment variable, falling back to `.goon/memory/`.
+/// Return the memory base directory: the `GO_ON_MEMORY_PATH` environment
+/// override if set, otherwise the canonical go-on data dir joined with
+/// `memory` (see `crate::shared::goon_paths`).
 pub fn memory_base_path() -> std::path::PathBuf {
-    let base = std::env::var("GO_ON_MEMORY_PATH").unwrap_or_else(|_| ".goon/memory/".to_string());
-    std::path::PathBuf::from(base)
+    match std::env::var("GO_ON_MEMORY_PATH") {
+        Ok(override_path) => std::path::PathBuf::from(override_path),
+        Err(_) => crate::shared::goon_paths::goon_subdir("memory"),
+    }
 }
 
 // ── Convenience initialiser ──────────────────────────────────────────────

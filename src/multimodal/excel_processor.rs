@@ -110,12 +110,6 @@ pub fn parse_excel_bytes(bytes: &[u8]) -> Result<ParsedContent, DocumentParserEr
     Ok(parsed_content)
 }
 
-/// Placeholder for when the feature is disabled.
-#[cfg(not(feature = "document-excel"))]
-pub fn parse_excel_bytes(_bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
-    Err(DocumentParserError::feature_disabled("Excel"))
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

@@ -1662,6 +1662,18 @@ pub async fn handle_request(
                     )
                     .await
                 }
+                "approval.list" => {
+                    crate::acp::r#impl::io::respond(
+                        server,
+                        request_id,
+                        protocol_pack::approval_list_payload(
+                            server,
+                            request.params.unwrap_or_default(),
+                        )
+                        .await,
+                    )
+                    .await
+                }
                 "conversation.checkpoint.create" => {
                     dispatch_to_client(
                         server,

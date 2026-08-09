@@ -514,6 +514,114 @@ def test_models_list_targets_v1_models():
     assert result["data"][0]["id"] == "go-on"
 
 
+def test_tool_approve_sends_tool_name():
+    """tool.approve must send tool_name."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "result": {"ok": True}}
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.tool_approve("apply_patch")
+        await client.aclose()
+
+    _run(run())
+    body = captured["requests"][0]
+    assert body["method"] == "tool.approve"
+    assert body["params"] == {"tool_name": "apply_patch"}
+
+
+def test_skill_create_sends_full_params():
+    """skill.create must send name, description, prompt_template and input_schema."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": "1", "result": {"ok": True, "name": "s1"}},
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.skill_create(
+            "s1", "desc", "Do {{task}}", {"task": "string"}
+        )
+        await client.aclose()
+
+    _run(run())
+    body = captured["requests"][0]
+    assert body["method"] == "skill.create"
+    assert body["params"] == {
+        "name": "s1",
+        "description": "desc",
+        "prompt_template": "Do {{task}}",
+        "input_schema": {"task": "string"},
+    }
+
+
+def test_skill_version_rollback_sends_name_and_version():
+    """skill.version.rollback must send name and version."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "result": {"ok": True}}
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.skill_version_rollback("s1", "1.0.1")
+        await client.aclose()
+
+    _run(run())
+    body = captured["requests"][0]
+    assert body["method"] == "skill.version.rollback"
+    assert body["params"] == {"name": "s1", "version": "1.0.1"}
+
+
+def test_prompts_create_sends_lang_and_template():
+    """prompts.create must send lang plus template fields."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "result": {"ok": True}}
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.prompts_create({"id": "t1", "content": "Hello"}, "zh-CN")
+        await client.aclose()
+
+    _run(run())
+    body = captured["requests"][0]
+    assert body["method"] == "prompts.create"
+    assert body["params"] == {"lang": "zh-CN", "id": "t1", "content": "Hello"}
+
+
+def test_prompts_search_sends_query_and_lang():
+    """prompts.search must send query and lang."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": "1", "result": {"results": []}}
+        )
+
+    client, captured = _client_with_mock_handler(handler)
+
+    async def run():
+        await client.prompts_search("test", "en")
+        await client.aclose()
+
+    _run(run())
+    body = captured["requests"][0]
+    assert body["method"] == "prompts.search"
+    assert body["params"] == {"query": "test", "lang": "en"}
+
+
 # ── Client initialization ────────────────────────────────────────────────
 
 

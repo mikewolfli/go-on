@@ -219,7 +219,7 @@ fn signature_similarity(left: &str, right: &str) -> f64 {
 fn scan_learning_records_with_parseability(
     window: usize,
 ) -> Result<(Vec<LearningRecord>, usize, usize)> {
-    let storage_dir = Path::new(".goon").join("learning");
+    let storage_dir = crate::shared::goon_paths::goon_subdir("learning");
     let records_path = storage_dir.join(crate::pua::LEARNING_RECORDS_FILE);
     if !records_path.exists() {
         return Ok((Vec::new(), 0, 0));
@@ -484,7 +484,7 @@ pub(super) fn learning_replay_payload(server: &AcpServer, params: Value) -> Resu
         .unwrap_or(20)
         .max(1);
 
-    let storage_dir = Path::new(".goon").join("learning");
+    let storage_dir = crate::shared::goon_paths::goon_subdir("learning");
     let records = load_learning_records(&storage_dir, window).unwrap_or_default();
     let workflow_count = records
         .iter()
@@ -542,7 +542,7 @@ struct KnowledgeTombstoneEntry {
 }
 
 fn knowledge_storage_dir() -> PathBuf {
-    Path::new(".goon").join("knowledge")
+    crate::shared::goon_paths::goon_subdir("knowledge")
 }
 
 fn knowledge_tombstone_path() -> PathBuf {
@@ -714,7 +714,7 @@ pub(super) async fn knowledge_distill_payload(server: &AcpServer, params: Value)
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
-    let learning_dir = Path::new(".goon").join("learning");
+    let learning_dir = crate::shared::goon_paths::goon_subdir("learning");
     let evidence_records = load_learning_records(&learning_dir, window).unwrap_or_default();
     let workflow_records = evidence_records
         .iter()
@@ -884,7 +884,7 @@ fn collect_rl_offline_eval_samples(
     window: usize,
     weights: RlRewardWeights,
 ) -> Vec<RlOfflineEvalSample> {
-    let learning_dir = Path::new(".goon").join("learning");
+    let learning_dir = crate::shared::goon_paths::goon_subdir("learning");
     let records = load_learning_records(&learning_dir, window).unwrap_or_default();
 
     records

@@ -209,7 +209,6 @@ async fn run() -> Result<()> {
     // The returned SkillRegistry is populated with ~/.agents/skills/ SKILL.md files.
     let skill_registry =
         match crate::core::bootstrap::perform_bootstrap(&crate::core::bootstrap::BootstrapConfig {
-            enable_telemetry: false,
             enable_i18n: true,
             config_path: config_path.clone(),
         })
@@ -264,6 +263,33 @@ async fn run() -> Result<()> {
         Some(config) => config,
         None => return Ok(()),
     };
+
+    // ── OTLP export wiring (late init after config load) ───────────────
+    // Logging/tracing subscribers are initialized early (above) so startup
+    // logs are captured; the *export* path needs the parsed config's
+    // [runtime] otel_* values, so it is wired here — after load. Previously
+    // the export branch was unreachable (main hard-coded enable_tracing:
+    // false) while the config surface still promised otlp/jaeger export.
+    if let Some(runtime) = config.runtime.as_ref() {
+        if runtime.otel_enabled {
+            match crate::observability::telemetry_enhanced::init_otel_export(
+                &runtime.otel_exporter,
+                runtime.otel_endpoint.as_deref(),
+                &runtime.otel_service_name,
+                runtime.otel_sample_ratio,
+            ) {
+                Ok(()) => {
+                    info!(
+                        "OpenTelemetry export enabled (exporter={})",
+                        runtime.otel_exporter
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("OpenTelemetry export initialization failed: {e}");
+                }
+            }
+        }
+    }
 
     // ── Graceful shutdown notify (shared with all background tasks) ──
     let shutdown_notify = Arc::new(Notify::new());

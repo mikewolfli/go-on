@@ -406,6 +406,86 @@ describe("ACP contract params", () => {
     });
   });
 
+  it("tool.approve sends tool_name", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true },
+    });
+    globalThis.fetch = mock;
+
+    await client.toolApprove("apply_patch");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("tool.approve");
+    expect(body.params).toEqual({ tool_name: "apply_patch" });
+  });
+
+  it("skill.create sends name, description, prompt_template and input_schema", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true, action: "create", name: "my-skill" },
+    });
+    globalThis.fetch = mock;
+
+    await client.skillCreate({
+      name: "my-skill",
+      description: "A test skill",
+      prompt_template: "Do {{task}}",
+      input_schema: { task: "string" },
+    });
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("skill.create");
+    expect(body.params).toEqual({
+      name: "my-skill",
+      description: "A test skill",
+      prompt_template: "Do {{task}}",
+      input_schema: { task: "string" },
+    });
+  });
+
+  it("skill.version.rollback sends name and version", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true, action: "version.rollback", name: "s1", version: "1.0.1" },
+    });
+    globalThis.fetch = mock;
+
+    await client.skillVersionRollback("s1", "1.0.1");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("skill.version.rollback");
+    expect(body.params).toEqual({ name: "s1", version: "1.0.1" });
+  });
+
+  it("prompts.create sends lang plus template fields", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { ok: true },
+    });
+    globalThis.fetch = mock;
+
+    await client.promptsCreate({ id: "t1", content: "Hello" }, "zh-CN");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("prompts.create");
+    expect(body.params).toEqual({ lang: "zh-CN", id: "t1", content: "Hello" });
+  });
+
+  it("prompts.search sends query and lang", async () => {
+    const mock = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { results: [] },
+    });
+    globalThis.fetch = mock;
+
+    await client.promptsSearch("test", "en");
+    const body = lastRpcBody(mock);
+    expect(body.method).toBe("prompts.search");
+    expect(body.params).toEqual({ query: "test", lang: "en" });
+  });
+
   it("session/resume sends sessionId and optional cwd", async () => {
     const mock = createMockFetch(true, {
       jsonrpc: "2.0",

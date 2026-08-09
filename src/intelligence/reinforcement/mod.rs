@@ -27,8 +27,6 @@ const MAX_ARCHIVES_PER_STEM: usize = 10;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-const GOON_DIR: &str = ".goon";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactLedger {
     root: PathBuf,
@@ -36,12 +34,16 @@ pub struct ArtifactLedger {
 
 impl ArtifactLedger {
     pub fn new(config_path: Option<&Path>) -> Self {
+        // Resolve the ledger root relative to the config file's parent (or
+        // the CWD), joined under the canonical go-on data dir so the
+        // `GO_ON_DATA_DIR` override applies uniformly.
+        let data_dir = crate::shared::goon_paths::goon_data_dir();
         let root = config_path
-            .and_then(|path| path.parent().map(|parent| parent.join(GOON_DIR)))
+            .and_then(|path| path.parent().map(|parent| parent.join(&data_dir)))
             .unwrap_or_else(|| {
                 std::env::current_dir()
                     .unwrap_or_else(|_| PathBuf::from("."))
-                    .join(GOON_DIR)
+                    .join(&data_dir)
             });
         Self { root }
     }

@@ -464,6 +464,24 @@ pub(crate) fn is_bridge_special_tool(name: &str) -> bool {
     )
 }
 
+/// Returns true if the name resolves through the server's skill registry
+/// (exact name or best fuzzy match with the given arguments). Mirrors the
+/// skill fallback applied by the execution arm so the "is this callable?"
+/// fast-path agrees with what the fallback would accept.
+fn skill_registry_resolves(server: &AcpServer, name: &str, arguments: &Value) -> bool {
+    let registry = match server.orchestration_deps.skill_registry.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("skill registry lock poisoned during known-check");
+            poisoned.into_inner()
+        }
+    };
+    if registry.get(name).is_some() {
+        return true;
+    }
+    registry.best_match_with_input(name, arguments).is_some()
+}
+
 pub(crate) async fn execute_mcp_tool_call(
     server: &AcpServer,
     name: &str,
@@ -499,7 +517,14 @@ pub(crate) async fn execute_tool_call(
     // surface "unknown tool or skill" (mapped to INVALID_PARAMS on the MCP
     // arm). Previously governance ran first and an unknown tool was rejected
     // by the sandbox require_review gate (a confusing -32603 for callers).
-    let known = registry.get(name).is_some() || is_bridge_special_tool(name);
+    //
+    // A tool is known if it is in the registry, is a bridge-only special
+    // tool, OR resolves through the skill registry (exact name or best fuzzy
+    // match) — the latter mirrors the fallback the execution arm applies, so
+    // advertised skills (builtin.echo, skill-creator, …) stay callable.
+    let known = registry.get(name).is_some()
+        || is_bridge_special_tool(name)
+        || skill_registry_resolves(server, name, arguments);
     if !known {
         anyhow::bail!("unknown tool or skill: {name}");
     }
@@ -582,7 +607,8 @@ pub(crate) async fn execute_tool_call(
     // BLUE56-C05: ChaosEngine fault injection check (only when chaos-testing feature enabled)
     #[cfg(feature = "chaos-testing")]
     {
-        static CHAOS: LazyLock<crate::resilience::chaos::ChaosEngine> = LazyLock::new(|| {
+        static CHAOS: std::sync::LazyLock<crate::resilience::chaos::ChaosEngine> =
+            std::sync::LazyLock::new(|| {
             let engine = crate::resilience::chaos::ChaosEngine::new();
             engine.set_enabled(std::env::var("GO_ON_CHAOS_ENABLED").as_deref() == Ok("1"));
             engine

@@ -600,6 +600,126 @@ export class GoOnClient {
     });
   }
 
+  /** tool.approve — approve a tool so later calls bypass the review gate. */
+  async toolApprove(toolName: string): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("tool.approve", {
+      tool_name: toolName,
+    });
+  }
+
+  // ── Skills ─────────────────────────────────────────────────────────
+
+  /** skill.list — list all registered skills. */
+  async skillList(): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.list", {});
+  }
+
+  /** skill.list_imported — list imported skills. */
+  async skillListImported(): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.list_imported", {});
+  }
+
+  /** skill.create — create a prompt-based skill. */
+  async skillCreate(params: {
+    name: string;
+    description: string;
+    prompt_template: string;
+    input_schema?: Record<string, string>;
+  }): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.create", {
+      name: params.name,
+      description: params.description,
+      prompt_template: params.prompt_template,
+      input_schema: params.input_schema ?? {},
+    });
+  }
+
+  /** skill.update — update a skill's description / prompt template. */
+  async skillUpdate(
+    name: string,
+    patch: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.update", {
+      name,
+      ...patch,
+    });
+  }
+
+  /** skill.enable — enable a skill. */
+  async skillEnable(name: string): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.enable", { name });
+  }
+
+  /** skill.disable — disable a skill. */
+  async skillDisable(name: string): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.disable", { name });
+  }
+
+  /** skill.remove — remove a skill. */
+  async skillRemove(name: string): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.remove", { name });
+  }
+
+  /** skill.version.list — list versions of a skill. */
+  async skillVersionList(name: string): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.version.list", { name });
+  }
+
+  /** skill.version.rollback — roll back a skill to a previous version. */
+  async skillVersionRollback(
+    name: string,
+    version: string,
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("skill.version.rollback", {
+      name,
+      version,
+    });
+  }
+
+  // ── Prompts ────────────────────────────────────────────────────────
+
+  /** prompts.list — list all prompt templates for a language. */
+  async promptsList(lang = "en"): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("prompts.list", { lang });
+  }
+
+  /** prompts.get — get a single prompt template by id. */
+  async promptsGet(id: string, lang = "en"): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("prompts.get", { id, lang });
+  }
+
+  /** prompts.search — search prompt templates by keyword. */
+  async promptsSearch(query: string, lang = "en"): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("prompts.search", { query, lang });
+  }
+
+  /** prompts.create — create a custom prompt template. */
+  async promptsCreate(
+    template: Record<string, unknown>,
+    lang = "en",
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("prompts.create", {
+      lang,
+      ...template,
+    });
+  }
+
+  /** prompts.update — update a custom prompt template. */
+  async promptsUpdate(
+    template: Record<string, unknown>,
+    lang = "en",
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("prompts.update", {
+      lang,
+      ...template,
+    });
+  }
+
+  /** prompts.delete — delete a custom prompt template by id. */
+  async promptsDelete(id: string, lang = "en"): Promise<Record<string, unknown>> {
+    return this.jsonRpc<Record<string, unknown>>("prompts.delete", { id, lang });
+  }
+
   // ── OpenAI-compatible endpoints ─────────────────────────────────────
 
   /**

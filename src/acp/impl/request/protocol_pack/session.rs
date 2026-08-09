@@ -705,6 +705,33 @@ pub async fn session_close_payload(_server: &AcpServer, params: Value) -> Result
     )?)
 }
 
+/// Handle `approval.list` — list pending permission requests awaiting a
+/// client decision.
+///
+/// The pending requests are tracked in `acp_pending_permission_requests`
+/// (keyed by session id) when the backend sends `session/request_permission`
+/// and waits for a response. This read-only endpoint lets clients (e.g. the
+/// VS Code approval panel) poll for real pending requests instead of showing
+/// an always-empty placeholder.
+pub async fn approval_list_payload(_server: &AcpServer, _params: Value) -> Result<Value> {
+    let pending = super::acp_pending_permission_requests().read().await;
+    let requests: Vec<Value> = pending
+        .iter()
+        .map(|(session_id, req)| {
+            json!({
+                "session_id": session_id,
+                "tool_name": req.tool_name,
+                "mode": req.mode,
+                "risk_score": req.risk_score,
+                "tool_args": req.tool_args,
+            })
+        })
+        .collect();
+    drop(pending);
+
+    Ok(json!({ "requests": requests, "count": requests.len() }))
+}
+
 /// Handle `session/request_permission` — client responds to a permission request.
 pub async fn session_request_permission_payload(
     server: &AcpServer,

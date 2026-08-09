@@ -882,6 +882,100 @@ class GoOnClient:
             duration_ms=elapsed_ms,
         )
 
+    async def tool_approve(self, tool_name: str) -> dict[str, Any]:
+        """tool.approve — approve a tool for execution.
+
+        Persists the approval in the backend harness evaluator so later
+        calls to that tool bypass the require-review gate.
+        """
+        return await self._json_rpc("tool.approve", {"tool_name": tool_name})
+
+    # ── Skills ─────────────────────────────────────────────────────────
+
+    async def skill_list(self) -> dict[str, Any]:
+        """skill.list — list all registered skills."""
+        return await self._json_rpc("skill.list", {})
+
+    async def skill_list_imported(self) -> dict[str, Any]:
+        """skill.list_imported — list imported skills."""
+        return await self._json_rpc("skill.list_imported", {})
+
+    async def skill_create(
+        self,
+        name: str,
+        description: str,
+        prompt_template: str,
+        input_schema: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """skill.create — create a prompt-based skill."""
+        return await self._json_rpc(
+            "skill.create",
+            {
+                "name": name,
+                "description": description,
+                "prompt_template": prompt_template,
+                "input_schema": input_schema or {},
+            },
+        )
+
+    async def skill_update(self, name: str, **patch: Any) -> dict[str, Any]:
+        """skill.update — update a skill's description / prompt template."""
+        params: dict[str, Any] = {"name": name}
+        params.update(patch)
+        return await self._json_rpc("skill.update", params)
+
+    async def skill_enable(self, name: str) -> dict[str, Any]:
+        """skill.enable — enable a skill."""
+        return await self._json_rpc("skill.enable", {"name": name})
+
+    async def skill_disable(self, name: str) -> dict[str, Any]:
+        """skill.disable — disable a skill."""
+        return await self._json_rpc("skill.disable", {"name": name})
+
+    async def skill_remove(self, name: str) -> dict[str, Any]:
+        """skill.remove — remove a skill."""
+        return await self._json_rpc("skill.remove", {"name": name})
+
+    async def skill_version_list(self, name: str) -> dict[str, Any]:
+        """skill.version.list — list versions of a skill."""
+        return await self._json_rpc("skill.version.list", {"name": name})
+
+    async def skill_version_rollback(self, name: str, version: str) -> dict[str, Any]:
+        """skill.version.rollback — roll back a skill to a previous version."""
+        return await self._json_rpc(
+            "skill.version.rollback", {"name": name, "version": version}
+        )
+
+    # ── Prompts ────────────────────────────────────────────────────────
+
+    async def prompts_list(self, lang: str = "en") -> dict[str, Any]:
+        """prompts.list — list all prompt templates for a language."""
+        return await self._json_rpc("prompts.list", {"lang": lang})
+
+    async def prompts_get(self, id: str, lang: str = "en") -> dict[str, Any]:
+        """prompts.get — get a single prompt template by id."""
+        return await self._json_rpc("prompts.get", {"id": id, "lang": lang})
+
+    async def prompts_search(self, query: str, lang: str = "en") -> dict[str, Any]:
+        """prompts.search — search prompt templates by keyword."""
+        return await self._json_rpc("prompts.search", {"query": query, "lang": lang})
+
+    async def prompts_create(self, template: dict[str, Any], lang: str = "en") -> dict[str, Any]:
+        """prompts.create — create a custom prompt template."""
+        params: dict[str, Any] = {"lang": lang}
+        params.update(template)
+        return await self._json_rpc("prompts.create", params)
+
+    async def prompts_update(self, template: dict[str, Any], lang: str = "en") -> dict[str, Any]:
+        """prompts.update — update a custom prompt template."""
+        params: dict[str, Any] = {"lang": lang}
+        params.update(template)
+        return await self._json_rpc("prompts.update", params)
+
+    async def prompts_delete(self, id: str, lang: str = "en") -> dict[str, Any]:
+        """prompts.delete — delete a custom prompt template by id."""
+        return await self._json_rpc("prompts.delete", {"id": id, "lang": lang})
+
     # ── OpenAI-compatible endpoints ─────────────────────────────────────
 
     async def chat_completions(self, request: dict[str, Any]) -> dict[str, Any]:

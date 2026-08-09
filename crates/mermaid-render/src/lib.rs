@@ -183,3 +183,14 @@ fn rgba_alpha(c: RgbaColor, a: u8) -> RgbaColor {
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     (a as f32 + (b as f32 - a as f32) * t.clamp(0.0, 1.0)).round() as u8
 }
+
+/// Format an RGBA color as a CSS hex string (`#rrggbb` when opaque,
+/// `#rrggbbaa` when translucent). Shared by the SVG theme renderer and the
+/// post-processor (previously duplicated in both modules).
+pub(crate) fn css_hex(c: RgbaColor) -> String {
+    if c.a == 255 {
+        format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
+    } else {
+        format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)
+    }
+}

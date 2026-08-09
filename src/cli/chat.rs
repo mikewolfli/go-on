@@ -60,8 +60,8 @@ const DEFAULT_FOLLOWUP_TIMEOUT_SECS: u64 = 60;
 /// Maximum number of concurrent tool executions.
 /// Prevents resource exhaustion when the agent emits many parallel tool calls.
 const MAX_CONCURRENT_TOOLS: usize = 10;
-/// Session file name for conversation persistence (inside .goon/ directory).
-const SESSION_FILE: &str = ".goon/chat-session.json";
+/// Session file name for conversation persistence (inside the go-on data dir).
+const SESSION_FILE: &str = "chat-session.json";
 
 /// Threshold at which we prompt the user to compact the conversation.
 const COMPACT_PROMPT_THRESHOLD: usize = 30;
@@ -461,7 +461,7 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
     };
 
     // ── Session persistence path ──
-    let session_path = std::path::PathBuf::from(SESSION_FILE);
+    let session_path = crate::shared::goon_paths::goon_subdir(SESSION_FILE);
     if let Some(parent) = session_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

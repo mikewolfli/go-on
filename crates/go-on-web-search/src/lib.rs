@@ -251,10 +251,6 @@ impl WebSearchClient {
 
 /// URL-encode a string for use in a query parameter.
 fn urlencoding(input: &str) -> String {
-    urlencoding_inner(input)
-}
-
-fn urlencoding_inner(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     for byte in input.bytes() {
         match byte {

@@ -108,11 +108,7 @@ fn theme_css_overrides(theme: &MermaidTheme) -> String {
 }
 
 fn css_hex(c: RgbaColor) -> String {
-    if c.a == 255 {
-        format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
-    } else {
-        format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)
-    }
+    crate::css_hex(c)
 }
 
 /// Compute a legible text color (black or white) for a given background.

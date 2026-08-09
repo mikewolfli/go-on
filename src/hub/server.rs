@@ -5,7 +5,8 @@
 //! discovery file, Bearer token auth.
 //!
 //! JSON-RPC 2.0 methods:
-//! - hub.handshake  — verify hub identity
+//! - hub.handshake  — echo hub identity (hub_id + nonce + version; no
+//!   signature verification yet — see `HubDiscovery::public_key`)
 //! - hub.status     — get runtime status
 //! - hub.store      — persist a value
 //! - hub.retrieve   — read a persisted value
@@ -78,7 +79,9 @@ impl HubServer {
         self.bind_addr = format!("http://{}", addr);
         info!("Hub {} starting on {}", self.hub_id, self.bind_addr);
 
-        // Write discovery file for clients.
+        // Random opaque identity token. Not derived from a keypair and not
+        // yet verified by clients: handshake is an identity echo until the
+        // signed-handshake design (hub failover roadmap) is implemented.
         let discovery = HubDiscovery {
             hub_id: self.hub_id.clone(),
             transport: "loopback_http".to_string(),
@@ -278,11 +281,18 @@ async fn handle_rpc(
             vault.lock().await.insert(key.clone(), entries);
             json!({"ok": true, "stored": count, "key": key})
         }
-        _ => json_rpc_error(
-            Some(req_id.clone()),
-            -32601,
-            format!("Method not found: {}", req_method),
-        ),
+        _ => {
+            // Unknown method → JSON-RPC error object in the top-level
+            // `error` field (previously the error object was wrongly nested
+            // inside `result`).
+            let err = json_rpc_error(
+                Some(req_id.clone()),
+                -32601,
+                format!("Method not found: {}", req_method),
+            );
+            write_json(&mut stream, 200, err).await?;
+            return Ok(());
+        }
     };
 
     let response = json!({

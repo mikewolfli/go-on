@@ -28,8 +28,8 @@ use uuid::Uuid;
 /// Auto-rollback threshold: if metrics degrade more than this ratio, roll back.
 const AUTO_ROLLBACK_THRESHOLD: f64 = 0.20;
 
-/// Default history file path relative to workspace root.
-const DEFAULT_HISTORY_PATH: &str = ".goon/evolution/history.ndjson";
+/// Default history file path relative to the canonical go-on data dir.
+const DEFAULT_HISTORY_PATH: &str = "evolution/history.ndjson";
 
 // ---------------------------------------------------------------------------
 // RollbackCommit
@@ -207,7 +207,8 @@ impl EvolutionHistory {
     /// # Arguments
     /// * `base_path` - Root directory where `.goon/evolution/` will be created.
     pub async fn new(base_path: PathBuf) -> Self {
-        let history_path = base_path.join(DEFAULT_HISTORY_PATH);
+        let history_path =
+            base_path.join(crate::shared::goon_paths::goon_subdir(DEFAULT_HISTORY_PATH));
         let history = Self {
             history_path,
             entries: Mutex::new(HashMap::new()),

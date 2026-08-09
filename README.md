@@ -199,7 +199,7 @@ go-on uses a **sub-bus capability architecture** — 7 feature-gated sub-buses (
 
 ### Request Handler Dispatch
 
-All 152 JSON-RPC handlers return a unified `DispatchOutput` enum. The dispatch layer serializes each variant to the appropriate transport response:
+All 153 JSON-RPC handlers return a unified `DispatchOutput` enum. The dispatch layer serializes each variant to the appropriate transport response:
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain

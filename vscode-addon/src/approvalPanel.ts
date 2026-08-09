@@ -23,7 +23,6 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
   private pollTimer: NodeJS.Timeout | undefined;
   private _disposed = false;
   private pendingRequests: ApprovalRequest[] = [];
-  private warnedPendingUnsupported = false;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -103,17 +102,21 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
   private async _fetchPendingRequests(): Promise<void> {
     if (!this._view || !this.manager.isRunning()) return;
 
-    // `approval.pending` is not a backend ACP method — there is no handler
-    // that lists pending permission requests. Do not send a doomed request;
-    // warn once and show the empty state instead.
-    if (!this.warnedPendingUnsupported) {
-      this.warnedPendingUnsupported = true;
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[go-on] approval.pending is not supported by this backend; no pending approval requests can be listed",
-      );
+    let result: Record<string, unknown>;
+    try {
+      // List real pending permission requests from the backend. Previously
+      // this hard-coded `{ requests: [] }` because `approval.pending` was
+      // not a backend method — the panel always rendered an empty list and
+      // the approve/deny buttons could never resolve anything (log-20260809-3,
+      // §13 fake-state fix). The backend now exposes `approval.list`.
+      result = (await this.manager.sendRequest(
+        "approval.list",
+        {},
+      )) as Record<string, unknown>;
+    } catch (err) {
+      log.warn("approval.list failed:", err);
+      result = { requests: [] };
     }
-    const result: Record<string, unknown> = { requests: [] };
 
     try {
       const items = Array.isArray(result?.requests)
@@ -121,16 +124,21 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
         : [];
 
       const requests: ApprovalRequest[] = items.map((item) => ({
-        id: String(item.id ?? ""),
+        id: String(item.session_id ?? item.id ?? ""),
         agentName: String(item.agent_name ?? item.agentName ?? "Unknown"),
-        action: String(item.action ?? "Unknown"),
+        action: String(item.tool_name ?? item.action ?? "Unknown"),
         riskLevel: this._normalizeRiskLevel(
-          String(item.risk_level ?? item.riskLevel ?? "medium"),
+          String(
+            item.risk_level ??
+              item.riskScore ??
+              item.risk_score ??
+              "medium",
+          ),
         ),
         description: String(
-          item.description ?? item.action ?? "No description",
+          item.tool_name ?? item.description ?? item.action ?? "No description",
         ),
-        details: item.details as Record<string, unknown> | undefined,
+        details: item.tool_args as Record<string, unknown> | undefined,
         timestamp: String(item.timestamp ?? new Date().toISOString()),
       }));
 

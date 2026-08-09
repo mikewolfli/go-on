@@ -25,7 +25,8 @@ pub struct HubDiscovery {
     pub transport: String,
     /// Local endpoint (e.g. "http://127.0.0.1:34567").
     pub endpoint: String,
-    /// Hub's public verification key (hex).
+    /// Opaque identity token (hex). Currently a random value: no signature
+    /// verification is performed yet (handshake is an identity echo).
     pub public_key: String,
     /// Process PID.
     pub pid: u32,

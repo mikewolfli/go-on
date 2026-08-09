@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -500,13 +499,14 @@ impl From<AutonomousEditAuditEntry> for crate::governance::audit::AuditLogEntry 
 /// The former second NDJSON writer (`.goon/audit/audit.ndjson`) was removed:
 /// all audit writers now share the single `ThreadSafeAuditLog` persistence
 /// layer (`~/.goon/audit.ndjson`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AuditLogger;
 
 impl AuditLogger {
-    /// Create a logger. The argument is kept for API compatibility with the
-    /// previous per-directory logger; persistence now goes to the global sink.
-    pub fn new(_log_dir: PathBuf) -> Self {
+    /// Create a logger bound to the canonical global audit sink.
+    /// The former per-directory constructor parameter was removed: the sink is
+    /// process-global, so a directory argument would be misleading.
+    pub fn new() -> Self {
         Self
     }
 
@@ -928,7 +928,7 @@ mod tests {
 
     #[test]
     fn audit_logger_writes_to_global_sink_via_from_conversion() {
-        let logger = AuditLogger::new(PathBuf::from(".goon/audit"));
+        let logger = AuditLogger::new();
 
         let entry = AutonomousEditAuditEntry {
             timestamp: "2026-04-14T00:00:00Z".to_string(),

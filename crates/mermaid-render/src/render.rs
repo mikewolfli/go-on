@@ -88,9 +88,5 @@ fn to_merman_config(theme: &MermaidTheme) -> merman::MermaidConfig {
 }
 
 fn css_hex(c: crate::RgbaColor) -> String {
-    if c.a == 255 {
-        format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
-    } else {
-        format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)
-    }
+    crate::css_hex(c)
 }

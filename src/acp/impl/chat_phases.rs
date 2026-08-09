@@ -1959,7 +1959,7 @@ pub(crate) async fn reflect_phase(
         let meta = cb.metacognitive.clone();
         tokio::spawn(async move {
             use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
-            let storage_dir = std::path::PathBuf::from(".goon/metacognitive");
+            let storage_dir = crate::shared::goon_paths::goon_subdir("metacognitive");
             if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
                 let _ = persistence.save(&meta);
             }

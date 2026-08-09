@@ -917,6 +917,169 @@ impl GoOnClient {
             .await
     }
 
+    /// tool.approve — approve a tool for execution (persists the approval in
+    /// the harness evaluator so later calls to that tool bypass the
+    /// require-review gate).
+    pub async fn tool_approve(&self, tool_name: &str) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "tool.approve",
+            serde_json::json!({ "tool_name": tool_name }),
+        )
+        .await
+    }
+
+    // ── Skills ────────────────────────────────────────────────────────
+
+    /// skill.list — list all registered skills.
+    pub async fn skill_list(&self) -> Result<Value, SdkError> {
+        self.json_rpc("skill.list", serde_json::json!({})).await
+    }
+
+    /// skill.list_imported — list imported skills.
+    pub async fn skill_list_imported(&self) -> Result<Value, SdkError> {
+        self.json_rpc("skill.list_imported", serde_json::json!({}))
+            .await
+    }
+
+    /// skill.create — create a prompt-based skill.
+    pub async fn skill_create(
+        &self,
+        name: &str,
+        description: &str,
+        prompt_template: &str,
+        input_schema: Value,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "skill.create",
+            serde_json::json!({
+                "name": name,
+                "description": description,
+                "prompt_template": prompt_template,
+                "input_schema": input_schema,
+            }),
+        )
+        .await
+    }
+
+    /// skill.update — update a skill's description / prompt template.
+    pub async fn skill_update(&self, name: &str, patch: Value) -> Result<Value, SdkError> {
+        let mut params = serde_json::json!({ "name": name });
+        if let Some(obj) = params.as_object_mut() {
+            if let Some(patch_obj) = patch.as_object() {
+                for (k, v) in patch_obj {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        self.json_rpc("skill.update", params).await
+    }
+
+    /// skill.enable — enable a skill.
+    pub async fn skill_enable(&self, name: &str) -> Result<Value, SdkError> {
+        self.json_rpc("skill.enable", serde_json::json!({ "name": name }))
+            .await
+    }
+
+    /// skill.disable — disable a skill.
+    pub async fn skill_disable(&self, name: &str) -> Result<Value, SdkError> {
+        self.json_rpc("skill.disable", serde_json::json!({ "name": name }))
+            .await
+    }
+
+    /// skill.remove — remove a skill.
+    pub async fn skill_remove(&self, name: &str) -> Result<Value, SdkError> {
+        self.json_rpc("skill.remove", serde_json::json!({ "name": name }))
+            .await
+    }
+
+    /// skill.version.list — list versions of a skill.
+    pub async fn skill_version_list(&self, name: &str) -> Result<Value, SdkError> {
+        self.json_rpc("skill.version.list", serde_json::json!({ "name": name }))
+            .await
+    }
+
+    /// skill.version.rollback — roll back a skill to a previous version.
+    pub async fn skill_version_rollback(
+        &self,
+        name: &str,
+        version: &str,
+    ) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "skill.version.rollback",
+            serde_json::json!({ "name": name, "version": version }),
+        )
+        .await
+    }
+
+    // ── Prompts ───────────────────────────────────────────────────────
+
+    /// prompts.list — list all prompt templates for a language.
+    pub async fn prompts_list(&self, lang: Option<&str>) -> Result<Value, SdkError> {
+        let params = serde_json::json!({ "lang": lang.unwrap_or("en") });
+        self.json_rpc("prompts.list", params).await
+    }
+
+    /// prompts.get — get a single prompt template by id.
+    pub async fn prompts_get(&self, id: &str, lang: Option<&str>) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "prompts.get",
+            serde_json::json!({ "id": id, "lang": lang.unwrap_or("en") }),
+        )
+        .await
+    }
+
+    /// prompts.search — search prompt templates by keyword.
+    pub async fn prompts_search(&self, query: &str, lang: Option<&str>) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "prompts.search",
+            serde_json::json!({ "query": query, "lang": lang.unwrap_or("en") }),
+        )
+        .await
+    }
+
+    /// prompts.create — create a custom prompt template.
+    pub async fn prompts_create(
+        &self,
+        template: Value,
+        lang: Option<&str>,
+    ) -> Result<Value, SdkError> {
+        let mut params = serde_json::json!({ "lang": lang.unwrap_or("en") });
+        if let Some(obj) = params.as_object_mut() {
+            if let Some(tpl) = template.as_object() {
+                for (k, v) in tpl {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        self.json_rpc("prompts.create", params).await
+    }
+
+    /// prompts.update — update a custom prompt template.
+    pub async fn prompts_update(
+        &self,
+        template: Value,
+        lang: Option<&str>,
+    ) -> Result<Value, SdkError> {
+        let mut params = serde_json::json!({ "lang": lang.unwrap_or("en") });
+        if let Some(obj) = params.as_object_mut() {
+            if let Some(tpl) = template.as_object() {
+                for (k, v) in tpl {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        self.json_rpc("prompts.update", params).await
+    }
+
+    /// prompts.delete — delete a custom prompt template by id.
+    pub async fn prompts_delete(&self, id: &str, lang: Option<&str>) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "prompts.delete",
+            serde_json::json!({ "id": id, "lang": lang.unwrap_or("en") }),
+        )
+        .await
+    }
+
     // ── OpenAI-compatible endpoints ────────────────────────────────────
 
     /// POST /v1/chat/completions — OpenAI-compatible chat completions.

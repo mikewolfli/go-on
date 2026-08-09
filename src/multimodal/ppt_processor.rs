@@ -244,12 +244,6 @@ pub fn parse_pptx_bytes(bytes: &[u8]) -> Result<ParsedContent, DocumentParserErr
     ))
 }
 
-/// Placeholder for when the feature is disabled.
-#[cfg(not(feature = "document-ppt"))]
-pub fn parse_pptx_bytes(_bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
-    Err(DocumentParserError::feature_disabled("PPT"))
-}
-
 // ---------------------------------------------------------------------------
 // Text extraction from slide XML
 // ---------------------------------------------------------------------------

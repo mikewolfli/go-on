@@ -44,11 +44,11 @@ pub(super) use mcp::{
 
 // Session handlers
 pub(super) use session::{
-    session_cancel_payload, session_close_payload, session_config_favorite_toggle_payload,
-    session_config_get_payload, session_config_set_payload, session_delete_payload,
-    session_list_payload, session_load_payload, session_new_payload, session_prompt_payload,
-    session_request_permission_payload, session_resume_payload, session_set_config_option_payload,
-    session_set_mode_payload,
+    approval_list_payload, session_cancel_payload, session_close_payload,
+    session_config_favorite_toggle_payload, session_config_get_payload, session_config_set_payload,
+    session_delete_payload, session_list_payload, session_load_payload, session_new_payload,
+    session_prompt_payload, session_request_permission_payload, session_resume_payload,
+    session_set_config_option_payload, session_set_mode_payload,
 };
 
 // Skill handlers
@@ -751,6 +751,36 @@ mod tests {
         assert!(result.is_object());
         let pending = acp_pending_permission_requests().read().await;
         assert!(!pending.contains_key(new_result["sessionId"].as_str().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn approval_list_returns_pending_requests() {
+        let server = crate::acp::server::ServerBuilder::default().build();
+
+        // Empty by default.
+        let empty = approval_list_payload(&server, json!({})).await.unwrap();
+        assert_eq!(empty["count"].as_u64(), Some(0));
+
+        // Seed one pending request.
+        {
+            let mut pending = acp_pending_permission_requests().write().await;
+            pending.insert(
+                "sess-1".to_string(),
+                PendingPermissionRequest {
+                    tool_name: "apply_patch".to_string(),
+                    tool_args: json!({}),
+                    mode: "edit".to_string(),
+                    risk_score: 0.9,
+                },
+            );
+        }
+
+        let result = approval_list_payload(&server, json!({})).await.unwrap();
+        let requests = result["requests"].as_array().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["session_id"], "sess-1");
+        assert_eq!(requests[0]["tool_name"], "apply_patch");
+        assert_eq!(requests[0]["risk_score"], 0.9);
     }
 
     #[test]
