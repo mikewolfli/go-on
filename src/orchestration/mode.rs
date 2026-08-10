@@ -22,32 +22,20 @@ use tracing::{info, warn};
 // SafeGuard non-readonly branch), which allowed the two copies to drift.
 
 /// Read/plan-only tool set (Plan mode).
+///
+/// Derived from [`READ_ONLY_TOOL_NAMES`] (single source of truth) with two
+/// deliberate semantic differences:
+/// - `http_request` is Plan-only (research GETs) and excluded from the
+///   SafeGuard ReadOnly degraded set (it can mutate remote state).
+/// - `web_search` / `security_scan` are SafeGuard ReadOnly tools that are
+///   not part of the Plan tool surface.
 fn plan_tools() -> Vec<&'static str> {
-    vec![
-        "read_file",
-        "read_file_lines",
-        "search_files",
-        "grep",
-        "list_directory",
-        "inspect_git_diff",
-        "code_index_search",
-        "go_to_definition",
-        "find_references",
-        "date_time",
-        "environment_info",
-        "json_query",
-        "file_diff",
-        "archive_inspect",
-        "code_metrics",
-        "dns_lookup",
-        "ping",
-        "docker_ps",
-        "docker_logs",
-        "http_request",
-        "skill_list",
-        "rss_read",
-        "jsonl_read",
-    ]
+    READ_ONLY_TOOL_NAMES
+        .iter()
+        .copied()
+        .filter(|t| *t != "web_search" && *t != "security_scan")
+        .chain(std::iter::once("http_request"))
+        .collect()
 }
 
 /// Full execution tool set (Edit / FullAuto / SafeGuard non-readonly).
@@ -783,13 +771,34 @@ impl GenericModeRuntime {
     }
 
     /// Evaluate risk and return the appropriate degradation policy.
+    ///
+    /// Delegates to [`Self::safeguard_policy`] with auto-degrade enabled.
     pub fn evaluate_degradation(&self, risk_score: f64) -> AutoDegradePolicy {
+        Self::safeguard_policy(risk_score, true)
+    }
+
+    /// Compute the SafeGuard degradation policy for a given risk score.
+    ///
+    /// Shared by `evaluate_degradation`, `pre_execute` and `fallback_result`
+    /// (previously the two non-auto-degrade branches duplicated this block
+    /// verbatim and drifted from `evaluate_degradation`).
+    ///
+    /// - `auto_degrade = true`: 0.95 Block / 0.70 ConfirmRequired /
+    ///   0.40 ReadOnly / else AllowWithAudit.
+    /// - `auto_degrade = false`: 0.95 Block / 0.40 ConfirmRequired
+    ///   (no ReadOnly step — the operator confirms manually instead of
+    ///   auto-degrading) / else AllowWithAudit.
+    fn safeguard_policy(risk_score: f64, auto_degrade: bool) -> AutoDegradePolicy {
         if risk_score > 0.95 {
             AutoDegradePolicy::Block
-        } else if risk_score > 0.70 {
+        } else if auto_degrade && risk_score > 0.70 {
             AutoDegradePolicy::ConfirmRequired
         } else if risk_score > 0.40 {
-            AutoDegradePolicy::ReadOnly
+            if auto_degrade {
+                AutoDegradePolicy::ReadOnly
+            } else {
+                AutoDegradePolicy::ConfirmRequired
+            }
         } else {
             // Low risk: allow with audit logging
             AutoDegradePolicy::AllowWithAudit
@@ -904,15 +913,7 @@ impl ModeStrategy for GenericModeRuntime {
             }
             ModeKind::SafeGuard => {
                 let risk_score = self.compute_risk_score(objective);
-                let policy = if self.auto_degrade {
-                    self.evaluate_degradation(risk_score)
-                } else if risk_score > 0.95 {
-                    AutoDegradePolicy::Block
-                } else if risk_score > 0.40 {
-                    AutoDegradePolicy::ConfirmRequired
-                } else {
-                    AutoDegradePolicy::AllowWithAudit
-                };
+                let policy = Self::safeguard_policy(risk_score, self.auto_degrade);
 
                 match policy {
                     AutoDegradePolicy::Block => {
@@ -1070,15 +1071,7 @@ impl ModeStrategy for GenericModeRuntime {
             },
             ModeKind::SafeGuard => {
                 let risk_score = self.compute_risk_score(objective);
-                let policy = if self.auto_degrade {
-                    self.evaluate_degradation(risk_score)
-                } else if risk_score > 0.95 {
-                    AutoDegradePolicy::Block
-                } else if risk_score > 0.40 {
-                    AutoDegradePolicy::ConfirmRequired
-                } else {
-                    AutoDegradePolicy::AllowWithAudit
-                };
+                let policy = Self::safeguard_policy(risk_score, self.auto_degrade);
                 AgentTaskResult {
                     success: true,
                     output: Some(serde_json::json!({

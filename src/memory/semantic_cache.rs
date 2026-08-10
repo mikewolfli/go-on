@@ -93,7 +93,6 @@ pub struct SemanticResponseCache {
     total_hits: AtomicU64,
     total_misses: AtomicU64,
     expired_count: AtomicU64,
-    cancellation_token: Option<CancellationToken>,
 }
 
 impl SemanticResponseCache {
@@ -104,7 +103,6 @@ impl SemanticResponseCache {
             total_hits: AtomicU64::new(0),
             total_misses: AtomicU64::new(0),
             expired_count: AtomicU64::new(0),
-            cancellation_token: None,
         }
     }
 
@@ -337,15 +335,9 @@ impl SemanticResponseCache {
             }
         });
 
-        self.cancellation_token = Some(token.clone());
+        // The caller owns the returned token; the task runs until cancelled
+        // or the process exits (no stop method is exposed).
         token
-    }
-
-    /// Stop the background cleanup task.
-    pub fn stop_background_cleanup(&mut self) {
-        if let Some(token) = self.cancellation_token.take() {
-            token.cancel();
-        }
     }
 }
 

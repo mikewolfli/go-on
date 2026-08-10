@@ -97,14 +97,7 @@ impl LanguageWatcher {
 
     /// Update tracked file modification times
     fn update_file_times(&mut self) -> Result<()> {
-        self.file_times.clear();
-        for_each_json_in_dir(&self.watch_dir, |path| {
-            if let Ok(metadata) = std::fs::metadata(path) {
-                if let Ok(modified) = metadata.modified() {
-                    self.file_times.insert(path.to_path_buf(), modified);
-                }
-            }
-        });
+        update_file_times_in_dir(&self.watch_dir, &mut self.file_times);
         Ok(())
     }
 

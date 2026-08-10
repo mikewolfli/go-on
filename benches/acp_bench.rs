@@ -11,7 +11,8 @@
 //! on full JSON-RPC messages) against direct in-memory struct construction
 //! and manipulation.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use serde_json::{json, Value};
 use std::time::Duration;
 

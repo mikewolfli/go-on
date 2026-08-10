@@ -66,6 +66,54 @@ describe("GoOnClient", () => {
     expect(result).toEqual(mockResponse);
   });
 
+  it("metricsPrometheus fetches GET /metrics as plain text", async () => {
+    const prometheusText = "# HELP acp_test_total 1\nacp_test_total 1\n";
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(prometheusText),
+      json: () => Promise.reject(new Error("not json")),
+    } as unknown as Response);
+
+    const result = await client.metricsPrometheus();
+    expect(result).toBe(prometheusText);
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(url).toBe(`${MOCK_BASE_URL}/metrics`);
+  });
+
+  it("initialize omits setup_level when not provided", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {},
+    });
+
+    await client.initialize();
+    const body = JSON.parse(
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!
+        .body as string,
+    );
+    expect(body.method).toBe("initialize");
+    expect(body.params).toEqual({});
+  });
+
+  it("initialize sends setup_level when provided", async () => {
+    globalThis.fetch = createMockFetch(true, {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {},
+    });
+
+    await client.initialize("full");
+    const body = JSON.parse(
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!
+        .body as string,
+    );
+    expect(body.method).toBe("initialize");
+    expect(body.params).toEqual({ setup_level: "full" });
+  });
+
   it("should handle governance.status", async () => {
     globalThis.fetch = createMockFetch(true, {
       jsonrpc: "2.0",
@@ -122,11 +170,25 @@ describe("GoOnClient", () => {
     globalThis.fetch = createMockFetch(true, {
       jsonrpc: "2.0",
       id: 4,
-      result: { modes: {}, configOptions: { model: "gpt-4o" } },
+      result: {
+        modes: { currentModeId: "ask", availableModes: [] },
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            kind: {
+              type: "select",
+              currentValue: "gpt-4o",
+              options: { type: "grouped", groups: [] },
+            },
+          },
+        ],
+      },
     });
 
     const result = await client.sessionLoad("sess-1");
-    expect(result.configOptions.model).toBe("gpt-4o");
+    expect(result.configOptions?.[0]?.id).toBe("model");
+    expect(result.modes?.currentModeId).toBe("ask");
     const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!.body as string);
     expect(body.method).toBe("session/load");
     expect(body.params).toEqual({ sessionId: "sess-1" });
@@ -140,7 +202,7 @@ describe("GoOnClient", () => {
     });
 
     const result = await client.sessionConfigGet("sess-1");
-    expect(result.configOptions.model).toBe("gpt-4o");
+    expect(result.configOptions["model"]).toBe("gpt-4o");
     const body = JSON.parse((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]!.body as string);
     expect(body.method).toBe("session/config/get");
     expect(body.params).toEqual({ sessionId: "sess-1" });
@@ -199,6 +261,46 @@ describe("GoOnClient", () => {
       chunks.push(chunk);
     }
     expect(chunks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("chatStream nests model/temperature/max_tokens inside options", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"token":"Hi"}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: stream,
+      headers: new Headers(),
+    } as Response);
+
+    const chunks: Record<string, unknown>[] = [];
+    for await (const chunk of client.chatStream({
+      messages: [{ role: "user", content: "Hi" }],
+      model: "gpt-4",
+      temperature: 0.7,
+      max_tokens: 128,
+    })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual([{ token: "Hi" }]);
+
+    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.options).toEqual({
+      model: "gpt-4",
+      temperature: 0.7,
+      max_tokens: 128,
+    });
+    expect(body.model).toBeUndefined();
+    expect(body.temperature).toBeUndefined();
+    expect(body.max_tokens).toBeUndefined();
   });
 
   it("should abort chat stream on signal without hanging", async () => {

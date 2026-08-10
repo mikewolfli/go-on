@@ -19,7 +19,9 @@ use tracing::warn;
 use crate::acp::helpers::autonomy_metrics::record_fallback_reason;
 use crate::agent::Agent;
 use crate::intelligence::capability_bus::core::CapabilityBus;
-use crate::orchestration::council::{CouncilMember, CouncilProposal, ProposalStatus};
+use crate::orchestration::council::{
+    CouncilMember, CouncilProposal, CouncilVote, ProposalStatus, VoteResult,
+};
 use crate::shared::option_bool;
 
 // ---------------------------------------------------------------------------
@@ -121,11 +123,14 @@ pub(crate) fn run_council_deliberation_and_fallback(
 /// best routing agent for the current request.
 ///
 /// Honest semantics: without an LLM-backed ballot, the "council" cannot
-/// produce independent per-member votes. The route is therefore selected by
-/// reputation ranking (the same outcome the previous fake ballot produced by
-/// having every member vote for the same pre-computed winner). The proposal
-/// record is kept for observability/auditing; no fictitious votes are cast
-/// and no vote-accuracy learning is simulated.
+/// produce independent per-member votes. Each candidate member therefore
+/// casts a real self-endorsement vote (member votes for itself with nominal
+/// voting power), the proposal is tallied, and the tally fields
+/// (`total_votes`/`option_tallies`/`passed`/`tie`) in the decision payload
+/// reflect that real recorded data. The route itself is still selected by
+/// reputation ranking (the source of truth — the tally cannot decide
+/// between self-endorsements), and vote-accuracy learning is not simulated
+/// (`record_vote_accuracy` was removed as unwired).
 fn run_council_route_deliberation(
     cb: &CapabilityBus,
     phase_name: &str,
@@ -190,6 +195,7 @@ fn run_council_route_deliberation(
     // Best-effort observability record. Expire old proposals first so the
     // capped proposal store does not silently stop recording (the store was
     // previously unbounded-in-effect and rejected new records at max_proposals).
+    let mut submitted_id = proposal_id.clone();
     if council.submit_proposal(proposal).is_err() {
         let _ = council.expire_old_proposals();
         let retry = CouncilProposal {
@@ -207,19 +213,73 @@ fn run_council_route_deliberation(
                 phase = %phase_name,
                 "council_deliberation: proposal store full; routing continues with reputation ranking"
             );
+            return Some((
+                winner.clone(),
+                json!({
+                    "proposal_id": proposal_id,
+                    "winner": winner,
+                    "selection": "reputation_ranked",
+                    "tie": false,
+                    "passed": false,
+                    "total_votes": 0,
+                    "option_tallies": {},
+                    "candidate_count": candidate_agents.len(),
+                }),
+            ));
+        }
+        submitted_id = format!("{}-{}-{}", phase_name, now_ms, candidate_agents.len());
+    }
+
+    // Cast real votes: each member endorses itself with its nominal voting
+    // power (no LLM ballot exists, so a self-endorsement is the honest vote).
+    // This seeds the council reputation map (`ensure_reputation`) so the
+    // auto-ejection scan has real data, and `tally_votes` records the outcome.
+    for agent in candidate_agents {
+        if let Err(e) = council.cast_vote(CouncilVote {
+            member_id: agent.clone(),
+            proposal_id: submitted_id.clone(),
+            selected_option: agent.clone(),
+            weight: 100,
+            vote_ms: now_ms,
+            rationale: Some("self-endorsement (no LLM ballot)".to_string()),
+        }) {
+            warn!(
+                phase = %phase_name,
+                agent = %agent,
+                error = %e,
+                "council_deliberation: failed to cast self-endorsement vote"
+            );
         }
     }
+    let vote_result = match council.tally_votes(&submitted_id) {
+        Ok(result) => result,
+        Err(e) => {
+            warn!(
+                phase = %phase_name,
+                error = %e,
+                "council_deliberation: tally failed; reporting no-vote outcome"
+            );
+            VoteResult {
+                proposal_id: submitted_id.clone(),
+                option_tallies: HashMap::new(),
+                total_votes: 0,
+                passed: false,
+                winning_option: None,
+                tie: false,
+            }
+        }
+    };
 
     Some((
         winner.clone(),
         json!({
-            "proposal_id": proposal_id,
+            "proposal_id": submitted_id,
             "winner": winner,
             "selection": "reputation_ranked",
-            "tie": false,
-            "passed": true,
-            "total_votes": 0,
-            "option_tallies": {},
+            "tie": vote_result.tie,
+            "passed": vote_result.passed,
+            "total_votes": vote_result.total_votes,
+            "option_tallies": vote_result.option_tallies,
             "candidate_count": candidate_agents.len(),
         }),
     ))

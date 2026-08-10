@@ -38,64 +38,92 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<SkillRegistry
     //    telemetry step here (the previous enable_telemetry branch was an
     //    unreachable duplicate of that init — see log-20260809-3).
 
-    // 2. Initialize i18n (internationalization)
-    if config.enable_i18n {
-        let lang_dir = config
-            .config_path
-            .parent()
-            .map(|p| p.join("languages"))
-            .unwrap_or_else(|| Path::new("config/languages").to_path_buf());
-        if lang_dir.exists() {
-            let _ = crate::i18n::runtime::init_i18n(&lang_dir);
-        }
-        info!("I18n initialized");
-        // Wire the language hot-reload watcher (i18n::watcher) so edits to the
-        // on-disk language files (en-US.json / zh-CN.json / zh-TW.json) are
-        // picked up at runtime without a restart. Best-effort: failures are
-        // logged, not fatal.
-        let watcher_started =
-            crate::i18n::watcher::start_watcher(&lang_dir, std::time::Duration::from_secs(5));
-        if let Ok(true) = watcher_started {
-            info!("I18n hot-reload watcher started");
-        } else if let Err(e) = watcher_started {
-            tracing::warn!("I18n hot-reload watcher failed to start: {e}");
-        }
-    }
+    // 2. i18n initialization and local-skill discovery are independent, so
+    //    they run concurrently to cut startup latency. The skill walk does
+    //    synchronous std::fs I/O, so it runs on a blocking thread instead of
+    //    stalling the async runtime.
+    let lang_dir = if config.enable_i18n {
+        Some(
+            config
+                .config_path
+                .parent()
+                .map(|p| p.join("languages"))
+                .unwrap_or_else(|| Path::new("config/languages").to_path_buf()),
+        )
+    } else {
+        None
+    };
 
-    // 3. Orchestration provider trait is available for architecture boundary verification.
-    //    DefaultOrchestrationProvider was a stub (always returned 0 skills) and has been removed.
-    tracing::debug!(
-        target: "go_on::core::bootstrap",
-        "OrchestrationProvider trait available"
+    let (_i18n_result, skill_result) = tokio::join!(
+        async {
+            if let Some(lang_dir) = lang_dir.as_deref() {
+                // I18nManager::new creates the languages dir when missing, so
+                // a fresh install (no <config-dir>/languages) still initializes
+                // the global I18N instead of silently leaving t()/tf() on
+                // raw keys.
+                if let Err(e) = crate::i18n::runtime::init_i18n(lang_dir) {
+                    tracing::warn!(target: "go_on::core::bootstrap", "i18n initialization failed: {e:#}");
+                } else {
+                    info!("I18n initialized");
+                }
+                // Wire the language hot-reload watcher (i18n::watcher) so edits
+                // to the on-disk language files (en-US.json / zh-CN.json /
+                // zh-TW.json) are picked up at runtime without a restart.
+                // Best-effort: failures are logged, not fatal.
+                let watcher_started = crate::i18n::watcher::start_watcher(
+                    lang_dir,
+                    std::time::Duration::from_secs(5),
+                );
+                if let Ok(true) = watcher_started {
+                    info!("I18n hot-reload watcher started");
+                } else if let Err(e) = watcher_started {
+                    tracing::warn!("I18n hot-reload watcher failed to start: {e}");
+                }
+            }
+        },
+        async {
+            tokio::task::spawn_blocking(move || {
+                let mut skill_registry = crate::orchestration::skill::SkillRegistry::default();
+                let discovery = skill_registry.discover_and_register_local_skills(None);
+                (skill_registry, discovery)
+            })
+            .await
+        },
     );
+    // i18n_result is unit (errors already logged inside the async block).
 
-    // 4. (removed) intermediate-file dir init — the `.goon/intermediates/`
-    //    feature was dormant: create_task_intermediate_dir ran per request but
-    //    nothing consumed or cleaned the directories (log-20260730-18).
-
-    // 5. Initialize agent skills system — discover local SKILL.md files
-    //    and set up the default prompt skill agent.
-    //    The registry is returned so the server can use these discovered skills.
-    let mut skill_registry = crate::orchestration::skill::SkillRegistry::default();
-    match skill_registry.discover_and_register_local_skills(None) {
-        Ok(summary) => {
-            tracing::debug!(
-                target: "go_on::core::bootstrap",
-                registered = summary.registered,
-                skipped = summary.skipped,
-                errors = summary.errors.len(),
-                "Local skills discovered"
-            );
+    // 3. Consume the discovery outcome and finish skill registration.
+    let mut skill_registry = match skill_result {
+        Ok((registry, discovery)) => {
+            match discovery {
+                Ok(summary) => {
+                    tracing::debug!(
+                        target: "go_on::core::bootstrap",
+                        registered = summary.registered,
+                        skipped = summary.skipped,
+                        errors = summary.errors.len(),
+                        "Local skills discovered"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "go_on::core::bootstrap",
+                        "SKILL discovery skipped: {e}"
+                    );
+                }
+            }
+            registry
         }
         Err(e) => {
             tracing::warn!(
                 target: "go_on::core::bootstrap",
-                "SKILL discovery skipped: {e}"
+                "SKILL discovery task failed: {e}"
             );
+            crate::orchestration::skill::SkillRegistry::default()
         }
-    }
+    };
 
-    // 6. Register built-in skills that ship with go-on (e.g. create-skill).
+    // 4. Register built-in skills that ship with go-on (e.g. create-skill).
     //    Done after local discovery so that a locally discovered skill with the
     //    same name takes precedence (built-in registration skips existing names).
     if let Err(e) = skill_registry.register_builtin_skills() {

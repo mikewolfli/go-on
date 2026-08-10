@@ -9,7 +9,6 @@
 use super::core::CapabilityBus;
 
 use crate::intelligence::reinforcement::learning::RlTaskExecutionMetrics;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
 
 impl CapabilityBus {
@@ -87,67 +86,10 @@ impl CapabilityBus {
             );
         }
 
-        // ── Periodic maintenance: detect forgetting & replay (every 10th call) ──
-        static CL_MAINTENANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let count = CL_MAINTENANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-
-        if count.is_multiple_of(10) {
-            // 1. Detect forgetting and reinforce forgotten memories
-            let forgotten = {
-                let cl = crate::lock_or_recover!(&self.continuous_learning, "intelligence");
-                cl.detect_forgetting()
-            };
-            for curve in &forgotten {
-                if let Err(e) = crate::lock_or_recover!(&self.continuous_learning, "intelligence")
-                    .reinforce_memory(&curve.memory_id)
-                {
-                    warn!("evolve: reinforce_memory failed: {}", e);
-                }
-            }
-            if !forgotten.is_empty() {
-                tracing::info!(
-                    "evolve: continuous_learning reinforced {} forgotten memories",
-                    forgotten.len()
-                );
-            }
-
-            // 2. Replay important memories and feed into Q-learning
-            let replayed = {
-                let cl = crate::lock_or_recover!(&self.continuous_learning, "intelligence");
-                cl.replay_important_memories(3)
-            };
-            for mem in &replayed {
-                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&mem.data) {
-                    // Parse the stored (state, action, reward) triple
-                    let state_arr = data["state"].as_array();
-                    let action_str = data["action"].as_str();
-                    let replay_reward = data["reward"].as_f64();
-
-                    if let (Some(arr), Some(action_str), Some(replay_reward)) =
-                        (state_arr, action_str, replay_reward)
-                    {
-                        if arr.len() >= 2 {
-                            if let (Some(s0), Some(s1)) = (arr[0].as_str(), arr[1].as_str()) {
-                                let replayed_state = (s0.to_string(), s1.to_string());
-                                // BLUE70: Use ReinforcementBus (replaces legacy QLearningAgent)
-                                crate::write_or_recover!(&self.reinforcement_bus, "intelligence")
-                                    .record_reward(
-                                        &replayed_state.0,
-                                        action_str,
-                                        replay_reward,
-                                        &state.0,
-                                    );
-                            }
-                        }
-                    }
-                }
-            }
-            if !replayed.is_empty() {
-                tracing::info!(
-                    "evolve: continuous_learning replayed {} memories into Q-learning",
-                    replayed.len()
-                );
-            }
-        }
+        // Periodic maintenance (forgetting detection + spaced replay) is owned
+        // by the 10-minute `ContinuousLearningCenter::review_cycle` background
+        // task in acp/server.rs, which runs the full loop (LLM distillation,
+        // reinforce, replay, risk eviction). Keeping a second copy here would
+        // double-write the same center.
     }
 }

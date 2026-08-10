@@ -8,6 +8,12 @@
 //!   - ACP stdio: JSON-RPC over stdin/stdout
 //!   - CLI:       terminal chat mode (simulated via `--chat --non-interactive`)
 //!   - MCP stdio: JSON-RPC over stdin/stdout (MCP variant)
+//!
+//! NOTE: the ACP/MCP `initialize` + `tools/list` shape assertions here overlap
+//! with `protocol_consistency_integration.rs`. Both files are intentionally
+//! kept: they use different harnesses (this file spawns one child per protocol
+//! mode via `StdioHarness`) and each carries unique assertions (tool-name
+//! overlap, tool-count subset, three-route contract).
 
 use std::fs;
 use std::io::{BufRead, Write};

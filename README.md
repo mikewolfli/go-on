@@ -199,7 +199,11 @@ go-on uses a **sub-bus capability architecture** — 7 feature-gated sub-buses (
 
 ### Request Handler Dispatch
 
-All 153 JSON-RPC handlers return a unified `DispatchOutput` enum. The dispatch layer serializes each variant to the appropriate transport response:
+All JSON-RPC methods are dispatched through a unified handler pipeline. Most handlers
+return `Result<Value>` and write the JSON-RPC response directly via `io::respond`;
+handlers that need non-standard response shapes (text/plain, streaming, silent)
+return the `DispatchOutput` enum, which `dispatch_to_client` serializes to the
+appropriate transport response:
 
 ```
 Handler → Result<DispatchOutput> → dispatch_to_client → JSON-RPC / SSE / text/plain
@@ -286,7 +290,7 @@ npm run compile
 | SDK (Rust + Python + TypeScript) LOC | ~4K |
 | Built-in tools | 60+ |
 | AI providers | 37 |
-| Skills in marketplace | 30+ |
+| Skills in marketplace | 33 |
 | Unit tests | ~1.7K (1,590 lib + 139 integration; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 

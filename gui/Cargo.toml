@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-eframe = { version = "0.34", features = ["wgpu", "glow"] }
-egui = "0.34"
+eframe = { version = "0.36", features = ["wgpu", "glow"] }
+egui = "0.36"
 reqwest = { workspace = true, features = ["socks"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -13,9 +13,9 @@ tokio.workspace = true
 anyhow.workspace = true
 directories = "6"
 rfd = "0.17"
-keyring = { workspace = true, features = ["apple-native", "sync-secret-service"] }
+keyring = { workspace = true }
 chrono = { version = "0.4", features = ["now"] }
-comrak = "0.52"
+comrak = "0.54"
 base64.workspace = true
 go-on-mermaid-render = { path = "../crates/mermaid-render" }
 go-on-latex = { path = "../crates/go-on-latex" }

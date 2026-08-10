@@ -40,7 +40,12 @@ where
     tokio::task::spawn_blocking(move || {
         let mut last_error: Option<anyhow::Error> = None;
         for attempt in 0..3 {
-            let backoff_secs = 1u64 << attempt; // 1s, 2s, 4s
+            // Exponential backoff (1s, 2s, 4s) — same formula as the agent
+            // chat retry helper (`backoff_secs` in agents/copilot.rs), but kept
+            // inline here because this is a *blocking connection-init* retry
+            // (postgres backend setup inside spawn_blocking), not an async
+            // model-chat retry; `retry_chat_once` targets the chat path only.
+            let backoff_secs = 1u64 << attempt;
             match factory(url_owned.clone()) {
                 Ok(value) => return Ok(value),
                 Err(e) => {

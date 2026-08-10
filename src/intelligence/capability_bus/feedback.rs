@@ -81,20 +81,26 @@ impl CapabilityBus {
             );
         }
 
-        // 2. BLUE70: Write to UnifiedKnowledgeBus + ReinforcementBus (replaces legacy ReputationStore + QLearningAgent + ExperienceKnowledgeBase)
+        // 2. BLUE70: Write to ReinforcementBus + UnifiedKnowledgeBus (replaces
+        // legacy ReputationStore + QLearningAgent + ExperienceKnowledgeBase).
+        // Lock order: reinforcement_bus (Level 1) is acquired and released
+        // BEFORE unified_knowledge_bus (Level 3), matching the documented
+        // ordering in core.rs. Previously the reward write happened while
+        // holding the Level 3 write lock — a lock-order violation.
         {
+            // Feed reward signal to reinforcement bus (Level 1 — acquire first).
+            let reward = if success { 1.0 } else { -0.5 };
+            let next_state = format!("{}/next", task_type);
+            if let Ok(mut rb) = self.reinforcement_bus.try_write() {
+                rb.record_reward(task_type, agent, reward, &next_state);
+            }
+
             let mut ukb = crate::write_or_recover!(&self.unified_knowledge_bus, "intelligence");
             let outcome_summary = format!(
                 "agent={} task={} success={} dur={}ms tokens={} quality={:.2}",
                 agent, task_type, success, duration_ms, token_cost, quality_score
             );
             ukb.record_outcome(agent, task_type, success, outcome_summary);
-            // Feed reward signal to reinforcement bus
-            let reward = if success { 1.0 } else { -0.5 };
-            let next_state = format!("{}/next", task_type);
-            if let Ok(mut rb) = self.reinforcement_bus.try_write() {
-                rb.record_reward(task_type, agent, reward, &next_state);
-            }
         }
 
         // 3. Write to ObservabilityBus

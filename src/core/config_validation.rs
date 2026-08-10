@@ -4,7 +4,7 @@
 //! and performance impact assessment.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use tracing::{info, warn};
@@ -13,17 +13,10 @@ use crate::config::{AgentConfig, AppConfig, PhaseConfig};
 use crate::i18n::runtime::{I18nManager, Language};
 
 fn report_language() -> Language {
-    if let Ok(explicit) = std::env::var("GO_ON_LANG") {
-        return Language::from_code(&explicit);
-    }
+    // GO_ON_LANG is honored inside Language::detect_system (it checks the
+    // override before locale env vars), so delegate rather than re-implementing
+    // the env-var branch here.
     Language::detect_system()
-}
-
-fn resolve_languages_dir(config_path: &Path) -> PathBuf {
-    config_path
-        .parent()
-        .map(|parent| parent.join("languages"))
-        .unwrap_or_else(|| PathBuf::from("languages"))
 }
 
 fn tr(manager: Option<&I18nManager>, lang: Language, key: &str, fallback: &str) -> String {
@@ -295,13 +288,6 @@ pub struct ValidationResult {
 }
 
 impl ValidationResult {
-    /// Check if there are any critical errors
-    pub fn has_critical_errors(&self) -> bool {
-        self.errors
-            .iter()
-            .any(|e| e.severity == ErrorSeverity::Critical)
-    }
-
     /// Get only critical errors
     pub fn critical_errors(&self) -> Vec<&ValidationError> {
         self.errors
@@ -311,13 +297,13 @@ impl ValidationResult {
     }
 }
 
-/// Validation error severity
+/// Validation error severity. Only `Critical` is ever constructed today;
+/// `is_valid` is defined as "no critical errors", so non-critical issues are
+/// reported as warnings instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorSeverity {
     /// Critical error - configuration cannot be used
     Critical,
-    /// Warning - configuration has minor issues
-    Warning,
 }
 
 /// Configuration validation error
@@ -362,12 +348,6 @@ pub enum RecommendationCategory {
     Performance,
     /// Security improvement
     Security,
-    /// Reliability enhancement
-    Reliability,
-    /// Maintainability improvement
-    Maintainability,
-    /// Cost optimization
-    Cost,
 }
 
 /// Impact level
@@ -377,8 +357,6 @@ pub enum ImpactLevel {
     High,
     /// Medium impact
     Medium,
-    /// Low impact
-    Low,
 }
 
 /// Priority level
@@ -388,8 +366,6 @@ pub enum PriorityLevel {
     High,
     /// Medium priority
     Medium,
-    /// Low priority
-    Low,
 }
 
 /// Dependency analysis
@@ -418,7 +394,12 @@ pub struct ConfigValidator {
 impl ConfigValidator {
     /// Create a new configuration validator
     pub fn new(config_path: &Path, config: AppConfig) -> Self {
-        let i18n = I18nManager::new(resolve_languages_dir(config_path)).ok();
+        // Reuse the process-global I18N manager (initialized during bootstrap)
+        // instead of constructing a second one here: building a fresh
+        // I18nManager re-reads the language files from disk (and creates the
+        // languages dir) on every validation. When I18N is not yet initialized
+        // the report falls back to English keys, matching the pre-init path.
+        let i18n = crate::i18n::runtime::I18N.get().cloned();
         Self {
             config_path: config_path.to_path_buf(),
             config,
@@ -780,9 +761,6 @@ impl ConfigValidator {
                     ErrorSeverity::Critical => {
                         tr(i18n.as_ref(), lang, "severity.critical", "CRITICAL")
                     }
-                    ErrorSeverity::Warning => {
-                        tr(i18n.as_ref(), lang, "severity.warning", "WARNING")
-                    }
                 };
                 report.push_str(&format!(
                     "  [{}] {}: {}\n",
@@ -828,7 +806,6 @@ impl ConfigValidator {
                 let priority = match rec.priority {
                     PriorityLevel::High => tr(i18n.as_ref(), lang, "priority.high", "HIGH"),
                     PriorityLevel::Medium => tr(i18n.as_ref(), lang, "priority.medium", "MEDIUM"),
-                    PriorityLevel::Low => tr(i18n.as_ref(), lang, "priority.low", "LOW"),
                 };
                 let category = match rec.category {
                     RecommendationCategory::Performance => {
@@ -837,22 +814,12 @@ impl ConfigValidator {
                     RecommendationCategory::Security => {
                         tr(i18n.as_ref(), lang, "category.sec", "SEC")
                     }
-                    RecommendationCategory::Reliability => {
-                        tr(i18n.as_ref(), lang, "category.rel", "REL")
-                    }
-                    RecommendationCategory::Maintainability => {
-                        tr(i18n.as_ref(), lang, "category.maint", "MAINT")
-                    }
-                    RecommendationCategory::Cost => {
-                        tr(i18n.as_ref(), lang, "category.cost", "COST")
-                    }
                 };
                 let impact = match rec.impact {
                     ImpactLevel::High => tr(i18n.as_ref(), lang, "impact.high", "High impact"),
                     ImpactLevel::Medium => {
                         tr(i18n.as_ref(), lang, "impact.medium", "Medium impact")
                     }
-                    ImpactLevel::Low => tr(i18n.as_ref(), lang, "impact.low", "Low impact"),
                 };
                 report.push_str(&format!(
                     "  [{}][{}] {}: {}\n",

@@ -114,7 +114,9 @@ impl HarnessBus {
             resilience_engine: external_resilience_engine.unwrap_or_else(|| {
                 Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
             }),
-            fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
+            fault_tolerance: Arc::new(FaultToleranceEngine::new_with_restore(
+                FaultToleranceConfig::default(),
+            )),
             audit_log,
             consecutive_allows: AtomicU32::new(0),
         };
@@ -303,7 +305,8 @@ impl HarnessBus {
             }
         }
 
-        // Parallelize resilience recording and audit logging (they are independent).
+        // Parallelize resilience recording and audit logging — they are
+        // independent, so join them instead of running sequentially.
         let audit_entry = AuditLogEntry {
             timestamp: crate::governance::audit::chrono_now(),
             task_id: format!("{:?}", ctx.task_type),
@@ -324,13 +327,13 @@ impl HarnessBus {
             retention_policy: None,
             correlation_id: None,
         };
-        // Record resilience outcome and audit entry synchronously: both are
-        // cheap in-memory operations (the audit's disk I/O is offloaded to its
-        // dedicated writer thread), so no tokio::join is needed here.
-        self.resilience_engine
-            .record_execution("harness-main", success)
-            .await;
-        self.audit(audit_entry);
+        tokio::join!(
+            self.resilience_engine
+                .record_execution("harness-main", success),
+            async {
+                self.audit(audit_entry);
+            },
+        );
 
         verdict
     }
@@ -387,9 +390,12 @@ impl HarnessBus {
     }
 
     /// Post-execution output verification with audit recording.
-    pub fn verify_output(&self, output: &Value) -> OutputVerdict {
+    ///
+    /// `stage` is the current PUA execution stage (see
+    /// [`PolicyEvaluator::verify_output`]) and drives the PUA evidence chain.
+    pub fn verify_output(&self, output: &Value, stage: &str) -> OutputVerdict {
         let start = Instant::now();
-        let verdict = self.evaluator.verify_output(output);
+        let verdict = self.evaluator.verify_output(output, stage);
 
         // Feed real latency telemetry into the drift engine (Performance drift).
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;

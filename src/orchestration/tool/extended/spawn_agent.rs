@@ -130,9 +130,10 @@ impl Tool for SpawnAgentTool {
 
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
         // This tool is inherently async (agent chat is async). The sync `run()`
-        // uses Handle::try_current() to detect an existing runtime; if present,
-        // it uses handle.block_on directly (principle #23: no block_in_place
-        // needed for block_on). Otherwise it falls back to a dedicated blocking
+        // always executes on the dedicated blocking runtime (see
+        // `spawn_agent_runtime()`), mirroring `web_search.rs`/`lsp.rs`. It must
+        // NOT use `Handle::try_current() → handle.block_on`: that would block a
+        // tokio worker thread when `run()` is called from inside an existing
         // runtime. Async callers should always use run_async.
         // Validate parameters FIRST so bad-input tests get a proper error.
         let task = input.payload["task"]
@@ -162,30 +163,18 @@ impl Tool for SpawnAgentTool {
         let role = input.payload["role"].as_str().map(|s| s.to_string());
         let token_budget = input.payload["token_budget"].as_u64();
 
-        // Prefer Handle::try_current() to detect if we are already running
-        // inside a tokio runtime. If so, use handle.block_on directly
-        // (principle #23: no block_in_place needed for block_on).
-        // If no runtime is active, fall back to the dedicated blocking runtime.
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(execute_spawn(
-                registry,
-                task,
-                agent_name,
-                model_override,
-                timeout_secs,
-                role,
-                token_budget,
-            )),
-            Err(_) => spawn_agent_runtime().block_on(execute_spawn(
-                registry,
-                task,
-                agent_name,
-                model_override,
-                timeout_secs,
-                role,
-                token_budget,
-            )),
-        }
+        // Always use the dedicated blocking runtime. Never `Handle::try_current()`
+        // + `handle.block_on()` here — when `run()` is invoked from within an
+        // existing tokio runtime that would block a worker thread.
+        spawn_agent_runtime().block_on(execute_spawn(
+            registry,
+            task,
+            agent_name,
+            model_override,
+            timeout_secs,
+            role,
+            token_budget,
+        ))
     }
 
     fn run_async(

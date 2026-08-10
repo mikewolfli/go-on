@@ -34,17 +34,11 @@ pub struct ArtifactLedger {
 
 impl ArtifactLedger {
     pub fn new(config_path: Option<&Path>) -> Self {
-        // Resolve the ledger root relative to the config file's parent (or
-        // the CWD), joined under the canonical go-on data dir so the
-        // `GO_ON_DATA_DIR` override applies uniformly.
-        let data_dir = crate::shared::goon_paths::goon_data_dir();
-        let root = config_path
-            .and_then(|path| path.parent().map(|parent| parent.join(&data_dir)))
-            .unwrap_or_else(|| {
-                std::env::current_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join(&data_dir)
-            });
+        // Resolve the ledger root via the canonical goon_paths resolver so the
+        // `-c`/`GO_ON_DATA_DIR` semantics match every other subsystem (chat
+        // sessions, learning, metacognitive) instead of deriving a second,
+        // drifting data dir.
+        let root = crate::shared::goon_paths::resolve_goon_root(config_path);
         Self { root }
     }
 

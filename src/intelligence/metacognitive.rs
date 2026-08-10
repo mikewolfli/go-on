@@ -18,7 +18,6 @@
 //! In short: `consciousness` = *how aware* the system is numerically;
 //! `metacognitive` = *what it observes and does about it*.
 
-use crate::agent::Agent;
 use crate::i18n::{t, tf};
 
 use anyhow::Result;
@@ -223,23 +222,15 @@ struct Inner {
 
 /// Thread-safe controller that monitors execution quality and triggers
 /// corrective actions through a reflection/self-correction loop.
-///
-/// When an `llm_agent` is provided, reflect operations use LLM-based
-/// root cause analysis instead of keyword matching.
 #[derive(Clone)]
 pub struct MetacognitiveController {
     inner: Arc<Mutex<Inner>>,
-    llm_agent: Option<Arc<dyn Agent>>,
 }
 
 impl std::fmt::Debug for MetacognitiveController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MetacognitiveController")
             .field("inner", &self.inner)
-            .field(
-                "llm_agent",
-                &self.llm_agent.as_ref().map(|_| "Some(Arc<dyn Agent>)"),
-            )
             .finish()
     }
 }
@@ -260,13 +251,11 @@ pub fn global_metacognitive_controller() -> &'static MetacognitiveController {
 }
 
 /// Create a new `MetacognitiveController` that shares its inner state with
-/// the global singleton.  The returned instance owns a separate `llm_agent`
-/// field so callers can inject an LLM agent without affecting the global.
+/// the global singleton.
 pub fn shared_metacognitive_controller() -> MetacognitiveController {
     let global = global_metacognitive_controller();
     MetacognitiveController {
         inner: Arc::clone(&global.inner),
-        llm_agent: None,
     }
 }
 
@@ -283,18 +272,7 @@ impl MetacognitiveController {
                 max_reports: DEFAULT_MAX_REPORTS,
                 next_id: 1,
             })),
-            llm_agent: None,
         }
-    }
-
-    /// Returns a reference to the optional LLM agent.
-    pub fn llm_agent(&self) -> Option<&Arc<dyn Agent>> {
-        self.llm_agent.as_ref()
-    }
-
-    /// Set or replace the LLM agent used for AI-driven reflection.
-    pub fn set_llm_agent(&mut self, agent: Arc<dyn Agent>) {
-        self.llm_agent = Some(agent);
     }
 
     // ── Observation management ──────────────────────────────────────────
@@ -738,27 +716,6 @@ impl MetacognitiveController {
             self.fail_action(&action_id, &t("status.metacognitive.rl.failed_outcome"))?;
         }
         Ok(action_id)
-    }
-
-    /// Get action effectiveness ratio: completed / (completed + failed).
-    pub fn action_effectiveness_ratio(&self) -> f64 {
-        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
-        let completed = inner
-            .actions
-            .iter()
-            .filter(|a| a.status == CorrectiveStatus::Completed)
-            .count() as f64;
-        let failed = inner
-            .actions
-            .iter()
-            .filter(|a| a.status == CorrectiveStatus::Failed)
-            .count() as f64;
-        let total = completed + failed;
-        if total == 0.0 {
-            0.0
-        } else {
-            completed / total
-        }
     }
 
     // ── Profile ─────────────────────────────────────────────────────────
@@ -1293,11 +1250,9 @@ mod tests {
             "expected action_effectiveness_ratio 0.5, got {}",
             p.action_effectiveness_ratio
         );
-        // Also verify direct method matches profile
-        assert!(
-            (ctrl.action_effectiveness_ratio() - p.action_effectiveness_ratio).abs() < 0.001,
-            "direct action_effectiveness_ratio() should match profile"
-        );
+        // The standalone `action_effectiveness_ratio()` method was removed
+        // (it duplicated `profile()` and had zero production callers); the
+        // ratio is asserted above via the profile snapshot.
     }
 
     // ── 15. HashMap index stays in sync after eviction ──────────────────

@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::shared::execution_recorder::ExecutionRecorder;
 use tracing::debug;
 
 /// Process-global live-performance feed shared by the orchestrator and the
@@ -31,25 +30,17 @@ struct LivePerformanceInner {
 }
 
 /// EMA-smoothed live performance feed for model monitoring.
-///
-/// When an optional `self_model` recorder is provided, every recorded execution
-/// is also forwarded to the self-model for dynamic capability scoring.
 pub struct LivePerformanceFeed {
     /// Inner state protected by a single mutex.
     inner: Mutex<LivePerformanceInner>,
     /// Exponential smoothing factor α (higher = more weight on recent).
     pub ema_alpha: f64,
-    /// Optional execution recorder for dynamic capability scoring.
-    self_model: Option<Box<dyn ExecutionRecorder>>,
 }
 
 impl LivePerformanceFeed {
     /// Create a new feed with the given EMA smoothing factor.
     ///
     /// Typical values: 0.1 (slow-moving), 0.3 (moderate), 0.5 (responsive).
-    ///
-    /// When `self_model` is `Some(...)`, execution results are also forwarded
-    /// to the self-model for dynamic capability EMA scoring.
     pub fn new(ema_alpha: f64) -> Self {
         Self {
             inner: Mutex::new(LivePerformanceInner {
@@ -58,27 +49,10 @@ impl LivePerformanceFeed {
                 model_requests: HashMap::new(),
             }),
             ema_alpha,
-            self_model: None,
-        }
-    }
-
-    /// Create a new feed linked to an [`ExecutionRecorder`] for dynamic scoring.
-    pub fn new_with_self_model(ema_alpha: f64, self_model: Box<dyn ExecutionRecorder>) -> Self {
-        Self {
-            inner: Mutex::new(LivePerformanceInner {
-                model_latency: HashMap::new(),
-                model_success_rate: HashMap::new(),
-                model_requests: HashMap::new(),
-            }),
-            ema_alpha,
-            self_model: Some(self_model),
         }
     }
 
     /// Record a successful request for `model` with observed latency.
-    ///
-    /// If a `self_model` recorder is attached, the result is also forwarded for
-    /// dynamic capability scoring.
     pub fn record_success(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;
         let mut inner = crate::observability::lock_mutex(&self.inner);
@@ -100,15 +74,6 @@ impl LivePerformanceFeed {
         // Bump request count.
         *inner.model_requests.entry(model.to_string()).or_insert(0) += 1;
 
-        // Drop the inner lock before calling into self_model to avoid
-        // potential deadlock (different mutex order).
-        drop(inner);
-
-        // Forward to SelfModel for dynamic capability scoring.
-        if let Some(ref sm) = self.self_model {
-            sm.record_execution_result(model, true, latency_ms);
-        }
-
         debug!(
             model = %model,
             latency_ms,
@@ -117,9 +82,6 @@ impl LivePerformanceFeed {
     }
 
     /// Record a failed request for `model` with observed latency.
-    ///
-    /// If a `self_model` recorder is attached, the result is also forwarded for
-    /// dynamic capability scoring.
     pub fn record_failure(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;
         let mut inner = crate::observability::lock_mutex(&self.inner);
@@ -140,15 +102,6 @@ impl LivePerformanceFeed {
 
         // Bump request count.
         *inner.model_requests.entry(model.to_string()).or_insert(0) += 1;
-
-        // Drop the inner lock before calling into self_model to avoid
-        // potential deadlock (different mutex order).
-        drop(inner);
-
-        // Forward to SelfModel for dynamic capability scoring.
-        if let Some(ref sm) = self.self_model {
-            sm.record_execution_result(model, false, latency_ms);
-        }
 
         debug!(
             model = %model,

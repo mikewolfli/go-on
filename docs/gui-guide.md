@@ -26,6 +26,7 @@ go-on 的 GUI 主窗口由以下三部分组成：
 | Workflow  | 工作流       | 查看和管理 workflow 执行状态                         |
 | Prompts   | 提示词管理   | 浏览、搜索、管理提示词模板                           |
 | Autotune  | 自动调优     | 自动调优系统参数和模型配置                           |
+| Risk Decision | 风险决策 | 高维风险投票决策面板（默认开启，可在 Settings 关闭） |
 | Security  | 安全         | 安全管理、权限控制、审计日志                         |
 | Config    | 配置         | 查看和编辑配置文件                                   |
 | Providers | 提供商       | 管理 AI 模型提供商和 API 密钥                        |

@@ -228,14 +228,18 @@ impl TokenTracker {
 }
 
 /// Run an interactive terminal chat session with full agent capabilities.
-pub async fn run_terminal_chat(config: Arc<AppConfig>) -> Result<()> {
+pub async fn run_terminal_chat(
+    config: Arc<AppConfig>,
+    skill_registry: Option<Arc<RwLock<crate::orchestration::skill::SkillRegistry>>>,
+    config_path: &std::path::Path,
+) -> Result<()> {
     if config.agents().is_empty() {
         eprintln!("{}", tf("error.no_agents", &[]));
         return Ok(());
     }
 
     // ── Delegate to sub-functions for each phase ──
-    let session = setup_chat_environment(config).await?;
+    let session = setup_chat_environment(config, skill_registry, config_path).await?;
     let ChatEnvironment {
         registry,
         mut current_agent,
@@ -317,7 +321,11 @@ struct ChatEnvironment {
     session_path: std::path::PathBuf,
 }
 
-async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironment> {
+async fn setup_chat_environment(
+    config: Arc<AppConfig>,
+    skill_registry: Option<Arc<RwLock<crate::orchestration::skill::SkillRegistry>>>,
+    config_path: &std::path::Path,
+) -> Result<ChatEnvironment> {
     // ── Initialize runtime components ──
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
@@ -343,17 +351,26 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
     crate::orchestration::tool_extended::spawn_agent::init_spawn_agent_budget();
 
     // ── Initialize skill registry for terminal chat ──
-    {
-        let skill_registry = Arc::new(RwLock::new(
-            crate::orchestration::skill::SkillRegistry::default(),
-        ));
-        if let Ok(mut reg) = skill_registry.write() {
-            if let Err(e) = reg.discover_and_register_local_skills(None) {
-                tracing::warn!("Failed to discover local skills in terminal chat: {e}");
+    // The registry comes from bootstrap (main/mod.rs perform_bootstrap), which
+    // already discovered ~/.agents/skills/ and registered built-ins. Reusing it
+    // avoids a second full directory scan and a second global set_skill_registry
+    // (previously chat mode discovered and registered its own copy, so the two
+    // registries could diverge).
+    let skill_registry = match skill_registry {
+        Some(registry) => registry,
+        None => {
+            let registry = Arc::new(RwLock::new(
+                crate::orchestration::skill::SkillRegistry::default(),
+            ));
+            if let Ok(mut reg) = registry.write() {
+                if let Err(e) = reg.discover_and_register_local_skills(None) {
+                    tracing::warn!("Failed to discover local skills in terminal chat: {e}");
+                }
             }
+            registry
         }
-        crate::orchestration::tool::set_skill_registry(skill_registry);
-    }
+    };
+    crate::orchestration::tool::set_skill_registry(skill_registry);
 
     let mut agent_names: Vec<String> = config.agents().keys().cloned().collect();
     agent_names.sort();
@@ -397,7 +414,7 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
     });
 
     // ── Print banner ──
-    print_chat_banner(&current_agent_name);
+    print_chat_banner(&current_agent_name, current_mode.kind());
 
     // ── Build initial system message ──
     let mut messages = Vec::new();
@@ -461,7 +478,11 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
     };
 
     // ── Session persistence path ──
-    let session_path = crate::shared::goon_paths::goon_subdir(SESSION_FILE);
+    // Resolve via the canonical goon_paths resolver so the session file lands
+    // in the same data root as reinforcement/learning/metacognitive artifacts
+    // (config-dir/.goon when -c points elsewhere, CWD/.goon otherwise).
+    let session_path =
+        crate::shared::goon_paths::resolve_goon_root(Some(config_path)).join(SESSION_FILE);
     if let Some(parent) = session_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -479,13 +500,20 @@ async fn setup_chat_environment(config: Arc<AppConfig>) -> Result<ChatEnvironmen
 }
 
 /// Print the startup banner for the terminal chat session.
-fn print_chat_banner(current_agent_name: &str) {
+fn print_chat_banner(current_agent_name: &str, mode: ModeKind) {
+    let mode_name = match mode {
+        ModeKind::Ask => "ask",
+        ModeKind::Plan => "plan",
+        ModeKind::Edit => "edit",
+        ModeKind::FullAuto => "full_auto",
+        ModeKind::SafeGuard => "safeguard",
+    };
     let version = env!("CARGO_PKG_VERSION");
     eprintln!("╔════════════════════════════════════════════════════════════════╗");
     eprintln!("║            go-on terminal chat v{:<46} ║", version);
     eprintln!("╠════════════════════════════════════════════════════════════════╣");
     eprintln!("║  Agent: {:<60} ║", current_agent_name);
-    eprintln!("║  Mode:  {:<60} ║", "edit");
+    eprintln!("║  Mode:  {:<60} ║", mode_name);
     eprintln!("║  Commands: /help /quit /clear /save /load /cost /compact    ║");
     eprintln!("║   /diff /commit /plan /model /models /retry /context /tools /skills   ║");
     eprintln!("║   /mode /stats /find_path  ║");
@@ -2054,7 +2082,6 @@ async fn run_agent_streaming_phase(
 
     let mut renderer = StreamMarkdownRenderer::new();
     let mut in_reasoning = false;
-    let mut _thinking_buffer = String::new();
 
     // ── Progressive streaming display with interrupt support ──
     loop {
@@ -2088,7 +2115,6 @@ async fn run_agent_streaming_phase(
                         // __thinking__ prefixed tokens
                         if let Some(think) = token.strip_prefix(TOKEN_THINKING_PREFIX) {
                             eprint!("{}💭 {}{}", ansi!("90"), think, ansi!("0"));
-                            _thinking_buffer.push_str(think);
                             continue;
                         }
 
@@ -2101,7 +2127,6 @@ async fn run_agent_streaming_phase(
 
                         if in_reasoning {
                             eprint!("{}💭 {}{}", ansi!("90"), token, ansi!("0"));
-                            _thinking_buffer.push_str(&token);
                         } else {
                             renderer.feed(&token);
                             let (formatted, _) = renderer.flush();

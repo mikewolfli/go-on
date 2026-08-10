@@ -527,7 +527,7 @@ impl ChatView {
             .resizable(true)
             .min_size(140.0)
             .max_size(400.0)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 sidebar::show_sidebar(self, ui, i18n, backend, ctx);
             });
 

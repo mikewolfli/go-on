@@ -157,6 +157,15 @@ export interface AcpSessionNewResponse {
   configOptions?: SessionConfigOption[];
 }
 
+/** Response from loading an existing ACP session (session/load). */
+export interface SessionLoadResponse {
+  sessionId?: string;
+  modes?: SessionModeState;
+  configOptions?: SessionConfigOption[];
+  memoryContext?: string[];
+  memoryRestoredCount?: number;
+}
+
 /** Request to send a prompt in an ACP session. */
 export interface AcpSessionPromptRequest {
   sessionId: string;
@@ -176,6 +185,11 @@ export interface AcpSessionCloseRequest {
 export interface AcpSessionListResponse {
   /** The backend returns a minimal summary per session: `[{ "id": sid }]`. */
   sessions: AcpSessionInfo[];
+  /**
+   * Wire key is camelCase `nextCursor` (backend `ListSessionsResponse` uses
+   * `#[serde(rename_all = "camelCase")]`); currently always absent because
+   * the backend handler sends `next_cursor: None`.
+   */
   nextCursor?: string | null;
 }
 

@@ -725,3 +725,116 @@ def test_chat_request_max_tokens():
     msg = ChatMessage(role="user", content="Hello")
     request = ChatRequest(messages=[msg], max_tokens=2048)
     assert request.max_tokens == 2048
+
+
+# ── Observability: metrics.prometheus fetches GET /metrics ─────────────────
+
+
+def test_metrics_prometheus_fetches_text_endpoint():
+    """metrics_prometheus GETs /metrics and returns the Prometheus text body.
+
+    The backend serves /metrics as text/plain (the JSON-RPC metrics.prometheus
+    method returns a `__text_plain__` sentinel that is not JSON-parseable), so
+    the SDK must read the HTTP endpoint directly.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/metrics"
+        return httpx.Response(200, text="# HELP acp_test_total 1\nacp_test_total 1\n")
+
+    async def run():
+        client = GoOnClient(base_url="http://localhost:8090", max_retries=0)
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        text = await client.metrics_prometheus()
+        await client.aclose()
+        return text
+
+    result = _run(run())
+    assert result.startswith("# HELP acp_test_total")
+    assert "acp_test_total 1" in result
+
+
+# ── Streaming chat: model/temperature/max_tokens inside options ────────────
+
+
+def test_chat_stream_sends_model_temperature_max_tokens_in_options():
+    """chat_stream nests model/temperature/max_tokens under options.
+
+    The backend reads them from params.options.extra (GUI-aligned payload), so
+    the request body must not carry top-level model/temperature/max_tokens.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            text='data: {"token":"hi"}\n\ndata: [DONE]\n\n',
+            headers={"Content-Type": "text/event-stream"},
+        )
+
+    async def run():
+        client = GoOnClient(base_url="http://localhost:8090", max_retries=0)
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        request = ChatRequest(
+            messages=[ChatMessage(role="user", content="Hi")],
+            model="gpt-4",
+            temperature=0.7,
+            max_tokens=128,
+        )
+        chunks: list[dict[str, Any]] = []
+        async for chunk in client.chat_stream(request):
+            chunks.append(chunk)
+        await client.aclose()
+        return chunks
+
+    chunks = _run(run())
+    assert chunks == [{"token": "hi"}]
+    body = captured["body"]
+    assert body["options"]["model"] == "gpt-4"
+    assert body["options"]["temperature"] == 0.7
+    assert body["options"]["max_tokens"] == 128
+    assert "model" not in body
+    assert "temperature" not in body
+    assert "max_tokens" not in body
+
+
+# ── initialize: setup_level is optional / reserved ─────────────────────────
+
+
+def test_initialize_omits_setup_level_when_none():
+    """initialize sends empty params when setup_level is None."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {}})
+
+    async def run():
+        client = GoOnClient(base_url="http://localhost:8090", max_retries=0)
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        await client.initialize()
+        await client.aclose()
+
+    _run(run())
+    assert captured["body"]["method"] == "initialize"
+    assert "setup_level" not in captured["body"]["params"]
+
+
+def test_initialize_sends_setup_level_when_provided():
+    """initialize forwards setup_level when explicitly given."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {}})
+
+    async def run():
+        client = GoOnClient(base_url="http://localhost:8090", max_retries=0)
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        await client.initialize("full")
+        await client.aclose()
+
+    _run(run())
+    assert captured["body"]["params"]["setup_level"] == "full"

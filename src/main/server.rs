@@ -256,6 +256,7 @@ pub(crate) async fn handle_chat_mode(
     config: Arc<AppConfig>,
     _cli: &Cli,
     config_path: &Path,
+    skill_registry: Option<Arc<std::sync::RwLock<crate::orchestration::skill::SkillRegistry>>>,
 ) -> Result<()> {
     if config.agents().is_empty() {
         eprintln!("{}", t("error.no_providers_configured"));
@@ -268,7 +269,7 @@ pub(crate) async fn handle_chat_mode(
     // here because the terminal chat bypasses the ACP transport layer.
     debug!("chat mode: starting terminal chat");
 
-    crate::cli::chat::run_terminal_chat(config).await
+    crate::cli::chat::run_terminal_chat(config, skill_registry, config_path).await
 }
 
 /// Handle secret management commands, local model setup, recommended config, setup wizard, and AI onboarding.
@@ -370,10 +371,15 @@ pub(crate) async fn handle_validation_mode(
 
     // Perform enhanced configuration validation (reuses the already-loaded
     // config — avoids a second AppConfig::load from disk on every startup).
+    // This is the single report/analysis engine used by --validate-config.
     let validation_result =
         config_validation::validate_config_with(config_path, config.as_ref().clone())?;
 
-    // Also run legacy validation for compatibility
+    // Runtime readiness: hard structural gate (config.validate()) plus
+    // env-secret/strict-mode checks and the legacy health report. The two
+    // engines are complementary — ConfigValidator reports; this one enforces
+    // the hard gate (also used by the ACP config.reload endpoint) — and both
+    // now share the process-global I18N (no duplicate language-file reads).
     let health_report = validate_runtime_readiness(config_path, &config)?;
     emit_config_warnings(&health_report.warnings, cli.validate_config);
 
@@ -426,7 +432,7 @@ pub(crate) async fn handle_validation_mode(
     }
 
     // Check if configuration is valid before proceeding.
-    // Note: `is_valid` is `!has_critical_errors()` (see ValidationResult::validate),
+    // `is_valid` is defined as "no critical errors" (see ValidationResult::validate),
     // so an invalid result always carries critical errors — the former
     // `has_errors()` (non-critical) and "unknown reasons" branches were dead.
     if !validation_result.is_valid {

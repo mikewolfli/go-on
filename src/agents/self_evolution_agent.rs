@@ -397,7 +397,12 @@ impl SelfEvolutionAgent {
         // Build the system context from RULES
         let system_context = self.build_system_context(analysis, instruction);
 
-        // Use the model selector to pick the best model for code generation
+        // Use the model selector to pick the best model for code generation.
+        // The selection is advisory (observability only): synthesis is heuristic
+        // unless an LLM agent is injected. Production passes
+        // `available_models: Vec::new()`, so `select_model` is always None there;
+        // the former "model-aware synthesis" branch duplicated the fallback
+        // verbatim and has been removed.
         let selected_model = self.select_model("code_generation");
         info!(
             target = %analysis.target,
@@ -460,22 +465,10 @@ impl SelfEvolutionAgent {
                     }
                 }
             }
-        } else if let Some(ref model) = selected_model {
-            // Model-aware synthesis: use the selected model's characteristics
-            // to guide the patch generation strategy. When an LLM call is wired,
-            // this will pass { model, system_context } to agent.chat().
-            info!(
-                model = %model,
-                "selected model {} for code generation via model_selector",
-                model,
-            );
-            self.synthesize_patch_lines(&content, instruction)
         } else {
-            // No suitable model found — fall back to heuristic synthesis
-            warn!(
-                target = %analysis.target,
-                "no suitable model found via model_selector, using heuristic synthesis"
-            );
+            // No LLM agent injected — heuristic synthesis. `selected_model` is
+            // advisory only (logged above); it does not change the synthesis
+            // path (previously a verbatim duplicate branch claimed otherwise).
             self.synthesize_patch_lines(&content, instruction)
         };
 

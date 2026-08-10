@@ -452,46 +452,7 @@ impl BackendClient {
                 }
                 Vec::new()
             }
-            None => {
-                // Fallback to legacy health.probes format
-                match self.rpc_call_quick("health.probes", None).await {
-                    Some(val) => {
-                        let probes = val.get("probes");
-                        let deps = probes
-                            .and_then(|p| p.get("dependencies"))
-                            .and_then(|d| d.as_array());
-                        if let Some(deps) = deps {
-                            for dep in deps {
-                                if dep.get("name").and_then(|n| n.as_str())
-                                    == Some("provider_dependencies")
-                                {
-                                    if let Some(details) = dep.get("details") {
-                                        if let Some(api_map) = details
-                                            .get("provider_api_map")
-                                            .and_then(|m| m.as_array())
-                                        {
-                                            return api_map
-                                                .iter()
-                                                .filter_map(|p| {
-                                                    let name = p.get("provider")?.as_str()?;
-                                                    let status = p.get("status")?.as_str()?;
-                                                    Some(ProviderStatus {
-                                                        name: name.to_string(),
-                                                        ready: status == "set",
-                                                        model: String::new(),
-                                                    })
-                                                })
-                                                .collect();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Vec::new()
-                    }
-                    None => Vec::new(),
-                }
-            }
+            None => Vec::new(),
         }
     }
 }

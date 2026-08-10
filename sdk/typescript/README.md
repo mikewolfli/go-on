@@ -39,11 +39,12 @@ for await (const chunk of client.chatStream({ messages })) {
 | `health()`           | `GET /health`              | Quick health check               |
 | `runtimeHealth()`    | `runtime.health`           | Full runtime health              |
 | `runtimeStability()` | `runtime.stability`        | Runtime stability snapshot       |
-| `initialize()`       | `initialize`               | Initialize the runtime           |
+| `initialize()`       | `initialize`               | Initialize the runtime (`setupLevel` optional/reserved) |
 | `shutdown()`         | `shutdown`                 | Gracefully shut down             |
 | `governanceStatus()` | `governance.status`        | Governance status                |
 | `healthProbes()`     | `health.probes`            | Module-level health probes       |
 | `metricsGet()`       | `metrics.get`              | Runtime metrics                  |
+| `metricsPrometheus()`| `GET /metrics`            | Prometheus-formatted metrics (plain text) |
 | `breakerStatus()`    | `breaker.status`           | Circuit breaker status           |
 | `checkpointList()`   | `checkpoint.list`          | List checkpoints                 |
 | `workflowExecute()`  | `workflow.execute`         | Execute workflow                 |

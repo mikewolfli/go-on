@@ -11,13 +11,13 @@ license = "MIT"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "process", "fs", "net", "io-util", "time", "io-std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12.9", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 anyhow = "1"
 thiserror = "2"
 futures = "0.3"
 futures-util = "0.3"
-base64 = "0.22"
-keyring = { version = "3", features = ["apple-native", "sync-secret-service"] }
+base64 = "0.23"
+keyring = { version = "4", features = ["v1"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tokio-stream = "0.1"
@@ -247,7 +247,7 @@ regex = "1"
 indexmap = "2"
 serde.workspace = true
 serde_json.workspace = true
-reqwest = { workspace = true, features = ["http2", "blocking", "multipart"] }
+reqwest = { workspace = true, features = ["http2", "blocking", "multipart", "form", "query"] }
 anyhow.workspace = true
 thiserror.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
@@ -318,10 +318,12 @@ schemars.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
-# ── Note: Contract tests live in tests/contract_tests/ ──────────────────
+# ── Note: Integration tests live in tests/ (protocol parity/consistency,
+# ── transport parity, HTTP accept matrix, e2e, CLI, …); reusable harness
+# ── helpers are in tests/common/ and tests/structural/. ──────────────────
 serial_test = "4"
 temp-env = "0.3"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 rcgen = { version = "0.14", features = ["pem"] }
 
 # Benchmarks use the default test harness, but both criterion benchmarks

@@ -4,6 +4,7 @@
 //! They do not require a running backend — they only test that the
 //! SDK types and builders are wired correctly.
 
+use futures::StreamExt;
 use go_on_sdk::GoOnClientBuilder;
 
 #[test]
@@ -216,12 +217,20 @@ struct CapturedRequest {
 async fn spawn_capture_server(
     response_json: serde_json::Value,
 ) -> (String, tokio::sync::oneshot::Receiver<CapturedRequest>) {
+    spawn_capture_server_raw(response_json.to_string()).await
+}
+
+/// Like [`spawn_capture_server`], but answers with a raw HTTP body (any
+/// content type) — used for text/plain endpoints such as `GET /metrics` and
+/// the SSE `/chat/stream` responses.
+async fn spawn_capture_server_raw(
+    response_body: String,
+) -> (String, tokio::sync::oneshot::Receiver<CapturedRequest>) {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test listener");
     let addr = listener.local_addr().expect("listener local addr");
-    let response_body = response_json.to_string();
 
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept test connection");
@@ -246,7 +255,7 @@ async fn spawn_capture_server(
         let _ = tx.send(CapturedRequest { method, path, body });
 
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             response_body.len(),
             response_body
         );
@@ -353,4 +362,172 @@ async fn test_models_list_targets_v1_models() {
     let captured = rx.await.expect("server should capture one request");
     assert_eq!(captured.method, "GET");
     assert_eq!(captured.path, "/v1/models");
+}
+
+// ---------------------------------------------------------------------------
+// Observability: metrics.prometheus fetches GET /metrics as plain text
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_metrics_prometheus_fetches_text_endpoint() {
+    let prometheus_text = "# HELP acp_test_total 1\nacp_test_total 1\n".to_string();
+    let (base_url, rx) = spawn_capture_server_raw(prometheus_text.clone()).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .metrics_prometheus()
+        .await
+        .expect("metrics_prometheus should succeed");
+
+    assert_eq!(result, prometheus_text);
+    let captured = rx.await.expect("server should capture one request");
+    assert_eq!(captured.method, "GET");
+    assert_eq!(captured.path, "/metrics");
+}
+
+// ---------------------------------------------------------------------------
+// Streaming chat: model/temperature/max_tokens inside options
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_chat_stream_nests_model_in_options() {
+    let sse = "data: {\"token\":\"hi\"}\n\ndata: [DONE]\n\n".to_string();
+    let (base_url, rx) = spawn_capture_server_raw(sse).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let request = go_on_sdk::ChatRequest {
+        messages: vec![go_on_sdk::ChatMessage {
+            role: "user".to_string(),
+            content: "Hi".to_string(),
+        }],
+        model: Some("gpt-4".to_string()),
+        temperature: Some(0.7),
+        max_tokens: Some(128),
+        stream: Some(true),
+    };
+    let mut stream = Box::pin(
+        client
+            .chat_stream(request)
+            .await
+            .expect("chat_stream should start"),
+    );
+    let mut chunks: Vec<serde_json::Value> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        chunks.push(chunk.expect("chunk should parse"));
+    }
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0]["token"], "hi");
+
+    let captured = rx.await.expect("server should capture one request");
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.path, "/chat/stream");
+    let sent: serde_json::Value =
+        serde_json::from_str(&captured.body).expect("request body should be JSON");
+    assert_eq!(sent["options"]["model"], "gpt-4");
+    assert_eq!(sent["options"]["temperature"], 0.7);
+    assert_eq!(sent["options"]["max_tokens"], 128);
+    assert!(
+        sent.get("model").is_none(),
+        "top-level model must not be sent (backend reads options.model)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// initialize: setup_level is optional / reserved
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_initialize_omits_setup_level_when_none() {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "ok": true },
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .initialize(None)
+        .await
+        .expect("initialize should succeed");
+    assert_eq!(result["ok"], true);
+
+    let captured = rx.await.expect("server should capture one request");
+    let sent: serde_json::Value =
+        serde_json::from_str(&captured.body).expect("request body should be JSON");
+    assert_eq!(sent["method"], "initialize");
+    assert!(
+        sent["params"].get("setup_level").is_none(),
+        "setup_level must be omitted when None"
+    );
+}
+
+#[tokio::test]
+async fn test_initialize_sends_setup_level_when_provided() {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "ok": true },
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .initialize(Some("full"))
+        .await
+        .expect("initialize should succeed");
+    assert_eq!(result["ok"], true);
+
+    let captured = rx.await.expect("server should capture one request");
+    let sent: serde_json::Value =
+        serde_json::from_str(&captured.body).expect("request body should be JSON");
+    assert_eq!(sent["params"]["setup_level"], "full");
+}
+
+// ---------------------------------------------------------------------------
+// Defaults: governance.audit.recent / trace.get default to limit=20
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_governance_audit_recent_defaults_limit_to_20() {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "ok": true },
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .governance_audit_recent(None)
+        .await
+        .expect("governance_audit_recent should succeed");
+    assert_eq!(result["ok"], true);
+
+    let captured = rx.await.expect("server should capture one request");
+    let sent: serde_json::Value =
+        serde_json::from_str(&captured.body).expect("request body should be JSON");
+    assert_eq!(sent["params"]["limit"], 20);
+}
+
+#[tokio::test]
+async fn test_trace_get_defaults_limit_to_20() {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "ok": true },
+    });
+    let (base_url, rx) = spawn_capture_server(response).await;
+    let client = go_on_sdk::GoOnClient::new(base_url);
+
+    let result = client
+        .trace_get(None)
+        .await
+        .expect("trace_get should succeed");
+    assert_eq!(result["ok"], true);
+
+    let captured = rx.await.expect("server should capture one request");
+    let sent: serde_json::Value =
+        serde_json::from_str(&captured.body).expect("request body should be JSON");
+    assert_eq!(sent["params"]["limit"], 20);
 }

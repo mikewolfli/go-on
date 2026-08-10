@@ -18,7 +18,11 @@ impl OrchestrationCouncil {
     pub fn auto_eject_low_performers(&mut self) -> Vec<String> {
         let eject_threshold = self.config.ejection_threshold.unwrap_or(0.3);
         let eject_window = self.config.ejection_window.unwrap_or(20);
-        let _ = self.config.ejection_warmup_rounds.unwrap_or(10);
+        // New members are protected from ejection until they have participated
+        // in at least `ejection_warmup_rounds` voting rounds (recorded
+        // outcomes). Reputation records are seeded by `cast_vote`;
+        // `total_votes` only advances when outcomes are recorded.
+        let eject_warmup = self.config.ejection_warmup_rounds.unwrap_or(10);
         let mut ejected = Vec::new();
 
         let rep = self.reputation.lock().unwrap_or_else(|poisoned| {
@@ -27,7 +31,11 @@ impl OrchestrationCouncil {
         });
 
         for (member_id, record) in rep.iter() {
-            // Skip members in warmup period
+            // Skip members still in the ejection warmup period.
+            if (record.total_votes as usize) < eject_warmup {
+                continue;
+            }
+            // Skip members in reputation warmup.
             if record.warmup_remaining > 0 {
                 continue;
             }

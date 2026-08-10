@@ -198,7 +198,27 @@ impl GoOnClient {
             req = req.timeout(timeout);
         }
 
-        let response = req.json(&request).send().await.map_err(SdkError::Http)?;
+        // `model` / `temperature` / `max_tokens` are sent inside `options`
+        // (e.g. `options.model`), matching the GUI payload contract — the
+        // backend reads them from `params.options.extra`.
+        let mut body = serde_json::json!({
+            "messages": request.messages,
+            "options": serde_json::Value::Object(serde_json::Map::new()),
+        });
+        if let Some(stream) = request.stream {
+            body["stream"] = serde_json::json!(stream);
+        }
+        if let Some(model) = request.model {
+            body["options"]["model"] = serde_json::json!(model);
+        }
+        if let Some(temperature) = request.temperature {
+            body["options"]["temperature"] = serde_json::json!(temperature);
+        }
+        if let Some(max_tokens) = request.max_tokens {
+            body["options"]["max_tokens"] = serde_json::json!(max_tokens);
+        }
+
+        let response = req.json(&body).send().await.map_err(SdkError::Http)?;
 
         let (tx, rx) = mpsc::channel::<Result<Value, SdkError>>(256);
 
@@ -452,12 +472,16 @@ impl GoOnClient {
     }
 
     /// initialize — initialize the runtime.
-    pub async fn initialize(&self, setup_level: &str) -> Result<Value, SdkError> {
-        self.json_rpc(
-            "initialize",
-            serde_json::json!({ "setup_level": setup_level }),
-        )
-        .await
+    ///
+    /// `setup_level` is a reserved parameter: the server ignores it (it only
+    /// negotiates `protocolVersion`), so it may be omitted (`None`).
+    pub async fn initialize(&self, setup_level: Option<&str>) -> Result<Value, SdkError> {
+        let mut params = serde_json::Map::new();
+        if let Some(level) = setup_level {
+            params.insert("setup_level".to_string(), serde_json::json!(level));
+        }
+        self.json_rpc("initialize", serde_json::Value::Object(params))
+            .await
     }
 
     /// shutdown — gracefully shut down the runtime.
@@ -482,10 +506,11 @@ impl GoOnClient {
     }
 
     /// governance.audit.recent — view recent audit entries.
-    pub async fn governance_audit_recent(&self, limit: u32) -> Result<Value, SdkError> {
+    /// `limit` defaults to 20 when `None` (aligned with the Python/TS SDKs).
+    pub async fn governance_audit_recent(&self, limit: Option<u32>) -> Result<Value, SdkError> {
         self.json_rpc(
             "governance.audit.recent",
-            serde_json::json!({ "limit": limit }),
+            serde_json::json!({ "limit": limit.unwrap_or(20) }),
         )
         .await
     }
@@ -531,20 +556,35 @@ impl GoOnClient {
         self.extract(result)
     }
 
-    /// metrics.prometheus — get Prometheus-formatted metrics.
+    /// GET /metrics — fetch Prometheus-formatted metrics as plain text.
+    ///
+    /// The backend exposes the canonical Prometheus text format at the
+    /// `GET /metrics` HTTP route. The JSON-RPC `metrics.prometheus` method
+    /// is served as `text/plain` (via the `__text_plain__` sentinel) and is
+    /// not JSON-parseable, so the SDK reads the HTTP endpoint directly.
     pub async fn metrics_prometheus(&self) -> Result<String, SdkError> {
-        let result = self
-            .json_rpc("metrics.prometheus", serde_json::json!({}))
-            .await?;
-        result.as_str().map(|s| s.to_string()).ok_or_else(|| {
-            SdkError::UnexpectedShape("metrics.prometheus returned non-string value".to_string())
-        })
+        let mut req = self.http.get(format!("{}/metrics", self.base_url));
+
+        if let Some(timeout) = self.timeout {
+            req = req.timeout(timeout);
+        }
+
+        let resp = req.send().await.map_err(SdkError::Http)?;
+        resp.error_for_status()
+            .map_err(SdkError::Http)?
+            .text()
+            .await
+            .map_err(SdkError::Http)
     }
 
     /// trace.get — get trace entries.
-    pub async fn trace_get(&self, limit: u32) -> Result<Value, SdkError> {
-        self.json_rpc("trace.get", serde_json::json!({ "limit": limit }))
-            .await
+    /// `limit` defaults to 20 when `None` (aligned with the Python/TS SDKs).
+    pub async fn trace_get(&self, limit: Option<u32>) -> Result<Value, SdkError> {
+        self.json_rpc(
+            "trace.get",
+            serde_json::json!({ "limit": limit.unwrap_or(20) }),
+        )
+        .await
     }
 
     // ── Reliability ───────────────────────────────────────────────────

@@ -327,13 +327,17 @@ export function registerConfigRpcCommands(
         return;
       }
       try {
-        const healthResult = asRecord(
-          await deps.sendRequest("runtime.health"),
-        );
-        const metrics = asRecord(await deps.sendRequest("metrics.get"));
-        const trace = asRecord(await deps.sendRequest("trace.metrics"));
+        // The three RPCs are independent — fire them in parallel instead of
+        // awaiting serially (each request can take up to its own timeout).
+        const [healthResult, metricsResult, traceResult] = await Promise.all([
+          deps.sendRequest("runtime.health"),
+          deps.sendRequest("metrics.get"),
+          deps.sendRequest("trace.metrics"),
+        ]);
 
-        const lifecycle = asRecord(healthResult.lifecycle);
+        const metrics = asRecord(metricsResult);
+        const trace = asRecord(traceResult);
+        const lifecycle = asRecord(asRecord(healthResult).lifecycle);
         const timeouts = asRecord(trace.timeouts);
 
         const workspaceRoot =

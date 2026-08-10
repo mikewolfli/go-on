@@ -540,11 +540,16 @@ impl FaultToleranceEngine {
         }
     }
 
-    /// Create a new engine and immediately restore persisted state from disk/DB.
-    /// Falls back to an empty engine if no persisted state exists.
-    pub async fn new_with_restore(config: FaultToleranceConfig) -> Self {
+    /// Create a new engine and immediately restore persisted state from
+    /// disk/DB. Falls back to an empty engine if no persisted state exists.
+    ///
+    /// Synchronous: restore runs once at engine construction (startup), and
+    /// the underlying load is a small bounded read. The periodic write path
+    /// (`try_persist_state`) remains async and offloads I/O via
+    /// `spawn_blocking`.
+    pub fn new_with_restore(config: FaultToleranceConfig) -> Self {
         let engine = Self::new(config);
-        engine.restore_state().await;
+        engine.restore_state();
         engine
     }
 
@@ -553,11 +558,13 @@ impl FaultToleranceEngine {
     /// Uses the same storage path as `try_persist_state` so that state
     /// survives process restarts. Counter fields (fault_counter,
     /// group_counter, plan_counter) are derived from the loaded data.
-    pub async fn restore_state(&self) {
+    ///
+    /// Runs synchronously at startup; `try_write` succeeds because a
+    /// freshly-created engine has no concurrent lock holders.
+    pub fn restore_state(&self) {
         #[cfg(feature = "backend-sqlite")]
         {
-            let cache_path = std::path::PathBuf::from("target")
-                .join("go-on")
+            let cache_path = crate::shared::goon_paths::goon_subdir("fault_tolerance")
                 .join("fault_tolerance.db");
 
             if !cache_path.exists() {
@@ -568,41 +575,35 @@ impl FaultToleranceEngine {
                 return;
             }
 
-            let path = cache_path.clone();
-            match tokio::task::spawn_blocking(move || load_sqlite(&path)).await {
-                Ok(Some(snapshot)) => {
-                    let mut inner = self.inner.write().await;
-                    inner.faults = snapshot.faults;
-                    inner.recovery_plans = snapshot.recovery_plans;
-                    inner.isolation_groups = snapshot.isolation_groups;
-                    inner.heartbeats = snapshot.heartbeats;
-                    // Derive counters from loaded data
-                    inner.fault_counter = inner.faults.len() as u64;
-                    inner.group_counter = inner.isolation_groups.len() as u64;
-                    inner.plan_counter = inner.recovery_plans.len() as u64;
-                    tracing::info!(
-                        faults = inner.faults.len(),
-                        plans = inner.recovery_plans.len(),
-                        groups = inner.isolation_groups.len(),
-                        heartbeats = inner.heartbeats.len(),
-                        "FaultToleranceEngine: restored state from SQLite"
+            if let Some(snapshot) = load_sqlite(&cache_path) {
+                let Ok(mut inner) = self.inner.try_write() else {
+                    tracing::warn!(
+                        "FaultToleranceEngine: state lock busy at startup — skipping restore"
                     );
-                }
-                Ok(None) => {
-                    tracing::info!("FaultToleranceEngine: no data in SQLite DB — starting fresh");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "FaultToleranceEngine: failed to load state from SQLite: {}",
-                        e
-                    );
-                }
+                    return;
+                };
+                inner.faults = snapshot.faults;
+                inner.recovery_plans = snapshot.recovery_plans;
+                inner.isolation_groups = snapshot.isolation_groups;
+                inner.heartbeats = snapshot.heartbeats;
+                // Derive counters from loaded data
+                inner.fault_counter = inner.faults.len() as u64;
+                inner.group_counter = inner.isolation_groups.len() as u64;
+                inner.plan_counter = inner.recovery_plans.len() as u64;
+                tracing::info!(
+                    faults = inner.faults.len(),
+                    plans = inner.recovery_plans.len(),
+                    groups = inner.isolation_groups.len(),
+                    heartbeats = inner.heartbeats.len(),
+                    "FaultToleranceEngine: restored state from SQLite"
+                );
+            } else {
+                tracing::info!("FaultToleranceEngine: no data in SQLite DB — starting fresh");
             }
         }
         #[cfg(not(feature = "backend-sqlite"))]
         {
-            let cache_path = std::path::PathBuf::from("target")
-                .join("go-on")
+            let cache_path = crate::shared::goon_paths::goon_subdir("fault_tolerance")
                 .join("fault_tolerance.json");
 
             if !cache_path.exists() {
@@ -613,35 +614,30 @@ impl FaultToleranceEngine {
                 return;
             }
 
-            let path = cache_path.clone();
-            match tokio::task::spawn_blocking(move || load_json(&path)).await {
-                Ok(Some(snapshot)) => {
-                    let mut inner = self.inner.write().await;
-                    inner.faults = snapshot.faults;
-                    inner.recovery_plans = snapshot.recovery_plans;
-                    inner.isolation_groups = snapshot.isolation_groups;
-                    inner.heartbeats = snapshot.heartbeats;
-                    // Derive counters from loaded data
-                    inner.fault_counter = inner.faults.len() as u64;
-                    inner.group_counter = inner.isolation_groups.len() as u64;
-                    inner.plan_counter = inner.recovery_plans.len() as u64;
-                    tracing::info!(
-                        faults = inner.faults.len(),
-                        plans = inner.recovery_plans.len(),
-                        groups = inner.isolation_groups.len(),
-                        heartbeats = inner.heartbeats.len(),
-                        "FaultToleranceEngine: restored state from JSON"
+            if let Some(snapshot) = load_json(&cache_path) {
+                let Ok(mut inner) = self.inner.try_write() else {
+                    tracing::warn!(
+                        "FaultToleranceEngine: state lock busy at startup — skipping restore"
                     );
-                }
-                Ok(None) => {
-                    tracing::info!("FaultToleranceEngine: no data in JSON file — starting fresh");
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "FaultToleranceEngine: failed to load state from JSON: {}",
-                        e
-                    );
-                }
+                    return;
+                };
+                inner.faults = snapshot.faults;
+                inner.recovery_plans = snapshot.recovery_plans;
+                inner.isolation_groups = snapshot.isolation_groups;
+                inner.heartbeats = snapshot.heartbeats;
+                // Derive counters from loaded data
+                inner.fault_counter = inner.faults.len() as u64;
+                inner.group_counter = inner.isolation_groups.len() as u64;
+                inner.plan_counter = inner.recovery_plans.len() as u64;
+                tracing::info!(
+                    faults = inner.faults.len(),
+                    plans = inner.recovery_plans.len(),
+                    groups = inner.isolation_groups.len(),
+                    heartbeats = inner.heartbeats.len(),
+                    "FaultToleranceEngine: restored state from JSON"
+                );
+            } else {
+                tracing::info!("FaultToleranceEngine: no data in JSON file — starting fresh");
             }
         }
     }
@@ -787,8 +783,7 @@ impl FaultToleranceEngine {
 
         #[cfg(feature = "backend-sqlite")]
         {
-            let cache_path = std::path::PathBuf::from("target")
-                .join("go-on")
+            let cache_path = crate::shared::goon_paths::goon_subdir("fault_tolerance")
                 .join("fault_tolerance.db");
 
             // Clone data under the async lock, then release it before blocking I/O
@@ -810,8 +805,7 @@ impl FaultToleranceEngine {
         }
         #[cfg(not(feature = "backend-sqlite"))]
         {
-            let cache_path = std::path::PathBuf::from("target")
-                .join("go-on")
+            let cache_path = crate::shared::goon_paths::goon_subdir("fault_tolerance")
                 .join("fault_tolerance.json");
 
             // Clone data under the async lock, then release it before blocking I/O

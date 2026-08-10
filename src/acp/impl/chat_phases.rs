@@ -1389,9 +1389,14 @@ pub(crate) async fn act_phase(
         metacognitive_loop = ml;
         distillation = dst;
 
-        // HarnessBus post-execute
+        // HarnessBus post-execute — this runs in the PUA verification stage,
+        // so pass the real stage so the PUA evidence chain is evaluated
+        // against the actual stage requirements.
         if let Some(ref harness) = server.governance_deps.harness_bus {
-            let output_v = harness.verify_output(&json!({"agent": &selected_agent, "response": &response_text, "reasoning": &reasoning_text, "phase": &resolve_out.phase_name}));
+            let output_v = harness.verify_output(
+                &json!({"agent": &selected_agent, "response": &response_text, "reasoning": &reasoning_text, "phase": &resolve_out.phase_name}),
+                "verification",
+            );
             if !output_v.quality {
                 tracing::warn!(target: "harness_bus", risk_score = output_v.risk_score, "post-execute: verification flagged quality issue");
             }

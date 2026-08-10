@@ -458,9 +458,8 @@ impl CapabilityBus {
             max_event_history: 100,
             consciousness: ConsciousnessMetrics::new(Default::default()),
             // BLUE56-GAP-B02: Uses the global-shared singleton so inner state
-                        // (observations, actions, reports) is shared across the system.
-                        // `with_metacognitive_llm()` builder method sets the per-instance llm_agent.
-                        metacognitive: crate::intelligence::metacognitive::shared_metacognitive_controller(),
+            // (observations, actions, reports) is shared across the system.
+            metacognitive: crate::intelligence::metacognitive::shared_metacognitive_controller(),
             world_model: WorldModel::new(Default::default()),
             self_model: SelfModelCore::new(Default::default()),
             discovery: DiscoveryCenter::new(),
@@ -525,15 +524,6 @@ impl CapabilityBus {
     // adaptive selector (the former P2-1 token-cache routing fast path was
     // removed in round 32: it shared the LLM response cache and its no-TTL
     // task→agent entries would freeze agent routing).
-
-    /// Inject an LLM agent into the MetacognitiveController (BLUE56-GAP-B02).
-    ///
-    /// When an LLM agent is provided, reflection reports use LLM-based
-    /// root cause analysis instead of template-based fallback.
-    pub fn with_metacognitive_llm(mut self, agent: Arc<dyn crate::agent::Agent>) -> Self {
-        self.metacognitive.set_llm_agent(agent);
-        self
-    }
 
     /// Attach a pre-populated capability graph (shared with AgentRegistry)
     /// so the capability bus sees all registered agents for candidate selection.

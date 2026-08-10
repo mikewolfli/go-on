@@ -414,20 +414,27 @@ class GoOnClient:
         Each yielded value is a parsed JSON object from a ``data:`` line
         in the SSE stream.
 
+        ``model`` / ``temperature`` / ``max_tokens`` are sent inside
+        ``options`` (e.g. ``options.model``), matching the GUI payload
+        contract — the backend reads them from ``params.options.extra``.
+
         Yields
         ------
         dict
             A JSON chunk from the stream.
         """
+        options: dict[str, Any] = {}
+        if request.model is not None:
+            options["model"] = request.model
+        if request.temperature is not None:
+            options["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            options["max_tokens"] = request.max_tokens
+
         request_dict: dict[str, Any] = {
             "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+            "options": options,
         }
-        if request.model is not None:
-            request_dict["model"] = request.model
-        if request.temperature is not None:
-            request_dict["temperature"] = request.temperature
-        if request.max_tokens is not None:
-            request_dict["max_tokens"] = request.max_tokens
         if request.stream is not None:
             request_dict["stream"] = request.stream
 
@@ -484,9 +491,18 @@ class GoOnClient:
         """runtime.stability — runtime stability snapshot."""
         return await self._json_rpc("runtime.stability")
 
-    async def initialize(self, setup_level: str = "standard") -> dict[str, Any]:
-        """initialize — initialize the runtime."""
-        return await self._json_rpc("initialize", {"setup_level": setup_level})
+    async def initialize(self, setup_level: str | None = None) -> dict[str, Any]:
+        """initialize — initialize the runtime.
+
+        ``setup_level`` is a reserved parameter: the server ignores it (it
+        only negotiates ``protocolVersion``), so it may be omitted. It is
+        kept optional for forward compatibility with the CLI ``--setup-level``
+        flag.
+        """
+        params: dict[str, Any] = {}
+        if setup_level is not None:
+            params["setup_level"] = setup_level
+        return await self._json_rpc("initialize", params)
 
     async def shutdown(self) -> dict[str, Any]:
         """shutdown — gracefully shut down the runtime."""
@@ -544,9 +560,17 @@ class GoOnClient:
         return MetricsResponse(metrics=cast(dict[str, Any], result.get("metrics", {})))
 
     async def metrics_prometheus(self) -> str:
-        """metrics.prometheus — get Prometheus-formatted metrics."""
-        result = await self._json_rpc("metrics.prometheus")
-        return str(result) if result else ""
+        """GET /metrics — fetch Prometheus-formatted metrics as plain text.
+
+        The backend exposes the canonical Prometheus text format at the
+        ``GET /metrics`` HTTP route. The JSON-RPC ``metrics.prometheus``
+        method is served as ``text/plain`` (``__text_plain__`` sentinel) and
+        is therefore not JSON-parseable, so the SDK reads the HTTP endpoint
+        directly instead.
+        """
+        resp = await self._client.get(f"{self.base_url}/metrics")
+        _ = resp.raise_for_status()
+        return resp.text
 
     async def trace_get(self, limit: int = 20) -> dict[str, Any]:
         """trace.get — get trace entries."""
@@ -731,7 +755,10 @@ class GoOnClient:
 
         Returns the full envelope ``{"sessions": [...], "nextCursor": ..., "_meta": ...}``
         for consistency with the Rust and TypeScript SDKs (which also return
-        the envelope, not a bare list).
+        the envelope, not a bare list). The cursor key is ``nextCursor``
+        (camelCase): the backend `ListSessionsResponse` is annotated with
+        ``#[serde(rename_all = "camelCase")]`` and currently always sends
+        ``next_cursor: None``.
         """
         result = await self._json_rpc("session/list")
         return result

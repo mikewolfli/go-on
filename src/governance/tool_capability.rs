@@ -1,6 +1,6 @@
 //! Centralized tool-name-to-capability registry.
 //!
-//! Unifies 4 previously independent tool-classification mappings into a single
+//! Unifies the previously independent tool-classification mappings into a single
 //! source of truth so that new tools only need to be added once.
 //!
 //! # Design
@@ -12,11 +12,12 @@
 //! * `action`    — governance action        (Read / Write / Shell / Search / Network)
 //! * `risk_class` — default-policy risk class (ReadOnly / LowRiskWrite / HighRiskExecute / Admin)
 //!
-//! All methods use **explicit match arms** for tools that have been registered in
-//! any of the four original mappings, plus a **keyword-based fallback** as a
-//! safety net for tools that follow standard naming conventions but have not yet
-//! been added to the explicit list.  Tools that match no keyword and no explicit
-//! arm receive a safe default (Read / Read / LowRiskWrite respectively).
+//! All three methods look up the **same** [`TOOL_CLASSIFICATIONS`] table, so a
+//! tool's classification can never disagree between consumers, plus a
+//! **keyword-based fallback** as a safety net for tools that follow standard
+//! naming conventions but have not yet been added to the table. Tools that
+//! match no keyword and no table entry receive a safe default
+//! (Read / Read / LowRiskWrite respectively).
 
 use crate::governance::hardening::GovernanceAction;
 use serde::{Deserialize, Serialize};
@@ -47,351 +48,1056 @@ pub struct ToolCapabilityRegistry;
 
 impl ToolCapabilityRegistry {
     // ── Sandbox operation ──────────────────────────────────────────────────
-    //
-    // Derived from evaluator.rs sandbox match and status.rs tool_category().
 
     /// Return the sandbox operation for a tool name.
+    ///
+    /// Looks up the single [`TOOL_CLASSIFICATIONS`] table; tools not listed
+    /// there fall back to keyword classification.
     pub fn operation(tool: &str) -> ToolOperation {
-        match tool {
-            // ── Read / Query tools ──────────────────────────────────
-            "read_file"
-            | "read_file_lines"
-            | "read"
-            | "search_files"
-            | "inspect_git_diff"
-            | "list_directory"
-            | "list_files"
-            | "ls"
-            | "date_time"
-            | "skill_list"
-            | "skill-finder"
-            | "skill_reload"
-            | "chat.execute"
-            | "acp_trace_get"
-            | "acp_debug_panel_get"
-            | "goon_workflow_run_list"
-            | "goon_workflow_run_get"
-            | "goon_metrics_window_query"
-            | "goon_metrics_errors_summary"
-            | "goon_provider_capabilities"
-            | "prompts_list"
-            | "prompts_get"
-            | "workflow_execute"
-            | "workflow_ask"
-            | "workflow_generate"
-            | "import_skill"
-            | "archive_inspect"
-            | "jsonl_read"
-            | "environment_info"
-            | "echo_skill"
-            | "builtin.echo"
-            | "goon_skill_version_list"
-            // ── Document readers ──────────────────────────────
-            | "read_pdf"
-            | "read_docx"
-            | "read_excel"
-            | "read_ppt"
-            | "email_parse"
-            | "invoice_parse"
-            | "web_scrape"
-            // ── CAD / 3D readers ──────────────────────────────
-            | "dxf_read"
-            | "cad_convert"
-            | "step_read"
-            | "obj_read"
-            | "obj_model_read"
-            | "stl_read"
-            | "gltf_read"
-            | "iges_read"
-            | "ply_read"
-            | "geo_util"
-            | "gcode_read"
-            | "gpx_read"
-            | "svg_read"
-            // ── Image readers ────────────────────────────────
-            | "image_analyze"
-            // ── Data readers ──────────────────────────────────
-            | "csv_read"
-            | "csv_analyze"
-            | "toml_read"
-            | "yaml_read"
-            | "rss_read"
-            // ── Database ───────────────────────────────────────
-            | "sqlite_query"
-            // ── Game readers ───────────────────────────────────
-            | "game_server_query"
-            | "game_price_tracker"
-            | "game_matchmaking"
-            | "game_achievements"
-            | "game_mod_list"
-            | "game_coaching_assistant"
-            // ── Compilation / diagnostics ─────────────────────
-            | "cargo_check"
-            | "diagnostics"
-            // ── Code analysis ──────────────────────────────────
-            | "code_metrics"
-            | "encode_decode"
-            | "file_diff"
-            | "file_watch"
-            | "hash_file"
-            | "lint_run"
-            | "random_token"
-            | "search_packages"
-            | "security_scan"
-            | "template_render"
-            | "uuid_gen"
-            | "docker_logs" => ToolOperation::Read,
-
-            // ── Search / Discovery tools ──────────────────────────
-            | "grep" | "find_path" | "semantic_search" | "code_index_search" | "find_files"
-            | "search" | "find" => ToolOperation::Search,
-
-            // ── Network / Outbound tools ─────────────────────────
-            "http_request"
-            | "dns_lookup"
-            | "ping"
-            | "port_scan"
-            | "git"
-            | "github_search_skills"
-            | "game_monitor"
-            | "game_online_status"
-            | "goon_provider_test_connection"
-            | "goon_provider_test_completion" => ToolOperation::Network,
-
-            // ── Shell / Execution tools ──────────────────────────
-            "run_tests"
-            | "execute_command"
-            | "terminal"
-            | "bash"
-            | "cargo_test"
-            | "shell_exec"
-            | "run"
-            | "build_run"
-            | "docker_build"
-            | "docker_compose"
-            | "docker_exec"
-            | "docker_push"
-            | "spawn_agent"
-            | "game_launch"
-            | "game_keyboard_input"
-            | "game_mouse_input"
-            | "game_auto_grind"
-            | "skill_execute" => ToolOperation::Shell,
-
-            // ── Write / Admin tools ───────────────────────────────
-            "write_file"
-            | "write"
-            | "create"
-            | "apply_patch"
-            | "apply_code_action"
-            | "create_directory"
-            | "dependency_add"
-            | "delete_path"
-            | "move_path"
-            | "copy_path"
-            | "file_move"
-            | "file_delete"
-            | "edit_file"
-            | "format_code"
-            | "compress"
-            | "decompress"
-            | "archive_extract"
-            | "jsonl_write"
-            | "csv_write"
-            | "csv_transform"
-            | "toml_write"
-            | "yaml_write"
-            | "write_docx"
-            | "write_excel"
-            | "write_ppt"
-            | "svg_generate"
-            | "svg_export"
-            | "stl_generate"
-            | "qrcode_generate"
-            | "image_generate"
-            | "image_resize"
-            | "image_convert"
-            | "skill_create"
-            | "skill-creator"
-            | "goon_skill_update"
-            | "goon_skill_version_rollback"
-            | "goon_workflow_run_cancel"
-            | "goon_workflow_run_pause"
-            | "goon_workflow_run_resume"
-            | "game_screen_capture"
-            | "game_replay_recorder"
-            | "game_save_manager"
-            | "game_mod_install"
-            | "game_state_modify"
-            | "pdf_merge"
-            | "pdf_split" => ToolOperation::Write,
-
-            // ── Keyword-based fallback ─────────────────────────
-            _ => classify_operation_by_keyword(tool),
-        }
+        lookup_tool(tool)
+            .map(|c| c.1)
+            .unwrap_or_else(|| classify_operation_by_keyword(tool))
     }
 
     // ── Governance action (for permission checks) ──────────────────────────
-    //
-    // Derived from evaluator.rs check_permission() + tools_pack.rs
-    // governance_action_for_tool().
 
     /// Return the governance action for a tool name.
     ///
     /// This is the canonical tool→action mapping, consolidating what was
     /// previously duplicated in `pipeline_tool_to_action`. All sandbox
-    /// governance paths should use this single source of truth.
+    /// governance paths should use this single source of truth. Looks up the
+    /// single [`TOOL_CLASSIFICATIONS`] table; tools not listed there fall back
+    /// to keyword classification.
     pub fn action(tool: &str) -> GovernanceAction {
-        match tool {
-            // ── Read operations (read-only file/content access) ──
-            "read_file" | "inspect_git_diff" | "list_directory" | "date_time"
-            | "skill_list" | "archive_inspect" | "jsonl_read" | "diagnostics" | "environment_info"
-            | "echo_skill" | "builtin.echo" | "goon_skill_version_list"
-            | "skill-finder" | "chat.execute"
-            | "acp_trace_get" | "acp_debug_panel_get"
-            | "goon_workflow_run_list" | "goon_workflow_run_get"
-            | "goon_metrics_window_query" | "goon_metrics_errors_summary"
-            | "goon_provider_capabilities" | "prompts_list" | "prompts_get"
-            | "workflow_execute" | "workflow_ask" | "workflow_generate"
-            | "import_skill" | "skill_reload"
-            // ── CAD read tools (read-only 3d/2d format parsing) ──
-            | "dxf_read" | "stl_read" | "obj_read" | "step_read" | "ply_read" | "iges_read"
-            | "gltf_read" | "svg_read" | "obj_model_read" | "gcode_read" | "gpx_read" | "geo_util"
-            // ── Image read/analyze tools ──
-            | "image_analyze"
-            // ── Compilation / code analysis (read-only diagnostics) ──
-            | "cargo_check" | "lint_run" | "code_metrics" | "hash_file" | "encode_decode"
-            | "template_render" | "uuid_gen" | "random_token"
-            // ── Document read tools ──
-            | "read_docx" | "read_excel" | "read_pdf" | "read_ppt"
-            | "email_parse" | "csv_read" | "csv_analyze" | "toml_read" | "yaml_read"
-            | "web_scrape" | "invoice_parse" | "rss_read" | "sqlite_query" => GovernanceAction::Read,
-
-            // ── Search operations ──
-            "grep" | "search_files" | "find_path" | "find_files" | "code_index_search" | "semantic_search"
-            | "search" | "find" => GovernanceAction::Search,
-
-            // ── Write operations (file creation/modification) ──
-            "write_file"
-            | "apply_patch"
-            | "create_directory"
-            | "delete_path"
-            | "move_path"
-            | "copy_path"
-            | "file_move"
-            | "file_delete"
-            | "compress"
-            | "decompress"
-            | "archive_extract"
-            | "jsonl_write"
-            | "csv_write"
-            | "csv_transform"
-            | "toml_write"
-            | "yaml_write"
-            | "game_mod_install"
-            | "game_replay_recorder"
-            | "game_save_manager"
-            | "game_screen_capture"
-            | "goon_skill_update"
-            | "goon_skill_version_rollback"
-            | "goon_workflow_run_cancel"
-            | "goon_workflow_run_pause"
-            | "goon_workflow_run_resume"
-            | "image_generate"
-            | "image_resize"
-            | "image_convert"
-            | "skill-creator" | "skill_create"
-            | "stl_generate"
-            | "svg_export"
-            | "svg_generate"
-            | "qrcode_generate"
-            | "write_docx"
-            | "write_excel"
-            | "write_ppt"
-            | "pdf_merge" | "pdf_split"
-            | "cad_convert"
-            | "game_auto_grind"
-            | "game_keyboard_input"
-            | "game_mouse_input"
-            | "game_state_modify" => GovernanceAction::Write,
-
-            // ── Shell operations (command/code execution) ──
-            "run_tests"
-            | "execute_command"
-            | "terminal"
-            | "bash"
-            | "cargo_test"
-            | "shell_exec"
-            | "game_launch"
-            | "skill_execute"
-            | "spawn_agent" => GovernanceAction::Shell,
-
-            // ── Network operations (outbound) ──
-            "http_request"
-            | "web_search"
-            | "dns_lookup"
-            | "ping"
-            | "port_scan"
-            | "git"
-            | "github_search_skills"
-            | "game_monitor"
-            | "game_online_status"
-            | "goon_provider_test_completion"
-            | "goon_provider_test_connection" => GovernanceAction::Network,
-
-            // ── Keyword-based fallback ─────────────────────────
-            _ => classify_action_by_keyword(tool),
-        }
+        lookup_tool(tool)
+            .map(|c| c.2)
+            .unwrap_or_else(|| classify_action_by_keyword(tool))
     }
 
     // ── Risk class (for default governance policy) ─────────────────────────
-    //
-    // Derived from tool_governance_defaults.rs classify_tool_risk().
 
     /// Return the risk class for a tool name.
+    ///
+    /// The `goon_skill_*` prefix is the highest-priority admin signal (it
+    /// applies even to tools like `goon_skill_version_list` that the table
+    /// classifies as read-only). Looks up the single [`TOOL_CLASSIFICATIONS`]
+    /// table; tools without an explicit risk entry (or not listed at all)
+    /// fall back to keyword classification.
     pub fn risk_class(tool: &str) -> ToolRiskClass {
         // Admin prefix check (highest priority)
         if tool.starts_with("goon_skill_") {
             return ToolRiskClass::Admin;
         }
 
-        match tool {
-            // Admin tools (workflow control)
-            "goon_workflow_run_cancel" | "goon_workflow_run_pause" | "goon_workflow_run_resume" => {
-                ToolRiskClass::Admin
-            }
-
-            // Read-only tools (explicit from tool_governance_defaults.rs)
-            "search_files"
-            | "read_file"
-            | "inspect_git_diff"
-            | "skill-finder"
-            | "prompts_list"
-            | "prompts_get"
-            | "acp_trace_get"
-            | "acp_debug_panel_get"
-            | "goon_workflow_run_list"
-            | "goon_workflow_run_get"
-            | "goon_metrics_window_query"
-            | "goon_metrics_errors_summary"
-            | "goon_provider_capabilities"
-            | "goon_skill_version_list" => ToolRiskClass::ReadOnly,
-
-            // Low-risk write tools (explicit from tool_governance_defaults.rs)
-            "write_file" | "apply_patch" => ToolRiskClass::LowRiskWrite,
-
-            // High-risk execution tools (explicit from tool_governance_defaults.rs)
-            "run_tests"
-            | "bash"
-            | "execute_command"
-            | "shell_exec"
-            | "goon_provider_test_connection"
-            | "goon_provider_test_completion" => ToolRiskClass::HighRiskExecute,
-
-            // ── Keyword-based fallback (matches tool_governance_defaults.rs) ──
-            _ => classify_risk_by_keyword(tool),
-        }
+        lookup_tool(tool)
+            .and_then(|c| c.3)
+            .unwrap_or_else(|| classify_risk_by_keyword(tool))
     }
+}
+
+/// Single row of the unified tool-classification table.
+///
+/// `(name, operation, action, risk)` — `risk: None` means the tool has no
+/// explicit risk class and falls back to keyword classification.
+type ToolClassification = (
+    &'static str,
+    ToolOperation,
+    GovernanceAction,
+    Option<ToolRiskClass>,
+);
+
+/// Single source of truth for tool classification: name → sandbox operation,
+/// governance action and default risk class.
+///
+/// The three public methods (`operation` / `action` / `risk_class`) all look
+/// up this one table, so a tool's classification can never disagree between
+/// consumers. Previously the three explicit match arms drifted from each
+/// other — e.g. `game_auto_grind` was Shell in `operation` but Write in
+/// `action`, `cad_convert` was Read in `operation` but Write in `action`,
+/// and the `docker_*` tools were only listed in one of the three arms. The
+/// conflicting entries below were unified to the more accurate value:
+///
+/// - game input tools (`game_auto_grind`, `game_keyboard_input`,
+///   `game_mouse_input`) execute in-game actions → Shell for both op and action
+/// - `cad_convert` produces output files → Write for both op and action
+/// - `search_files` / `search_packages` / `web_search` are search/network ops
+/// - `run` / `build_run` / `docker_logs` / `format_code` / `dependency_add`
+///   now get an explicit action matching their operation instead of the
+///   generic keyword default
+const TOOL_CLASSIFICATIONS: &[ToolClassification] = &[
+    // ── Read / query tools ────────────────────────────────────────────
+    (
+        "read_file",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "read_file_lines",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    ("read", ToolOperation::Read, GovernanceAction::Read, None),
+    (
+        "list_directory",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "list_files",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    ("ls", ToolOperation::Read, GovernanceAction::Read, None),
+    (
+        "date_time",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "skill_list",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "skill-finder",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "skill_reload",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "chat.execute",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "acp_trace_get",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "acp_debug_panel_get",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "goon_workflow_run_list",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "goon_workflow_run_get",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "goon_metrics_window_query",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "goon_metrics_errors_summary",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "goon_provider_capabilities",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "prompts_list",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "prompts_get",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "workflow_execute",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "workflow_ask",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "workflow_generate",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "import_skill",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "archive_inspect",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "jsonl_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "environment_info",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "echo_skill",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "builtin.echo",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // Risk resolved to Admin by the `goon_skill_*` prefix rule, not here.
+    (
+        "goon_skill_version_list",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // ── Document readers ──────────────────────────────────────────────
+    (
+        "read_pdf",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "read_docx",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "read_excel",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "read_ppt",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "email_parse",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "invoice_parse",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "web_scrape",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // ── CAD / 3D readers ──────────────────────────────────────────────
+    (
+        "dxf_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "step_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "obj_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "obj_model_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "stl_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "gltf_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "iges_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "ply_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "geo_util",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "gcode_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "gpx_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "svg_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // ── Image / data readers ──────────────────────────────────────────
+    (
+        "image_analyze",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "csv_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "csv_analyze",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "toml_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "yaml_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "rss_read",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "sqlite_query",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // ── Game readers ──────────────────────────────────────────────────
+    (
+        "game_server_query",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "game_price_tracker",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "game_matchmaking",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "game_achievements",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "game_mod_list",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "game_coaching_assistant",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // ── Compilation / diagnostics ─────────────────────────────────────
+    (
+        "cargo_check",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "diagnostics",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // ── Code analysis ─────────────────────────────────────────────────
+    (
+        "code_metrics",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "encode_decode",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "file_diff",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "file_watch",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "hash_file",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "lint_run",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "random_token",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "security_scan",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "template_render",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "uuid_gen",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    (
+        "inspect_git_diff",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "docker_logs",
+        ToolOperation::Read,
+        GovernanceAction::Read,
+        None,
+    ),
+    // ── Search / discovery tools ──────────────────────────────────────
+    (
+        "grep",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    (
+        "find_path",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    (
+        "semantic_search",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    (
+        "code_index_search",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    (
+        "find_files",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    (
+        "search",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    (
+        "find",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    (
+        "search_files",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        Some(ToolRiskClass::ReadOnly),
+    ),
+    (
+        "search_packages",
+        ToolOperation::Search,
+        GovernanceAction::Search,
+        None,
+    ),
+    // ── Network / outbound tools ──────────────────────────────────────
+    (
+        "http_request",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "web_search",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "dns_lookup",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "ping",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "port_scan",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "git",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "github_search_skills",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "game_monitor",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "game_online_status",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        None,
+    ),
+    (
+        "goon_provider_test_connection",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        Some(ToolRiskClass::HighRiskExecute),
+    ),
+    (
+        "goon_provider_test_completion",
+        ToolOperation::Network,
+        GovernanceAction::Network,
+        Some(ToolRiskClass::HighRiskExecute),
+    ),
+    // ── Shell / execution tools ───────────────────────────────────────
+    (
+        "run_tests",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        Some(ToolRiskClass::HighRiskExecute),
+    ),
+    (
+        "execute_command",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        Some(ToolRiskClass::HighRiskExecute),
+    ),
+    (
+        "terminal",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "bash",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        Some(ToolRiskClass::HighRiskExecute),
+    ),
+    (
+        "cargo_test",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "shell_exec",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        Some(ToolRiskClass::HighRiskExecute),
+    ),
+    ("run", ToolOperation::Shell, GovernanceAction::Shell, None),
+    (
+        "build_run",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "docker_build",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "docker_compose",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "docker_exec",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "docker_push",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "spawn_agent",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "game_launch",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "game_keyboard_input",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "game_mouse_input",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "game_auto_grind",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    (
+        "skill_execute",
+        ToolOperation::Shell,
+        GovernanceAction::Shell,
+        None,
+    ),
+    // ── Write / admin tools ───────────────────────────────────────────
+    (
+        "write_file",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        Some(ToolRiskClass::LowRiskWrite),
+    ),
+    ("write", ToolOperation::Write, GovernanceAction::Write, None),
+    (
+        "create",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "apply_patch",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        Some(ToolRiskClass::LowRiskWrite),
+    ),
+    (
+        "apply_code_action",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "create_directory",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "dependency_add",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "delete_path",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "move_path",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "copy_path",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "file_move",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "file_delete",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "edit_file",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "format_code",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "compress",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "decompress",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "archive_extract",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "jsonl_write",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "csv_write",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "csv_transform",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "toml_write",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "yaml_write",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "write_docx",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "write_excel",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "write_ppt",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "svg_generate",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "svg_export",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "stl_generate",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "qrcode_generate",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "image_generate",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "image_resize",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "image_convert",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "skill_create",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "skill-creator",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "goon_skill_update",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "goon_skill_version_rollback",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "goon_workflow_run_cancel",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        Some(ToolRiskClass::Admin),
+    ),
+    (
+        "goon_workflow_run_pause",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        Some(ToolRiskClass::Admin),
+    ),
+    (
+        "goon_workflow_run_resume",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        Some(ToolRiskClass::Admin),
+    ),
+    (
+        "game_screen_capture",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "game_replay_recorder",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "game_save_manager",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "game_mod_install",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "game_state_modify",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "pdf_merge",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "pdf_split",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+    (
+        "cad_convert",
+        ToolOperation::Write,
+        GovernanceAction::Write,
+        None,
+    ),
+];
+
+/// Look up a tool in the unified [`TOOL_CLASSIFICATIONS`] table.
+fn lookup_tool(
+    tool: &str,
+) -> Option<(
+    &'static str,
+    ToolOperation,
+    GovernanceAction,
+    Option<ToolRiskClass>,
+)> {
+    TOOL_CLASSIFICATIONS
+        .iter()
+        .find(|(name, ..)| *name == tool)
+        .copied()
 }
 
 // ── Keyword-based helpers ──────────────────────────────────────────────────

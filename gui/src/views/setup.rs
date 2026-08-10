@@ -339,18 +339,18 @@ impl SetupView {
 
     pub fn show(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         i18n: &I18n,
         config: &mut AppConfig,
         backend: &BackendClient,
     ) -> bool {
         let mut done = false;
+        let ctx = ui.ctx().clone();
 
-        self.ensure_models_loaded(backend, ctx);
+        self.ensure_models_loaded(backend, &ctx);
         self.process_pending(i18n, config);
 
-        #[allow(deprecated)]
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui: &mut egui::Ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(60.0);
                 ui.heading(i18n.t("setup.title"));

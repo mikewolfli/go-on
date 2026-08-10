@@ -281,6 +281,9 @@ mod unit_tests {
             options: None,
             vector_hits: None,
             plan_output: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.test");
@@ -425,6 +428,9 @@ mod unit_tests {
             options: None,
             vector_hits: None,
             plan_output: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.e2e");
@@ -514,6 +520,9 @@ mod unit_tests {
             options: None,
             vector_hits: None,
             plan_output: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.empty_output");
@@ -604,6 +613,9 @@ mod unit_tests {
             options: None,
             vector_hits: None,
             plan_output: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.all_empty");
@@ -682,6 +694,9 @@ mod unit_tests {
             }),
             vector_hits: None,
             plan_output: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.model_filter_fallback");
@@ -771,6 +786,9 @@ mod unit_tests {
             options: None,
             vector_hits: None,
             plan_output: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.council_smoke");
@@ -846,6 +864,9 @@ mod unit_tests {
             options: None,
             vector_hits: None,
             plan_output: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
         };
 
         let trace = chat_trace_context(&Some(json!(1)), "chat.autonomy_contract");

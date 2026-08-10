@@ -324,10 +324,6 @@ impl DynamicQualityCompass {
 
         checks
     }
-
-    pub fn quality_compass_compat(&self) -> Vec<String> {
-        quality_compass()
-    }
 }
 
 impl PuaRuleEngine {
@@ -995,13 +991,6 @@ mod tests {
         assert!(checks.iter().any(|check| check.id == "build-proof"));
         assert!(checks.iter().any(|check| check.id == "error-case"));
         assert!(checks.iter().any(|check| check.id == "pattern-scan"));
-    }
-
-    #[test]
-    fn quality_compass_compat_returns_five_items() {
-        let compass = DynamicQualityCompass::default();
-        let compat = compass.quality_compass_compat();
-        assert_eq!(compat.len(), 5);
     }
 
     #[test]

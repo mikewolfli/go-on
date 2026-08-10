@@ -1,7 +1,10 @@
 //! Voting-related methods for `OrchestrationCouncil`.
 //!
-//! Handles casting votes, tallying results, recording vote accuracy,
-//! reputation tracking, and effective voting power calculation.
+//! Handles casting votes, tallying results, and effective voting power
+//! calculation. Reputation records are seeded by `cast_vote` (via
+//! `ensure_reputation`) so the auto-ejection scan in `quorum/consensus.rs`
+//! has data to examine; vote-accuracy learning (`record_vote_accuracy`) was
+//! removed as unwired dead code — no production path recorded outcomes.
 
 use super::council::OrchestrationCouncil;
 use super::types::*;
@@ -42,42 +45,6 @@ impl OrchestrationCouncil {
             return adjusted.max(1); // Minimum voting power of 1
         }
         nominal_power
-    }
-
-    /// Record the accuracy of a member's vote after the final outcome is known.
-    /// Call this after `tally_votes()` to enable the council to learn.
-    pub fn record_vote_accuracy(
-        &self,
-        proposal_id: &str,
-        winning_option: &Option<String>,
-    ) -> Result<()> {
-        let votes = self
-            .votes
-            .lock()
-            .map_err(|e| anyhow!("Failed to acquire lock on votes: {e}"))?;
-        let mut reputation = self
-            .reputation
-            .lock()
-            .map_err(|e| anyhow!("Failed to acquire lock on reputation: {e}"))?;
-
-        for vote in votes.values().filter(|v| v.proposal_id == proposal_id) {
-            // Initialize reputation if not present (called without holding reputation lock, which
-            // is already held in the outer scope, so we access the map directly)
-            if !reputation.contains_key(&vote.member_id) {
-                reputation.insert(
-                    vote.member_id.to_string(),
-                    ReputationRecord::new(&vote.member_id, self.config.reputation_warmup_rounds),
-                );
-            }
-            if let Some(record) = reputation.get_mut(&vote.member_id) {
-                let was_accurate = match winning_option {
-                    Some(winner) => vote.selected_option == *winner,
-                    None => false, // No winner (e.g. tie), no one was accurate
-                };
-                record.record_outcome(was_accurate);
-            }
-        }
-        Ok(())
     }
 
     /// Get the reputation record for a member, if available.
@@ -767,57 +734,5 @@ mod tests {
             high_power,
             low_power
         );
-    }
-
-    #[test]
-    fn test_record_vote_accuracy_updates_reputation() {
-        let council = default_council();
-        council
-            .add_member(sample_member("voter-1", "Voter One", "analyst", 1))
-            .unwrap();
-        council
-            .add_member(sample_member("voter-2", "Voter Two", "analyst", 1))
-            .unwrap();
-
-        let proposal = sample_proposal("prop-rep", "Rep Test", "voter-1");
-        council.submit_proposal(proposal).unwrap();
-
-        // Both vote approve
-        council
-            .cast_vote(CouncilVote {
-                member_id: "voter-1".to_string(),
-                proposal_id: "prop-rep".to_string(),
-                selected_option: "approve".to_string(),
-                weight: 1,
-                vote_ms: now_epoch_ms(),
-                rationale: None,
-            })
-            .unwrap();
-        council
-            .cast_vote(CouncilVote {
-                member_id: "voter-2".to_string(),
-                proposal_id: "prop-rep".to_string(),
-                selected_option: "approve".to_string(),
-                weight: 1,
-                vote_ms: now_epoch_ms(),
-                rationale: None,
-            })
-            .unwrap();
-
-        let result = council.tally_votes("prop-rep").unwrap();
-        assert!(result.passed);
-
-        // Record accuracy - both should be marked accurate since they voted with the winner
-        council
-            .record_vote_accuracy("prop-rep", &result.winning_option)
-            .unwrap();
-
-        let rep1 = council.get_reputation("voter-1").unwrap();
-        assert_eq!(rep1.accurate_votes, 1);
-        assert_eq!(rep1.total_votes, 1);
-
-        let rep2 = council.get_reputation("voter-2").unwrap();
-        assert_eq!(rep2.accurate_votes, 1);
-        assert_eq!(rep2.total_votes, 1);
     }
 }

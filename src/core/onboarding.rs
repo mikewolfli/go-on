@@ -64,20 +64,9 @@ fn detect_ai_onboarding_state(config_path: &Path) -> Result<Option<AiOnboardingS
         return Ok(Some(AiOnboardingState::BlankConfig));
     }
 
-    let root: toml::Value = match toml::from_str(&content) {
-        Ok(val) => val,
-        Err(_) => return Ok(Some(AiOnboardingState::InvalidConfig)),
-    };
-
-    let no_agents = root
-        .get("agents")
-        .and_then(|v| v.as_table())
-        .map(|t| t.is_empty())
-        .unwrap_or(true);
-    if no_agents {
-        return Ok(Some(AiOnboardingState::NoAgents));
-    }
-
+    // Parse the config once via AppConfig::load and derive both the
+    // "no agents" state and the env-readiness state from the result,
+    // instead of doing a separate hand-rolled TOML probe first.
     let config = match AppConfig::load(config_path) {
         Ok(cfg) => cfg,
         Err(_) => return Ok(Some(AiOnboardingState::InvalidConfig)),

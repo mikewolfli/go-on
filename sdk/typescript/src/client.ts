@@ -18,6 +18,7 @@ import type {
   LearningSummaryResponse,
   MetricsResponse,
   SelectorStatusResponse,
+  SessionLoadResponse,
   SessionModeState,
   TaskPlanResponse,
   ToolInfo,
@@ -205,15 +206,30 @@ export class GoOnClient {
    * Send a chat request and return an async generator over SSE stream chunks.
    * Each yielded value is a parsed JSON chunk from the SSE `data:` field.
    * The generator terminates when the stream ends or is aborted.
+   *
+   * `model` / `temperature` / `max_tokens` are sent inside `options`
+   * (e.g. `options.model`), matching the GUI payload contract — the backend
+   * reads them from `params.options.extra`.
    */
   async *chatStream(
     request: ChatRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<Record<string, unknown>, void, unknown> {
+    const { model, temperature, max_tokens: maxTokens, ...rest } = request;
+    const body: Record<string, unknown> = {
+      ...rest,
+      stream: true,
+      options: {
+        ...(model !== undefined ? { model } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+      },
+    };
+
     const response = await fetch(`${this.baseUrl}${CHAT_STREAM_ENDPOINT}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, stream: true }),
+      body: JSON.stringify(body),
       signal,
     });
 
@@ -312,9 +328,17 @@ export class GoOnClient {
     return this.jsonRpc("runtime.stability", {});
   }
 
-  /** initialize — initialize the runtime. */
-  async initialize(setupLevel: string): Promise<Record<string, unknown>> {
-    return this.jsonRpc("initialize", { setup_level: setupLevel });
+  /**
+   * initialize — initialize the runtime.
+   * `setupLevel` is a reserved parameter: the server ignores it (it only
+   * negotiates `protocolVersion`), so it may be omitted.
+   */
+  async initialize(setupLevel?: string): Promise<Record<string, unknown>> {
+    const params: Record<string, unknown> = {};
+    if (setupLevel !== undefined) {
+      params.setup_level = setupLevel;
+    }
+    return this.jsonRpc("initialize", params);
   }
 
   /** shutdown — gracefully shut down the runtime. */
@@ -334,8 +358,8 @@ export class GoOnClient {
     return this.jsonRpc("governance.plan.get", {});
   }
 
-  /** governance.audit.recent — view recent audit entries. */
-  async governanceAuditRecent(limit: number): Promise<Record<string, unknown>> {
+  /** governance.audit.recent — view recent audit entries (default limit: 20). */
+  async governanceAuditRecent(limit: number = 20): Promise<Record<string, unknown>> {
     return this.jsonRpc("governance.audit.recent", { limit });
   }
 
@@ -368,14 +392,30 @@ export class GoOnClient {
     return this.jsonRpc("metrics.get", {});
   }
 
-  /** metrics.prometheus — get Prometheus-formatted metrics. */
+  /** GET /metrics — fetch Prometheus-formatted metrics as plain text.
+   *
+   * The backend exposes the canonical Prometheus text format at the
+   * `GET /metrics` HTTP route. The JSON-RPC `metrics.prometheus` method is
+   * served as `text/plain` (via the `__text_plain__` sentinel) and is not
+   * JSON-parseable, so the SDK reads the HTTP endpoint directly instead.
+   */
   async metricsPrometheus(): Promise<string> {
-    const result = await this.jsonRpc<string>("metrics.prometheus", {});
-    return result;
+    const response = await fetch(`${this.baseUrl}/metrics`, {
+      signal: AbortSignal.timeout(this.timeout),
+    });
+
+    if (!response.ok) {
+      throw new GoOnError(
+        response.status,
+        `HTTP ${response.status}: ${response.statusText}`,
+      );
+    }
+
+    return await response.text();
   }
 
-  /** trace.get — get trace entries. */
-  async traceGet(limit: number): Promise<Record<string, unknown>> {
+  /** trace.get — get trace entries (default limit: 20). */
+  async traceGet(limit: number = 20): Promise<Record<string, unknown>> {
     return this.jsonRpc("trace.get", { limit });
   }
 
@@ -546,7 +586,7 @@ export class GoOnClient {
   }
 
   /** session/load — load an existing ACP session (modes + config options). */
-  async sessionLoad(sessionId: string): Promise<Record<string, unknown>> {
+  async sessionLoad(sessionId: string): Promise<SessionLoadResponse> {
     return this.jsonRpc("session/load", { sessionId });
   }
 
@@ -558,7 +598,7 @@ export class GoOnClient {
     return this.jsonRpc("session/delete", { sessionId });
   }
 
-  /** session/config/get — read the per-session config options. */
+  /** session/config/get — read the per-session config options (flat key→value map). */
   async sessionConfigGet(sessionId: string): Promise<{
     configOptions: Record<string, unknown>;
     sessionId: string;

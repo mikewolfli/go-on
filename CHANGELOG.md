@@ -1,5 +1,44 @@
 # Changelog
 
+## [Unreleased] - 2026-08-10
+
+### Round 41 — Super-Deep/Broad Scan + Dependency Audit (2026-08-10, docs/log/log-20260810-1.md)
+
+#### Link Closure & Dedup
+
+- **`$/cancel_request` / `session/cancel` 取消语义真实化**：SDK chat_stream 参数顶层 model/temperature/max_tokens 映射进 options；GUI/vscode 串行请求并行化（join!/Promise.all）。
+- **Council 投票链接线**：`cast_vote`/`tally_votes` 真实参与路由决策；删除零调用 `record_vote_accuracy`。
+- **SelfModelCore 假持久化清理**：删永不落盘 persistence 面，新增 `capability_stats()` 读取 API；`ExecutionRecorder` 孤儿 trait 删除。
+- **metacognitive llm_agent 假注入链整体删除**（字段/setter/builder/调用点）。
+- **熔断器状态机三份合并**为单一 `transition_breaker`，半开计时统一；hyper_resilience 双记录路径统一。
+- **工具分类三份映射合并**为单一数据表（消除同一工具跨列表不一致）。
+- **Cold tier 接通读取**：`search_by_session` warm 不足回退冷层；`get_from_cold` 新 API；shard 计数 O(1) 缓存。
+- **fault_tolerance 状态可恢复**：生产接 `new_with_restore`；持久化路径 target/ → `.goon/fault_tolerance/`。
+- **配置双源合并**：老格式顶层键（entry_auth_enabled 等）回填 `[runtime]`（显式值优先），不再静默丢弃。
+- **i18n 启动断点修复**：全新安装也能初始化全局 I18N；startup i18n 与 skill 发现并行化。
+- **.goon 路径统一**为 `resolve_goon_root` 单一解析；chat 模式复用 bootstrap SkillRegistry。
+- 死代码清理：learning.rs 双遗忘循环、schema 迁移空 API、cache/semantic_cache/pua 零调用 pub fn、onboarding 双解析、i18n watcher 重复等。
+
+#### Dependency Upgrades (audit all 84 direct deps)
+
+- **reqwest 0.12 → 0.13**（feature `rustls-tls`→`rustls`，启用 `form`/`query`）
+- **base64 0.22 → 0.23**
+- **keyring 3 → 4**（`apple-native`/`sync-secret-service` → `v1` 兼容层）
+- **criterion 0.5 → 0.8**（dev-only）
+- **egui/eframe 0.34 → 0.36**（App trait `update`→`ui`；panel `show(ctx)`→`show(ui)`；`show_inside` 改名 `show`）
+- **comrak 0.52 → 0.54**（GUI，与主 crate 统一）；**quick-xml 0.37 → 0.41**（mermaid-render）
+- 约束内 197 项传递依赖更新至最新；zip 8 / merman alpha 链 / serde_yaml 因兼容性保留（记录在案）。
+
+#### Verification
+
+```
+cargo check 4 profiles + --workspace → zero warnings
+cargo clippy (local/multi-users/GUI) -D warnings → zero warnings
+cargo test --lib → 1490 passed / 0 failed
+acp_runtime_rpc 27/27 · protocol_consistency 26/26 · transport_parity 18/18 · protocol_parity 5/5 · structural 12/12 · pua_smoke 3/3
+Rust SDK 21/21
+```
+
 ## [1.5.1] - 2026-08-07
 
 ### Version bump + errors/warnings sweep (2026-08-07, docs/log/log-20260807-1.md)

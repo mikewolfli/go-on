@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── 3. Initialize the runtime ───────────────────────────────────────
     println!("🚀 Initializing runtime...");
-    let init_result = client.initialize("full").await?;
+    let init_result = client.initialize(Some("full")).await?;
     println!(
         "   ✓ Runtime initialized: {}",
         init_result

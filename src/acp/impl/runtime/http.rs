@@ -393,6 +393,33 @@ async fn handle_state_events_sse(socket: &mut HttpStream, cors_headers: &str) ->
     Ok(())
 }
 
+/// Map legacy top-level `model` / `temperature` / `max_tokens` fields
+/// (pre-`options.*` SDK payloads) into `options.extra` so the chat pipeline
+/// honors them. Explicit `options.*` values take precedence.
+fn apply_legacy_chat_top_level_params(params: &mut crate::acp::r#impl::chat::ChatParams) {
+    if params.model.is_none() && params.temperature.is_none() && params.max_tokens.is_none() {
+        return;
+    }
+    let opts = params
+        .options
+        .get_or_insert_with(crate::config::PhaseOptions::default);
+    if let Some(model) = params.model.take() {
+        opts.extra
+            .entry("model".to_string())
+            .or_insert(serde_json::Value::String(model));
+    }
+    if let Some(temperature) = params.temperature.take() {
+        opts.extra
+            .entry("temperature".to_string())
+            .or_insert(serde_json::json!(temperature));
+    }
+    if let Some(max_tokens) = params.max_tokens.take() {
+        opts.extra
+            .entry("max_tokens".to_string())
+            .or_insert(serde_json::json!(max_tokens));
+    }
+}
+
 /// Route a POST request — reads body, dispatches to the appropriate handler,
 /// and writes the response to the socket. Returns the path label for logging.
 ///
@@ -516,6 +543,7 @@ async fn route_http_post(
                                 return Ok(());
                             }
                         };
+                    apply_legacy_chat_top_level_params(&mut params);
                     let trace = http_trace_context("chat");
                     let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
                         user_session,
@@ -587,6 +615,7 @@ async fn route_http_post(
                                 return Ok(());
                             }
                         };
+                    apply_legacy_chat_top_level_params(&mut params);
                     use super::sse::{flush_sse, write_sse_event, write_sse_headers};
                     write_sse_headers(socket, cors_headers).await?;
                     // Out-of-band SSE transport requires an fd-cloneable plain TCP

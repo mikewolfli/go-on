@@ -103,15 +103,23 @@ const HEALTH_ERROR_RATE_THRESHOLD: f64 = 0.1;
 /// Success-rate threshold below which a service is classified Degraded.
 const HEALTH_SUCCESS_RATE_THRESHOLD: f64 = 0.8;
 
-/// Apply a success/failure to a circuit breaker without persistence.
+/// Outcome of a single execution applied to a circuit breaker state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BreakerOutcome {
+    Success,
+    Failure,
+}
+
+/// Apply a single execution outcome to the circuit breaker state machine.
 ///
-/// Mirrors the transition rules of `record_failure_with_mode` / `record_success`
-/// (threshold open, success resets while closed, half-open re-trip) so the sync
-/// `record_outcome` path and the async breaker methods cannot drift.
-fn apply_breaker_outcome(cb: &mut CircuitBreaker, success: bool, threshold: u64) {
-    let now = crate::shared::timestamps::now_ts_ms_u64();
-    if success {
-        match cb.state {
+/// This is the **single** state-transition authority: the sync
+/// `record_outcome` path, the async `record_failure_with_mode` /
+/// `record_success` methods and `record_execution` all delegate here, so the
+/// Closed/Open/HalfOpen rules (threshold open, success reset while closed,
+/// half-open re-trip) cannot drift between entry points.
+fn transition_breaker(cb: &mut CircuitBreaker, outcome: BreakerOutcome, now: u64) {
+    match outcome {
+        BreakerOutcome::Success => match cb.state {
             CircuitState::HalfOpen => {
                 cb.state = CircuitState::Closed;
                 cb.failure_count = 0;
@@ -121,28 +129,46 @@ fn apply_breaker_outcome(cb: &mut CircuitBreaker, success: bool, threshold: u64)
             CircuitState::Closed => {
                 cb.failure_count = 0;
             }
-            CircuitState::Open => {}
-        }
-    } else {
-        match cb.state {
+            CircuitState::Open => {
+                // No-op: an open breaker can't accept successes directly;
+                // it must transition through half-open first.
+            }
+        },
+        BreakerOutcome::Failure => match cb.state {
             CircuitState::Closed => {
                 cb.failure_count += 1;
                 cb.last_failure_ms = now;
-                if cb.failure_count >= threshold {
+                if cb.failure_count >= cb.threshold {
                     cb.state = CircuitState::Open;
                 }
             }
             CircuitState::Open => {
+                // Already open; update last_failure so the timer resets.
                 cb.last_failure_ms = now;
             }
             CircuitState::HalfOpen => {
+                // Failure in half-open immediately trips back to open.
                 cb.state = CircuitState::Open;
                 cb.failure_count += 1;
                 cb.last_failure_ms = now;
                 cb.half_open_attempts = 0;
             }
-        }
+        },
     }
+}
+
+/// Apply a success/failure to a circuit breaker without persistence
+/// (sync convenience wrapper over [`transition_breaker`]).
+fn apply_breaker_outcome(cb: &mut CircuitBreaker, success: bool) {
+    transition_breaker(
+        cb,
+        if success {
+            BreakerOutcome::Success
+        } else {
+            BreakerOutcome::Failure
+        },
+        crate::shared::timestamps::now_ts_ms_u64(),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -236,12 +262,6 @@ pub struct ResilienceConfig {
     pub max_failover_attempts: u32,
     #[serde(default)]
     pub self_healing_enabled: bool,
-    /// Interval (in ms) after which an open circuit breaker automatically
-    /// transitions to HalfOpen during `is_available()` checks, enabling the
-    /// self-healing / auto-recovery pattern without requiring an explicit
-    /// `probe()` call.
-    #[serde(default)]
-    pub half_open_probe_interval_ms: u64,
 }
 
 impl Default for ResilienceConfig {
@@ -252,7 +272,6 @@ impl Default for ResilienceConfig {
             health_check_interval_ms: 5_000,
             max_failover_attempts: 3,
             self_healing_enabled: true,
-            half_open_probe_interval_ms: 5000,
         }
     }
 }
@@ -437,17 +456,15 @@ impl HyperResilienceEngine {
         }
     }
 
-    /// Record a request outcome for a service.
+    /// Update the per-service health monitor (counters + status) for a single
+    /// execution outcome.
     ///
-    /// Updates the per-service health monitor (success/error rates, EMA
-    /// latency, status) and drives the service's circuit breaker — one call
-    /// for both, so breaker and health can never drift. Synchronous: the
-    /// underlying locks are `std::Mutex` and are never held across an `.await`.
-    pub fn record_outcome(&self, name: &str, success: bool, latency_ms: u64) {
-        let (max_failure_threshold, recovery_timeout_ms) = {
-            let config = read_lock(&self.config);
-            (config.circuit_breaker_threshold, config.recovery_timeout_ms)
-        };
+    /// Shared by the sync `record_outcome` and the async `record_execution`
+    /// paths so `health_report()` / `degradation_level()` always derive from
+    /// the same counters as the breaker state. `latency_ms: None` keeps the
+    /// previous average when the caller has no latency measurement.
+    fn record_service_outcome(&self, name: &str, success: bool, latency_ms: Option<u64>) {
+        let max_failure_threshold = read_lock(&self.config).circuit_breaker_threshold;
 
         let (success_rate, error_rate, avg_latency_ms, status) = {
             let mut sc = lock_mutex(&self.service_counters);
@@ -484,12 +501,17 @@ impl HyperResilienceEngine {
                 .get(name)
                 .map(|h| h.avg_latency_ms)
                 .unwrap_or(100.0);
-            let samples = total.max(1) as f64;
-            let previous_weight = (samples - 1.0).max(0.0);
-            let avg_latency_ms = if previous_weight == 0.0 {
-                latency_ms as f64
-            } else {
-                (prior_avg * previous_weight + latency_ms as f64) / samples
+            let avg_latency_ms = match latency_ms {
+                Some(measured) => {
+                    let samples = total.max(1) as f64;
+                    let previous_weight = (samples - 1.0).max(0.0);
+                    if previous_weight == 0.0 {
+                        measured as f64
+                    } else {
+                        (prior_avg * previous_weight + measured as f64) / samples
+                    }
+                }
+                None => prior_avg,
             };
             let status = if error_rate > HEALTH_ERROR_RATE_THRESHOLD {
                 HealthStatus::Unhealthy
@@ -517,6 +539,21 @@ impl HyperResilienceEngine {
             h.status = status;
             h.last_check_timestamp = crate::shared::timestamps::now_ts_ms_u64() / 1000;
         }
+    }
+
+    /// Record a request outcome for a service.
+    ///
+    /// Updates the per-service health monitor (success/error rates, EMA
+    /// latency, status) and drives the service's circuit breaker — one call
+    /// for both, so breaker and health can never drift. Synchronous: the
+    /// underlying locks are `std::Mutex` and are never held across an `.await`.
+    pub fn record_outcome(&self, name: &str, success: bool, latency_ms: u64) {
+        let (max_failure_threshold, recovery_timeout_ms) = {
+            let config = read_lock(&self.config);
+            (config.circuit_breaker_threshold, config.recovery_timeout_ms)
+        };
+
+        self.record_service_outcome(name, success, Some(latency_ms));
 
         // Drive the breaker from the same outcome (sync inline update).
         let mut cbs = lock_mutex(&self.circuit_breakers);
@@ -533,7 +570,7 @@ impl HyperResilienceEngine {
                 last_failure_mode: None,
                 failure_history: Vec::new(),
             });
-        apply_breaker_outcome(cb, success, max_failure_threshold);
+        apply_breaker_outcome(cb, success);
     }
 
     /// Current health snapshot for a service (None when not registered).
@@ -709,26 +746,7 @@ impl HyperResilienceEngine {
                 cb.failure_history.remove(0);
             }
 
-            match cb.state {
-                CircuitState::Closed => {
-                    cb.failure_count += 1;
-                    cb.last_failure_ms = now;
-                    if cb.failure_count >= cb.threshold {
-                        cb.state = CircuitState::Open;
-                    }
-                }
-                CircuitState::Open => {
-                    // Already open; update last_failure so the timer resets.
-                    cb.last_failure_ms = now;
-                }
-                CircuitState::HalfOpen => {
-                    // Failure in half-open immediately trips back to open.
-                    cb.state = CircuitState::Open;
-                    cb.failure_count += 1;
-                    cb.last_failure_ms = now;
-                    cb.half_open_attempts = 0;
-                }
-            }
+            transition_breaker(cb, BreakerOutcome::Failure, now);
 
             state = cb.state;
         } // drop circuit_breakers lock
@@ -746,23 +764,11 @@ impl HyperResilienceEngine {
                 tf("error.circuit_breaker_not_found", &[("name", breaker_name)])
             })?;
 
-            match cb.state {
-                CircuitState::HalfOpen => {
-                    // Success in half-open → closed.
-                    cb.state = CircuitState::Closed;
-                    cb.failure_count = 0;
-                    cb.half_open_attempts = 0;
-                    cb.last_failure_ms = 0;
-                }
-                CircuitState::Closed => {
-                    // Reset failure count on success while closed.
-                    cb.failure_count = 0;
-                }
-                CircuitState::Open => {
-                    // No-op: an open breaker can't accept successes directly;
-                    // it must transition through half-open first.
-                }
-            }
+            transition_breaker(
+                cb,
+                BreakerOutcome::Success,
+                crate::shared::timestamps::now_ts_ms_u64(),
+            );
         } // drop circuit_breakers lock
 
         Ok(())
@@ -772,19 +778,19 @@ impl HyperResilienceEngine {
     /// (closed or half-open).
     ///
     /// If the breaker is **Open** and the time since the last failure exceeds
-    /// `half_open_probe_interval_ms`, this method automatically transitions
-    /// it to **HalfOpen**, enabling the self-healing / auto-recovery pattern
-    /// without requiring an explicit `probe()` call.
+    /// the breaker's `recovery_timeout_ms`, this method automatically
+    /// transitions it to **HalfOpen**, enabling the self-healing /
+    /// auto-recovery pattern without requiring an explicit `probe()` call.
+    ///
+    /// The half-open timing is unified on `recovery_timeout_ms` — the same
+    /// standard `probe()` uses — so the same breaker behaves identically
+    /// regardless of which entry point transitions it.
     ///
     /// # Lock ordering
-    /// Always acquires `circuit_breakers` Mutex **first**, then `config` RwLock
-    /// (only in the Open branch where `probe_interval` is needed).
-    /// This matches the common pattern used by `record_failure_with_mode`,
-    /// `record_success`, `record_execution`, etc. — all of which acquire
-    /// `circuit_breakers` without taking `config` at all. Acquiring in the
-    /// opposite order (config first, then circuit_breakers) would risk a
-    /// deadlock with code paths that hold circuit_breakers and later take
-    /// config (e.g. `health_check_cycle` → `record_execution`).
+    /// Acquires `circuit_breakers` Mutex **first**, and never takes the
+    /// config RwLock (the recovery timeout lives on the breaker itself),
+    /// matching the pattern used by `record_failure_with_mode`,
+    /// `record_success`, `record_execution`, etc.
     pub async fn is_available(&self, breaker_name: &str) -> bool {
         // Acquire circuit_breakers FIRST — this is the canonical lock order.
         let mut cbs = lock_mutex(&self.circuit_breakers);
@@ -796,10 +802,9 @@ impl HyperResilienceEngine {
         match cb.state {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
-                // Acquire config RwLock only in the Open branch (not in the fast path).
-                let probe_interval = read_lock(&self.config).half_open_probe_interval_ms;
+                let recovery = cb.recovery_timeout_ms;
                 let now = crate::shared::timestamps::now_ts_ms_u64();
-                if now >= cb.last_failure_ms + probe_interval {
+                if now >= cb.last_failure_ms + recovery {
                     cb.state = CircuitState::HalfOpen;
                     cb.half_open_attempts = 0;
                     true
@@ -1023,8 +1028,11 @@ impl HyperResilienceEngine {
             health_check_result
         );
 
-        // Simulate execution duration.
-        let test_duration_ms: u64 = match &action {
+        // Simulate execution duration: healing actions are inherently slow
+        // (restart, scale, reinit), so honor the nominal duration with a real
+        // sleep and measure the actual elapsed time for the report — previously
+        // the duration was computed but never actually waited for.
+        let nominal_duration_ms: u64 = match &action {
             SelfHealingAction::RestartNode => 2_000,
             SelfHealingAction::PromoteReplica => 500,
             SelfHealingAction::ClearCircuitBreaker => 100,
@@ -1204,10 +1212,12 @@ impl HyperResilienceEngine {
             }
         };
 
+        // Wait for the simulated execution duration so the reported duration
+        // is honest (the state-machine updates above are instantaneous).
+        tokio::time::sleep(std::time::Duration::from_millis(nominal_duration_ms)).await;
+
         let completed_ms = crate::shared::timestamps::now_ts_ms_u64();
-        let duration_ms = completed_ms
-            .saturating_sub(started_ms)
-            .max(test_duration_ms);
+        let duration_ms = completed_ms.saturating_sub(started_ms);
 
         let report = HealingReport {
             action,
@@ -1468,25 +1478,7 @@ impl HyperResilienceEngine {
 
             let now = crate::shared::timestamps::now_ts_ms_u64();
 
-            if success {
-                match cb_ref.state {
-                    CircuitState::HalfOpen => {
-                        // Success in half-open → closed.
-                        cb_ref.state = CircuitState::Closed;
-                        cb_ref.failure_count = 0;
-                        cb_ref.half_open_attempts = 0;
-                        cb_ref.last_failure_ms = 0;
-                    }
-                    CircuitState::Closed => {
-                        // Reset failure count on success while closed.
-                        cb_ref.failure_count = 0;
-                    }
-                    CircuitState::Open => {
-                        // No-op: an open breaker can't accept successes directly;
-                        // it must transition through half-open first.
-                    }
-                }
-            } else {
+            if !success {
                 // Track failure mode (default to ResourceExhaustion like record_failure).
                 let failure_mode = FailureMode::ResourceExhaustion;
                 cb_ref.last_failure_mode = Some(failure_mode);
@@ -1494,29 +1486,25 @@ impl HyperResilienceEngine {
                 if cb_ref.failure_history.len() > 10 {
                     cb_ref.failure_history.remove(0);
                 }
-
-                match cb_ref.state {
-                    CircuitState::Closed => {
-                        cb_ref.failure_count += 1;
-                        cb_ref.last_failure_ms = now;
-                        if cb_ref.failure_count >= cb_ref.threshold {
-                            cb_ref.state = CircuitState::Open;
-                        }
-                    }
-                    CircuitState::Open => {
-                        // Already open; update last_failure so the timer resets.
-                        cb_ref.last_failure_ms = now;
-                    }
-                    CircuitState::HalfOpen => {
-                        // Failure in half-open immediately trips back to open.
-                        cb_ref.state = CircuitState::Open;
-                        cb_ref.failure_count += 1;
-                        cb_ref.last_failure_ms = now;
-                        cb_ref.half_open_attempts = 0;
-                    }
-                }
             }
+
+            transition_breaker(
+                cb_ref,
+                if success {
+                    BreakerOutcome::Success
+                } else {
+                    BreakerOutcome::Failure
+                },
+                now,
+            );
         }
+
+        // Record the same outcome into the per-service health monitor so
+        // breaker state and `health_report()` / `degradation_level()` never
+        // drift (previously record_execution updated only the breakers, while
+        // record_outcome updated both). No latency is measured here, so the
+        // previous average latency is kept.
+        self.record_service_outcome(breaker_name, success, None);
     }
 }
 

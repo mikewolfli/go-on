@@ -32,7 +32,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::security::vulnerability_scan::{
-    DependencyScanResult, PermitScanResult, SecretScanResult, Severity, Vulnerability,
+    DependencyScanResult, SecretScanResult, Severity, Vulnerability,
 };
 
 // ---------------------------------------------------------------------------
@@ -154,12 +154,12 @@ pub struct SecurityDigest {
     pub medium_count: usize,
     /// Number of low severity alerts.
     pub low_count: usize,
-    /// Summary of dependency scan results.
+    /// Summary of dependency scan results (latest scan recorded by
+    /// `alert_from_dependency_scan`).
     pub dependency_summary: Option<DependencyScanResult>,
-    /// Summary of secret scan results.
+    /// Summary of secret scan results (latest scan recorded by
+    /// `alert_from_secret_scan`).
     pub secret_summary: Option<SecretScanResult>,
-    /// Summary of permit scan results.
-    pub permit_summary: Option<PermitScanResult>,
     /// All alerts generated today.
     pub alerts: Vec<SecurityAlert>,
     /// Top recommendations.
@@ -222,6 +222,12 @@ pub struct SecurityAdvisorAgent {
     config: SecurityAdvisorConfig,
     /// In-memory alert buffer (for building the daily digest).
     alerts: Arc<Mutex<Vec<SecurityAlert>>>,
+    /// Latest dependency scan result (populated by `alert_from_dependency_scan`,
+    /// surfaced in the daily digest's `dependency_summary`).
+    last_dependency_scan: Arc<Mutex<Option<DependencyScanResult>>>,
+    /// Latest secret scan result (populated by `alert_from_secret_scan`,
+    /// surfaced in the daily digest's `secret_summary`).
+    last_secret_scan: Arc<Mutex<Option<SecretScanResult>>>,
     /// Count of auto-generated patches.
     patches_generated: AtomicU64,
     /// Count of auto-applied patches.
@@ -238,6 +244,8 @@ impl SecurityAdvisorAgent {
         Self {
             config,
             alerts: Arc::new(Mutex::new(Vec::new())),
+            last_dependency_scan: Arc::new(Mutex::new(None)),
+            last_secret_scan: Arc::new(Mutex::new(None)),
             patches_generated: AtomicU64::new(0),
             patches_applied: AtomicU64::new(0),
             ws_senders: Arc::new(Mutex::new(Vec::new())),
@@ -426,10 +434,15 @@ impl SecurityAdvisorAgent {
     }
 
     /// Create a security alert from a dependency scan result and push it.
+    ///
+    /// Also records the scan result so the daily digest can surface a real
+    /// `dependency_summary` (previously the digest field was always `None`).
     pub async fn alert_from_dependency_scan(
         &self,
         scan_result: &DependencyScanResult,
     ) -> Result<(), SecurityAdvisorError> {
+        *self.last_dependency_scan.lock().await = Some(scan_result.clone());
+
         for vuln in &scan_result.vulnerabilities {
             let fix = if self.config.auto_fix_enabled {
                 self.auto_generate_fix(vuln).await.ok()
@@ -456,10 +469,15 @@ impl SecurityAdvisorAgent {
     }
 
     /// Create a security alert from a secret scan result and push it.
+    ///
+    /// Also records the scan result so the daily digest can surface a real
+    /// `secret_summary` (previously the digest field was always `None`).
     pub async fn alert_from_secret_scan(
         &self,
         scan_result: &SecretScanResult,
     ) -> Result<(), SecurityAdvisorError> {
+        *self.last_secret_scan.lock().await = Some(scan_result.clone());
+
         for secret_match in &scan_result.matches {
             if secret_match.risk < crate::security::vulnerability_scan::SecretRisk::High {
                 continue;
@@ -521,6 +539,12 @@ impl SecurityAdvisorAgent {
         let patches_gen = self.patches_generated.load(Ordering::Relaxed) as usize;
         let patches_app = self.patches_applied.load(Ordering::Relaxed) as usize;
 
+        // Surface the latest scan results (recorded by
+        // alert_from_dependency_scan / alert_from_secret_scan) instead of
+        // always leaving the summaries as None.
+        let dependency_summary = self.last_dependency_scan.lock().await.clone();
+        let secret_summary = self.last_secret_scan.lock().await.clone();
+
         let digest = SecurityDigest {
             date: now,
             total_alerts: alerts.len(),
@@ -528,9 +552,8 @@ impl SecurityAdvisorAgent {
             high_count: high,
             medium_count: medium,
             low_count: low,
-            dependency_summary: None,
-            secret_summary: None,
-            permit_summary: None,
+            dependency_summary,
+            secret_summary,
             alerts: alerts.clone(),
             recommendations,
             patches_generated: patches_gen,
@@ -791,7 +814,6 @@ mod tests {
             low_count: 1,
             dependency_summary: None,
             secret_summary: None,
-            permit_summary: None,
             alerts: Vec::new(),
             recommendations: vec!["Fix all issues".into()],
             patches_generated: 3,

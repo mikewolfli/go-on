@@ -32,13 +32,16 @@ pub struct ChatMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
-    /// Lifecycle snapshot — present on `runtime.health` (JSON-RPC) responses.
+    /// Lifecycle snapshot — present on both `GET /health` (ServerStatus) and
+    /// `runtime.health` (JSON-RPC) responses.
     #[serde(default)]
     pub lifecycle: Option<Value>,
-    /// Version string — present on both endpoints.
+    /// Version string — present only on `runtime.health` (JSON-RPC);
+    /// `GET /health` (ServerStatus) does not emit this field.
     #[serde(default)]
     pub version: Option<String>,
-    /// Request statistics — present on `runtime.health`.
+    /// Request statistics — present only on `runtime.health` (JSON-RPC);
+    /// `GET /health` (ServerStatus) does not emit this field.
     #[serde(default)]
     pub stats: Option<Value>,
     /// Maintenance snapshot — present on both endpoints.
@@ -47,7 +50,8 @@ pub struct HealthResponse {
     /// Monotonic server timestamp (ms) — present on both endpoints.
     #[serde(default)]
     pub timestamp: Option<i64>,
-    /// Metrics snapshot — present on `GET /health` (ServerStatus payload).
+    /// Metrics snapshot — present only on `GET /health` (ServerStatus);
+    /// `runtime.health` exposes `stats` / `review_gate` / `timeouts` instead.
     #[serde(default)]
     pub metrics: Option<Value>,
     /// Compatibility alias — the backend does not emit this field.
@@ -56,7 +60,8 @@ pub struct HealthResponse {
     /// Compatibility alias — the backend does not emit this field.
     #[serde(default)]
     pub uptime_seconds: Option<u64>,
-    /// Module health probes — present on `runtime.health`.
+    /// Module health probes — present only on `runtime.health` (JSON-RPC);
+    /// `GET /health` (ServerStatus) does not emit this field.
     #[serde(default)]
     pub modules: Option<Value>,
 }
@@ -304,7 +309,10 @@ pub struct PromptResourceBlock {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcpSessionListResponse {
     pub sessions: Vec<AcpSessionSummary>,
-    // Backend serializes this as `nextCursor` (camelCase, schema/agent.rs).
+    // Wire key is `nextCursor` (camelCase): the backend `ListSessionsResponse`
+    // (src/schema/agent.rs) is annotated `#[serde(rename_all = "camelCase")]`,
+    // so the snake_case Rust field needs the rename below. The backend handler
+    // currently always sends `next_cursor: None`, so the field is usually absent.
     #[serde(
         rename = "nextCursor",
         default,

@@ -7,12 +7,9 @@ use super::super::types::AppConfig;
 /// Checks config schema-version compatibility.
 ///
 /// Reads the `schema_version` field from the config, validates it against the
-/// current schema version, and — if real migration steps exist — applies them.
-///
-/// Honesty contract (principle #13/#15): this function never fabricates a
-/// migration. When no registered migration path exists, the config keeps its
-/// original `schema_version` and a warning is emitted, instead of silently
-/// stamping the config as "already migrated".
+/// current schema version, and logs the outcome. There are no registered
+/// migration steps (the schema is at v1.0.0), so this never rewrites the
+/// config: the original version is left untouched and observable.
 pub(crate) fn migrate_config_schema(cfg: &mut AppConfig, normalized: &str) -> Result<()> {
     let schema_version_str = if normalized.contains("schema_version") {
         cfg.schema_version.clone()
@@ -27,64 +24,29 @@ pub(crate) fn migrate_config_schema(cfg: &mut AppConfig, normalized: &str) -> Re
         Ok(v) => v,
         Err(e) => {
             warn!(
-                "Failed to parse schema_version '{}' from config: {}; skipping migration",
+                "Failed to parse schema_version '{}' from config: {}; skipping compatibility check",
                 schema_version_str, e
             );
             return Ok(());
         }
     };
 
+    if parsed_version == schema_version::SchemaVersion::CURRENT {
+        info!(
+            "Config schema version {} matches current version",
+            parsed_version
+        );
+        return Ok(());
+    }
+
     let manager = schema_version::SchemaManager::new();
     match manager.validate_version(&parsed_version) {
         Ok(()) => {
-            if parsed_version != schema_version::SchemaVersion::CURRENT {
-                match manager.find_migration_path(&parsed_version) {
-                    Some(steps) if steps.is_empty() => {
-                        info!(
-                            "Config schema version {} is compatible with current {}; no migration needed",
-                            parsed_version,
-                            schema_version::SchemaVersion::CURRENT
-                        );
-                        // Compatible minor/patch differences are tolerated; keep
-                        // the original version so the real state is observable.
-                    }
-                    Some(steps) => {
-                        info!(
-                            "Applying {} config migration step(s) from {} to {}",
-                            steps.len(),
-                            parsed_version,
-                            schema_version::SchemaVersion::CURRENT
-                        );
-                        for step in &steps {
-                            info!(
-                                "  Migration: {} -> {}: {}",
-                                step.from_version, step.to_version, step.description
-                            );
-                        }
-                        // No migration apply hook is registered yet (see
-                        // SchemaManager::register_migration). When real steps
-                        // exist, each step must mutate `cfg`; until then the
-                        // version is left untouched rather than falsely stamped.
-                        warn!(
-                            "Registered migration steps have no apply implementation yet; \
-                             config version left as {}",
-                            parsed_version
-                        );
-                    }
-                    None => {
-                        warn!(
-                            "No migration path found from {} to {}; config may be incompatible",
-                            parsed_version,
-                            schema_version::SchemaVersion::CURRENT
-                        );
-                    }
-                }
-            } else {
-                info!(
-                    "Config schema version {} matches current version",
-                    parsed_version
-                );
-            }
+            info!(
+                "Config schema version {} is compatible with current {}; no migration needed",
+                parsed_version,
+                schema_version::SchemaVersion::CURRENT
+            );
         }
         Err(msg) => {
             warn!(

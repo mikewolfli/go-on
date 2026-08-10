@@ -1162,36 +1162,38 @@ top_k = 2
             let tx = self.connection.backend_tx.clone();
             let backend = self.connection.backend.clone();
             tokio::spawn(async move {
-                // Add timeout to prevent hanging if backend is not responding
-                let health =
-                    match tokio::time::timeout(std::time::Duration::from_secs(5), backend.health())
-                        .await
-                    {
-                        Ok(h) => h,
-                        Err(_) => {
-                            super::log_msg("Warning: Backend health check timed out");
-                            HealthStatus {
-                                connected: false,
-                                healthy: false,
-                                uptime: 0,
-                                requests_per_minute: 0.0,
-                                success_rate: 0.0,
-                                avg_latency_ms: 0.0,
-                                backend_version: None,
-                                backend_build: None,
-                            }
+                // Run health + provider status concurrently (each with a 5s
+                // timeout) instead of serially, so a slow endpoint cannot
+                // double the refresh latency (worst case 10s -> 5s).
+                let health_fut =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), backend.health());
+                let providers_fut = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend.provider_status(),
+                );
+                let (health_res, providers_res) = tokio::join!(health_fut, providers_fut);
+
+                let health = match health_res {
+                    Ok(h) => h,
+                    Err(_) => {
+                        super::log_msg("Warning: Backend health check timed out");
+                        HealthStatus {
+                            connected: false,
+                            healthy: false,
+                            uptime: 0,
+                            requests_per_minute: 0.0,
+                            success_rate: 0.0,
+                            avg_latency_ms: 0.0,
+                            backend_version: None,
+                            backend_build: None,
                         }
-                    };
+                    }
+                };
                 if let Err(e) = tx.try_send(BackendUpdate::Health(health)) {
                     super::log_msg(&format!("WARN: app try_send failed: {:?}", e));
                 }
 
-                let providers = match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    backend.provider_status(),
-                )
-                .await
-                {
+                let providers = match providers_res {
                     Ok(p) => p,
                     Err(_) => {
                         super::log_msg("Warning: Backend provider status check timed out");

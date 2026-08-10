@@ -331,7 +331,7 @@ async fn run() -> Result<()> {
 
     // Handle terminal chat mode
     if cli.chat {
-        return server::handle_chat_mode(config, &cli, &config_path).await;
+        return server::handle_chat_mode(config, &cli, &config_path, skill_registry).await;
     }
 
     // Start the server with top-level graceful shutdown signal handling
@@ -351,9 +351,14 @@ async fn run() -> Result<()> {
 ///
 /// Diagnoses configuration, connectivity, agents, and system health
 /// without starting the full server. Useful for pre-flight checks.
+///
+/// Reuses the same validation engine as `handle_validation_mode`
+/// (`validate_config_with` + `ConfigValidator::generate_report`), the shared
+/// `check_startup_memory` check, and the bootstrap i18n result — no
+/// hand-rolled duplicates of those subsystems.
 async fn diagnose_and_exit(config_path: &std::path::Path) {
     use crate::config::AppConfig;
-    use crate::core::config_validation::ConfigValidator;
+    use crate::core::config_validation::validate_config_with;
 
     println!("═══════════════════════════════════");
     println!("  go-on System Diagnostics");
@@ -374,7 +379,7 @@ async fn diagnose_and_exit(config_path: &std::path::Path) {
         }
     }
 
-    // 2. Config parsing and validation
+    // 2. Config parsing and validation — same engine as --validate-config
     println!("[2/5] Config Validation");
     match AppConfig::load(config_path) {
         Ok(config) => {
@@ -382,16 +387,21 @@ async fn diagnose_and_exit(config_path: &std::path::Path) {
             let agent_count = config.agents().len();
             println!("  ℹ️  Agents configured: {agent_count}");
             println!("  ℹ️  Workflow type: {:?}", config.flow.workflow_type);
-            let validator = ConfigValidator::new(config_path, config);
-            let report = validator.validate();
-            if report.errors.is_empty() && report.warnings.is_empty() {
-                println!("  ✅ Config validation: no issues");
-            } else {
-                for err in &report.errors {
-                    println!("  ❌ Validation error: {err:?}");
+            match validate_config_with(config_path, config) {
+                Ok(report) => {
+                    if report.errors.is_empty() && report.warnings.is_empty() {
+                        println!("  ✅ Config validation: no issues");
+                    } else {
+                        for err in &report.errors {
+                            println!("  ❌ Validation error: {err:?}");
+                        }
+                        for warn in &report.warnings {
+                            println!("  ⚠️  Validation warning: {warn:?}");
+                        }
+                    }
                 }
-                for warn in &report.warnings {
-                    println!("  ⚠️  Validation warning: {warn:?}");
+                Err(e) => {
+                    println!("  ❌ Config validation failed: {e}");
                 }
             }
         }
@@ -400,7 +410,7 @@ async fn diagnose_and_exit(config_path: &std::path::Path) {
         }
     }
 
-    // 3. Memory health
+    // 3. Memory health — shared check_startup_memory + print helper
     println!("[3/5] System Health");
     let mem = crate::observability::memory_health::check_startup_memory();
     match &mem {
@@ -419,19 +429,18 @@ async fn diagnose_and_exit(config_path: &std::path::Path) {
     }
     crate::observability::memory_health::print_memory_health(&mem);
 
-    // 4. i18n readiness
+    // 4. i18n readiness — reuse the bootstrap-initialized global I18N instead
+    //    of re-scanning the languages directory on disk.
     println!("[4/5] Internationalization");
-    let i18n_dir = config_path
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("languages");
-    match std::fs::read_dir(&i18n_dir) {
-        Ok(entries) => {
-            let count = entries.filter_map(|e| e.ok()).count();
-            println!("  ✅ i18n directory exists: {} entries", count);
+    match crate::i18n::runtime::I18N.get() {
+        Some(manager) => {
+            println!(
+                "  ✅ i18n initialized (language: {})",
+                manager.current_language().code()
+            );
         }
-        Err(_) => {
-            println!("  ⚠️  i18n directory not found: {}", i18n_dir.display());
+        None => {
+            println!("  ⚠️  i18n not initialized");
         }
     }
 

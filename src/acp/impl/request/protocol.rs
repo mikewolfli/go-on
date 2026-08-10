@@ -65,6 +65,27 @@ impl AcpErrorCode {
     }
 }
 
+/// Lift a wire-standard ACP error code into the app-level [`ErrorCode`]
+/// used by `AppError` and HTTP responses.
+///
+/// [`AcpErrorCode`] is the single source of truth for the ACP wire codes;
+/// this bridge is the only place that maps them to the app-level enum so the
+/// two code systems cannot drift apart.
+impl From<AcpErrorCode> for crate::core::error::ErrorCode {
+    fn from(code: AcpErrorCode) -> Self {
+        match code {
+            AcpErrorCode::MethodNotFound => Self::NotFound,
+            AcpErrorCode::InvalidParams => Self::ValidationError,
+            AcpErrorCode::AuthRequired => Self::AuthenticationRequired,
+            AcpErrorCode::InternalError => Self::InternalError,
+            AcpErrorCode::ConsultationBlocked => Self::Forbidden,
+            AcpErrorCode::PuaViolation => Self::Forbidden,
+            AcpErrorCode::ServerError => Self::ServiceUnavailable,
+            AcpErrorCode::RateLimited => Self::RateLimitExceeded,
+        }
+    }
+}
+
 use crate::acp::server::AcpServer;
 use crate::protocol::access_mode::{request_dispatch_mode, RequestDispatchMode};
 

@@ -4,7 +4,8 @@
 //! on every error response path.  Tracking these ensures the ErrorCode injection
 //! in `write_http_json_response` does not regress.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 // ---------------------------------------------------------------------------
 // Baseline: error-code serialization (hot path for every error response)

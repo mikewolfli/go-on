@@ -8,6 +8,13 @@
 ///   - Unknown method → error code -32601 (METHOD_NOT_FOUND).
 ///   - Missing required params → error code -32602 (INVALID_PARAMS).
 ///   - Error responses omit the `result` field; success responses omit `error`.
+///
+/// NOTE: the ACP/MCP `initialize` + `tools/list` shape probes overlap with
+/// `protocol_parity_integration.rs`. Both files are intentionally kept: this
+/// file reuses the shared `common` harness and carries the bulk of the
+/// platform_context / error-shape / cancel / ping probes, while the parity
+/// file adds tool-name-overlap, tool-count and three-route assertions with its
+/// own per-mode harness.
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;

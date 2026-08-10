@@ -10,15 +10,17 @@
 use anyhow::{Context, Result};
 use tokio::task::spawn_blocking;
 
+use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use futures_util::stream::{self, StreamExt};
 use indexmap::IndexSet;
 #[cfg(feature = "backend-postgres")]
 use postgres::{Client as PgClient, NoTls as PgNoTls};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -282,6 +284,13 @@ struct ColdStorage {
     max_total_shards: usize,
     /// Sidecar index for O(1) cold storage lookups.
     index: Mutex<ColdStorageIndex>,
+    /// Cached total shard count across all months. Computed once with a
+    /// single directory scan, then maintained incrementally by append/evict
+    /// so the write path never re-scans the tree.
+    shard_count: Mutex<Option<usize>>,
+    /// Cached highest existing shard index per year-month (key: `y*100+m`),
+    /// avoiding the previous per-append stat() loop from index 0.
+    latest_shard_idx: Mutex<Option<(u32, i64)>>,
 }
 
 impl ColdStorage {
@@ -291,6 +300,8 @@ impl ColdStorage {
             max_shard_size_bytes: 10 * 1024 * 1024, // 10 MB default
             max_total_shards: 100,
             index: Mutex::new(ColdStorageIndex::default()),
+            shard_count: Mutex::new(None),
+            latest_shard_idx: Mutex::new(None),
         }
     }
 
@@ -305,40 +316,106 @@ impl ColdStorage {
             .join(format!("{}.ndjson.gz", shard_id))
     }
 
-    /// Find the next available shard index within the given year-month directory.
-    fn next_shard_index(&self, year: i32, month: u32, start_index: u32) -> u32 {
-        let dir = self.month_dir(year, month);
-        let mut idx = start_index;
-        loop {
-            let path = dir.join(format!("{:04}-{:02}-{:03}.ndjson.gz", year, month, idx));
-            if !path.exists() {
-                return idx;
+    /// Find the next free shard index within the given year-month directory.
+    ///
+    /// Uses a per-month cache of the highest existing shard index: the first
+    /// write into a month pays one directory listing, subsequent writes are
+    /// O(1). Previously every append stat()ed candidate paths from index 0,
+    /// making the write path linear in the shard count.
+    fn next_shard_index(&self, year: i32, month: u32) -> u32 {
+        let ym_key = (year as u32) * 100 + month;
+        let mut cache = self.latest_shard_idx.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("cold storage shard cache lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let start = match *cache {
+            Some((cached_ym, last)) if cached_ym == ym_key => last + 1,
+            _ => {
+                // First write into this month: scan the directory once and
+                // cache the highest existing shard index (-1 when empty).
+                let mut max_idx: i64 = -1;
+                if let Ok(entries) = fs::read_dir(self.month_dir(year, month)) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if let Some(idx) = name
+                            .strip_suffix(".ndjson.gz")
+                            .and_then(|stem| stem.rsplit('-').next())
+                            .and_then(|s| s.parse::<i64>().ok())
+                        {
+                            max_idx = max_idx.max(idx);
+                        }
+                    }
+                }
+                *cache = Some((ym_key, max_idx));
+                max_idx + 1
             }
+        };
+        // Verify the cached guess (files may have been removed externally,
+        // e.g. by shard eviction) and scan forward only when it is stale.
+        let mut idx = start.max(0) as u32;
+        while self
+            .shard_path(year, month, &format!("{:04}-{:02}-{:03}", year, month, idx))
+            .exists()
+        {
             idx += 1;
         }
+        *cache = Some((ym_key, idx as i64 - 1));
+        idx
     }
 
     /// Count existing shard files under the base path.
+    ///
+    /// Cached: the first call performs one recursive directory scan;
+    /// subsequent calls return the cached value maintained by
+    /// `append_entry` / `evict_oldest_shards`.
     fn total_shard_count(&self) -> usize {
-        let mut count = 0;
-        if !self.base_path.exists() {
-            return 0;
+        let mut cache = self.shard_count.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("cold storage shard count lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(count) = *cache {
+            return count;
         }
-        if let Ok(dir_iter) = fs::read_dir(&self.base_path) {
-            for entry in dir_iter.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Ok(file_iter) = fs::read_dir(&path) {
-                        for file in file_iter.flatten() {
-                            if file.path().extension().and_then(|e| e.to_str()) == Some("gz") {
-                                count += 1;
+        let mut count = 0;
+        if self.base_path.exists() {
+            if let Ok(dir_iter) = fs::read_dir(&self.base_path) {
+                for entry in dir_iter.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Ok(file_iter) = fs::read_dir(&path) {
+                            for file in file_iter.flatten() {
+                                if file.path().extension().and_then(|e| e.to_str()) == Some("gz") {
+                                    count += 1;
+                                }
                             }
                         }
                     }
                 }
             }
         }
+        *cache = Some(count);
         count
+    }
+
+    /// Adjust the cached shard count after a new shard file was created.
+    fn note_shard_created(&self) {
+        if let Ok(mut cache) = self.shard_count.lock() {
+            if let Some(count) = cache.as_mut() {
+                *count += 1;
+            }
+        }
+    }
+
+    /// Adjust the cached shard count after shard files were evicted.
+    fn note_shards_removed(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        if let Ok(mut cache) = self.shard_count.lock() {
+            if let Some(current) = cache.as_mut() {
+                *current = current.saturating_sub(count);
+            }
+        }
     }
 
     /// Append a single entry to the latest shard for the current month,
@@ -352,7 +429,7 @@ impl ColdStorage {
         fs::create_dir_all(&dir).context("failed to create cold storage month directory")?;
 
         // Determine current active shard for this month.
-        let shard_index = self.next_shard_index(year, month, 0);
+        let shard_index = self.next_shard_index(year, month);
         let shard = if shard_index == 0 {
             // No shard exists yet; start with index 0.
             format!("{:04}-{:02}-000", year, month)
@@ -369,6 +446,7 @@ impl ColdStorage {
                 format!("{:04}-{:02}-{:03}", year, month, latest_idx)
             } else {
                 // Need a new shard.
+                self.note_shard_created();
                 format!("{:04}-{:02}-{:03}", year, month, shard_index)
             }
         };
@@ -429,10 +507,115 @@ impl ColdStorage {
             }
         }
         shards.sort_by_key(|p| fs::metadata(p).and_then(|m| m.modified()).ok());
+        let mut removed = 0usize;
         for shard in shards.into_iter().take(count) {
-            let _ = fs::remove_file(&shard);
+            if fs::remove_file(&shard).is_ok() {
+                removed += 1;
+            }
+        }
+        self.note_shards_removed(removed);
+    }
+}
+
+/// Collect every shard file under a cold storage base path (all year-month
+/// directories), sorted by path.
+fn collect_shard_paths(base_path: &Path) -> Vec<PathBuf> {
+    let mut shards = Vec::new();
+    if let Ok(dir_iter) = fs::read_dir(base_path) {
+        for entry in dir_iter.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Ok(file_iter) = fs::read_dir(&path) {
+                    for file in file_iter.flatten() {
+                        let fp = file.path();
+                        if fp.extension().and_then(|e| e.to_str()) == Some("gz") {
+                            shards.push(fp);
+                        }
+                    }
+                }
+            }
         }
     }
+    shards.sort();
+    shards
+}
+
+/// Read every entry stored in one cold shard file. Shards are written as a
+/// sequence of gzip members (one per append), so the whole file must be
+/// decoded as a multi-member stream.
+fn read_shard_entries(path: &Path) -> Result<Vec<MemoryEntry>> {
+    let file = fs::File::open(path).context("failed to open cold storage shard")?;
+    let decoder = MultiGzDecoder::new(file);
+    let mut entries = Vec::new();
+    for line in std::io::BufReader::new(decoder).lines() {
+        let line = line.context("failed to read cold storage shard line")?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<MemoryEntry>(line) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => {
+                tracing::warn!(
+                    "cold storage: skipping malformed entry line in {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Core cold lookup shared by [`ColdStorage::load_entry`] and
+/// `MemoryPersistence::get_from_cold` (which runs the scan on the blocking
+/// pool with a pre-captured index snapshot).
+fn load_entry_from_cold(
+    base: &Path,
+    index: &ColdStorageIndex,
+    uid: &str,
+    memory_id: &str,
+) -> Result<Option<MemoryEntry>> {
+    let index_hit = index
+        .entries
+        .get(&(uid.to_string(), memory_id.to_string()))
+        .cloned();
+    let shards: Vec<PathBuf> = match index_hit {
+        Some((year_month, shard_name, _)) => {
+            vec![base
+                .join(&year_month)
+                .join(format!("{}.ndjson.gz", shard_name))]
+        }
+        None => collect_shard_paths(base),
+    };
+    for path in shards {
+        if !path.exists() {
+            continue;
+        }
+        for entry in read_shard_entries(&path)? {
+            if entry.id == memory_id && entry.user_id.as_deref().unwrap_or("") == uid {
+                return Ok(Some(entry));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Find all cold entries belonging to a session, most recently accessed first.
+fn find_cold_entries_by_session(base: &Path, session_id: &str) -> Result<Vec<MemoryEntry>> {
+    let mut hits = Vec::new();
+    for path in collect_shard_paths(base) {
+        if !path.exists() {
+            continue;
+        }
+        for entry in read_shard_entries(&path)? {
+            if entry.session_id.as_deref() == Some(session_id) {
+                hits.push(entry);
+            }
+        }
+    }
+    hits.sort_by_key(|b| std::cmp::Reverse(b.accessed_at));
+    Ok(hits)
 }
 
 // ===========================================================================
@@ -1017,17 +1200,62 @@ impl MemoryPersistence {
         Ok(())
     }
 
-    /// Search the durable warm tier for entries belonging to a session,
-    /// most recently accessed first. This is the read side of the
-    /// persistence layer — used by `session/load` and `session/resume` to
-    /// restore a session's memory context. (Previously the persistence layer
-    /// was write-only in production.)
+    /// Search the durable warm tier — with cold-tier fallback — for entries
+    /// belonging to a session, most recently accessed first. This is the read
+    /// side of the persistence layer — used by `session/load` and
+    /// `session/resume` to restore a session's memory context.
+    ///
+    /// When the warm tier returns fewer than `limit` entries, the cold
+    /// archival tier is scanned so long-term memories remain recoverable
+    /// after their warm-tier retention expires. The cold scan decodes every
+    /// shard (gzip), so it only runs when warm results are short of the limit.
     pub async fn search_by_session(
         &self,
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
-        self.warm.search_by_session(session_id, limit).await
+        let mut hits = self.warm.search_by_session(session_id, limit).await?;
+        if hits.len() < limit {
+            let base = self.cold.base_path.clone();
+            let sid = session_id.to_string();
+            let cold_entries = spawn_blocking(move || find_cold_entries_by_session(&base, &sid))
+                .await
+                .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))??;
+            for entry in cold_entries {
+                if hits.len() >= limit {
+                    break;
+                }
+                if !hits.iter().any(|h| h.id == entry.id) {
+                    hits.push(entry);
+                }
+            }
+            hits.sort_by_key(|b| std::cmp::Reverse(b.accessed_at));
+            hits.truncate(limit);
+        }
+        Ok(hits)
+    }
+
+    /// Load a single entry from the cold archival tier (long-term memory
+    /// recovery). The sidecar index is consulted first; when the entry was
+    /// written by an earlier process (the cold index is in-memory only) all
+    /// shards are scanned. Returns `None` when the entry is not archived.
+    pub async fn get_from_cold(
+        &self,
+        user_id: Option<&str>,
+        memory_id: &str,
+    ) -> Result<Option<MemoryEntry>> {
+        let base = self.cold.base_path.clone();
+        let index = self
+            .cold
+            .index
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let uid = user_id.unwrap_or("").to_string();
+        let mid = memory_id.to_string();
+        spawn_blocking(move || load_entry_from_cold(&base, &index, &uid, &mid))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     /// Run automatic tier migration based on policy.
@@ -1049,33 +1277,59 @@ impl MemoryPersistence {
             hot.evict_expired()
         };
 
-        for entry in evicted {
-            if entry.usefulness >= self.policy.hot_threshold {
-                // Promote to warm.
-                self.promote_to_warm(entry).await?;
-                report.promoted_hot_to_warm += 1;
-            } else {
-                // Stale, demote to cold directly (or discard).
-                self.promote_to_cold(entry).await?;
-                report.demoted_hot_to_cold += 1;
+        // Parallelize tier promotions: each call runs spawn_blocking + a
+        // SQLite write, so buffer at most 8 in flight to avoid exhausting the
+        // blocking pool (previously every entry was awaited sequentially).
+        let mut hot_stream = stream::iter(evicted)
+            .map(|entry| {
+                let promote_warm = entry.usefulness >= self.policy.hot_threshold;
+                async move {
+                    if promote_warm {
+                        self.promote_to_warm(entry).await?;
+                        Ok::<MigrationStep, anyhow::Error>(MigrationStep::PromotedToWarm)
+                    } else {
+                        self.promote_to_cold(entry).await?;
+                        Ok::<MigrationStep, anyhow::Error>(MigrationStep::DemotedToCold)
+                    }
+                }
+            })
+            .buffer_unordered(8);
+        while let Some(result) = hot_stream.next().await {
+            match result? {
+                MigrationStep::PromotedToWarm => report.promoted_hot_to_warm += 1,
+                MigrationStep::DemotedToCold => report.demoted_hot_to_cold += 1,
+                _ => {}
             }
         }
 
         // ── Step 2: Check warm for TTL candidates ──
         let warm_entries = self.warm.iterate_all().await?;
         let now = crate::shared::timestamps::now_ts();
-        for entry in warm_entries {
-            let idle = now.saturating_sub(entry.accessed_at);
-            if idle >= self.policy.warm_ttl_secs {
-                if entry.usefulness >= self.policy.warm_threshold {
-                    // Promote to cold (archival).
-                    self.promote_to_cold(entry).await?;
-                    report.promoted_warm_to_cold += 1;
-                } else {
-                    // Low-usefulness warm entry: just remove.
-                    self.warm.remove(&entry.id).await?;
-                    report.evicted_warm += 1;
+        let ttl_candidates: Vec<MemoryEntry> = warm_entries
+            .into_iter()
+            .filter(|entry| now.saturating_sub(entry.accessed_at) >= self.policy.warm_ttl_secs)
+            .collect();
+        let mut warm_stream = stream::iter(ttl_candidates)
+            .map(|entry| {
+                let promote_cold = entry.usefulness >= self.policy.warm_threshold;
+                async move {
+                    if promote_cold {
+                        // Promote to cold (archival).
+                        self.promote_to_cold(entry).await?;
+                        Ok::<MigrationStep, anyhow::Error>(MigrationStep::PromotedToCold)
+                    } else {
+                        // Low-usefulness warm entry: just remove.
+                        self.warm.remove(&entry.id).await?;
+                        Ok::<MigrationStep, anyhow::Error>(MigrationStep::EvictedWarm)
+                    }
                 }
+            })
+            .buffer_unordered(8);
+        while let Some(result) = warm_stream.next().await {
+            match result? {
+                MigrationStep::PromotedToCold => report.promoted_warm_to_cold += 1,
+                MigrationStep::EvictedWarm => report.evicted_warm += 1,
+                _ => {}
             }
         }
 
@@ -1150,6 +1404,16 @@ impl MemoryPersistence {
 // ===========================================================================
 // Reports & Index
 // ===========================================================================
+
+/// Intermediate result of a single tier-migration step, used to aggregate the
+/// [`MigrationReport`] after a parallel migration batch completes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MigrationStep {
+    PromotedToWarm,
+    DemotedToCold,
+    PromotedToCold,
+    EvictedWarm,
+}
 
 /// Report from a migration cycle.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1261,11 +1525,51 @@ mod tests {
     fn test_cold_storage_append_and_read() {
         let dir = TempDir::new().expect("temp dir creation should succeed");
         let cold = ColdStorage::new(dir.path());
-        let entry = make_entry("cold1", 0.7);
+        let mut entry = make_entry("cold1", 0.7);
+        entry.user_id = Some("u1".to_string());
+        // Mirror `promote_to_cold`: the archival entry carries the Cold tier.
+        entry.tier = MemoryTier::Cold;
         cold.append_entry(&entry).expect("append should succeed");
 
         // The write path must produce exactly one gzip shard on disk.
         assert_eq!(cold.total_shard_count(), 1);
+
+        // The cold read path must recover the entry (by user + id), so cold
+        // is a real archival tier rather than write-only storage.
+        let index = cold.index.lock().map(|g| g.clone()).unwrap_or_default();
+        let loaded = load_entry_from_cold(&cold.base_path, &index, "u1", "cold1")
+            .expect("load should succeed")
+            .expect("entry should be found in cold storage");
+        assert_eq!(loaded.id, "cold1");
+        assert_eq!(loaded.content, "content-cold1");
+        assert_eq!(loaded.tier, MemoryTier::Cold);
+
+        // A miss (unknown id / user) returns None.
+        assert!(load_entry_from_cold(&cold.base_path, &index, "u1", "nope")
+            .expect("load should succeed")
+            .is_none());
+        assert!(
+            load_entry_from_cold(&cold.base_path, &index, "other", "cold1")
+                .expect("load should succeed")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_cold_storage_find_by_session() {
+        let dir = TempDir::new().expect("temp dir creation should succeed");
+        let cold = ColdStorage::new(dir.path());
+        let mut entry = make_entry("sess-entry", 0.4);
+        entry.session_id = Some("sess-cold".to_string());
+        cold.append_entry(&entry).expect("append should succeed");
+
+        let hits = find_cold_entries_by_session(&cold.base_path, "sess-cold")
+            .expect("find_by_session should succeed");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "sess-entry");
+        assert!(find_cold_entries_by_session(&cold.base_path, "other")
+            .expect("find_by_session should succeed")
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1368,5 +1672,57 @@ mod tests {
             .expect("auto migration should run");
         assert_eq!(report.promoted_hot_to_warm, 1);
         assert_eq!(report.demoted_hot_to_cold, 1);
+
+        // The cold-tier write must be readable back: the demoted entry is
+        // recoverable via the archival read path (long-term memory restore).
+        let recovered = persistence
+            .get_from_cold(None, "low")
+            .await
+            .expect("get_from_cold should succeed");
+        assert!(recovered.is_some(), "cold entry should be recoverable");
+        assert_eq!(recovered.expect("recovered entry").id, "low");
+        assert!(persistence
+            .get_from_cold(None, "missing")
+            .await
+            .expect("get_from_cold should succeed")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_search_by_session_falls_back_to_cold() {
+        let dir = TempDir::new().expect("temp dir creation should succeed");
+        let db_path = dir.path().join("warm.db");
+        let cold_path = dir.path().join("cold");
+
+        let persistence = MemoryPersistence::new(
+            &db_path,
+            &cold_path,
+            Some(MemoryTieringPolicy {
+                hot_ttl_secs: 0,
+                ..Default::default()
+            }),
+        )
+        .expect("persistence should initialize");
+
+        // Low-usefulness entry: auto-migrate demotes it straight to cold.
+        let mut entry = make_entry("cold-sess", 0.1);
+        entry.session_id = Some("sess-cold2".to_string());
+        persistence
+            .store(entry)
+            .await
+            .expect("store should succeed");
+        persistence
+            .auto_migrate()
+            .await
+            .expect("auto_migrate should succeed");
+
+        // The warm tier has no row for this session; search must fall back to
+        // the cold tier and still restore the memory.
+        let hits = persistence
+            .search_by_session("sess-cold2", 16)
+            .await
+            .expect("search_by_session should succeed");
+        assert_eq!(hits.len(), 1, "cold fallback should restore session memory");
+        assert_eq!(hits[0].id, "cold-sess");
     }
 }

@@ -108,6 +108,11 @@ impl ResponseCache {
 
     /// Get a cached response by key
     ///
+    /// Read-only: expired rows are filtered by the query (`expires_at > now`)
+    /// and never deleted from the read path — cleanup is left to `put`'s
+    /// over-budget eviction (previously every `get` ran a DELETE on the
+    /// database, turning the hot read path into a writer).
+    ///
     /// # Arguments
     /// * `cache_key` - The cache key to look up
     ///
@@ -120,11 +125,6 @@ impl ResponseCache {
         spawn_blocking(move || {
             let now = now_ts();
             let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-
-            conn.execute(
-                "DELETE FROM response_cache WHERE expires_at <= ?1",
-                params![now],
-            )?;
 
             let found = conn
                 .query_row(
@@ -246,26 +246,6 @@ impl ResponseCache {
             }
 
             Ok(())
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-    }
-
-    /// Purge expired entries from the cache
-    ///
-    /// # Returns
-    /// * `Result<usize>` - Returns Ok(usize) with the number of entries purged, or an error if something goes wrong
-    pub async fn purge_expired(&self) -> Result<usize> {
-        let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let conn = self.conn.clone();
-        spawn_blocking(move || {
-            let now = now_ts();
-            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let affected = conn.execute(
-                "DELETE FROM response_cache WHERE expires_at <= ?1",
-                params![now],
-            )?;
-            Ok(affected)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -523,7 +503,6 @@ impl ResponseCache {
         spawn_blocking(move || {
             let mut client = pool_get(&pool)?;
             let now = now_ts();
-            client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?;
 
             let row = client.query_opt(
                 "SELECT response_text, agent_name FROM response_cache
@@ -606,21 +585,6 @@ impl ResponseCache {
             }
 
             Ok(())
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-    }
-
-    pub async fn purge_expired(&self) -> Result<usize> {
-        let _permit = crate::shared::db_pool::acquire_db_permit().await;
-        let pool = self.pool.write.clone();
-        spawn_blocking(move || {
-            let mut client = pool_get(&pool)?;
-            let now = now_ts();
-            Ok(
-                client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?
-                    as usize,
-            )
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?

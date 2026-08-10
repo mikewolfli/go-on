@@ -37,6 +37,19 @@ pub struct ChatParams {
     /// the structured plan as context for task execution.
     #[serde(default)]
     pub plan_output: Option<PlanOutput>,
+    /// Legacy top-level model override (pre-`options.model` payloads).
+    /// Mapped into `options.extra` by the HTTP layer so the pipeline honors
+    /// it; kept for backward compatibility with older SDK clients.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Legacy top-level temperature override (pre-`options.temperature` payloads).
+    /// See [`Self::model`].
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    /// Legacy top-level max-tokens override (pre-`options.max_tokens` payloads).
+    /// See [`Self::model`].
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
 
 /// Context for a chat request, including tenant and user info.

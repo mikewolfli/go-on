@@ -179,12 +179,10 @@ impl eframe::App for GoOnApp {
         if self.show_setup {
             let done = {
                 let mut cfg = self.config_store.write();
-                let result = self.views.setup_view.show(
-                    &ctx,
-                    &self.i18n,
-                    &mut cfg,
-                    &self.connection.backend,
-                );
+                let result =
+                    self.views
+                        .setup_view
+                        .show(ui, &self.i18n, &mut cfg, &self.connection.backend);
                 if result {
                     self.show_setup = false;
                     self.has_providers = has_valid_providers(&cfg);
@@ -278,7 +276,7 @@ impl eframe::App for GoOnApp {
             .is_some_and(|h| h.connected);
 
         // Toolbar
-        egui::Panel::top("toolbar").show_inside(ui, |ui| {
+        egui::Panel::top("toolbar").show(ui, |ui| {
             egui::Frame::NONE.show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let title_color = ui.style().visuals.text_color();
@@ -422,7 +420,7 @@ impl eframe::App for GoOnApp {
         ];
         let mut new_tab: Option<String> = None;
         let mut blocked_tab: Option<String> = None;
-        egui::Panel::top("tabs").show_inside(ui, |ui| {
+        egui::Panel::top("tabs").show(ui, |ui| {
             egui::Frame::NONE.show(ui, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -497,7 +495,7 @@ impl eframe::App for GoOnApp {
 
         // ═══════════════════════════════════════════════════════════════
         // ── Main content ────────────────────────────────────────────────
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             egui::Frame::NONE.show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("main_scroll")

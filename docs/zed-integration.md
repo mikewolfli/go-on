@@ -107,7 +107,6 @@ cycle triggers a full restart.
 |---|---|
 | `--protocol-mode acp_stdio` | ACP over stdio **(required for Zed)** |
 | `-b 127.0.0.1:8090` | Optional HTTP bind address for health checks / metrics |
-| `--verbose` | Enable verbose logging to stderr (useful for debugging) |
 | `--config <path>` | Path to go-on's `config.toml` |
 
 ### Environment Variables
@@ -209,11 +208,12 @@ curl http://127.0.0.1:8090/health
 | Connection refused | Wrong `--protocol-mode` | Make sure `--protocol-mode acp_stdio` is set |
 | Empty response / timeout | Missing API keys | Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in `env` |
 | `config.toml` not found | Wrong path | Pass `--config <path>` (there is no `GO_ON_CONFIG` env var) |
-| Verbose errors on stderr | Need debugging | Add `"--verbose"` to `args` |
+| Verbose errors on stderr | Need debugging | Set `RUST_LOG` (e.g. `RUST_LOG=debug`) in `env` |
 
 ### Enabling debug logging
 
-Add `"--verbose"` to the `args` array and set `"RUST_LOG": "debug"` in `env`. Then check Zed's
+Set `"RUST_LOG": "debug"` in the `env` array of the agent server config (go-on
+has no `--verbose` CLI flag; `RUST_LOG` is the supported logging knob). Then check Zed's
 agent server logs via **"Zed: Open Log"** → select the agent server log file.
 
 ---

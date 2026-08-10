@@ -305,7 +305,8 @@ impl ChatView {
         // ── Handle file drop (drag-and-drop) via egui 0.31 raw input ──
         let dropped = ui.input(|i| i.raw.dropped_files.clone());
         for f in &dropped {
-            if let Some(path) = &f.path {
+            let path = f.path();
+            if !path.as_os_str().is_empty() {
                 let mime = Self::guess_mime(path);
                 if mime.starts_with("image/") || mime.starts_with("application/pdf") {
                     if let Ok(data) = std::fs::read(path) {

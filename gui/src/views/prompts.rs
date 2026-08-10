@@ -549,7 +549,7 @@ impl PromptsView {
                     .resizable(true)
                     .default_size(200.0)
                     .size_range(150.0..=350.0)
-                    .show_inside(ui, |ui| {
+                    .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(i18n.t("prompts.categories"))
                                 .strong()
@@ -584,7 +584,7 @@ impl PromptsView {
                     });
 
                 // ── Right panel: templates list + detail ───────────────────
-                egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     match self.selected_category.clone() {
                         None => {
                             ui.label(egui::RichText::new(i18n.t("prompts.noCategory")).weak());

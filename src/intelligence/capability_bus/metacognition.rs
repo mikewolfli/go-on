@@ -32,7 +32,6 @@ impl CapabilityBus {
 
         // ── Generate metacognitive feedback and feed into Q-learning (F-GAP-51) ──
         let feedback = self.metacognitive.generate_evolve_feedback();
-        let _reward_multiplier = feedback["reward_multiplier"].as_f64().unwrap_or(1.0);
         let suggested_exploration_rate = feedback["suggested_exploration_rate"]
             .as_f64()
             .unwrap_or(0.1);

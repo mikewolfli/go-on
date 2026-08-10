@@ -383,6 +383,12 @@ impl CopilotAgent {
     }
 }
 
+/// Exponential backoff delay (seconds) for retry attempt `attempt`.
+/// Yields 1s, 2s, 4s for attempts 0, 1, 2.
+fn backoff_secs(attempt: u64) -> u64 {
+    1u64 << attempt
+}
+
 #[async_trait]
 impl Agent for CopilotAgent {
     async fn chat_once(
@@ -504,7 +510,7 @@ impl Agent for CopilotAgent {
         let mut last_error: Option<anyhow::Error> = None;
 
         'models: for model_id in &candidates {
-            for attempt in 0..=2 {
+            for attempt in 0u64..=2 {
                 let mut model_opts = options.clone().unwrap_or_default();
                 model_opts.insert("model".to_string(), json!(model_id));
                 let model_options = Some(model_opts);
@@ -552,7 +558,7 @@ impl Agent for CopilotAgent {
                                 // still try next model after exhausting retries
                                 if attempt < 2 {
                                     last_error = Some(err);
-                                    sleep(Duration::from_secs(1u64 << attempt)).await;
+                                    sleep(Duration::from_secs(backoff_secs(attempt))).await;
                                     continue;
                                 }
                                 continue 'models;
@@ -560,7 +566,7 @@ impl Agent for CopilotAgent {
                             // Non-auto: retry with backoff
                             if attempt < 2 {
                                 last_error = Some(err);
-                                sleep(Duration::from_secs(1u64 << attempt)).await;
+                                sleep(Duration::from_secs(backoff_secs(attempt))).await;
                             } else {
                                 last_error = Some(err);
                             }
@@ -569,7 +575,7 @@ impl Agent for CopilotAgent {
                         // Transient error → retry
                         if attempt < 2 {
                             last_error = Some(err);
-                            sleep(Duration::from_secs(1u64 << attempt)).await;
+                            sleep(Duration::from_secs(backoff_secs(attempt))).await;
                         } else {
                             last_error = Some(err);
                         }

@@ -559,11 +559,18 @@ impl PolicyEvaluator {
     }
 
     /// Post-execution output verification.
+    ///
     /// Validates that `output` is a well-formed JSON value, checks for expected
     /// structural fields, runs content safety and prompt injection checks,
     /// and logs the verification outcome.
-    pub fn verify_output(&self, output: &Value) -> OutputVerdict {
-        let stage = "default";
+    ///
+    /// `stage` is the current PUA execution stage (e.g. `"verification"` for
+    /// post-execute output checks). The stage drives the PUA evidence chain:
+    /// `collect_evidence(stage)` / `collect_missing(stage, ...)` are evaluated
+    /// against the real stage requirements so the harness genuinely checks the
+    /// stage's required evidence instead of the no-op `"default"` stage that
+    /// never matched any PUA plan requirement.
+    pub fn verify_output(&self, output: &Value, stage: &str) -> OutputVerdict {
         let completed: Vec<String> = Vec::new();
 
         // --- Validate the output value itself ---

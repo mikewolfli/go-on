@@ -4,11 +4,8 @@
 //! limitations, identity, and performance. All state is guarded behind
 //! `Arc<Mutex<>>` for thread-safe access.
 
-use crate::shared::execution_recorder::ExecutionRecorder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
@@ -67,13 +64,11 @@ impl Default for SelfModelConfig {
 // Internal state
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct Inner {
     identity: Option<SelfIdentity>,
     capability_stats: HashMap<String, CapabilityStats>,
     last_update_ms: u64,
-    #[serde(skip)]
-    persistence_path: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -95,26 +90,7 @@ impl SelfModelCore {
                 identity: None,
                 capability_stats: HashMap::new(),
                 last_update_ms: crate::shared::timestamps::now_ts_ms() as u64,
-                persistence_path: None,
             })),
-        }
-    }
-
-    /// Persist without locking (caller must hold the lock).
-    /// Used to avoid re-entrant lock deadlocks when persist is called
-    /// from methods that already hold the lock.
-    fn persist_inner(inner: &Inner) {
-        if let Some(path) = &inner.persistence_path {
-            match serde_json::to_string_pretty(inner) {
-                Ok(json) => {
-                    if let Err(e) = fs::write(path, &json) {
-                        debug!("SelfModel: failed to write persistence file: {e}");
-                    }
-                }
-                Err(e) => {
-                    debug!("SelfModel: failed to serialize state: {e}");
-                }
-            }
         }
     }
 
@@ -125,8 +101,6 @@ impl SelfModelCore {
         let mut inner = crate::lock_or_recover!(&self.inner, "intelligence");
         inner.identity = Some(identity);
         inner.last_update_ms = crate::shared::timestamps::now_ts_ms() as u64;
-        // Use persist_inner to avoid re-entrant lock deadlock
-        Self::persist_inner(&inner);
     }
 
     // -- Dynamic EMA Statistics -------------------------------------------
@@ -182,18 +156,15 @@ impl SelfModelCore {
             samples = stats.sample_count,
             "SelfModel: updated capability stats"
         );
-        Self::persist_inner(&inner);
     }
-}
 
-// ---------------------------------------------------------------------------
-// Trait implementations
-// ---------------------------------------------------------------------------
-
-impl ExecutionRecorder for SelfModelCore {
-    fn record_execution_result(&self, capability_name: &str, success: bool, latency: u64) {
-        // Delegate to the inherent method to avoid infinite recursion
-        // (the trait method would otherwise call itself).
-        SelfModelCore::record_execution_result(self, capability_name, success, latency);
+    /// Return a snapshot of the per-capability EMA statistics.
+    ///
+    /// Read-side counterpart of `record_execution_result`: exposes the
+    /// learned effectiveness/confidence/latency for each capability without
+    /// locking the whole core. Consumed by self-model runtime endpoints.
+    pub fn capability_stats(&self) -> HashMap<String, CapabilityStats> {
+        let inner = crate::lock_or_recover!(&self.inner, "intelligence");
+        inner.capability_stats.clone()
     }
 }

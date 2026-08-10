@@ -174,11 +174,6 @@ pub async fn new_acp_server(
     .with_capability_graph(registry.get_capability_graph())
     .with_provenance_ledger(Arc::clone(&provenance_ledger))
     .with_live_performance(Arc::clone(&perf_feed));
-    let cb_builder = if let Some(ref agent) = first_agent {
-        cb_builder.with_metacognitive_llm(agent.clone())
-    } else {
-        cb_builder
-    };
     let mut capability_bus = Arc::new(cb_builder);
 
     // GAP-B58-B09: Set self-model identity from package metadata
