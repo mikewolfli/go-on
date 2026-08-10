@@ -6,8 +6,9 @@
 //!
 //! Source of truth: <https://github.com/agentclientprotocol/agent-client-protocol>
 //!
-//! Many types are defined here for future use and may trigger dead_code
-//! warnings until they are adopted by the ACP handlers.
+//! Types are actively used by the ACP handlers (version negotiation, session
+//! and content blocks, permissions, session-config options) — keep definitions
+//! in sync with the upstream `agent-client-protocol-schema` crate.
 
 //!
 //! ## Serde rules

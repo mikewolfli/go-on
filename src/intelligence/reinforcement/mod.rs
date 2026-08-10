@@ -118,7 +118,8 @@ pub use action_check::{
     run_action_check, ActionCheckItem, ActionCheckKind, ActionCheckReport, FinalSummaryArtifact,
 };
 pub use health::{
-    aggregate_status, build_runtime_healthcheck_report, persist_runtime_healthcheck, CheckStatus,
+    aggregate_status, build_runtime_healthcheck_report,
+    build_runtime_healthcheck_report_with_config, persist_runtime_healthcheck, CheckStatus,
     ComponentReport, RuntimeHealthcheckReport,
 };
 pub use learning::{

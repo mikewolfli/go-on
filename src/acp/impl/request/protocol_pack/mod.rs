@@ -6,7 +6,7 @@ use tracing::{info, warn};
 
 use super::*;
 // GovernanceAction and AutonomousEditAuditEntry used by sub-modules via super::*
-use crate::mcp::MCP_VERSION;
+use crate::mcp::{MAX_CANCELLED_REQUESTS, MCP_VERSION};
 use crate::schema::{ModelsListResponse, PhaseResponse, ProtocolVersion};
 
 // ── Sub-modules ──────────────────────────────────────────────────────────
@@ -133,15 +133,6 @@ pub(super) fn acp_session_state() -> &'static tokio::sync::RwLock<HashMap<String
     ACP_SESSION_STATE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
 }
 
-static ACP_PERMISSION_STATE: OnceLock<
-    tokio::sync::RwLock<HashMap<String, crate::schema::PermissionOptionId>>,
-> = OnceLock::new();
-
-pub(crate) fn acp_permission_state(
-) -> &'static tokio::sync::RwLock<HashMap<String, crate::schema::PermissionOptionId>> {
-    ACP_PERMISSION_STATE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
-}
-
 static ACP_PENDING_PERMISSION_REQUESTS: OnceLock<
     tokio::sync::RwLock<HashMap<String, PendingPermissionRequest>>,
 > = OnceLock::new();
@@ -161,10 +152,9 @@ pub(super) fn acp_terminal_state() -> &'static StdMutex<HashMap<String, Terminal
 // The ACP arm mirrors the MCP transport's `cancelled_requests` registry
 // (src/mcp/handlers.rs): `$/cancel_request` marks a request id, and the
 // token-collection loops of in-flight requests check the mark and abort.
-
-/// Upper bound for the cancelled-request registry (same 10K bound as the MCP
-/// transport's `cancelled_requests`; oldest entry evicted on overflow).
-const MAX_CANCELLED_REQUESTS: usize = 10_000;
+// The 10K registry bound is shared with the MCP arm — see
+// `crate::mcp::MAX_CANCELLED_REQUESTS`. Eviction drops an arbitrary entry
+// (HashSet iteration order is unspecified), not the oldest.
 
 /// Request ids flagged by `$/cancel_request` (keyed with `value_to_id`).
 static ACP_CANCELLED_REQUESTS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();

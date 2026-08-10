@@ -55,10 +55,6 @@ pub struct PolicyEvaluator {
     /// the self-rationalization guard. Consumed by `HarnessBus::evaluate()`
     /// to record a rationalization block counter on the governance profile.
     pub(crate) rationalization_block_occurred: AtomicBool,
-    /// Set to true when the most recent `evaluate()` call resolved a review
-    /// gate outcome that bypasses manual review (i.e., the response indicates
-    /// override of the default review requirement).
-    pub(crate) review_override_occurred: AtomicBool,
 }
 
 impl PolicyEvaluator {
@@ -88,7 +84,6 @@ impl PolicyEvaluator {
             })),
             user_approved_tools: Mutex::new(std::collections::HashSet::new()),
             rationalization_block_occurred: AtomicBool::new(false),
-            review_override_occurred: AtomicBool::new(false),
         }
     }
 
@@ -244,11 +239,6 @@ impl PolicyEvaluator {
             tf("status.harness_bus.review_approved", &[])
         };
         let verdict = Self::resolve_review_policy(&review_response, 8);
-        // Detect review override: manual review was required but the gate
-        // resolved to Approve (e.g., via a customized review_verdict impl).
-        if requires_review && verdict_is_approved(verdict) {
-            self.review_override_occurred.store(true, Ordering::Release);
-        }
         let outcome = ReviewGateOutcome {
             passed: matches!(verdict, QualityVerdict::Approve),
             comments: vec![
@@ -773,13 +763,6 @@ impl PolicyEvaluator {
     pub fn drain_rationalization_blocked(&self) -> bool {
         self.rationalization_block_occurred
             .swap(false, Ordering::AcqRel)
-    }
-
-    /// Returns `true` if the most recent `evaluate()` call detected a review
-    /// gate override (manual review was required but the gate resolved to
-    /// Approve), and resets the flag.
-    pub fn drain_review_override(&self) -> bool {
-        self.review_override_occurred.swap(false, Ordering::AcqRel)
     }
 
     /// Resolve a raw response string into a governance-level review verdict.

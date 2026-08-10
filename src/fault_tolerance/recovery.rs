@@ -409,9 +409,17 @@ impl FaultToleranceEngine {
         plan.completed_ms = Some(crate::shared::timestamps::now_ts_ms_u64());
         plan.result = Some(result.to_string());
 
-        // Restore the node status if completing a recovery plan
+        // Restore the node status if completing a recovery plan. A node that
+        // was already brought back Online (e.g. by the `RestartNode` action,
+        // which resets the heartbeat to Online) must NOT be demoted back to
+        // Recovering — that would be a state-machine regression right after
+        // the consistency check passed. Only nodes that are still in a
+        // non-Online state (e.g. after `FailoverToBackup`) stay Recovering
+        // while the plan completes.
         if let Some(record) = inner.heartbeats.get_mut(&node_id_clone) {
-            record.status = NodeStatus::Recovering;
+            if record.status != NodeStatus::Online {
+                record.status = NodeStatus::Recovering;
+            }
         }
         drop(inner);
 

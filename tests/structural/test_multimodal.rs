@@ -48,10 +48,18 @@ async fn test_multimodal_pipeline_full() {
     let md_bytes: Vec<u8> = md_content.as_bytes().to_vec();
     let parser = go_on::multimodal::DocumentParser::default();
 
-    // The parsed text is the real output of the production parser (or the
-    // real feature-gating error if the markdown backend is not compiled in).
-    let parsed_text: Option<String> = match parser.parse_bytes(&md_bytes, "md") {
-        Ok(content) => {
+    // The parsed text is the real output of the production parser. The
+    // markdown backend is feature-gated (`document-markdown` via
+    // `sub-bus-multimodal`): under that feature the parser must produce real
+    // text; without it the parser must fail with a clear feature-gating
+    // error. Each branch asserts exactly its own behavior — no dual-path
+    // "either outcome passes" assertions.
+    let parsed_text: Option<String> = {
+        #[cfg(feature = "sub-bus-multimodal")]
+        {
+            let content = parser
+                .parse_bytes(&md_bytes, "md")
+                .expect("markdown parsing must succeed when sub-bus-multimodal is enabled");
             assert!(
                 !content.text_content.is_empty(),
                 "parsed text must not be empty"
@@ -63,16 +71,23 @@ async fn test_multimodal_pipeline_full() {
             ctx.parsed_text = Some(content.text_content.clone());
             Some(content.text_content)
         }
-        Err(e) => {
-            let err_str = e.to_string();
-            assert!(
-                err_str.contains("feature")
-                    || err_str.contains("disabled")
-                    || err_str.contains("markdown"),
-                "unexpected parse error: {}",
-                err_str
-            );
-            None
+        #[cfg(not(feature = "sub-bus-multimodal"))]
+        {
+            match parser.parse_bytes(&md_bytes, "md") {
+                Ok(_) => {
+                    panic!("markdown parser must not succeed without the document-markdown feature")
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    assert!(
+                        err_str.contains("feature")
+                            || err_str.contains("disabled")
+                            || err_str.contains("markdown"),
+                        "feature-gated parser must fail with a clear message, got: {err_str}"
+                    );
+                    None
+                }
+            }
         }
     };
 

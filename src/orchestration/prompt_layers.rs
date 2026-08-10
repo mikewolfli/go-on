@@ -1,54 +1,32 @@
-//! BLUE35 S6: Prompt 8-Layer Architecture (ARCH-03)
+//! BLUE35 S6: Prompt Layered Architecture (ARCH-03)
 //!
-//! Defines a layered prompt processing pipeline:
+//! Defines a layered prompt processing pipeline. Only the layers that are
+//! actually constructed in production remain:
 //! L1: System Prompt Assembly
 //! L2: Role & Identity Injection
-//! L3: Context Window Optimization
-//! L4: Task Decomposition Guidance
-//! L5: Safety & Constraint Enforcement
-//! L6: Output Format Specification
-//! L7: Chain-of-Thought Triggers
-//! L8: Meta-Cognitive Instructions
+//! (L3–L8 — context-window optimization, task decomposition guidance,
+//! safety constraints, output format, chain-of-thought triggers, and
+//! meta-cognitive instructions — were never constructed anywhere; they were
+//! removed as dead variants.)
 
 use serde::{Deserialize, Serialize};
 
-/// The 8 prompt layers
+/// The prompt layers actually used by the request path.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PromptLayer {
     L1SystemPrompt,
     L2RoleIdentity,
-    L3ContextWindow,
-    L4TaskDecomposition,
-    L5SafetyConstraints,
-    L6OutputFormat,
-    L7ChainOfThought,
-    L8MetaCognitive,
 }
 
 impl PromptLayer {
     pub fn all() -> Vec<PromptLayer> {
-        vec![
-            PromptLayer::L1SystemPrompt,
-            PromptLayer::L2RoleIdentity,
-            PromptLayer::L3ContextWindow,
-            PromptLayer::L4TaskDecomposition,
-            PromptLayer::L5SafetyConstraints,
-            PromptLayer::L6OutputFormat,
-            PromptLayer::L7ChainOfThought,
-            PromptLayer::L8MetaCognitive,
-        ]
+        vec![PromptLayer::L1SystemPrompt, PromptLayer::L2RoleIdentity]
     }
 
     pub fn name(&self) -> &'static str {
         match self {
             PromptLayer::L1SystemPrompt => "system_prompt",
             PromptLayer::L2RoleIdentity => "role_identity",
-            PromptLayer::L3ContextWindow => "context_window",
-            PromptLayer::L4TaskDecomposition => "task_decomposition",
-            PromptLayer::L5SafetyConstraints => "safety_constraints",
-            PromptLayer::L6OutputFormat => "output_format",
-            PromptLayer::L7ChainOfThought => "chain_of_thought",
-            PromptLayer::L8MetaCognitive => "meta_cognitive",
         }
     }
 }
@@ -108,8 +86,8 @@ mod tests {
     fn test_assemble_orders_by_priority() {
         let segments = vec![
             PromptSegment {
-                layer: PromptLayer::L5SafetyConstraints,
-                content: "safety first".to_string(),
+                layer: PromptLayer::L2RoleIdentity,
+                content: "role identity".to_string(),
                 priority: 10,
             },
             PromptSegment {
@@ -120,7 +98,7 @@ mod tests {
         ];
         let prompt = PromptAssembler::assemble(segments);
         assert!(prompt.assembled.starts_with("system instruction"));
-        assert!(prompt.assembled.contains("safety first"));
+        assert!(prompt.assembled.contains("role identity"));
     }
 
     #[test]

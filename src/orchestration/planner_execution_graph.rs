@@ -146,8 +146,12 @@ mod tests {
             task_id: "test-bridge".to_string(),
             phase: "execution".to_string(),
             role: "tester".to_string(),
-            objective: "Analyze the authentication module and implement the required fix"
-                .to_string(),
+            // "performance" keeps the unified keyword classifier at Medium
+            // (baseline 2 + 1), producing the 3-step plan-1/exec-1/review-1 DAG
+            // these bridge tests exercise.
+            objective:
+                "Analyze the authentication module and implement the required performance fix"
+                    .to_string(),
             constraints: None,
             evidence: None,
             input: serde_json::json!({}),

@@ -1106,6 +1106,14 @@ fn lookup_tool(
 fn classify_operation_by_keyword(tool: &str) -> ToolOperation {
     let lower = tool.to_ascii_lowercase();
 
+    // Synthetic phase-dispatch actions (`phase.full_auto.execute` etc.) are
+    // internal orchestration routing signals, not shell operations. Without
+    // this guard the `exec` keyword below would classify them as Shell,
+    // denying every phase request under Basic+ sandbox levels.
+    if tool.starts_with("phase.") {
+        return ToolOperation::Read;
+    }
+
     // Shell / execution keywords
     if lower.contains("shell")
         || lower.contains("command")
@@ -1181,6 +1189,12 @@ fn classify_operation_by_keyword(tool: &str) -> ToolOperation {
 /// Classify a tool by keyword patterns into a governance action.
 fn classify_action_by_keyword(tool: &str) -> GovernanceAction {
     let lower = tool.to_ascii_lowercase();
+
+    // Synthetic phase-dispatch actions are read-only orchestration signals
+    // (see `classify_operation_by_keyword` for the same guard).
+    if tool.starts_with("phase.") {
+        return GovernanceAction::Read;
+    }
 
     if lower.contains("shell") || lower.contains("command") || lower.contains("docker") {
         return GovernanceAction::Shell;

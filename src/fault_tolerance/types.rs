@@ -200,17 +200,18 @@ pub struct RecoveryCycleSummary {
 /// Configuration for cluster health threshold calculations.
 ///
 /// Used by `cluster_health_from_counts` to determine whether the cluster
-/// is Healthy, Degraded, or Critical based on node offline/degraded ratios.
+/// is Healthy, Degraded, or Critical based on node offline/degraded ratios
+/// and unresolved fault counts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterHealthConfig {
-    /// Ratio of offline nodes above which the cluster is considered healthy.
+    /// Ratio of offline nodes at or above which the cluster is **Critical**.
     /// Default: 0.5
     pub healthy_threshold: f64,
-    /// Ratio of offline nodes above which the cluster is considered degraded (when combined
-    /// with degraded ratio). Default: 0.2
+    /// Ratio of offline nodes at or above which the cluster is **Degraded**
+    /// (unless already Critical). Default: 0.2
     pub degraded_threshold: f64,
-    /// Ratio of degraded nodes above which the cluster is considered degraded.
-    /// Default: 0.3
+    /// Ratio of degraded nodes at or above which the cluster is **Degraded**
+    /// (unless already Critical). Default: 0.3
     pub unhealthy_threshold: f64,
 }
 

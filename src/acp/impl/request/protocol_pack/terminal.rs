@@ -62,6 +62,24 @@ pub async fn terminal_create_payload(_server: &AcpServer, params: Value) -> Resu
     )?)
 }
 
+/// Drain available output from a blocking pipe into the process output buffer.
+///
+/// Reads until EOF, an error, or a `WouldBlock`. The caller runs on the
+/// blocking pool (`spawn_blocking`), so no async worker is starved — adding a
+/// read timeout here would change the blocking-pipe semantics, so the loop is
+/// extracted as-is.
+fn drain(reader: &mut impl std::io::Read, output_buffer: &mut Vec<u8>) {
+    let mut buf = [0u8; 4096];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => output_buffer.extend_from_slice(&buf[..n]),
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => break,
+        }
+    }
+}
+
 /// Handle `terminal/output` — reads buffered terminal output.
 pub async fn terminal_output_payload(_server: &AcpServer, params: Value) -> Result<Value> {
     let terminal_id = params
@@ -79,28 +97,10 @@ pub async fn terminal_output_payload(_server: &AcpServer, params: Value) -> Resu
             });
         if let Some(proc) = state.get_mut(&terminal_id_owned) {
             if let Some(ref mut stdout) = proc.child.stdout {
-                use std::io::Read;
-                let mut buf = [0u8; 4096];
-                loop {
-                    match stdout.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => proc.output_buffer.extend_from_slice(&buf[..n]),
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(_) => break,
-                    }
-                }
+                drain(stdout, &mut proc.output_buffer);
             }
             if let Some(ref mut stderr) = proc.child.stderr {
-                use std::io::Read;
-                let mut buf = [0u8; 4096];
-                loop {
-                    match stderr.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => proc.output_buffer.extend_from_slice(&buf[..n]),
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(_) => break,
-                    }
-                }
+                drain(stderr, &mut proc.output_buffer);
             }
 
             let exit_code = proc.child.try_wait().ok().flatten().map(|status| {

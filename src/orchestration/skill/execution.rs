@@ -210,11 +210,16 @@ impl Skill for PromptBasedSkill {
                                 err_str
                             ));
                             if attempt < max_attempts {
-                                let backoff =
-                                    std::time::Duration::from_millis(500 * attempt as u64);
+                                // Same canonical exponential schedule as the
+                                // rate-limit branch above (1s, 2s, 4s, … capped
+                                // at 10s).
+                                let backoff_secs = crate::agents::agent::retry_backoff_secs(
+                                    attempt.saturating_sub(1) as u32,
+                                );
+                                let backoff = std::time::Duration::from_secs(backoff_secs);
                                 warn!(
-                                    "Prompt skill '{}' attempt {}/{} failed, retrying in {:?}: {}",
-                                    self.name, attempt, max_attempts, backoff, err_str
+                                    "Prompt skill '{}' attempt {}/{} failed, retrying in {}s: {}",
+                                    self.name, attempt, max_attempts, backoff_secs, err_str
                                 );
                                 tokio::time::sleep(backoff).await;
                             }
@@ -323,27 +328,6 @@ pub(crate) fn normalize_name(name: &str) -> String {
         .collect::<String>()
 }
 
-pub(crate) fn name_similarity(left: &str, right: &str) -> f64 {
-    if left.is_empty() || right.is_empty() {
-        return 0.0;
-    }
-    if left == right {
-        return 1.0;
-    }
-
-    let shared_prefix = left
-        .chars()
-        .zip(right.chars())
-        .take_while(|(l, r)| l == r)
-        .count() as f64;
-    let prefix_score = shared_prefix / left.len().max(right.len()) as f64;
-
-    let overlap = left.chars().filter(|ch| right.contains(*ch)).count() as f64;
-    let overlap_score = overlap / left.len().max(right.len()) as f64;
-
-    (0.5 * prefix_score + 0.5 * overlap_score).clamp(0.0, 1.0)
-}
-
 pub(crate) fn extract_intent_tokens(input: &Value) -> std::collections::BTreeSet<String> {
     let mut chunks = Vec::new();
     if let Some(object) = input.as_object() {
@@ -356,36 +340,6 @@ pub(crate) fn extract_intent_tokens(input: &Value) -> std::collections::BTreeSet
         }
     }
     tokenize_text(&chunks.join(" "))
-}
-
-pub(crate) fn semantic_similarity(
-    intent_tokens: &std::collections::BTreeSet<String>,
-    skill: &Arc<dyn Skill>,
-) -> f64 {
-    if intent_tokens.is_empty() {
-        return 0.5;
-    }
-    let mut signature = String::new();
-    signature.push_str(skill.name());
-    signature.push(' ');
-    signature.push_str(skill.description());
-    signature.push(' ');
-    signature.push_str(&skill.input_schema().to_string());
-
-    let skill_tokens = tokenize_text(&signature);
-    if skill_tokens.is_empty() {
-        return 0.0;
-    }
-
-    let overlap = intent_tokens
-        .iter()
-        .filter(|token| skill_tokens.contains(*token))
-        .count() as f64;
-    let union = intent_tokens.union(&skill_tokens).count().max(1) as f64;
-    let token_score = (overlap / union).clamp(0.0, 1.0);
-    let intent_text = intent_tokens.iter().cloned().collect::<Vec<_>>().join(" ");
-    let embedding_score = embedding_cosine_similarity(&intent_text, &signature);
-    (0.5 * token_score + 0.5 * embedding_score).clamp(0.0, 1.0)
 }
 
 /// Shared bag-of-words tokenizer for the skill module tree.
@@ -411,18 +365,6 @@ fn tokenize_text(text: &str) -> std::collections::BTreeSet<String> {
     tokenize_with_stopwords(text, 3, &HashSet::new())
         .into_iter()
         .collect()
-}
-
-/// Embedding-based similarity over the canonical minhash embedding
-/// (`embedding_provider::local_hash_embed`) shared by the vector store, token
-/// cache L2, and semantic response cache — so scores are comparable across
-/// every similarity consumer.
-fn embedding_cosine_similarity(left: &str, right: &str) -> f64 {
-    let left_vec = crate::memory::embedding_provider::local_hash_embed(left, 96);
-    let right_vec = crate::memory::embedding_provider::local_hash_embed(right, 96);
-    f64::from(crate::shared::math::cosine_similarity_f32(
-        &left_vec, &right_vec,
-    ))
 }
 
 /// Built-in echo skill.

@@ -237,14 +237,49 @@ export class GoOnClient {
       body.stream = stream;
     }
 
-    const response = await fetch(`${this.baseUrl}${CHAT_STREAM_ENDPOINT}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    });
+    // Combine the caller's abort signal (if any) with a default timeout
+    // (this.timeout, default 30s) — matching the Rust (`req.timeout`) and
+    // Python (httpx timeout) SDKs, which also apply the configured timeout to
+    // streaming requests. The timeout stays armed for the whole stream (not
+    // just the connection phase), so a mid-stream stall is bounded too.
+    const controller = new AbortController();
+    let timedOut = false;
+    // Keep a stable listener reference so removeEventListener below actually
+    // removes it (a fresh arrow function each time would leak listeners).
+    const onAbort = () => controller.abort();
+    if (signal?.aborted) {
+      controller.abort();
+    } else {
+      signal?.addEventListener("abort", onAbort, { once: true });
+    }
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeout);
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${CHAT_STREAM_ENDPOINT}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onAbort);
+      if (timedOut) {
+        throw new GoOnError(
+          0,
+          `Chat stream timed out after ${this.timeout}ms`,
+        );
+      }
+      throw e;
+    }
 
     if (!response.ok) {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onAbort);
       throw new GoOnError(
         response.status,
         `HTTP ${response.status}: ${response.statusText}`,
@@ -257,10 +292,10 @@ export class GoOnClient {
     let wasAborted = false;
 
     // Listen for abort signal so we can distinguish "completed" vs "aborted"
-    const onAbort = () => {
+    const onStreamAbort = () => {
       wasAborted = true;
     };
-    signal?.addEventListener("abort", onAbort);
+    signal?.addEventListener("abort", onStreamAbort);
 
     try {
       while (true) {
@@ -268,11 +303,17 @@ export class GoOnClient {
         try {
           result = await reader.read();
         } catch {
+          // Abort (caller signal or timeout) surfaces as a read rejection.
+          // On timeout, surface the error to the consumer; otherwise record
+          // the abort and let the `finally` block yield the single abort
+          // notification below (no duplicate yield here).
+          if (timedOut) {
+            throw new GoOnError(
+              0,
+              `Chat stream timed out after ${this.timeout}ms`,
+            );
+          }
           wasAborted = true;
-          yield {
-            _type: "abort",
-            message: "Chat stream was aborted",
-          } as Record<string, unknown>;
           return;
         }
 
@@ -300,7 +341,9 @@ export class GoOnClient {
         }
       }
     } finally {
+      clearTimeout(timeoutId);
       signal?.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onStreamAbort);
       reader.releaseLock();
       // If the stream ended due to abort, yield a structured notification
       if (wasAborted) {

@@ -107,9 +107,9 @@ impl GovernanceStatus {
         if profile.drift_detections > 50 {
             status.mark_degraded("drift");
         }
-        if profile.review_overrides > 20 {
-            status.mark_degraded("voting");
-        }
+        // (review_overrides has no producer — the review gate never resolves
+        // to an override — so the old `> 20 → degraded("voting")` branch was
+        // dead and removed; the voting subsystem stays healthy.)
 
         status
     }

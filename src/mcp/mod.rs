@@ -16,30 +16,44 @@ pub mod client;
 mod tests;
 
 pub(crate) use schema::mcp_initialize_capabilities;
+// Re-export for the transports (src/protocol/mcp_server.rs): `handlers` is a
+// private module, so the mapping must be reachable at `crate::mcp::error_code_for`.
+pub(crate) use handlers::error_code_for;
 pub use schema::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
     McpListResourcesResult, McpListToolsResult, McpResource, McpTool, ServerInfo, JSONRPC_VERSION,
 };
 
 /// JSON-RPC error codes shared by the MCP layer.
+///
+/// The standard JSON-RPC codes that also exist in the ACP layer
+/// (`-32601`/`-32602`/`-32603`/`-32800`) reference `AcpErrorCode` as their
+/// single source of truth so the two protocol arms cannot drift.
 pub mod error_codes {
+    use crate::acp::r#impl::request::protocol::AcpErrorCode;
+
     /// JSON-RPC Parse error
     pub const PARSE_ERROR: i32 = -32700;
     /// JSON-RPC Invalid Request
     pub const INVALID_REQUEST: i32 = -32600;
     /// JSON-RPC Method not found
-    pub const METHOD_NOT_FOUND: i32 = -32601;
+    pub const METHOD_NOT_FOUND: i32 = AcpErrorCode::MethodNotFound as i32;
     /// JSON-RPC Invalid params
-    pub const INVALID_PARAMS: i32 = -32602;
+    pub const INVALID_PARAMS: i32 = AcpErrorCode::InvalidParams as i32;
     /// JSON-RPC Internal error
-    pub const INTERNAL_ERROR: i32 = -32603;
+    pub const INTERNAL_ERROR: i32 = AcpErrorCode::InternalError as i32;
     /// Request cancelled by client notification.
-    pub const REQUEST_CANCELLED: i32 = -32800;
+    pub const REQUEST_CANCELLED: i32 = AcpErrorCode::RequestCancelled as i32;
     /// Request timed out before producing a result.
     pub const REQUEST_TIMEOUT: i32 = -32801;
     /// Server has not been initialized yet (MCP spec -32002).
     pub const SERVER_NOT_INITIALIZED: i32 = -32002;
 }
+
+/// Upper bound for the cancelled-request registries (MCP `notifications/cancelled`
+/// and ACP `$/cancel_request`). Shared by both transport arms so the bound
+/// exists in exactly one place.
+pub(crate) const MAX_CANCELLED_REQUESTS: usize = 10_000;
 
 /// MCP Protocol Version — latest stable spec
 pub const MCP_VERSION: &str = "2024-11-05";

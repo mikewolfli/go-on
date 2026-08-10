@@ -427,20 +427,25 @@ fn layout_horizontal(nodes: &[MathNode], font_size: f32) -> LayoutBox {
     let mut x_offset = 0.0;
     let mut max_h = 0.0;
     let mut baseline = font_size * 0.85;
+    // Whether the previous element was an operator — lets the operator's extra
+    // spacing be applied symmetrically on both sides (once before the operator,
+    // once before the following operand) instead of an asymmetric before/after
+    // pair with a trailing phantom gap after the last element.
+    let mut prev_was_operator = false;
 
     for node in nodes {
         let box_ = layout_node(node, font_size);
-        // Add spacing between elements
-        if x_offset > 0.0 {
-            x_offset += 2.0; // inter-element spacing
-        }
         // Check if this is a binary operator (+, -, =, etc.)
         let is_operator = matches!(node, MathNode::Operator(_))
             || matches!(node, MathNode::Text(s) if s.len() == 1 && matches!(s.chars().next(), Some('+' | '-' | '=' | '<' | '>' | '/' | '(' | ')' | '[' | ']')));
 
-        // Add extra spacing around operators
-        if is_operator && x_offset > 0.0 {
-            x_offset += 2.0;
+        // Inter-element gap: 2.0 baseline, plus 2.0 operator extra when either
+        // side of the gap is an operator — symmetric on both sides.
+        if x_offset > 0.0 {
+            x_offset += 2.0; // inter-element spacing
+            if is_operator || prev_was_operator {
+                x_offset += 2.0; // operator extra spacing
+            }
         }
 
         elements.push(SvgElement::Group {
@@ -448,16 +453,13 @@ fn layout_horizontal(nodes: &[MathNode], font_size: f32) -> LayoutBox {
             transform: Some((x_offset, 0.0)),
         });
 
+        prev_was_operator = is_operator;
         x_offset += box_.width;
         if box_.height > max_h {
             max_h = box_.height;
         }
         if box_.baseline > baseline {
             baseline = box_.baseline;
-        }
-
-        if is_operator {
-            x_offset += 2.0;
         }
     }
 

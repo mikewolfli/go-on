@@ -108,13 +108,9 @@ developer machine at the time of writing:
 > not installed in this workspace's `~/.agents/skills/` and have been removed
 > from this list. These skills (if desired) live outside this repository.
 
-> ⚠️ **Backend registry drift**: the backend's `builtin_skills()` fallback
-> (`src/orchestration/skill_market.rs`) still returns 33 entries using the
-> **old pre-merge names** (e.g. `code-reviewer`, `commit-message-generator`,
-> `decision-logger`, `dependency-analyzer`, `review-pr`, `embed-text`), while
-> this directory contains 34 skills under the **new merged names**. The
-> backend registry should be synced to the new names in a separate backend
-> change (out of scope for this repository's docs/SDK/GUI layer).
+> The backend's `builtin_skills()` fallback (`src/orchestration/skill_market.rs`)
+> mirrors this list under the same 34 names, so the marketplace display names
+> and the local `skills/` inventory stay in sync.
 
 ### Removed (merged into others)
 

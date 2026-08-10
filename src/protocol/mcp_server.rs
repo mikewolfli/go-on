@@ -21,7 +21,6 @@ use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::i18n::runtime::{t, tf};
-use crate::mcp::error_codes;
 use crate::mcp::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpServer};
 use crate::security::mtls::MtlsAcceptor;
 use crate::tool::ToolRegistry;
@@ -99,33 +98,62 @@ impl McpStdioServer {
                         if line_str.starts_with('[') {
                             match serde_json::from_str::<Vec<JsonRpcRequest>>(&line_str) {
                                 Ok(requests) => {
-                                    for req in requests {
+                                    // Process each request in the batch concurrently
+                                    // (matching the HTTP transport) while preserving
+                                    // request order in the response stream.
+                                    let responses = join_all(requests.into_iter().map(|req| async {
                                         let req_id = req.id.clone();
                                         match self.mcp_server.handle_request(req).await {
                                             Ok(resp) => {
-                                            // Notifications (id=null or id=Value::Null sentinel) don't produce a response.
+                                                // Notifications (id=null or id=Value::Null sentinel)
+                                                // don't produce a response per JSON-RPC 2.0.
                                                 if resp.id.is_none()
                                                     || resp.id == Some(serde_json::Value::Null)
                                                 {
-                                                    continue;
+                                                    None
+                                                } else {
+                                                    Some(resp)
                                                 }
-                                                let mut stdout = stdout.lock().await;
-                                                let response_line = serde_json::to_string(&resp)?;
-                                                stdout.write_all(response_line.as_bytes()).await?;
-                                                stdout.write_all(b"\n").await?;
-                                                stdout.flush().await?;
                                             }
                                             Err(e) => {
                                                 let err_msg = format!("{}", e);
                                                 warn!(
                                                     "{}",
-                                                    tf("error.handling_request", &[("error", &err_msg)])
+                                                    tf(
+                                                        "error.handling_request",
+                                                        &[("error", &err_msg)],
+                                                    )
                                                 );
-                                                let mut stdout = stdout.lock().await;
-                                                send_handler_error(&mut *stdout, req_id, &err_msg).await?;
+                                                // Mirror the serial path: even a failed
+                                                // notification still gets an error line
+                                                // (id null) so the client learns of the
+                                                // failure; the code is mapped from the
+                                                // underlying error, not hardcoded.
+                                                Some(JsonRpcResponse {
+                                                    jsonrpc: "2.0".to_string(),
+                                                    result: None,
+                                                    error: Some(JsonRpcError {
+                                                        code: crate::mcp::error_code_for(&e),
+                                                        message: err_msg,
+                                                        data: None,
+                                                    }),
+                                                    id: req_id,
+                                                })
                                             }
                                         }
+                                    }))
+                                    .await
+                                    .into_iter()
+                                    .flatten()
+                                    .collect::<Vec<_>>();
+
+                                    let mut stdout = stdout.lock().await;
+                                    for resp in responses {
+                                        let response_line = serde_json::to_string(&resp)?;
+                                        stdout.write_all(response_line.as_bytes()).await?;
+                                        stdout.write_all(b"\n").await?;
                                     }
+                                    stdout.flush().await?;
                                 }
                                 Err(parse_error) => {
                                     warn!(
@@ -163,7 +191,13 @@ impl McpStdioServer {
                                             let err_msg = format!("{}", e);
                                             warn!("{}", tf("error.handling_request", &[("error", &err_msg)]));
                                             let mut stdout = stdout.lock().await;
-                                            send_handler_error(&mut *stdout, request_id, &err_msg).await?;
+                                            send_handler_error(
+                                                &mut *stdout,
+                                                request_id,
+                                                crate::mcp::error_code_for(&e),
+                                                &err_msg,
+                                            )
+                                            .await?;
                                         }
                                     }
                                 }
@@ -914,7 +948,10 @@ async fn handle_http_connection(
                         jsonrpc: "2.0".to_string(),
                         result: None,
                         error: Some(JsonRpcError {
-                            code: error_codes::INTERNAL_ERROR,
+                            // Same error-code mapping as the single-request
+                            // path, so e.g. METHOD_NOT_FOUND keeps its code
+                            // instead of collapsing into INTERNAL_ERROR.
+                            code: crate::mcp::error_code_for(&e),
                             message: format!("{}", e),
                             data: None,
                         }),
@@ -974,7 +1011,40 @@ async fn handle_http_connection(
         }
     };
 
-    let response = mcp_server.handle_request(request).await?;
+    let req_id = request.id.clone();
+    let response = match mcp_server.handle_request(request).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            warn!(
+                "MCP HTTP: error handling request from {} {}: {}",
+                method, path, e
+            );
+            // Keep the connection alive: write a JSON-RPC error response with
+            // the error code mapped by `error_code_for` (same shape as the
+            // parse-error branch) instead of propagating the Err, which would
+            // drop the connection without a response.
+            let error_data =
+                inject_platform_profiles_if_absent(serde_json::json!({}), "mcp.handler_error");
+            let error_response = JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: None,
+                error: Some(JsonRpcError {
+                    code: crate::mcp::error_code_for(&e),
+                    message: format!("{}", e),
+                    data: Some(error_data),
+                }),
+                id: req_id,
+            };
+            write_http_json_response(
+                socket,
+                200,
+                serde_json::to_value(error_response)?,
+                &cors_headers,
+            )
+            .await?;
+            return Ok(());
+        }
+    };
     debug!("MCP HTTP: dispatched {} {} -> ok", method, path);
 
     // MCP notifications (JSON-RPC with id=null) must not produce
@@ -1158,21 +1228,24 @@ async fn send_parse_error(
     Ok(())
 }
 
-/// Send a JSON-RPC Internal error response (-32603) to the client.
+/// Send a JSON-RPC error response to the client.
 ///
 /// Used when `handle_request` returns an `Err` after successfully parsing
-/// the JSON-RPC request.  If the original request `id` is unavailable, a
-/// `null` id is sent per the JSON-RPC 2.0 spec.
+/// the JSON-RPC request. The error `code` is mapped from the underlying error
+/// by `crate::mcp::error_code_for` (e.g. McpCodeError keeps its own code
+/// instead of always falling back to -32603). If the original request `id`
+/// is unavailable, a `null` id is sent per the JSON-RPC 2.0 spec.
 async fn send_handler_error(
     writer: &mut (impl tokio::io::AsyncWrite + Unpin),
     id: Option<serde_json::Value>,
+    code: i32,
     error_message: &str,
 ) -> std::io::Result<()> {
     let error = json!({
         "jsonrpc": "2.0",
         "id": id,
         "error": {
-            "code": -32603,
+            "code": code,
             "message": error_message
         }
     });

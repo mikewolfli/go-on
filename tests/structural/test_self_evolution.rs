@@ -1,15 +1,22 @@
 //! GAP-B52-37: Self-Evolution End-to-End
 //!
-//! Validates the full self-evolution lifecycle:
+//! Validates the self-evolution lifecycle:
 //!   trigger → analyze → propose → approve → sandbox → compile → commit → rollback
 //!
 //! Uses in-memory mock trigger sources and sandbox executors so this test
 //! can run without external infrastructure. Real integration would connect
 //! to a live go-on server with git and build-toolchain access.
 //!
+//! Coverage notes:
+//!   - The error path (no trigger sources) and the data-structure/constructor
+//!     contracts are asserted directly.
+//!   - `test_self_evolution_loop_polls_trigger_sources` proves the loop
+//!     machinery genuinely starts and polls registered sources.
+//!   - The full apply/commit/rollback stages require a real LLM agent (patch
+//!     generation), a compile-capable sandbox, and git — not available in
+//!     this sandbox, so those stages are covered by unit tests in the crate.
+//!
 //! # integration-test
-//! The sandbox methods build using the tokio::process::Command stub. In a
-//! production e2e, the sandbox would run inside a Docker container.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -303,4 +310,77 @@ async fn test_self_evolution_error_path_no_triggers_auto_approval() {
         Approval::approved("auto-rollback".into(), Some("health check failed".into()));
     assert!(rollback_approval.is_approved());
     assert_eq!(rollback_approval.by, "auto-rollback");
+}
+
+/// Validates the happy-path loop machinery: `run()` genuinely starts, polls
+/// registered trigger sources, and keeps driving evolution cycles instead of
+/// returning immediately or spinning on a no-op.
+///
+/// A counting mock trigger source fires one real trigger on its first poll
+/// (exercising the analyze/propose phases — without an agent the cycle is
+/// recorded as a skip) and counts subsequent polls. `run()` runs until the
+/// test has observed several polls and then cancels the task.
+#[tokio::test]
+async fn test_self_evolution_loop_polls_trigger_sources() {
+    use go_on::orchestration::self_evolution::evolution_loop::observe::TriggerSource;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct CountingSource {
+        polls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl TriggerSource for CountingSource {
+        fn name(&self) -> &str {
+            "counting_source"
+        }
+        async fn poll(&self) -> Vec<EvolutionTrigger> {
+            let n = self.polls.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == 1 {
+                // Fire one real trigger so the loop executes an evolution
+                // cycle (analyze → propose) rather than only polling.
+                vec![EvolutionTrigger::ManualRequest {
+                    instruction: "probe evolution cycle".into(),
+                }]
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    let ctx = EvolutionE2eContext::new("loop-001");
+    let sandbox =
+        SandboxExecutor::new(ctx.workdir.clone(), 3).with_allowed_targets(vec!["**/*.rs".into()]);
+    let polls = Arc::new(AtomicUsize::new(0));
+    let source = Box::new(CountingSource {
+        polls: Arc::clone(&polls),
+    });
+
+    let mut loop_instance = EvolutionLoop::new(ctx.workdir.clone())
+        .with_sandbox(sandbox)
+        .with_trigger_source(source)
+        .with_poll_interval(Duration::from_millis(50));
+
+    let handle = tokio::spawn(async move {
+        // Runs until cancelled; returns Err only if no trigger sources are
+        // registered (which is not the case here).
+        let _ = loop_instance.run().await;
+    });
+
+    // Wait until the loop has polled the source several times (proving the
+    // interval loop is alive and drives cycles), with a bounded deadline.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while polls.load(Ordering::SeqCst) < 3 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    handle.abort();
+    let _ = handle.await;
+
+    assert!(
+        polls.load(Ordering::SeqCst) >= 3,
+        "run() must poll registered trigger sources repeatedly, got {} polls",
+        polls.load(Ordering::SeqCst)
+    );
 }

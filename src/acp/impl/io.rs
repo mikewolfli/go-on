@@ -83,13 +83,24 @@ pub async fn send_error(
 /// Send notification
 ///
 /// This function replaces the `AcpServer::send_notification` method.
-pub async fn send_notification(server: &AcpServer, method: &str, params: Value) -> Result<()> {
+pub async fn send_notification(_server: &AcpServer, method: &str, params: Value) -> Result<()> {
+    write_notification_envelope(method, params).await
+}
+
+/// Write a JSON-RPC notification envelope (`{"jsonrpc","method","params"}`)
+/// to the current transport (or stdout fallback).
+///
+/// Single implementation of the notification envelope shape, shared by
+/// `send_notification` and the ACP `session/update` writer
+/// (`protocol_pack::session::send_session_update`) so the wire format exists
+/// in exactly one place.
+pub(crate) async fn write_notification_envelope(method: &str, params: Value) -> Result<()> {
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": method,
         "params": params,
     });
-    write_json_line(server, &payload).await
+    write_json_line_value(&payload).await
 }
 
 /// Write JSON-RPC response
@@ -147,6 +158,14 @@ pub async fn respond(
 ///
 /// Fallback: If no transport is set (tests, initialization), writes to stdout.
 pub async fn write_json_line(_server: &AcpServer, value: &Value) -> Result<()> {
+    write_json_line_value(value).await
+}
+
+/// Write a JSON line to the current transport (or stdout fallback).
+///
+/// The `AcpServer` parameter of the public `write_json_line` wrapper is
+/// unused — all transports resolve through the process-wide `CURRENT_TRANSPORT`.
+async fn write_json_line_value(value: &Value) -> Result<()> {
     // Use global Transport trait if set
     if let Some(transport) = get_current_transport() {
         return transport.write_json_line(value).await;

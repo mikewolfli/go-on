@@ -83,13 +83,13 @@ mod tests {
             "Simple"
         );
 
-        // Medium task -> 3 steps
+        // Medium task -> 3 steps (unified classifier: baseline + "performance")
         let medium_task = AgentTaskEnvelope {
             task_id: "medium-1".to_string(),
             phase: "coding".to_string(),
             role: "coder".to_string(),
             objective:
-                "Fix the bug in the authentication module and verify everything works correctly"
+                "Fix the performance bug in the authentication module and verify everything works correctly"
                     .to_string(),
             constraints: None,
             evidence: None,
@@ -102,12 +102,12 @@ mod tests {
             "Medium task should produce 3 steps"
         );
 
-        // Complex task -> full DAG
+        // Complex task -> full DAG (unified classifier: baseline + "redesign")
         let complex_task = AgentTaskEnvelope {
             task_id: "complex-1".to_string(),
             phase: "coding".to_string(),
             role: "coder".to_string(),
-            objective: "Research the authentication module, refactor to use JWT, build a middleware chain, and write comprehensive unit tests for all modified components".to_string(),
+            objective: "Research the authentication module, redesign the middleware chain to use JWT, and build comprehensive unit tests".to_string(),
             constraints: None,
             evidence: None,
             input: serde_json::json!({}),

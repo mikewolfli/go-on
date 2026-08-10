@@ -42,7 +42,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo clippy -D warnings` | 测试数 |
 |:--------|:--------------------------:|:------:|
-| **local** | ✅ **零警告** | **全部通过（~3.5K）** |
+| **local** | ✅ **零警告** | **全部通过（~1.8K）** |
 | **simple-server** | ✅ **零警告** | **全部通过** |
 | **full** | ✅ **零警告** | **全部通过** |
 | **multi-users-server** | ✅ **零警告** | **全部通过** |
@@ -136,9 +136,9 @@ go-on 在后端实现了约 **95%** 的全链路国际化覆盖：
 
 | 语言 | 文件 | 键值数 |
 |:-----|:-----|:------:|
-| 英语（美国） | `config/languages/en-US.json` | 711 |
-| 简体中文 | `config/languages/zh-CN.json` | 711 |
-| 繁体中文 | `config/languages/zh-TW.json` | 711 |
+| 英语（美国） | `config/languages/en-US.json` | 733 |
+| 简体中文 | `config/languages/zh-CN.json` | 733 |
+| 繁体中文 | `config/languages/zh-TW.json` | 733 |
 
 覆盖层：ACP/MCP HTTP 错误（100%）、Agent 供应商模块（100%，35 家供应商）、配置验证（100%）、CLI 初始化（100%）、API 处理错误（100%）、编排层（100%）、GUI（约 98%）、VS Code 插件（70+ 键值）。
 

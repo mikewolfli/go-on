@@ -34,12 +34,12 @@
 //!
 //! The application follows a modular architecture:
 //!
-//! 1. **Configuration Layer**: `config.rs`, `config_validation.rs`
-//! 2. **Telemetry Layer**: `telemetry.rs`, `telemetry_enhanced.rs`
-//! 3. **Performance Layer**: `performance.rs`, `observability.rs`
-//! 4. **Agent Layer**: `agent.rs`, `agents/` directory
-//! 5. **Protocol Layer**: `acp.rs`, `rpc_protocol.rs`
-//! 6. **Business Logic**: `flow.rs`, `task_router.rs`, `orchestrator.rs`
+//! 1. **Configuration Layer**: `src/core/config/` (parser, env overrides, defaults), `src/core/config_validation.rs`
+//! 2. **Telemetry Layer**: `src/observability/` (`telemetry_enhanced.rs`, `performance.rs`, `memory_health/`)
+//! 3. **Agent Layer**: `src/agents/` (`agent.rs`, agent registry)
+//! 4. **Protocol Layer**: `src/acp/` (ACP server + request handlers), `src/protocol/`
+//! 5. **Core Services**: `src/core/setup.rs`, `src/shared/`, `src/i18n/`
+//! 6. **Business Logic**: `src/orchestration/` (flow, orchestrator, task routing), `src/intelligence/` (reinforcement, capability graph)
 //!
 //! Each layer has clear responsibilities and well-defined interfaces.
 

@@ -37,6 +37,14 @@ pub const MEMORY_CRITICAL_MB: u64 = 256;
 /// Free memory threshold (MB) below which we abort immediately.
 pub const MEMORY_JETSAM_RISK_MB: u64 = 128;
 
+/// Free memory threshold (MB) below which resource limits are tightened
+/// (the "moderate" tier in [`estimate_safe_limits`]).
+pub const MEMORY_MODERATE_MB: u64 = 1024;
+
+/// Free memory threshold (MB) below which resource limits are relaxed
+/// (the "comfortable" tier in [`estimate_safe_limits`]).
+pub const MEMORY_COMFORTABLE_MB: u64 = 2048;
+
 // ── System Memory Info ──────────────────────────────────────────────────────
 
 /// Snapshot of system memory state.
@@ -80,6 +88,12 @@ impl SystemMemoryInfo {
 /// - **macOS**: `sysctl hw.memsize`, `vm_stat`, `sysctl vm.swapusage`, `sysctl kern.memorystatus_vm_pressure_level`
 /// - **Linux**: `/proc/meminfo`
 /// - **Windows**: `GlobalMemoryStatusEx`
+///
+/// # Blocking caveat
+/// The macOS branch spawns `sysctl`/`vm_stat` subprocesses (blocking I/O) and
+/// the Linux branch reads `/proc`; callers on tokio workers (e.g. the periodic
+/// alert loop in `acp/background.rs`) should route this through
+/// `tokio::task::spawn_blocking` on macOS. See `evaluate_memory_alerts`.
 pub fn query_system_memory() -> SystemMemoryInfo {
     #[cfg(target_os = "macos")]
     {
@@ -289,6 +303,14 @@ fn query_windows_memory() -> SystemMemoryInfo {
 /// Shared by the startup one-shot check and the periodic 30s alert loop so
 /// runtime memory degradation is actually observed (previously the rules
 /// were only evaluated once at startup).
+///
+/// # Blocking caveat
+/// `query_system_memory` spawns subprocesses on macOS (`sysctl`/`vm_stat`)
+/// and reads `/proc` on Linux. The periodic caller in `acp/background.rs`
+/// runs on a tokio worker; on macOS the subprocess spawn + pipe reads are
+/// blocking I/O. The macOS branch is left unmodified here because it is
+/// unverifiable on non-macOS hosts; the safe follow-up is to route this call
+/// through `tokio::task::spawn_blocking` at the call site.
 pub fn evaluate_memory_alerts() {
     let info = query_system_memory();
     let free_mb = info.free_mb();
@@ -426,20 +448,22 @@ pub fn estimate_safe_limits(
         );
     }
 
-    // Estimate safe values based on free memory
+    // Estimate safe values based on free memory. Thresholds reference the
+    // shared public constants (MEMORY_CRITICAL_MB / MEMORY_WARN_MB / …) so
+    // the tier boundaries cannot drift from the documented thresholds.
     let (cache_max, vector_max, inflight_max) = if low_memory_mode {
         // Ultra-conservative: absolute minimum
         (500, 500, 8)
-    } else if free_mb < 256 {
+    } else if free_mb < MEMORY_CRITICAL_MB {
         // Critical: severely limit
         (500, 500, 8)
-    } else if free_mb < 512 {
+    } else if free_mb < MEMORY_WARN_MB {
         // Low
         (1000, 1000, 16)
-    } else if free_mb < 1024 {
+    } else if free_mb < MEMORY_MODERATE_MB {
         // Moderate
         (2000, 2000, 32)
-    } else if free_mb < 2048 {
+    } else if free_mb < MEMORY_COMFORTABLE_MB {
         // Comfortable
         (3000, 5000, 64)
     } else {

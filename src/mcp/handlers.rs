@@ -137,7 +137,7 @@ fn request_id_key(id: &Value) -> String {
     }
 }
 
-fn error_code_for(err: &anyhow::Error) -> i32 {
+pub(crate) fn error_code_for(err: &anyhow::Error) -> i32 {
     if err.downcast_ref::<McpParamError>().is_some() {
         super::error_codes::INVALID_PARAMS
     } else if let Some(coded) = err.downcast_ref::<McpCodeError>() {
@@ -153,10 +153,13 @@ impl McpServer {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
-        // Prevent unbounded growth: evict oldest entry if over 10K limit
-        if cancelled.len() >= 10_000 {
-            if let Some(oldest) = cancelled.iter().next().cloned() {
-                cancelled.remove(&oldest);
+        // Prevent unbounded growth: when over the limit, drop an arbitrary
+        // entry (HashSet iteration order is unspecified — not insertion order,
+        // so this is not an LRU eviction; the bound is what matters for memory
+        // safety). Mirrors the ACP `$/cancel_request` registry.
+        if cancelled.len() >= super::MAX_CANCELLED_REQUESTS {
+            if let Some(arbitrary) = cancelled.iter().next().cloned() {
+                cancelled.remove(&arbitrary);
             }
         }
         cancelled.insert(request_id_key(request_id));
@@ -299,17 +302,21 @@ impl McpServer {
                 // is rejected rather than silently accepting a subscription
                 // that would never receive updates.
                 warn!("MCP: resources/subscribe rejected (no change-notification source)");
-                return Err(coded_error(
+                // No `return`: the Err must reach the bottom-of-handler mapping
+                // so `error_code_for` translates McpCodeError to its real code.
+                Err(coded_error(
                     super::error_codes::METHOD_NOT_FOUND,
                     "resources/subscribe is not supported".to_string(),
-                ));
+                ))
             }
             "resources/unsubscribe" => {
                 warn!("MCP: resources/unsubscribe rejected (no change-notification source)");
-                return Err(coded_error(
+                // No `return`: the Err must reach the bottom-of-handler mapping
+                // so `error_code_for` translates McpCodeError to its real code.
+                Err(coded_error(
                     super::error_codes::METHOD_NOT_FOUND,
                     "resources/unsubscribe is not supported".to_string(),
-                ));
+                ))
             }
             "prompts/list" => Ok(self.handle_list_prompts(&request).await),
             "prompts/get" => self.handle_get_prompt(&request).await,
@@ -414,45 +421,60 @@ impl McpServer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                let values: Vec<String> = match ref_type {
-                    "ref/prompt" => {
-                        if ref_name.is_empty() {
-                            // No specific prompt ref — return available top-level completions.
-                            // Filter by argument_name if provided.
-                            let all: Vec<String> = vec![
-                                "template://".to_string(),
-                                "agent://".to_string(),
-                                "skill://".to_string(),
-                            ];
-                            if argument_name.is_empty() || argument_name == "name" {
-                                all
-                            } else {
-                                vec![]
-                            }
-                        } else if argument_name.is_empty() || argument_name == "name" {
-                            // Provide name completions based on the ref value.
-                            if ref_name.starts_with("agent://") {
-                                self.agent_registry
-                                    .names()
-                                    .iter()
-                                    .map(|n| format!("agent://{}", n))
-                                    .collect()
-                            } else if ref_name.starts_with("template://") {
-                                // List available templates from the ACP prompt manager
-                                if let Some(acp) = &self.acp_server {
-                                    let lang = self.resolve_prompt_lang(&request);
-                                    if let Ok(collection) =
-                                        acp.prompt_manager.get_all_templates(&lang)
-                                    {
-                                        collection
-                                            .categories
-                                            .iter()
-                                            .flat_map(|cat| {
-                                                cat.templates.iter().map(|t| {
-                                                    format!("template://{}.{}", cat.id, t.id)
+                // Reject unknown reference types via the bottom-of-handler error
+                // mapping: the Err (not `return Err`) flows into the shared
+                // `error_code_for` match, so McpCodeError keeps its real code.
+                if ref_type != "ref/prompt" && ref_type != "ref/resource" {
+                    Err(coded_error(
+                        super::error_codes::INVALID_REQUEST,
+                        format!(
+                            "Unknown reference type '{}': only ref/prompt and ref/resource are supported",
+                            ref_type
+                        ),
+                    ))
+                } else {
+                    let values: Vec<String> = match ref_type {
+                        "ref/prompt" => {
+                            if ref_name.is_empty() {
+                                // No specific prompt ref — return available top-level completions.
+                                // Filter by argument_name if provided.
+                                let all: Vec<String> = vec![
+                                    "template://".to_string(),
+                                    "agent://".to_string(),
+                                    "skill://".to_string(),
+                                ];
+                                if argument_name.is_empty() || argument_name == "name" {
+                                    all
+                                } else {
+                                    vec![]
+                                }
+                            } else if argument_name.is_empty() || argument_name == "name" {
+                                // Provide name completions based on the ref value.
+                                if ref_name.starts_with("agent://") {
+                                    self.agent_registry
+                                        .names()
+                                        .iter()
+                                        .map(|n| format!("agent://{}", n))
+                                        .collect()
+                                } else if ref_name.starts_with("template://") {
+                                    // List available templates from the ACP prompt manager
+                                    if let Some(acp) = &self.acp_server {
+                                        let lang = self.resolve_prompt_lang(&request);
+                                        if let Ok(collection) =
+                                            acp.prompt_manager.get_all_templates(&lang)
+                                        {
+                                            collection
+                                                .categories
+                                                .iter()
+                                                .flat_map(|cat| {
+                                                    cat.templates.iter().map(|t| {
+                                                        format!("template://{}.{}", cat.id, t.id)
+                                                    })
                                                 })
-                                            })
-                                            .collect()
+                                                .collect()
+                                        } else {
+                                            vec![]
+                                        }
                                     } else {
                                         vec![]
                                     }
@@ -462,40 +484,30 @@ impl McpServer {
                             } else {
                                 vec![]
                             }
-                        } else {
-                            vec![]
                         }
-                    }
-                    "ref/resource" => {
-                        // Resource template argument completions — return the
-                        // actual resource URIs advertised by resources/list so
-                        // the completion is functional, not a silent empty list.
-                        vec!["go-on://agents".to_string(), "go-on://tools".to_string()]
-                    }
-                    other => {
-                        return Err(coded_error(
-                            super::error_codes::INVALID_REQUEST,
-                            format!(
-                                "Unknown reference type '{}': only ref/prompt and ref/resource are supported",
-                                other
-                            ),
-                        ));
-                    }
-                };
+                        "ref/resource" => {
+                            // Resource template argument completions — return the
+                            // actual resource URIs advertised by resources/list so
+                            // the completion is functional, not a silent empty list.
+                            vec!["go-on://agents".to_string(), "go-on://tools".to_string()]
+                        }
+                        _ => unreachable!("ref_type guarded above"),
+                    };
 
-                info!(
-                    count = values.len(),
-                    ref_type = ref_type,
-                    ref_name = ref_name,
-                    arg_name = argument_name,
-                    "MCP: completion/complete"
-                );
-                Ok(json!({
-                    "completion": {
-                        "values": values,
-                        "total": values.len()
-                    }
-                }))
+                    info!(
+                        count = values.len(),
+                        ref_type = ref_type,
+                        ref_name = ref_name,
+                        arg_name = argument_name,
+                        "MCP: completion/complete"
+                    );
+                    Ok(json!({
+                        "completion": {
+                            "values": values,
+                            "total": values.len()
+                        }
+                    }))
+                }
             }
             "sampling/createMessage" => self.handle_sampling_create_message(&request).await,
             "models/list" => Ok(self.handle_list_models(&request).await),

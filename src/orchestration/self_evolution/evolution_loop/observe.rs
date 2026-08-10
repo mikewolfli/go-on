@@ -234,6 +234,12 @@ pub struct MetricsPoint {
 /// A source of evolution triggers that is polled asynchronously.
 #[async_trait]
 pub trait TriggerSource: Send + Sync + std::fmt::Debug {
+    /// Stable identifier of this trigger source (e.g. "alert_manager_trigger").
+    ///
+    /// Used instead of `Debug`-string matching so callers can identify
+    /// source types without downcasting or fragile `format!("{:?}")` checks.
+    fn name(&self) -> &str;
+
     /// Poll for new evolution triggers. Returns a list of triggers that
     /// have been detected since the last poll.
     async fn poll(&self) -> Vec<EvolutionTrigger>;
@@ -288,6 +294,9 @@ impl AlertManagerTriggerSource {
 
 #[async_trait]
 impl TriggerSource for AlertManagerTriggerSource {
+    fn name(&self) -> &str {
+        &self.name
+    }
     async fn poll(&self) -> Vec<EvolutionTrigger> {
         let Some(ref am) = self.alert_manager else {
             warn!(
@@ -437,6 +446,10 @@ impl DiagnosticTriggerSource {
 
 #[async_trait]
 impl TriggerSource for DiagnosticTriggerSource {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     async fn poll(&self) -> Vec<EvolutionTrigger> {
         let mut triggers = Vec::new();
         let mut counts = self.error_counts.lock().await;
@@ -486,6 +499,10 @@ impl PubsubTriggerSource {
 
 #[async_trait]
 impl TriggerSource for PubsubTriggerSource {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     async fn poll(&self) -> Vec<EvolutionTrigger> {
         let mut triggers = Vec::new();
         let mut rx = self.rx.lock().await;

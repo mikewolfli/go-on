@@ -40,12 +40,10 @@ where
     tokio::task::spawn_blocking(move || {
         let mut last_error: Option<anyhow::Error> = None;
         for attempt in 0..3 {
-            // Exponential backoff (1s, 2s, 4s) — same formula as the agent
-            // chat retry helper (`backoff_secs` in agents/copilot.rs), but kept
-            // inline here because this is a *blocking connection-init* retry
-            // (postgres backend setup inside spawn_blocking), not an async
-            // model-chat retry; `retry_chat_once` targets the chat path only.
-            let backoff_secs = 1u64 << attempt;
+            // Exponential backoff (1s, 2s, 4s) via the single canonical
+            // schedule (`retry_backoff_secs` in agents/agent.rs), shared by
+            // every retry loop in the codebase.
+            let backoff_secs = crate::agents::agent::retry_backoff_secs(attempt);
             match factory(url_owned.clone()) {
                 Ok(value) => return Ok(value),
                 Err(e) => {

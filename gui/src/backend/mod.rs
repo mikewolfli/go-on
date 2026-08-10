@@ -189,12 +189,35 @@ impl BackendClient {
         // while still failing fast for genuinely unreachable backends.
         // When timed out, we return stale cache (or empty) — the caller (show())
         // will retry after 3 seconds via models_loaded == false.
-        let resp = match tokio::time::timeout(
-            Duration::from_millis(2000),
-            self.rpc_call("models.list", None),
-        )
-        .await
-        {
+        //
+        // The two RPCs below are independent, so they run concurrently
+        // (worst case drops from 2s+3s to 3s).
+        let (models_resp, copilot_resp) = tokio::join!(
+            tokio::time::timeout(
+                Duration::from_millis(2000),
+                self.rpc_call("models.list", None),
+            ),
+            async {
+                // Prefer provider.list_models for Copilot so GUI uses the same
+                // backend-resolved model ordering/candidates as chat execution.
+                // Wrap in a short timeout because the backend may hang while
+                // contacting the Copilot API (e.g., no network/proxy).
+                // If it times out, the static copilot models from models.list
+                // above are already in `result` — no data loss.
+                tokio::time::timeout(
+                    Duration::from_secs(3),
+                    self.rpc_call(
+                        "provider.list_models",
+                        Some(serde_json::json!({ "provider": "copilot" })),
+                    ),
+                )
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+            },
+        );
+
+        let resp = match models_resp {
             Ok(result) => result,
             Err(_elapsed) => {
                 tracing::warn!(
@@ -236,20 +259,8 @@ impl BackendClient {
 
         // Prefer provider.list_models for Copilot so GUI uses the same
         // backend-resolved model ordering/candidates as chat execution.
-        // Wrap in a short timeout because the backend may hang while
-        // contacting the Copilot API (e.g., no network/proxy).
-        // If it times out, the static copilot models from models.list above
-        // are already in `result` — no data loss.
-        let copilot_val = tokio::time::timeout(
-            Duration::from_secs(3),
-            self.rpc_call(
-                "provider.list_models",
-                Some(serde_json::json!({ "provider": "copilot" })),
-            ),
-        )
-        .await
-        .ok()
-        .and_then(|r| r.ok());
+        // (Already running concurrently via tokio::join! above.)
+        let copilot_val = copilot_resp;
         if let Some(copilot_val) = copilot_val {
             let ids = copilot_val
                 .get("model_ids")

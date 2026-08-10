@@ -116,6 +116,57 @@ pub(crate) fn communication_bus() -> Option<&'static Arc<CommunicationBus>> {
 // Tool definition
 // ---------------------------------------------------------------------------
 
+/// Parsed and validated SpawnAgentTool parameters.
+struct SpawnParams {
+    task: String,
+    agent_name: String,
+    model_override: Option<String>,
+    timeout_secs: u64,
+    role: Option<String>,
+    token_budget: Option<u64>,
+}
+
+/// Parse and validate the tool parameters from `input`.
+///
+/// Shared by `run()` and `run_async()` so the two entry points can never
+/// drift apart. Validation happens before any global-registry access, so
+/// bad-input errors are deterministic in both paths.
+fn parse_spawn_params(input: &ToolInput) -> Result<SpawnParams> {
+    let task = input.payload["task"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter 'task' (string)"))?;
+    // Validate role early (before accessing global registry).
+    if let Some(ref role) = input.payload["role"].as_str() {
+        if !SUB_AGENT_ROLES.contains(role) {
+            anyhow::bail!(
+                "invalid sub-agent role '{}': must be one of {}",
+                role,
+                SUB_AGENT_ROLES.join(", ")
+            );
+        }
+    }
+    let agent_name = input.payload["agent_name"]
+        .as_str()
+        .unwrap_or("deepseek")
+        .to_string();
+    let model_override = input.payload["model"].as_str().map(|s| s.to_string());
+    let timeout_secs = input.payload["timeout_seconds"]
+        .as_u64()
+        .unwrap_or(120)
+        .clamp(1, 300);
+    let role = input.payload["role"].as_str().map(|s| s.to_string());
+    let token_budget = input.payload["token_budget"].as_u64();
+    Ok(SpawnParams {
+        task,
+        agent_name,
+        model_override,
+        timeout_secs,
+        role,
+        token_budget,
+    })
+}
+
 /// Spawn a sub-agent with a specific task and collect its response.
 pub struct SpawnAgentTool;
 
@@ -136,44 +187,20 @@ impl Tool for SpawnAgentTool {
         // tokio worker thread when `run()` is called from inside an existing
         // runtime. Async callers should always use run_async.
         // Validate parameters FIRST so bad-input tests get a proper error.
-        let task = input.payload["task"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter 'task' (string)"))?;
-        // Validate role early (before accessing global registry).
-        if let Some(ref role) = input.payload["role"].as_str() {
-            if !SUB_AGENT_ROLES.contains(role) {
-                anyhow::bail!(
-                    "invalid sub-agent role '{}': must be one of {}",
-                    role,
-                    SUB_AGENT_ROLES.join(", ")
-                );
-            }
-        }
+        let params = parse_spawn_params(input)?;
         let registry = agent_registry()?.clone();
-        let agent_name = input.payload["agent_name"]
-            .as_str()
-            .unwrap_or("deepseek")
-            .to_string();
-        let model_override = input.payload["model"].as_str().map(|s| s.to_string());
-        let timeout_secs = input.payload["timeout_seconds"]
-            .as_u64()
-            .unwrap_or(120)
-            .clamp(1, 300);
-        let role = input.payload["role"].as_str().map(|s| s.to_string());
-        let token_budget = input.payload["token_budget"].as_u64();
 
         // Always use the dedicated blocking runtime. Never `Handle::try_current()`
         // + `handle.block_on()` here — when `run()` is invoked from within an
         // existing tokio runtime that would block a worker thread.
         spawn_agent_runtime().block_on(execute_spawn(
             registry,
-            task,
-            agent_name,
-            model_override,
-            timeout_secs,
-            role,
-            token_budget,
+            params.task,
+            params.agent_name,
+            params.model_override,
+            params.timeout_secs,
+            params.role,
+            params.token_budget,
         ))
     }
 
@@ -182,42 +209,18 @@ impl Tool for SpawnAgentTool {
         input: ToolInput,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput>> + Send>> {
         Box::pin(async move {
-            let task = input.payload["task"]
-                .as_str()
-                .map(|s| s.to_string())
-                .ok_or_else(|| anyhow::anyhow!("missing required parameter 'task' (string)"))?;
-            // Validate role early.
-            if let Some(ref role) = input.payload["role"].as_str() {
-                if !SUB_AGENT_ROLES.contains(role) {
-                    anyhow::bail!(
-                        "invalid sub-agent role '{}': must be one of {}",
-                        role,
-                        SUB_AGENT_ROLES.join(", ")
-                    );
-                }
-            }
+            let params = parse_spawn_params(&input)?;
             let registry = agent_registry()
                 .map_err(|e| anyhow::anyhow!("SpawnAgentTool: {}", e))?
                 .clone();
-            let agent_name = input.payload["agent_name"]
-                .as_str()
-                .unwrap_or("deepseek")
-                .to_string();
-            let model_override = input.payload["model"].as_str().map(|s| s.to_string());
-            let timeout_secs = input.payload["timeout_seconds"]
-                .as_u64()
-                .unwrap_or(120)
-                .clamp(1, 300);
-            let role = input.payload["role"].as_str().map(|s| s.to_string());
-            let token_budget = input.payload["token_budget"].as_u64();
             execute_spawn(
                 registry,
-                task,
-                agent_name,
-                model_override,
-                timeout_secs,
-                role,
-                token_budget,
+                params.task,
+                params.agent_name,
+                params.model_override,
+                params.timeout_secs,
+                params.role,
+                params.token_budget,
             )
             .await
         })

@@ -161,7 +161,6 @@ fn transition_breaker(cb: &mut CircuitBreaker, outcome: BreakerOutcome, now: u64
             CircuitState::HalfOpen => {
                 cb.state = CircuitState::Closed;
                 cb.failure_count = 0;
-                cb.half_open_attempts = 0;
                 cb.last_failure_ms = 0;
             }
             CircuitState::Closed => {
@@ -189,7 +188,6 @@ fn transition_breaker(cb: &mut CircuitBreaker, outcome: BreakerOutcome, now: u64
                 cb.state = CircuitState::Open;
                 cb.failure_count += 1;
                 cb.last_failure_ms = now;
-                cb.half_open_attempts = 0;
             }
         },
     }
@@ -245,7 +243,6 @@ pub struct CircuitBreaker {
     pub threshold: u64,
     pub recovery_timeout_ms: u64,
     pub last_failure_ms: u64,
-    pub half_open_attempts: u64,
     /// The failure mode of the most recent failure.
     pub last_failure_mode: Option<FailureMode>,
     /// Rolling history of recent failure modes (most recent first, max 10).
@@ -297,8 +294,6 @@ pub struct ResilienceConfig {
     #[serde(default)]
     pub health_check_interval_ms: u64,
     #[serde(default)]
-    pub max_failover_attempts: u32,
-    #[serde(default)]
     pub self_healing_enabled: bool,
 }
 
@@ -308,7 +303,6 @@ impl Default for ResilienceConfig {
             circuit_breaker_threshold: 5,
             recovery_timeout_ms: 30_000,
             health_check_interval_ms: 5_000,
-            max_failover_attempts: 3,
             self_healing_enabled: true,
         }
     }
@@ -450,7 +444,6 @@ impl HyperResilienceEngine {
                 threshold,
                 recovery_timeout_ms,
                 last_failure_ms: 0,
-                half_open_attempts: 0,
                 last_failure_mode: None,
                 failure_history: Vec::new(),
             },
@@ -499,7 +492,6 @@ impl HyperResilienceEngine {
                         threshold,
                         recovery_timeout_ms: recovery,
                         last_failure_ms: 0,
-                        half_open_attempts: 0,
                         last_failure_mode: None,
                         failure_history: Vec::new(),
                     },
@@ -618,7 +610,6 @@ impl HyperResilienceEngine {
                 threshold: max_failure_threshold,
                 recovery_timeout_ms,
                 last_failure_ms: 0,
-                half_open_attempts: 0,
                 last_failure_mode: None,
                 failure_history: Vec::new(),
             });
@@ -707,7 +698,6 @@ impl HyperResilienceEngine {
             if let Some(cb) = cbs.get_mut(name) {
                 cb.state = CircuitState::Closed;
                 cb.failure_count = 0;
-                cb.half_open_attempts = 0;
                 cb.last_failure_ms = 0;
             }
         }
@@ -858,7 +848,6 @@ impl HyperResilienceEngine {
                 let now = crate::shared::timestamps::now_ts_ms_u64();
                 if now >= cb.last_failure_ms + recovery {
                     cb.state = CircuitState::HalfOpen;
-                    cb.half_open_attempts = 0;
                     true
                 } else {
                     false
@@ -885,7 +874,6 @@ impl HyperResilienceEngine {
                 let now = crate::shared::timestamps::now_ts_ms_u64();
                 if now >= cb.last_failure_ms + cb.recovery_timeout_ms {
                     cb.state = CircuitState::HalfOpen;
-                    cb.half_open_attempts = 0;
                     true
                 } else {
                     false
@@ -1120,7 +1108,6 @@ impl HyperResilienceEngine {
                     cb.state = CircuitState::Closed;
                     cb.failure_count = 0;
                     cb.last_failure_ms = 0;
-                    cb.half_open_attempts = 0;
                     (
                         true,
                         tf("status.hyper_resilience.breaker_reset", &[("name", target)]),
@@ -1194,9 +1181,12 @@ impl HyperResilienceEngine {
                 );
                 (
                     true,
-                    tf(
-                        "status.hyper_resilience.node_restarted",
-                        &[("node", target)],
+                    format!(
+                        "{} (simulated — no in-process state changed)",
+                        tf(
+                            "status.hyper_resilience.node_restarted",
+                            &[("node", target)]
+                        )
                     ),
                     false,
                 )
@@ -1219,9 +1209,12 @@ impl HyperResilienceEngine {
                 );
                 (
                     true,
-                    tf(
-                        "status.hyper_resilience.resources_scaled",
-                        &[("target", target)],
+                    format!(
+                        "{} (simulated — no in-process state changed)",
+                        tf(
+                            "status.hyper_resilience.resources_scaled",
+                            &[("target", target)]
+                        )
                     ),
                     false,
                 )
@@ -1246,7 +1239,6 @@ impl HyperResilienceEngine {
                         cb.state = CircuitState::Closed;
                         cb.failure_count = 0;
                         cb.last_failure_ms = 0;
-                        cb.half_open_attempts = 0;
                         (
                             true,
                             tf(
@@ -1454,32 +1446,39 @@ impl HyperResilienceEngine {
         if health.level >= DegradationLevel::Constrained {
             let healing_enabled = read_lock(&self.config).self_healing_enabled;
             if healing_enabled {
-                for name in &breaker_names {
-                    let is_open = {
-                        let cbs = lock_mutex(&self.circuit_breakers);
-                        cbs.get(name)
-                            .map(|cb| matches!(cb.state, CircuitState::Open))
-                            .unwrap_or(false)
-                    };
-                    if is_open {
-                        match self
-                            .execute_healing(SelfHealingAction::ClearCircuitBreaker, name)
-                            .await
-                        {
-                            Ok(report) => {
-                                tracing::info!(
-                                    "health-check: auto-healed breaker '{}': {}",
-                                    name,
-                                    report.result
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "health-check: auto-heal failed for '{}': {}",
-                                    name,
-                                    e
-                                );
-                            }
+                // Collect the open breakers under a brief lock, then heal them
+                // in parallel: each `execute_healing` performs a real TCP probe
+                // (up to 3s) plus a simulated-duration sleep, so serializing
+                // them would stretch one cycle by N × (3s + sleep). This
+                // mirrors the Phase 1 parallel-probe pattern.
+                let open_breakers: Vec<String> = {
+                    let cbs = lock_mutex(&self.circuit_breakers);
+                    breaker_names
+                        .iter()
+                        .filter(|name| {
+                            cbs.get(*name)
+                                .map(|cb| matches!(cb.state, CircuitState::Open))
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                        .collect()
+                };
+                let healing_futures: Vec<_> = open_breakers
+                    .iter()
+                    .map(|name| self.execute_healing(SelfHealingAction::ClearCircuitBreaker, name))
+                    .collect();
+                let reports = join_all(healing_futures).await;
+                for (name, report) in open_breakers.iter().zip(reports) {
+                    match report {
+                        Ok(report) => {
+                            tracing::info!(
+                                "health-check: auto-healed breaker '{}': {}",
+                                name,
+                                report.result
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("health-check: auto-heal failed for '{}': {}", name, e);
                         }
                     }
                 }
@@ -1539,7 +1538,6 @@ impl HyperResilienceEngine {
                     threshold,
                     recovery_timeout_ms,
                     last_failure_ms: 0,
-                    half_open_attempts: 0,
                     last_failure_mode: None,
                     failure_history: Vec::new(),
                 });

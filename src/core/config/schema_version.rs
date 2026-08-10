@@ -116,7 +116,9 @@ impl SchemaManager {
                 version, self.min_supported_version
             ));
         }
-        if version.major > SchemaVersion::CURRENT.major {
+        // Same-major check via `is_compatible_with` — once the lower bound
+        // above passed, this is exactly `version.major > CURRENT.major`.
+        if !version.is_compatible_with(&SchemaVersion::CURRENT) {
             warn!(
                 "Config version {} is newer than application version {}",
                 version,

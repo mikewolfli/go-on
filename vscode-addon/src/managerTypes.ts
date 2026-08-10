@@ -10,6 +10,8 @@ export interface StreamRequestOptions {
   signal?: AbortSignal;
   skipProviderGuard?: boolean;
   callbacks?: StreamingCallbacks;
+  /** Request timeout in milliseconds (default: 30_000). */
+  timeout?: number;
 }
 
 export interface RuntimeManagerLike {

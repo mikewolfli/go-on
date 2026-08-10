@@ -302,28 +302,15 @@ impl FlowManager {
         }
     }
 
+    /// Task complexity on a 1–5 scale.
+    ///
+    /// Thin adapter over the single authoritative classifier
+    /// (`TaskRouter::estimate_complexity`); the former independent keyword
+    /// table was removed so the three complexity classifiers cannot diverge.
     pub(crate) fn analyze_task_complexity(task_description: Option<&str>) -> u8 {
-        let desc = task_description.unwrap_or("");
-        let lower = desc.to_lowercase();
-        let mut complexity = 2u8;
-        if lower.contains("complex")
-            || lower.contains("multi-step")
-            || lower.contains("algorithm")
-            || lower.contains("refactor")
-        {
-            complexity = 4;
-        }
-        if lower.contains("simple")
-            || lower.contains("quick")
-            || lower.contains("comment")
-            || lower.contains("format")
-        {
-            complexity = 1;
-        }
-        if lower.contains("code") || lower.contains("function") {
-            complexity = complexity.max(3);
-        }
-        complexity.clamp(1, 5)
+        crate::orchestration::task_router::TaskRouter::estimate_complexity(
+            task_description.unwrap_or(""),
+        )
     }
 
     pub(crate) fn build_selection_criteria(

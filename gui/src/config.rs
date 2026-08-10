@@ -660,13 +660,5 @@ fn compute_valid_providers(config: &AppConfig) -> bool {
         }
     }
 
-    // SECONDARY FALLBACK: if the config has provider entries (the user has
-    // configured providers), trust that the keys are in the keyring or will
-    // be resolved at runtime. This handles cases where the keyring crate's
-    // lookup doesn't match entries stored by a different mechanism or version.
-    if !config.providers.is_empty() {
-        return true;
-    }
-
     false
 }

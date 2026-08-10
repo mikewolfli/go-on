@@ -18,7 +18,7 @@ use indexmap::IndexSet;
 #[cfg(feature = "backend-postgres")]
 use postgres::Client as PgClient;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -237,44 +237,11 @@ impl HotCache {
         let lru_id = self.lru_order.first()?.clone();
         self.remove(&lru_id)
     }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.lru_order.clear();
-    }
 }
 
 // ===========================================================================
 // L3: Cold Tier — gzip NDJSON on disk
 // ===========================================================================
-
-/// Lightweight sidecar index: (user_id, memory_id) → cold storage location.
-///
-/// Maps each memory entry to the shard file where it is stored in cold
-/// storage, enabling O(1) retrieval without scanning all shards.
-#[derive(Debug, Clone, Default)]
-pub struct ColdStorageIndex {
-    /// Index: (user_id_or_empty, memory_id) → (year_month, shard_name, line_offset)
-    entries: HashMap<(String, String), (String, String, u64)>,
-}
-
-impl ColdStorageIndex {
-    /// Record a cold storage location for a memory entry.
-    pub fn store(
-        &mut self,
-        user_id: Option<&str>,
-        memory_id: &str,
-        year_month: &str,
-        shard_name: &str,
-        line_offset: u64,
-    ) {
-        let uid = user_id.unwrap_or("").to_string();
-        self.entries.insert(
-            (uid, memory_id.to_string()),
-            (year_month.to_string(), shard_name.to_string(), line_offset),
-        );
-    }
-}
 
 /// Manages cold storage: `.goon/memory/cold/YYYY-MM/*.ndjson.gz`
 #[derive(Debug)]
@@ -282,8 +249,6 @@ struct ColdStorage {
     base_path: PathBuf,
     max_shard_size_bytes: u64,
     max_total_shards: usize,
-    /// Sidecar index for O(1) cold storage lookups.
-    index: Mutex<ColdStorageIndex>,
     /// Cached total shard count across all months. Computed once with a
     /// single directory scan, then maintained incrementally by append/evict
     /// so the write path never re-scans the tree.
@@ -299,7 +264,6 @@ impl ColdStorage {
             base_path: base_path.to_path_buf(),
             max_shard_size_bytes: 10 * 1024 * 1024, // 10 MB default
             max_total_shards: 100,
-            index: Mutex::new(ColdStorageIndex::default()),
             shard_count: Mutex::new(None),
             latest_shard_idx: Mutex::new(None),
         }
@@ -465,20 +429,6 @@ impl ColdStorage {
             .finish()
             .context("failed to finalize cold storage gzip")?;
 
-        // Record entry location in the sidecar index for O(1) lookups.
-        if let Ok(mut idx) = self.index.lock() {
-            idx.store(
-                entry.user_id.as_deref(),
-                &entry.id,
-                &format!("{:04}-{:02}", year, month),
-                &shard,
-                // Approximate line offset; the actual offset within this shard
-                // is not tracked precisely, but the index still narrows the
-                // search to a single shard instead of scanning all shards.
-                0,
-            );
-        }
-
         // Enforce max total shards: if we just created a new shard, evict oldest.
         let current_count = self.total_shard_count();
         if current_count > self.max_total_shards {
@@ -573,8 +523,10 @@ fn read_shard_entries(path: &Path) -> Result<Vec<MemoryEntry>> {
 /// falls back here when the warm tier returns fewer than the requested limit.
 /// The former single-entry precise lookup (`get_from_cold` /
 /// `load_entry_from_cold`) had zero production callers — all recovery is
-/// session-scoped — so it was removed; the sidecar index it consulted is
-/// still maintained for future precise-lookup needs.
+/// session-scoped — so it was removed. No per-entry sidecar index is
+/// maintained (a previous `ColdStorageIndex` was write-only): cold shards are
+/// a sequence of gzip members that cannot be seeked, so a session lookup must
+/// decode the shards and scan them anyway.
 fn find_cold_entries_by_session(base: &Path, session_id: &str) -> Result<Vec<MemoryEntry>> {
     let mut hits = Vec::new();
     for path in collect_shard_paths(base) {
@@ -669,6 +621,152 @@ fn query_all(
 ) -> Result<Vec<MemoryEntry>> {
     let rows = conn.query(sql, params)?;
     Ok(rows.iter().map(row_to_memory_entry).collect())
+}
+
+// ---- Shared upsert machinery -------------------------------------------------
+// The warm-store upsert business logic (field preparation, SQL templates,
+// over-cap eviction) is shared across backends; only the placeholder style,
+// parameter binding and row reads differ. Those backend-specific bits live in
+// the two `upsert_exec` helpers below.
+
+/// Field values bound into the warm_memory upsert statement. Prepared once
+/// outside `spawn_blocking` so the closure only touches plain data.
+struct UpsertPayload {
+    id: String,
+    tier_label: String,
+    class: String,
+    content: String,
+    created_at: i64,
+    accessed_at: i64,
+    usefulness: f32,
+    embedding_json: Option<String>,
+    access_count: i64,
+    session_id: Option<String>,
+    user_id: Option<String>,
+}
+
+impl UpsertPayload {
+    fn from_entry(entry: &MemoryEntry) -> Self {
+        Self {
+            id: entry.id.clone(),
+            tier_label: entry.tier.label().to_string(),
+            class: entry.class.clone(),
+            content: entry.content.clone(),
+            created_at: entry.created_at,
+            accessed_at: entry.accessed_at,
+            usefulness: entry.usefulness,
+            embedding_json: entry
+                .embedding
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_default()),
+            access_count: entry.access_count,
+            session_id: entry.session_id.clone(),
+            user_id: entry.user_id.clone(),
+        }
+    }
+}
+
+/// INSERT ... ON CONFLICT(id) DO UPDATE ... — identical SQL for both
+/// backends; only the placeholder prefix differs (`?` vs `$n`).
+fn upsert_sql() -> String {
+    format!(
+        "INSERT INTO warm_memory({columns})
+         VALUES({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10, {p}11)
+         ON CONFLICT(id) DO UPDATE SET
+            tier = excluded.tier,
+            class = excluded.class,
+            content = excluded.content,
+            accessed_at = excluded.accessed_at,
+            usefulness = excluded.usefulness,
+            embedding_json = excluded.embedding_json,
+            access_count = excluded.access_count,
+            session_id = excluded.session_id,
+            user_id = excluded.user_id",
+        columns = WARM_MEMORY_COLUMNS,
+        p = PARAM_PREFIX
+    )
+}
+
+fn count_over_cap_sql() -> String {
+    format!("SELECT COUNT(*) - {p}1 FROM warm_memory", p = PARAM_PREFIX)
+}
+
+fn evict_over_cap_sql() -> String {
+    format!(
+        "DELETE FROM warm_memory WHERE id IN (
+        SELECT id FROM warm_memory ORDER BY accessed_at ASC \
+        LIMIT {p}1
+    )",
+        p = PARAM_PREFIX
+    )
+}
+
+/// Execute the upsert against a SQLite connection, evicting the LRU warm
+/// entries only when the table actually exceeds `max_entries` (the
+/// DELETE+ORDER BY full-table sort is skipped on every normal write).
+#[cfg(feature = "backend-sqlite")]
+fn upsert_exec(
+    conn: &rusqlite::Connection,
+    payload: &UpsertPayload,
+    max_entries: usize,
+) -> Result<()> {
+    conn.execute(
+        &upsert_sql(),
+        rusqlite::params![
+            &payload.id,
+            &payload.tier_label,
+            &payload.class,
+            &payload.content,
+            payload.created_at,
+            payload.accessed_at,
+            payload.usefulness,
+            &payload.embedding_json,
+            payload.access_count,
+            &payload.session_id,
+            &payload.user_id,
+        ],
+    )?;
+    let over_cap: i64 = conn.query_row(
+        &count_over_cap_sql(),
+        rusqlite::params![max_entries as i64],
+        |row| row.get(0),
+    )?;
+    if over_cap > 0 {
+        conn.execute(&evict_over_cap_sql(), rusqlite::params![over_cap])?;
+    }
+    Ok(())
+}
+
+/// PostgreSQL variant of [`upsert_exec`]; identical business logic, only the
+/// binding style (`&[...]` instead of `params![]`) and row read differ.
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+fn upsert_exec(
+    conn: &mut postgres::Client,
+    payload: &UpsertPayload,
+    max_entries: usize,
+) -> Result<()> {
+    conn.execute(
+        &upsert_sql(),
+        &[
+            &payload.id,
+            &payload.tier_label,
+            &payload.class,
+            &payload.content,
+            &payload.created_at,
+            &payload.accessed_at,
+            &payload.usefulness,
+            &payload.embedding_json,
+            &payload.access_count,
+            &payload.session_id,
+            &payload.user_id,
+        ],
+    )?;
+    let row = conn.query_one(&count_over_cap_sql(), &[&(max_entries as i64)])?;
+    let over_cap: i64 = row.get(0);
+    if over_cap > 0 {
+        conn.execute(&evict_over_cap_sql(), &[&over_cap])?;
+    }
+    Ok(())
 }
 
 /// Wrapper around the warm store (SQLite or PostgreSQL).
@@ -860,157 +958,36 @@ impl WarmStore {
             None => return Ok(()),
         };
         let max_entries = self.max_entries;
-        let embedding_json = entry
-            .embedding
-            .as_ref()
-            .map(|v| serde_json::to_string(v).unwrap_or_default());
-        #[cfg(feature = "backend-sqlite")]
-        {
-            let entry_id = entry.id.clone();
-            let tier_label = entry.tier.label().to_string();
-            let class = entry.class.clone();
-            let content = entry.content.clone();
-            let created_at = entry.created_at;
-            let accessed_at = entry.accessed_at;
-            let usefulness = entry.usefulness;
-            let access_count = entry.access_count;
-            let session_id = entry.session_id.clone();
-            let user_id = entry.user_id.clone();
-            spawn_blocking(move || {
-                let conn = conn.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("warm store mutex poisoned, recovering");
-                    poisoned.into_inner()
-                });
-                let sql = format!(
-                    "INSERT INTO warm_memory({columns})
-                     VALUES({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10, {p}11)
-                     ON CONFLICT(id) DO UPDATE SET
-                        tier = excluded.tier,
-                        class = excluded.class,
-                        content = excluded.content,
-                        accessed_at = excluded.accessed_at,
-                        usefulness = excluded.usefulness,
-                        embedding_json = excluded.embedding_json,
-                        access_count = excluded.access_count,
-                        session_id = excluded.session_id,
-                        user_id = excluded.user_id",
-                    columns = WARM_MEMORY_COLUMNS,
-                    p = PARAM_PREFIX
-                );
-                conn.execute(
-                    &sql,
-                    rusqlite::params![
-                        &entry_id,
-                        &tier_label,
-                        &class,
-                        &content,
-                        created_at,
-                        accessed_at,
-                        usefulness,
-                        &embedding_json,
-                        access_count,
-                        &session_id,
-                        &user_id,
-                    ],
-                )?;
-                // Evict only when the table actually exceeds the cap — the
-                // DELETE+ORDER BY full-table sort is skipped on every normal
-                // write (same COUNT-gated pattern as cache.rs).
-                let over_cap: i64 = conn.query_row(
-                    &format!("SELECT COUNT(*) - {p}1 FROM warm_memory", p = PARAM_PREFIX),
-                    rusqlite::params![max_entries as i64],
-                    |row| row.get(0),
-                )?;
-                if over_cap > 0 {
-                    conn.execute(
-                        &format!(
-                            "DELETE FROM warm_memory WHERE id IN (
-                            SELECT id FROM warm_memory ORDER BY accessed_at ASC \
-                            LIMIT {p}1
-                        )",
-                            p = PARAM_PREFIX
-                        ),
-                        rusqlite::params![over_cap],
-                    )?;
+        // Prepare the bound fields outside the blocking closure.
+        let payload = UpsertPayload::from_entry(entry);
+        spawn_blocking(move || {
+            #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+            let mut conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            #[cfg(feature = "backend-sqlite")]
+            let conn = conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("warm store mutex poisoned, recovering");
+                poisoned.into_inner()
+            });
+            // Business logic (SQL templates, insert, over-cap eviction) is
+            // shared; only the backend binding/row-read differs (sqlite takes
+            // `&Connection`, postgres takes `&mut Client`).
+            let upsert_result: Result<()> = {
+                #[cfg(feature = "backend-sqlite")]
+                {
+                    upsert_exec(&conn, &payload, max_entries)
                 }
-                Ok(())
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-        }
-        #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-        {
-            let entry_id = entry.id.clone();
-            let tier_label = entry.tier.label().to_string();
-            let class = entry.class.clone();
-            let content = entry.content.clone();
-            let created_at = entry.created_at;
-            let accessed_at = entry.accessed_at;
-            let usefulness = entry.usefulness;
-            let access_count = entry.access_count;
-            let session_id = entry.session_id.clone();
-            let user_id = entry.user_id.clone();
-            spawn_blocking(move || {
-                let mut conn = conn.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("warm store mutex poisoned, recovering");
-                    poisoned.into_inner()
-                });
-                let sql = format!(
-                    "INSERT INTO warm_memory({columns})
-                     VALUES({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10, {p}11)
-                     ON CONFLICT(id) DO UPDATE SET
-                        tier = EXCLUDED.tier,
-                        class = EXCLUDED.class,
-                        content = EXCLUDED.content,
-                        accessed_at = EXCLUDED.accessed_at,
-                        usefulness = EXCLUDED.usefulness,
-                        embedding_json = EXCLUDED.embedding_json,
-                        access_count = EXCLUDED.access_count,
-                        session_id = EXCLUDED.session_id,
-                        user_id = EXCLUDED.user_id",
-                    columns = WARM_MEMORY_COLUMNS,
-                    p = PARAM_PREFIX
-                );
-                conn.execute(
-                    &sql,
-                    &[
-                        &entry_id,
-                        &tier_label,
-                        &class,
-                        &content,
-                        &created_at,
-                        &accessed_at,
-                        &usefulness,
-                        &embedding_json,
-                        &access_count,
-                        &session_id,
-                        &user_id,
-                    ],
-                )?;
-                // Evict only when the table actually exceeds the cap (see
-                // the sqlite branch above for rationale).
-                let row = conn.query_one(
-                    &format!("SELECT COUNT(*) - {p}1 FROM warm_memory", p = PARAM_PREFIX),
-                    &[&(max_entries as i64)],
-                )?;
-                let over_cap: i64 = row.get(0);
-                if over_cap > 0 {
-                    conn.execute(
-                        &format!(
-                            "DELETE FROM warm_memory WHERE id IN (
-                            SELECT id FROM warm_memory ORDER BY accessed_at ASC \
-                            LIMIT {p}1
-                        )",
-                            p = PARAM_PREFIX
-                        ),
-                        &[&over_cap],
-                    )?;
+                #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+                {
+                    upsert_exec(&mut conn, &payload, max_entries)
                 }
-                Ok(())
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
-        }
+            };
+            upsert_result
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
     async fn remove(&self, id: &str) -> Result<bool> {
@@ -1046,7 +1023,11 @@ impl WarmStore {
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
     }
 
-    async fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
+    /// Fetch warm entries whose `accessed_at` is older than `before_ts`
+    /// (i.e. idle >= warm TTL). The filter is pushed into the query so the
+    /// full table is never loaded just to discard non-expired rows (the
+    /// previous `iterate_all` + in-memory filter pulled every warm row).
+    async fn iterate_expiring(&self, before_ts: i64) -> Result<Vec<MemoryEntry>> {
         #[cfg(feature = "backend-sqlite")]
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
         #[cfg(feature = "backend-sqlite")]
@@ -1065,16 +1046,18 @@ impl WarmStore {
             let conn = conn
                 .lock()
                 .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
-            let sql = format!("SELECT {} FROM warm_memory", WARM_MEMORY_COLUMNS);
+            let sql = format!(
+                "SELECT {} FROM warm_memory WHERE accessed_at <= {p}1",
+                WARM_MEMORY_COLUMNS,
+                p = PARAM_PREFIX
+            );
             #[cfg(feature = "backend-sqlite")]
             {
-                let empty_params: [&dyn rusqlite::types::ToSql; 0] = [];
-                query_all(&conn, &sql, &empty_params)
+                query_all(&conn, &sql, &[&before_ts])
             }
             #[cfg(not(feature = "backend-sqlite"))]
             {
-                let empty_params: [&(dyn postgres::types::ToSql + Sync); 0] = [];
-                query_all(&mut conn, &sql, &empty_params)
+                query_all(&mut conn, &sql, &[&before_ts])
             }
         })
         .await
@@ -1174,13 +1157,13 @@ impl WarmStore {
         ))
     }
 
-    fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
+    fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
         Err(anyhow::anyhow!(
             "No storage backend configured: enable backend-sqlite or backend-postgres feature"
         ))
     }
 
-    fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
+    fn iterate_expiring(&self, _before_ts: i64) -> Result<Vec<MemoryEntry>> {
         Err(anyhow::anyhow!(
             "No storage backend configured: enable backend-sqlite or backend-postgres feature"
         ))
@@ -1303,24 +1286,63 @@ impl MemoryPersistence {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
-        let mut hits = self.warm.search_by_session(session_id, limit).await?;
+        // Hot tier first: `store()` writes entries into the hot cache and they
+        // are only promoted to warm by `auto_migrate` (TTL-based, default
+        // 30 minutes). Without this merge, freshly stored memories would be
+        // invisible to `session/load` until the next migration cycle.
+        let mut hits: Vec<MemoryEntry> = {
+            let hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("hot cache mutex poisoned in 'search_by_session', recovering");
+                poisoned.into_inner()
+            });
+            let mut entries: Vec<MemoryEntry> = hot
+                .entries
+                .values()
+                .filter(|he| he.entry.session_id.as_deref() == Some(session_id))
+                .map(|he| he.entry.clone())
+                .collect();
+            entries.sort_by_key(|b| std::cmp::Reverse(b.accessed_at));
+            entries.truncate(limit);
+            entries
+        };
+
+        // Warm tier second, deduplicating against hot results (hot wins on
+        // id conflicts since it holds the freshest copy).
+        if hits.len() < limit {
+            let mut seen: HashSet<String> = hits.iter().map(|h| h.id.clone()).collect();
+            for entry in self.warm.search_by_session(session_id, limit).await? {
+                if hits.len() >= limit {
+                    break;
+                }
+                if seen.insert(entry.id.clone()) {
+                    hits.push(entry);
+                }
+            }
+        }
+
+        // Cold tier last, only when the upper tiers fell short of the limit.
         if hits.len() < limit {
             let base = self.cold.base_path.clone();
             let sid = session_id.to_string();
             let cold_entries = spawn_blocking(move || find_cold_entries_by_session(&base, &sid))
                 .await
                 .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))??;
+            let mut seen: HashSet<String> = hits.iter().map(|h| h.id.clone()).collect();
             for entry in cold_entries {
                 if hits.len() >= limit {
                     break;
                 }
-                if !hits.iter().any(|h| h.id == entry.id) {
+                if seen.insert(entry.id.clone()) {
                     hits.push(entry);
                 }
             }
-            hits.sort_by_key(|b| std::cmp::Reverse(b.accessed_at));
-            hits.truncate(limit);
         }
+
+        // Final global sort: hot and warm tiers (and cold when scanned) are
+        // merged in tier order above; sort once here so the combined result is
+        // truly most-recently-accessed-first regardless of which tiers matched.
+        hits.sort_by_key(|b| std::cmp::Reverse(b.accessed_at));
+        hits.truncate(limit);
         Ok(hits)
     }
 
@@ -1369,12 +1391,15 @@ impl MemoryPersistence {
         }
 
         // ── Step 2: Check warm for TTL candidates ──
-        let warm_entries = self.warm.iterate_all().await?;
+        // The idle filter is pushed down into the SQL query
+        // (`iterate_expiring`) instead of loading the whole warm table and
+        // filtering in memory — with 100k warm entries the full scan only
+        // served to throw away non-expired rows.
         let now = crate::shared::timestamps::now_ts();
-        let ttl_candidates: Vec<MemoryEntry> = warm_entries
-            .into_iter()
-            .filter(|entry| now.saturating_sub(entry.accessed_at) >= self.policy.warm_ttl_secs)
-            .collect();
+        let ttl_candidates = self
+            .warm
+            .iterate_expiring(now.saturating_sub(self.policy.warm_ttl_secs))
+            .await?;
         let mut warm_stream = stream::iter(ttl_candidates)
             .map(|entry| {
                 let promote_cold = entry.usefulness >= self.policy.warm_threshold;
@@ -1422,16 +1447,17 @@ impl MemoryPersistence {
 
         // Snapshot the hot entries under the lock, then drop it before the
         // await so the LLM call never holds the std Mutex across an await
-        // point (and the summarize-replace window stays race-free because
-        // auto_migrate is the only writer of the hot cache).
-        let entries: Vec<MemoryEntry> = {
+        // point. Entries stored after the snapshot are NOT summarized and must
+        // be preserved: we only remove the snapshot's ids below, so entries
+        // written by `store()` while the LLM call is in flight survive.
+        let (snapshot_ids, entries): (Vec<String>, Vec<MemoryEntry>) = {
             let hot = self.hot.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("hot cache mutex poisoned in 'summarize_hot_entries', recovering");
                 poisoned.into_inner()
             });
-            let entries: Vec<MemoryEntry> =
-                hot.entries.values().map(|he| he.entry.clone()).collect();
-            entries
+            let ids = hot.entries.keys().cloned().collect();
+            let entries = hot.entries.values().map(|he| he.entry.clone()).collect();
+            (ids, entries)
         };
         if !summarizer.should_summarize(entries.len()) {
             return Ok(());
@@ -1450,7 +1476,11 @@ impl MemoryPersistence {
                     );
                     poisoned.into_inner()
                 });
-                hot.clear();
+                // Remove only the entries that were part of the snapshot; any
+                // entry stored while the summarizer ran is left untouched.
+                for id in &snapshot_ids {
+                    hot.remove(id);
+                }
                 for entry in compressed {
                     hot.insert(entry);
                 }

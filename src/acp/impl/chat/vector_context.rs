@@ -768,6 +768,10 @@ pub(crate) async fn generate_phase_summary_text(
         None,
         Some(summary_options),
         Some(Duration::from_secs(timeout_seconds)),
+        // Phase-summary generation is a read-only helper path (no user file
+        // mutations); keep the conservative edit mode for approval events.
+        "edit",
+        false,
     )
     .await
     {

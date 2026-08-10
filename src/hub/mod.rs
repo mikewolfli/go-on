@@ -1,14 +1,18 @@
 //! Runtime Hub — reserved for future multi-process architecture.
 //!
 //! ## Status
-//! This module is **intentionally preserved** as a design reserve but is
-//! NOT wired into production code paths. It is gated behind the
-//! `sub-bus-distributed-memory` feature, which is only enabled in the
-//! `simple-server`, `multi-users-server`, and `full` profiles.
+//! The Hub is **live via the CLI**: `go-on hub` (see `src/main/mod.rs`) starts
+//! the daemon on a loopback port with discovery-file + Bearer-token auth.
+//! It is gated behind the `sub-bus-distributed-memory` feature, which is only
+//! enabled in the `simple-server`, `multi-users-server`, and `full` profiles.
 //!
 //! In the `local` profile (default), this module is **not compiled**.
 //!
-//! ## Why not wired yet
+//! Core service paths (the ACP HTTP server and its `/health`, `/chat`, …
+//! endpoints) are **not yet connected** to the Hub — that remains a design
+//! reserve for the future multi-process architecture described below.
+//!
+//! ## Why core service paths are not wired yet
 //!
 //! go-on's current architecture is monolithic: the `--acp-http-bind` mode (`-b`)
 //! already provides a long-running HTTP server with `/health`, `/chat`, etc.

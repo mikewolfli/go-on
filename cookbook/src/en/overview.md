@@ -24,7 +24,7 @@ Key features:
 - **Monitor**: Backend health, AI provider status, real-time metrics
 - **Chat**: Multi-session conversations with phase (coding/review/debug/test/deploy) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status. Action bar (copy/edit/delete) at bottom of each message bubble.
 - **Skills**: Create and import AI skills; built-in `skill-creator` lets AI define new skills autonomously
-- **Settings**: Feature toggles, language switching (en/zh-CN/zh-TW), 5 visual themes
+- **Settings**: Feature toggles, language switching (en/zh-CN/zh-TW), 6 visual themes
 - **Backend Connection**: ACP+HTTP JSON-RPC with automatic health polling
 
 ## Build Profiles
@@ -42,7 +42,7 @@ Four build profiles support different deployment scenarios:
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **local** | ✅ **Zero warnings** | **all pass (~3.5K)** |
+| **local** | ✅ **Zero warnings** | **all pass (~1.8K)** |
 | **simple-server** | ✅ **Zero warnings** | **all pass** |
 | **full** | ✅ **Zero warnings** | **all pass** |
 | **multi-users-server** | ✅ **Zero warnings** | **all pass** |
@@ -161,9 +161,9 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 
 | Language | File | Keys |
 |:---------|:-----|:----:|
-| English (US) | `config/languages/en-US.json` | 711 |
-| Chinese (Simplified) | `config/languages/zh-CN.json` | 711 |
-| Chinese (Traditional) | `config/languages/zh-TW.json` | 711 |
+| English (US) | `config/languages/en-US.json` | 733 |
+| Chinese (Simplified) | `config/languages/zh-CN.json` | 733 |
+| Chinese (Traditional) | `config/languages/zh-TW.json` | 733 |
 
 Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 37 providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
 

@@ -50,7 +50,7 @@ static GITHUB_CLIENT_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<GithubCl
 /// timeout each (~700 ms worst case) — far too expensive to repeat for every
 /// request. The built client is cached keyed on the proxy env snapshot and
 /// reused until the env vars change.
-fn build_github_client() -> reqwest::Client {
+async fn build_github_client() -> reqwest::Client {
     let env_snapshot = ProxyEnvSnapshot::capture();
     let cache = GITHUB_CLIENT_CACHE.get_or_init(|| std::sync::Mutex::new(None));
 
@@ -63,8 +63,13 @@ fn build_github_client() -> reqwest::Client {
         }
     }
 
-    // Slow path: (re)build the client from scratch (probe logic unchanged).
-    let client = build_github_client_uncached();
+    // Slow path: (re)build the client from scratch. The auto-detect probe runs
+    // up to 7 serial TCP connects with a 100 ms timeout each (~700 ms worst
+    // case), so it must not execute directly on a tokio worker — offload the
+    // whole probe/selection to the blocking pool (logic unchanged).
+    let client = tokio::task::spawn_blocking(build_github_client_uncached)
+        .await
+        .unwrap_or_else(|_| build_github_client_uncached());
     if let Ok(mut guard) = cache.lock() {
         // A concurrent caller may have built with the same env while we were
         // probing — prefer its result so the cache is not thrashed.
@@ -235,7 +240,7 @@ async fn resolve_copilot_models_dynamic() -> Vec<String> {
         return read_stale_copilot_models_cache().await.unwrap_or(fallback);
     };
 
-    let client = build_github_client();
+    let client = build_github_client().await;
     let token_resp = match client
         .get(COPILOT_TOKEN_URL)
         .header("Authorization", format!("token {}", github_token))
@@ -1373,7 +1378,7 @@ pub(super) async fn handle_copilot_device_code_request(
         .unwrap_or("read:user");
 
     // Build reqwest client with proxy support
-    let client = build_github_client();
+    let client = build_github_client().await;
 
     let device_params = [("client_id", client_id), ("scope", scope)];
 
@@ -1459,7 +1464,7 @@ pub(super) async fn handle_copilot_device_code_poll(
         .unwrap_or("01ab8ac9400c4e429b23");
     let token_url = "https://github.com/login/oauth/access_token";
 
-    let client = build_github_client();
+    let client = build_github_client().await;
 
     let poll_params = [
         ("client_id", client_id),
@@ -1602,7 +1607,7 @@ pub(super) async fn handle_copilot_device_code_poll(
 #[cfg(test)]
 mod tests {
     use super::estimate_p95_from_buckets;
-    use super::{build_github_client, ProxyEnvSnapshot, GITHUB_CLIENT_CACHE};
+    use super::{ProxyEnvSnapshot, GITHUB_CLIENT_CACHE};
 
     #[test]
     fn estimate_p95_from_buckets_skewed_samples_differ_from_average() {
@@ -1634,6 +1639,24 @@ mod tests {
     fn github_client_cache_rebuilds_only_when_proxy_env_changes() {
         use temp_env::with_vars;
 
+        // build_github_client is async now (its probe loop runs on the tokio
+        // blocking pool), so each invocation runs on a dedicated thread with its
+        // own current-thread runtime — a nested runtime would panic, and env
+        // vars are process-global so `with_vars` still applies. The shared
+        // GITHUB_CLIENT_CACHE is process-wide, so cache reuse across the two
+        // invocations is still exercised.
+        fn build_client_sync() -> reqwest::Client {
+            std::thread::spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build test runtime")
+                    .block_on(super::build_github_client())
+            })
+            .join()
+            .expect("client build thread panicked")
+        }
+
         // Both proxy URLs point at closed ports, so building the client is
         // fast and never touches the network.
         with_vars(
@@ -1644,10 +1667,10 @@ mod tests {
                 ("all_proxy", None),
             ],
             || {
-                let _first = build_github_client();
+                let _first = build_client_sync();
                 // Unchanged env: the second call must take the fast path and
                 // reuse the cached client instead of re-probing proxy ports.
-                let _second = build_github_client();
+                let _second = build_client_sync();
 
                 let cache = GITHUB_CLIENT_CACHE.get_or_init(|| std::sync::Mutex::new(None));
                 let guard = cache.lock().unwrap();
@@ -1666,7 +1689,7 @@ mod tests {
                 ("all_proxy", None),
             ],
             || {
-                let _rebuilt = build_github_client();
+                let _rebuilt = build_client_sync();
                 let cache = GITHUB_CLIENT_CACHE.get_or_init(|| std::sync::Mutex::new(None));
                 let guard = cache.lock().unwrap();
                 let (cached_env, _client) = guard.as_ref().expect("client must be cached");

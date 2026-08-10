@@ -1,10 +1,12 @@
 //! Voting-related methods for `OrchestrationCouncil`.
 //!
-//! Handles casting votes, tallying results, and effective voting power
-//! calculation. Reputation records are seeded by `cast_vote` (via
-//! `ensure_reputation`) so the auto-ejection scan in `quorum/consensus.rs`
-//! has data to examine; vote-accuracy learning (`record_vote_accuracy`) was
-//! removed as unwired dead code — no production path recorded outcomes.
+//! Handles casting votes, tallying results, effective voting power
+//! calculation, and outcome recording for reputation learning. Reputation
+//! records are seeded by `cast_vote` (via `ensure_reputation`) so the
+//! auto-ejection scan in `quorum/consensus.rs` has data to examine, and
+//! `record_outcome` (called from the council-deliberation routing path)
+//! advances each member's accuracy so reputation actually influences future
+//! voting power.
 
 use super::council::OrchestrationCouncil;
 use super::types::*;
@@ -54,6 +56,37 @@ impl OrchestrationCouncil {
             poisoned.into_inner()
         });
         guard.get(member_id).cloned()
+    }
+
+    /// Record the outcome of a tallied proposal for reputation learning.
+    ///
+    /// Every member that voted on `proposal_id` receives an accuracy outcome:
+    /// a vote is accurate when it selected `winning_option`. This is the
+    /// production caller of `ReputationRecord::record_outcome` — before it
+    /// existed, outcomes were never recorded, so `auto_eject_low_performers`
+    /// (quorum/consensus.rs) never ejected anyone and the reputation
+    /// voting-power boost (agent_selector.rs, `total_votes >= 3`) never
+    /// engaged.
+    pub fn record_outcome(&self, proposal_id: &str, winning_option: Option<&str>) {
+        let votes = self.votes.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("council votes lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let mut rep = self.reputation.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("council reputation lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        for ((member_id, pid), vote) in votes.iter() {
+            if pid != proposal_id {
+                continue;
+            }
+            if let Some(record) = rep.get_mut(member_id) {
+                let accurate = winning_option
+                    .map(|w| vote.selected_option == w)
+                    .unwrap_or(false);
+                record.record_outcome(accurate);
+            }
+        }
     }
 
     /// Cast a vote on a proposal.

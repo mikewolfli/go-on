@@ -249,7 +249,8 @@ fn run_council_route_deliberation(
     // Cast real votes: each member endorses itself with its nominal voting
     // power (no LLM ballot exists, so a self-endorsement is the honest vote).
     // This seeds the council reputation map (`ensure_reputation`) so the
-    // auto-ejection scan has real data, and `tally_votes` records the outcome.
+    // auto-ejection scan has real data. The outcome of the decision is
+    // recorded after the winner is chosen below (`record_outcome`).
     for agent in candidate_agents {
         if let Err(e) = council.cast_vote(CouncilVote {
             member_id: agent.clone(),
@@ -302,6 +303,14 @@ fn run_council_route_deliberation(
     } else {
         (winner_by_reputation.clone(), "reputation_ranked")
     };
+
+    // Record the real decision outcome for reputation learning: each member
+    // voted for itself, so its self-endorsement was accurate iff it is the
+    // routed winner. This closes the loop for `auto_eject_low_performers`
+    // (quorum/consensus.rs) and the `total_votes >= 3` reputation boost in
+    // agent_selector — before this call, no production path recorded
+    // outcomes, so neither mechanism could ever engage.
+    council.record_outcome(&submitted_id, Some(&winner));
 
     Some((
         winner.clone(),

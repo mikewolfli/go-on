@@ -498,12 +498,14 @@ pub(crate) fn cluster_health_from_counts_with_config(
     let degraded_ratio = degraded_nodes as f64 / total_nodes as f64;
     if offline_ratio >= config.healthy_threshold || active_faults >= 10 {
         ClusterHealth::Critical
-    } else if (offline_ratio >= config.degraded_threshold
+    } else if offline_ratio >= config.degraded_threshold
         || degraded_ratio >= config.unhealthy_threshold
-        || active_faults >= 5)
-        || offline_nodes > 0
-        || degraded_nodes > 0
+        || active_faults > 0
     {
+        // The threshold comparisons above are the real signal; the
+        // previously-present `offline_nodes > 0 || degraded_nodes > 0` fallback
+        // made them vacuous (any single offline node forced Degraded regardless
+        // of ratio). Unresolved faults remain an explicit degradation signal.
         ClusterHealth::Degraded
     } else {
         ClusterHealth::Healthy

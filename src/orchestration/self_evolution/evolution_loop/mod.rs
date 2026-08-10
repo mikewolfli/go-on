@@ -74,6 +74,32 @@ pub struct EvolutionLoop {
     diagnostic_error_counts: Option<Arc<tokio::sync::Mutex<HashMap<String, u64>>>>,
 }
 
+/// Capture a real system-metrics snapshot for evolution-history recording.
+///
+/// Sources the process-global performance monitor (average latency, total
+/// operations, error rate, memory and CPU usage). Returns `None` only if no
+/// snapshot is available — the history entry is then recorded with `None`
+/// metrics, which keeps `degradation()` / `should_auto_rollback()` inert for
+/// that entry rather than fabricating data.
+fn capture_metrics_snapshot() -> Option<observe::MetricsSnapshot> {
+    let perf = crate::observability::performance::global_metrics_snapshot()?;
+    let error_rate = if perf.total_ops > 0 {
+        perf.failed_ops as f64 / perf.total_ops as f64
+    } else {
+        0.0
+    };
+    Some(observe::MetricsSnapshot::new(
+        perf.avg_latency_ms,
+        perf.total_ops as f64,
+        error_rate,
+        perf.memory_usage_bytes,
+        // PerformanceMonitor reports CPU as a percentage; the snapshot
+        // expects a fraction (0.0–1.0).
+        perf.cpu_usage_percent / 100.0,
+        0, // no active-task counter is available from the performance monitor
+    ))
+}
+
 impl EvolutionLoop {
     /// Create a new EvolutionLoop with default settings.
     pub fn new(workdir: PathBuf) -> Self {
@@ -131,19 +157,15 @@ impl EvolutionLoop {
     /// the evolution loop to the live alert system.
     pub fn with_alert_manager(mut self, am: Arc<StdMutex<AlertManager>>) -> Self {
         // Replace any existing AlertManagerTriggerSource with a wired one.
+        // Identification uses the stable `TriggerSource::name()` identifier
+        // ("alert_manager_trigger") instead of Debug-string matching, which
+        // was fragile (it depended on the type's Debug formatting).
         let mut found = false;
         self.trigger_sources = self
             .trigger_sources
             .drain(..)
             .filter_map(|source| {
-                // We can't downcast trait objects in stable Rust without
-                // Any, so instead we simply add the wired one and drop
-                // the unwired one by checking Debug output heuristic.
-                //
-                // Actually, the cleanest way: remove all AlertManagerTriggerSource
-                // instances by not forwarding them. We check by debug formatting.
-                let debug_str = format!("{:?}", source);
-                if debug_str.contains("AlertManagerTriggerSource") && !found {
+                if source.name() == "alert_manager_trigger" && !found {
                     found = true;
                     None // remove the unwired one
                 } else {
@@ -286,6 +308,11 @@ impl EvolutionLoop {
                 }
 
                 // Phase 5: Apply the patch
+                // Capture a real system-metrics snapshot before applying, so
+                // the history entry carries genuine before/after data (the
+                // former `None`/`None` made `degradation()` /
+                // `should_auto_rollback()` dead in production).
+                let metrics_before = capture_metrics_snapshot();
                 let patch = match self.apply(&patch).await {
                     Ok(p) => p,
                     Err(e) => {
@@ -357,8 +384,8 @@ impl EvolutionLoop {
                             vec![patch],
                             approval,
                             verified,
-                            None, // metrics_before
-                            None, // metrics_after
+                            metrics_before,
+                            capture_metrics_snapshot(),
                         )
                         .await;
                 }

@@ -14,9 +14,11 @@
 //! - memory.ingest  — store shared memory entries synced from another node
 //!   (used by the DistributedMemoryBus HTTP transport)
 //!
-//! # Dead-code note
-//! This module is a design reserve for future multi-process architecture.
-//! See parent `hub/mod.rs` for the full rationale.
+//! # Wiring note
+//! This module is live via the `go-on hub` CLI command (see `src/main/mod.rs`);
+//! core server paths are not yet connected. It remains a design reserve for the
+//! future multi-process architecture — see parent `hub/mod.rs` for the full
+//! rationale.
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -252,16 +254,19 @@ async fn handle_rpc(
             let key = params.get("key").and_then(|v| v.as_str()).unwrap_or("");
             let value = params.get("value");
             if key.is_empty() || value.is_none() {
-                json_rpc_error(
+                // Top-level JSON-RPC error object (previously the error was
+                // wrongly nested inside `result` for this arm).
+                let err = json_rpc_error(
                     Some(req_id.clone()),
                     INVALID_PARAMS,
                     "key and value required",
-                )
-            } else {
-                let value = value.cloned().unwrap_or(json!(null));
-                vault.lock().await.insert(key.to_string(), value);
-                json!({"ok": true, "key": key})
+                );
+                write_json(&mut stream, 200, err).await?;
+                return Ok(());
             }
+            let value = value.cloned().unwrap_or(json!(null));
+            vault.lock().await.insert(key.to_string(), value);
+            json!({"ok": true, "key": key})
         }
         "hub.retrieve" => {
             let key = params.get("key").and_then(|v| v.as_str()).unwrap_or("");
@@ -300,8 +305,10 @@ async fn handle_rpc(
         }
         _ => {
             // Unknown method → JSON-RPC error object in the top-level
-            // `error` field (previously the error object was wrongly nested
-            // inside `result`).
+            // `error` field. Both this branch and the `hub.store`
+            // INVALID_PARAMS branch write the error at the top level
+            // (previously the error objects were wrongly nested inside
+            // `result`).
             let err = json_rpc_error(
                 Some(req_id.clone()),
                 METHOD_NOT_FOUND,

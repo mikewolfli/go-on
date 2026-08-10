@@ -43,7 +43,8 @@ path = "src/lib.rs"
 # Exactly ONE profile must be selected. Default is local.
 #
 # local: single-user local tool; SQLite cache + adaptive vector store
-#                Core sub-buses: tool, orchestration, observability, optimization
+#                Sub-buses: tool, orchestration, observability, optimization,
+#                memory, protocol
 #                Fast startup, minimal external dependencies
 #
 # simple-server: single-server deployment; SQLite cache + required sqlite-vec
@@ -339,6 +340,10 @@ harness = false
 
 [[bench]]
 name = "pipeline_bench"
+harness = false
+
+[[bench]]
+name = "streaming_e2e_bench"
 harness = false
 
 # ── Optimisation profiles ──────────────────────────────────────────────────

@@ -81,6 +81,8 @@ pub(crate) async fn collect_agent_responses(
 /// progressive SSE emission, then handles tool execution and followup.
 ///
 /// Returns `(response_text, reasoning_text, selected_model)`.
+/// `operation_mode` / `is_safeguard` control governance approval events.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_agent_collecting(
     server: &AcpServer,
     stream_ctx: StreamNotificationContext<'_>,
@@ -89,6 +91,8 @@ pub(crate) async fn run_agent_collecting(
     principles: Option<Vec<String>>,
     options: Option<HashMap<String, Value>>,
     timeout_duration: Option<Duration>,
+    operation_mode: &str,
+    is_safeguard: bool,
 ) -> Result<(String, String, Option<String>)> {
     // tool execution delegated to execute_tools_concurrent
     let chat_messages = messages.to_vec();
@@ -240,15 +244,20 @@ pub(crate) async fn run_agent_collecting(
                     );
                 }
                 // ── Execute tool calls concurrently via unified executor ──
+                // operation_mode / is_safeguard are passed through from the
+                // request (fallback path) or defaulted for read-only helper
+                // paths (vote / phase-summary), so governance approval events
+                // carry the real mode instead of a hard-coded "edit".
                 let exec_result = execute_tools_concurrent(
                     &tool_calls,
                     server.tool_registry(),
                     &ToolExecConfig {
                         max_concurrency: 10,
                         circuit_breaker_limit: 5,
-                        operation_mode: "edit".to_string(),
-                        governance_required: true,
-                        is_safeguard: false,
+                        operation_mode: operation_mode.to_string(),
+                        governance_required: operation_mode == "edit"
+                            || operation_mode == "safeguard",
+                        is_safeguard,
                         acp_session_id: None,
                     },
                     None, // no progress_tx in ACP secondary path

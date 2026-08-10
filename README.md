@@ -287,7 +287,7 @@ npm run compile
 | Built-in tools | 60+ |
 | AI providers | 37 |
 | Skills in marketplace | 34 |
-| Unit tests | ~1.7K (1,590 lib + 139 integration; see Verification below) |
+| Unit tests | ~1.7K (1,502 lib + 153 integration; see Verification below) |
 | Trilingual i18n | en / zh-CN / zh-TW (~95% coverage) |
 
 ## Build Profiles

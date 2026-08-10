@@ -691,6 +691,30 @@ async fn mcp_http_error_data_keeps_platform_context() {
     )
     .await;
 
+    // The MCP server only injects platform_context after `initialize` has
+    // been processed; if this request raced the initialize round-trip the
+    // response is SERVER_NOT_INITIALIZED (no platform_context). Retry a few
+    // times to close that timing window.
+    let mut unknown = unknown;
+    for _ in 0..5 {
+        if unknown["error"]["data"].get("platform_context").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        unknown = post_mcp_json_with_retry(
+            &client,
+            &format!("{}/", harness.base_url),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "blue25.unknown.method",
+                "params": {}
+            }),
+            3,
+        )
+        .await;
+    }
+
     assert!(
         unknown["error"]["data"].get("platform_context").is_some(),
         "mcp http unknown-method error.data must include platform_context; got: {unknown}"

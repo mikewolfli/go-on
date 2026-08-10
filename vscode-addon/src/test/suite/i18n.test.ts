@@ -42,9 +42,13 @@ suite("i18n", () => {
       i18n.loadLocale("en_US");
     });
 
-    test("reloadMessages does not throw", () => {
+    test("reloadMessages reloads the message table", () => {
       i18n.reloadMessages();
-      assert.ok(true, "reloadMessages should complete without error");
+      // reloadMessages() re-reads the locale file; the message table must
+      // remain functional afterwards (not just "not throw").
+      assert.strictEqual(i18n.getCurrentLanguage(), "en_US");
+      assert.strictEqual(t("general.goOn"), "Go-On");
+      assert.strictEqual(t("messages.goOnStarted"), "Go-On proxy started.");
     });
 
     test("setLanguage changes language and reloads", () => {
@@ -102,12 +106,13 @@ suite("i18n", () => {
     });
 
     test("t() with single parameter substitutes {0}", () => {
-      // This key uses {0} in the message value
+      // messages.goOnStartFailed = "Failed to start Go-On: {0}"
       const result = t("messages.goOnStartFailed", "timeout");
       assert.ok(
-        result.includes("timeout") || result.includes("Failed to start"),
+        result.includes("timeout") && result.includes("Failed to start Go-On"),
         `result should contain substitution: ${result}`,
       );
+      assert.ok(!result.includes("{0}"), "placeholder must be substituted");
     });
 
     test("t() with numeric parameters", () => {

@@ -1,8 +1,9 @@
-//! Mode selector and runtime orchestrator
+//! Model selection and cost/latency estimation.
 //!
-//! These functions are intentional framework definitions for Phase 0-9 architecture.
-//! Mode selector and executor will be called from the ACP handler once request
-//! routing logic decides which mode should handle each task.
+//! Provides the model-selection primitives used by the routing layer:
+//! task-driven model selection (`select_model_for_task`), semantic model
+//! matching (`select_model_semantic`), and the cost / latency / capability
+//! estimates that feed selection strategies.
 //!
 //! Phase 10+: Model selection integration for automatic model discovery and selection.
 //! BLUE44: HotFailover + LivePerformanceFeed + SemanticCapabilityMatcher integration.

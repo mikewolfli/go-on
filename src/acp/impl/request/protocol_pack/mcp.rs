@@ -371,7 +371,7 @@ pub async fn acp_tools_call_payload(server: &AcpServer, params: Value) -> Result
     // ── Send "started" progress update ──────────────────────────────────
     if let Some(ref sid) = session_id {
         let msg = format!("🔧 **{}** — executing...", name);
-        super::session::send_chunk(server, sid, "agent_message_chunk", &msg).await;
+        super::session::send_chunk(sid, "agent_message_chunk", &msg).await;
     }
 
     // ── Execute the tool ────────────────────────────────────────────────
@@ -381,7 +381,7 @@ pub async fn acp_tools_call_payload(server: &AcpServer, params: Value) -> Result
             record_mcp_tool_audit(name, &arguments, false, &err.to_string());
             if let Some(ref sid) = session_id {
                 let msg = format!("❌ **{}** failed: {}", name, err);
-                super::session::send_chunk(server, sid, "agent_message_chunk", &msg).await;
+                super::session::send_chunk(sid, "agent_message_chunk", &msg).await;
             }
             return Err(anyhow::anyhow!(err.to_string()));
         }
@@ -391,7 +391,7 @@ pub async fn acp_tools_call_payload(server: &AcpServer, params: Value) -> Result
     // ── Send "completed" progress update ────────────────────────────────
     if let Some(ref sid) = session_id {
         let msg = format!("✅ **{}** — completed", name);
-        super::session::send_chunk(server, sid, "agent_message_chunk", &msg).await;
+        super::session::send_chunk(sid, "agent_message_chunk", &msg).await;
     }
 
     let mut content = serde_json::Map::new();

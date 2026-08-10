@@ -50,6 +50,37 @@ pub struct McpClientTool {
     pub input_schema: Option<Value>,
 }
 
+/// Parse the `result` of a `tools/list` request into tool descriptors.
+///
+/// Shared by both transports (stdio + HTTP) so the field extraction cannot
+/// drift between them.
+fn parse_tool_list(result: Value) -> Vec<McpClientTool> {
+    let tools = result
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut list = Vec::with_capacity(tools.len());
+    for tool in tools {
+        list.push(McpClientTool {
+            name: tool
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            description: tool
+                .get("description")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            input_schema: tool
+                .get("inputSchema")
+                .or_else(|| tool.get("input_schema"))
+                .cloned(),
+        });
+    }
+    list
+}
+
 /// Configuration for an MCP client connection.
 #[derive(Debug, Clone)]
 pub struct McpClientConfig {
@@ -214,30 +245,7 @@ impl McpStdioClient {
     /// List tools exposed by the remote MCP server.
     pub async fn list_tools(&self) -> Result<Vec<McpClientTool>> {
         let result = self.request("tools/list", None).await?;
-        let tools = result
-            .get("tools")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut list = Vec::with_capacity(tools.len());
-        for tool in tools {
-            list.push(McpClientTool {
-                name: tool
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                description: tool
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                input_schema: tool
-                    .get("inputSchema")
-                    .or_else(|| tool.get("input_schema"))
-                    .cloned(),
-            });
-        }
-        Ok(list)
+        Ok(parse_tool_list(result))
     }
 
     /// Call a tool on the remote MCP server.
@@ -379,30 +387,7 @@ impl McpHttpClient {
     /// List tools exposed by the remote MCP server.
     pub async fn list_tools(&self) -> Result<Vec<McpClientTool>> {
         let result = self.request("tools/list", None).await?;
-        let tools = result
-            .get("tools")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut list = Vec::with_capacity(tools.len());
-        for tool in tools {
-            list.push(McpClientTool {
-                name: tool
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                description: tool
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                input_schema: tool
-                    .get("inputSchema")
-                    .or_else(|| tool.get("input_schema"))
-                    .cloned(),
-            });
-        }
-        Ok(list)
+        Ok(parse_tool_list(result))
     }
 
     /// Call a tool on the remote MCP server.

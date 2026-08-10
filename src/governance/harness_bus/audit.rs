@@ -39,7 +39,10 @@ pub struct PuaGovernanceProfile {
     pub learning_updates: u64,
     /// (13) Hardening events triggered
     pub hardening_events: u64,
-    /// (14) Review control overrides
+    /// (14) Review control overrides. Reserved: the review gate currently
+    /// never resolves to an override, so this stays 0 (kept on the profile
+    /// API surface; `status.rs` still reads it for the voting degradation
+    /// signal).
     pub review_overrides: u64,
     // ── Existing fields ───────────────────────────────────────────────
     pub current_active_policies: u32,
@@ -83,11 +86,6 @@ impl PuaGovernanceProfile {
     /// Record a hardening event.
     pub fn record_hardening_event(&mut self) {
         self.hardening_events += 1;
-    }
-
-    /// Record a review override.
-    pub fn record_review_override(&mut self) {
-        self.review_overrides += 1;
     }
 }
 

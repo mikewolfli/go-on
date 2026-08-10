@@ -1,21 +1,21 @@
-/// GAP-B50-20: 端到端流式性能 Benchmark
-///
-/// Measures:
-/// - time_to_first_token_ms (TTFT) p50/p95/p99
-/// - tokens_per_second (TPS)
-/// - time_to_complete_ms (TTC)
-/// - stream_interrupt_latency_ms
-///
-/// The benchmark spawns go-on once (uniform spawn — no mode-specific
-/// environment variables; the fictional GUI/VSCode/HTTP "mode" split and the
-/// GO_ON_MODE/GO_ON_STREAMING variables were removed because no production
-/// code reads them) and drives the real JSON-RPC streaming path.
-/// Regression detection: TTFT p50 > baseline × 1.5
-///
-/// NOTE: This test requires a live LLM server with streaming capabilities.
-/// It takes several minutes when a server is available.
-/// If no server is detected at 127.0.0.1:8090, it prints a skip notice and
-/// returns so CI is not blocked.
+//! GAP-B50-20: 端到端流式性能 Benchmark (custom bench harness)
+//!
+//! Measures:
+//! - time_to_first_token_ms (TTFT) p50/p95/p99
+//! - tokens_per_second (TPS)
+//! - time_to_complete_ms (TTC)
+//! - stream_interrupt_latency_ms
+//!
+//! The benchmark spawns go-on once (uniform spawn — no mode-specific
+//! environment variables; the fictional GUI/VSCode/HTTP "mode" split and the
+//! GO_ON_MODE/GO_ON_STREAMING variables were removed because no production
+//! code reads them) and drives the real JSON-RPC streaming path.
+//! Regression detection: TTFT p50 > baseline × 1.5
+//!
+//! Run with `cargo bench --bench streaming_e2e_bench`. It requires a live
+//! LLM server with streaming capabilities at 127.0.0.1:8090; when no server
+//! is detected it exits 0 with a visible skip notice (an optional benchmark,
+//! not a CI test gate — it lives in benches/, not tests/).
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -27,6 +27,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+/// Shared test-harness helpers live under tests/common (reused by this bench
+/// for binary discovery and the cross-process suite lock).
+#[path = "../tests/common/mod.rs"]
 pub mod common;
 use common::binary_path;
 use common::suite_mutex;
@@ -356,11 +359,10 @@ fn run_benchmarks() -> Vec<StreamBenchResult> {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// This benchmark requires a live LLM server at `127.0.0.1:8090`.
+/// The benchmark requires a live LLM server at `127.0.0.1:8090`.
 /// When the server is not available it prints an explicit skip notice and
-/// returns so CI is not blocked.
-#[test]
-fn streaming_e2e_benchmark() {
+/// exits 0 (the bench is optional; the CI test gate does not run benches).
+fn main() {
     // Quick health check: skip (with a visible reason) if server is unreachable.
     let server_available = TcpStream::connect_timeout(
         &"127.0.0.1:8090".parse().expect("valid socket addr"),
@@ -369,7 +371,7 @@ fn streaming_e2e_benchmark() {
     .is_ok();
     if !server_available {
         eprintln!(
-            "SKIP: streaming_e2e_benchmark — LLM server not detected at 127.0.0.1:8090; \
+            "SKIP: streaming_e2e_bench — LLM server not detected at 127.0.0.1:8090; \
              the benchmark requires a live streaming-capable server."
         );
         return;

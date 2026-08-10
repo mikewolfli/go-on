@@ -85,12 +85,15 @@ impl SkillDiscovery {
     ///
     /// Results are cached with TTL for repeated queries. This is a thin
     /// caching layer over `SkillRegistry::discover_skills()`.
+    ///
+    /// `min_score` — minimum composite score for a result (passed through to
+    /// the registry scorer; `None` uses the registry default of 0.40).
     pub fn discover(
         &mut self,
         query: &str,
         top_k: usize,
         registry: &SkillRegistry,
-        _min_score: Option<f64>,
+        min_score: Option<f64>,
     ) -> Vec<ScoredSkill> {
         // Check cache first
         let cache_key = format!("{}:{}", query.to_ascii_lowercase(), top_k);
@@ -100,8 +103,10 @@ impl SkillDiscovery {
             }
         }
 
-        // Delegate scoring to SkillRegistry's unified discover_skills()
-        let descriptors = registry.discover_skills(query, top_k);
+        // Delegate scoring to SkillRegistry's unified discover_skills(),
+        // passing the caller's threshold through instead of dropping it.
+        let descriptors =
+            registry.discover_skills_with_min_score(query, top_k, min_score.unwrap_or(0.40));
         let results: Vec<ScoredSkill> = descriptors
             .into_iter()
             .map(|desc| ScoredSkill {

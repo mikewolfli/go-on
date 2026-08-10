@@ -15,6 +15,7 @@ pub fn startup_context_profile(
         loaded: ctx.loaded,
         loaded_components: ctx.loaded_components.clone(),
         file_count: ctx.file_count,
+        attempted_file_count: ctx.attempted_file_count,
         char_count: ctx.char_count,
         readme_chars: ctx.readme_chars,
         build_command_count: ctx.build_commands.len(),

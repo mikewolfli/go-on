@@ -49,7 +49,7 @@ impl GoOnClientBuilder {
     /// Create a new builder targeting the go-on HTTP endpoint.
     pub fn new(base_url: &str) -> Self {
         Self {
-            base_url: base_url.to_string(),
+            base_url: trim_trailing_slashes(base_url),
             timeout: Duration::from_secs(30),
             max_retries: 3,
             retry_delay: Duration::from_secs(1),
@@ -111,6 +111,13 @@ pub struct GoOnClient {
     retry_delay: Duration,
 }
 
+/// Strip trailing slashes so `{base_url}{endpoint}` never produces
+/// `//rpc` — mirrors the TS (`replace(/\/+$/, "")`) and Python
+/// (`rstrip("/")`) SDKs.
+fn trim_trailing_slashes(url: &str) -> String {
+    url.trim_end_matches('/').to_string()
+}
+
 impl GoOnClient {
     /// Create a new client targeting the go-on HTTP endpoint.
     /// Uses `max_retries: 3` and `retry_delay: 1s` (aligned with Builder defaults).
@@ -120,7 +127,7 @@ impl GoOnClient {
     /// ```
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            base_url: base_url.into(),
+            base_url: trim_trailing_slashes(&base_url.into()),
             http: reqwest::Client::new(),
             timeout: Some(Duration::from_secs(30)),
             max_retries: 3,
@@ -340,8 +347,16 @@ impl GoOnClient {
                     (resp, status)
                 }
                 Err(e) => {
-                    // Transport errors (timeout, connection refused, etc.)
-                    last_error = Some(SdkError::Http(e));
+                    // Transport errors (timeout, connection refused, etc.).
+                    // A reqwest timeout maps to the documented `Timeout`
+                    // variant (previously everything collapsed into `Http`).
+                    last_error = if e.is_timeout() {
+                        Some(SdkError::Timeout {
+                            elapsed_secs: self.timeout.map(|d| d.as_secs()).unwrap_or(30),
+                        })
+                    } else {
+                        Some(SdkError::Http(e))
+                    };
                     if attempt < self.max_retries {
                         let backoff = Self::backoff_delay(self.retry_delay, attempt);
                         tokio::time::sleep(backoff).await;
@@ -352,11 +367,30 @@ impl GoOnClient {
 
             // ── Determine if retryable ──────────────────────────────────────
             if Self::is_retryable(status) {
-                last_error = Some(SdkError::UnexpectedShape(format!(
-                    "HTTP {} {}",
-                    status.as_u16(),
-                    status.canonical_reason().unwrap_or("")
-                )));
+                // 429 → RateLimited (honoring Retry-After when present);
+                // 408 → Timeout; other 5xx → UnexpectedShape. These variants
+                // are the documented public error surface and were previously
+                // never constructed (everything mapped to UnexpectedShape).
+                last_error = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    let retry_after = resp
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok());
+                    Some(SdkError::RateLimited {
+                        retry_after_secs: retry_after.unwrap_or(self.retry_delay.as_secs()),
+                    })
+                } else if status == reqwest::StatusCode::REQUEST_TIMEOUT {
+                    Some(SdkError::Timeout {
+                        elapsed_secs: self.timeout.map(|d| d.as_secs()).unwrap_or(30),
+                    })
+                } else {
+                    Some(SdkError::UnexpectedShape(format!(
+                        "HTTP {} {}",
+                        status.as_u16(),
+                        status.canonical_reason().unwrap_or("")
+                    )))
+                };
                 if attempt < self.max_retries {
                     let backoff = Self::backoff_delay(self.retry_delay, attempt);
                     tokio::time::sleep(backoff).await;

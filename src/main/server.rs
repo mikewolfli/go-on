@@ -12,8 +12,9 @@ use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::protocol::access_mode::resolve_access_selection;
 use crate::reinforcement::{
-    build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
-    persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
+    build_runtime_healthcheck_report, build_runtime_healthcheck_report_with_config,
+    build_task_plan, persist_runtime_healthcheck, persist_task_plan, run_action_check,
+    ActionCheckKind, ArtifactLedger,
 };
 use crate::setup::{
     add_local_model, apply_recommended_to_config, parse_secret_action, parse_secret_mode,
@@ -410,7 +411,11 @@ pub(crate) async fn handle_validation_mode(
     }
 
     if cli.status {
-        let report = build_runtime_healthcheck_report(Some(config_path), None, None).await?;
+        // Reuse the already-loaded config (loaded via `load_uncached` above)
+        // instead of letting the report builder re-load + re-parse the file
+        // and write a fresh mtime-cache entry.
+        let report =
+            build_runtime_healthcheck_report_with_config(config_path, &config, None, None).await?;
         print_runtime_status(config_path, &report);
         print_completeness_report(&config, &report);
         return Ok(None);

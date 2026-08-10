@@ -142,6 +142,8 @@ pub(crate) async fn execute_fallback_agents(
     enable_high_risk_multi_agent_vote: bool,
     max_vote_agents: usize,
     tenant_id: &str,
+    operation_mode: &str,
+    is_safeguard: bool,
 ) -> FallbackExecutionResult {
     let mut selected_agent = String::new();
     let mut response_text = String::new();
@@ -307,6 +309,8 @@ pub(crate) async fn execute_fallback_agents(
                 principles,
                 Some(per_attempt_options),
                 timeout,
+                operation_mode,
+                is_safeguard,
             )
             .await;
             (agent_name_owned, attempt_started, result)

@@ -111,29 +111,20 @@ impl PerformanceMonitor {
             0.0
         };
 
-        // Calculate percentiles (partial selection O(n), no full sort needed).
+        // Calculate percentiles from a single sort. The latency window is
+        // bounded by `max_latencies`, so a full sort is cheap and the two
+        // index reads are O(1) — the previous implementation ran two
+        // `select_nth_unstable` passes (O(n) each) for the same result.
         let mut sorted_latencies: Vec<f64> = self.latencies.iter().copied().collect();
+        sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        let p95_latency = if !sorted_latencies.is_empty() {
-            let index = (sorted_latencies.len() as f64 * 0.95).floor() as usize;
-            let index = index.min(sorted_latencies.len() - 1);
-            sorted_latencies.select_nth_unstable_by(index, |a, b| {
-                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            sorted_latencies[index]
+        let (p95_latency, p99_latency) = if sorted_latencies.is_empty() {
+            (0.0, 0.0)
         } else {
-            0.0
-        };
-
-        let p99_latency = if !sorted_latencies.is_empty() {
-            let index = (sorted_latencies.len() as f64 * 0.99).floor() as usize;
-            let index = index.min(sorted_latencies.len() - 1);
-            sorted_latencies.select_nth_unstable_by(index, |a, b| {
-                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            sorted_latencies[index]
-        } else {
-            0.0
+            let len = sorted_latencies.len();
+            let p95_index = ((len as f64 * 0.95).floor() as usize).min(len - 1);
+            let p99_index = ((len as f64 * 0.99).floor() as usize).min(len - 1);
+            (sorted_latencies[p95_index], sorted_latencies[p99_index])
         };
 
         // Calculate cache hit rate

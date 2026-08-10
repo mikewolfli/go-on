@@ -1,8 +1,13 @@
 //! GAP-B52-05: Evolution History
 //!
 //! Persists the full history of all evolution cycles to `.goon/evolution/history.ndjson`
-//! and provides query, rollback, and metrics-trend analysis. Supports automatic
-//! rollback if post-evolution metrics degrade by more than 20%.
+//! and provides query, rollback, and metrics-trend analysis. The evolution loop
+//! records real system metrics before/after each cycle (`capture_metrics_snapshot`
+//! in evolution_loop), so `degradation()` / `should_auto_rollback()` operate on
+//! genuine data; when both snapshots exist and post-evolution metrics degrade by
+//! more than 20%, `record_entry` logs an auto-rollback warning. Note that this is
+//! advisory detection — the authoritative rollback path is the evolution loop's
+//! immediate revert after failed verification.
 
 use crate::orchestration::self_evolution::evolution_loop::{
     Approval, EvolutionTrigger, MetricsPoint, MetricsSnapshot,
@@ -122,6 +127,9 @@ impl EvolutionEntry {
     }
 
     /// Compute the metrics degradation for this entry, if both snapshots exist.
+    ///
+    /// Snapshots are captured by the evolution loop around each applied patch,
+    /// so this reflects real before/after system metrics.
     pub fn degradation(&self) -> Option<f64> {
         match (&self.metrics_before, &self.metrics_after) {
             (Some(before), Some(after)) => Some(after.degradation_ratio(before)),
@@ -130,6 +138,10 @@ impl EvolutionEntry {
     }
 
     /// Returns true if this entry's metrics have degraded beyond the threshold.
+    ///
+    /// Advisory only: the evolution loop performs the authoritative rollback
+    /// (immediately after failed verification); `record_entry` warns when this
+    /// fires so an operator can investigate.
     pub fn should_auto_rollback(&self) -> bool {
         self.degradation()
             .map(|d| d > AUTO_ROLLBACK_THRESHOLD)

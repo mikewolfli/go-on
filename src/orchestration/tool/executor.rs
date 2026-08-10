@@ -437,7 +437,13 @@ async fn execute_single_tool(
         };
 
         // ── Emit ToolCallUpdate::Completed ─────────────────────────
-        let success_bool = output.error.is_none();
+        // Single success criterion: `output.success` (the tool's real outcome)
+        // drives both the circuit-breaker/recording path above and the
+        // ACP/SSE notifications below. Previously the notifications used
+        // `output.error.is_none()`, which disagreed when a tool reported
+        // `success: true` alongside a non-empty `error` field — the
+        // notifications could report "completed" for a failed tool.
+        let success_bool = success;
         if let Some(ref sid) = config.acp_session_id {
             if let Some(srv) = crate::acp::server::current_acp_server() {
                 let output_val = output

@@ -1,9 +1,10 @@
 //! Session-level chat handling
 //!
 //! Contains the top-level `handle_chat` function along with its private
-//! helper functions (`infer_optimal_mode`, `send_error`, `send_result`,
-//! `record_trace_event`).  Extracted from the parent `chat.rs` to reduce
-//! the monolithic file size.
+//! helper functions (`infer_optimal_mode`, `send_result`, `record_trace_event`).
+//! Error responses are sent directly via `io::send_error` (the local
+//! pass-through wrapper was removed).  Extracted from the parent `chat.rs` to
+//! reduce the monolithic file size.
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -120,7 +121,7 @@ pub(crate) async fn handle_chat(
         // Shared lifecycle gate — reject requests while the server is
         // shutting down (same gate is applied by the session/prompt entry).
         if let Some(snapshot) = check_server_shutdown(server).await? {
-            send_error(
+            crate::acp::r#impl::io::send_error(
                 server,
                 id,
                 crate::acp::r#impl::request::protocol::AcpErrorCode::ShuttingDown as i32,
@@ -135,7 +136,7 @@ pub(crate) async fn handle_chat(
         let mut chat_params: ChatParams = match serde_json::from_value(params_value) {
             Ok(value) => value,
             Err(err) => {
-                send_error(
+                crate::acp::r#impl::io::send_error(
                     server,
                     id,
                     crate::acp::r#impl::request::protocol::AcpErrorCode::InvalidParams as i32,
@@ -170,7 +171,7 @@ pub(crate) async fn handle_chat(
                 trace_id = %pipeline_trace.trace_id,
                 "approval strategy escalated due to policy — rejecting request"
             );
-            send_error(
+            crate::acp::r#impl::io::send_error(
                 server,
                 id,
                 crate::acp::r#impl::request::protocol::AcpErrorCode::EscalationRequired as i32,
@@ -196,7 +197,7 @@ pub(crate) async fn handle_chat(
                 &crate::rpc_protocol::value_to_id(v),
             )
         }) {
-            send_error(
+            crate::acp::r#impl::io::send_error(
                 server,
                 id,
                 crate::acp::r#impl::request::protocol::AcpErrorCode::RequestCancelled as i32,
@@ -749,17 +750,6 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
         "ask"
     }
     .to_string()
-}
-
-/// Send error response
-async fn send_error(
-    server: &AcpServer,
-    id: Option<Value>,
-    code: i32,
-    message: String,
-    data: Option<Value>,
-) -> Result<()> {
-    crate::acp::r#impl::io::send_error(server, id, code, message, data).await
 }
 
 /// Send result response

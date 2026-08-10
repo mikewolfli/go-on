@@ -45,6 +45,8 @@ pub struct StartupContextProfile {
     pub loaded_components: Vec<String>,
     /// Number of files successfully read
     pub file_count: usize,
+    /// Number of files/operations attempted (successful or not)
+    pub attempted_file_count: usize,
     /// Total number of characters extracted across all loaded components
     pub char_count: usize,
     /// Number of characters extracted from README

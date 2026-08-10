@@ -241,7 +241,7 @@ impl Parser {
                     MathNode::Sqrt(Box::new(radicand))
                 }
             }
-            "sum" | "sum_" => {
+            "sum" => {
                 let sub = if self.current == Token::Subscript {
                     self.advance();
                     Some(Box::new(self.parse_atom()))

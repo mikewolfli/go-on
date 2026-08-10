@@ -60,6 +60,12 @@ static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
 /// Initialised via [`init_intelligence_hub`] at server startup.
 static GLOBAL_VOTERS: OnceLock<Vec<Box<dyn AgentVoter + Send + Sync>>> = OnceLock::new();
 
+/// Global capability-bus reference for reputation lookups.
+/// Set by [`init_intelligence_hub`] when a bus is available; used by
+/// [`rationalize_decision`] to weight the Delphi vote with the real UKB
+/// reputation of the agent under evaluation.
+static GLOBAL_CAPABILITY_BUS: OnceLock<Arc<CapabilityBus>> = OnceLock::new();
+
 /// Snapshot of all intelligence hub metric counters.
 ///
 /// Used by the governance health endpoint to expose hub activity
@@ -104,6 +110,13 @@ pub fn init_intelligence_hub(
 
     // Phase 2: Register voters
     let mut voters: Vec<Box<dyn AgentVoter + Send + Sync>> = Vec::new();
+
+    // Keep the bus for later reputation lookups in `rationalize_decision`.
+    // Set it before the CapabilityBusVoter registration below consumes the
+    // `Option<Arc<CapabilityBus>>` value.
+    if let Some(bus) = capability_bus.as_ref() {
+        let _ = GLOBAL_CAPABILITY_BUS.set(bus.clone());
+    }
 
     if let Some(bus) = capability_bus {
         voters.push(Box::new(CapabilityBusVoter::new("capability-bus", bus)));
@@ -440,7 +453,24 @@ pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (
             "confidence": confidence,
             "risk_level": if risk_score > 0.0 { "high" } else { "low" },
         });
-        let reputations = HashMap::new();
+        // Reputation-weighted Delphi vote: build the voter-weight map from the
+        // real UKB reputation of the agent under evaluation instead of passing
+        // an empty map (an empty map degenerated the weighted vote to equal
+        // weights). The capability-bus voter represents the evaluated agent's
+        // ecosystem, so its vote is weighted by that agent's reputation; the
+        // remaining voters (local / rationalization-guard / LLM) are
+        // infrastructure and keep the default weight. When no bus is available
+        // the map stays empty and the vote uses default weights (unchanged).
+        let mut reputations = HashMap::new();
+        if let Some(bus) = GLOBAL_CAPABILITY_BUS.get() {
+            let ukb = bus.unified_knowledge_bus.read().unwrap_or_else(|poisoned| {
+                tracing::warn!("unified_knowledge_bus lock poisoned – recovered");
+                poisoned.into_inner()
+            });
+            let agent_reputation = ukb.get_reputation(agent).unwrap_or(0.5);
+            drop(ukb);
+            reputations.insert("capability-bus".to_string(), agent_reputation);
+        }
         let config = VoteConfig::default(); // defaults to DelphiDebate mode
         let (approved, _confidence) = consensus_vote_with_reputation(
             agent,

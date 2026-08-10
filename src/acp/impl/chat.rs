@@ -170,6 +170,11 @@ pub(crate) async fn run_high_risk_vote_attempt(
         principles,
         Some(options.clone()),
         timeout,
+        // High-risk voting is a decision-try helper path whose tool calls are
+        // read-only probes (no user file mutations); keep the conservative
+        // edit mode for approval events.
+        "edit",
+        false,
     )
     .await;
 
@@ -797,9 +802,7 @@ pub(crate) async fn resolve_request_phase(
 
     let phase = resolved.phase.clone();
     let phase_name = phase.phase_name.clone();
-    reorder_chat_agents_by_runtime_score(server, &phase_name, &mut resolved.agents);
 
-    let mut routing_provenance: Vec<String> = vec!["runtime_score_rerank_applied".to_string()];
     let reputation_scores = collect_reputation_scores(server, &resolved.agents);
 
     let online_scores = resolved
@@ -826,7 +829,19 @@ pub(crate) async fn resolve_request_phase(
         .map(|m| m.to_string());
     let skip_scoring = user_model.is_some();
 
-    if !skip_scoring {
+    let mut routing_provenance: Vec<String> = Vec::new();
+    if skip_scoring {
+        // User explicitly selected a model: runtime-score sorting is the only
+        // sort applied on this path (the selector re-rank below is skipped).
+        reorder_chat_agents_by_runtime_score(server, &phase_name, &mut resolved.agents);
+        routing_provenance.push("runtime_score_rerank_applied".to_string());
+        routing_provenance.push("model_selected_skip_scoring".to_string());
+    } else {
+        // Automatic routing: the selector performs the single canonical sort
+        // (base x capability + reputation + task affinity + capability boost).
+        // The runtime-score pre-sort is skipped so it cannot be silently
+        // overwritten — previously both ran and the selector's sort always
+        // won, making the earlier runtime sort dead work.
         let selector = AgentSelector::default();
         if let Some(selection) = selector.reorder_agents_by_selection(
             &mut resolved.agents,
@@ -844,8 +859,6 @@ pub(crate) async fn resolve_request_phase(
                 selection.selection_reason
             ));
         }
-    } else {
-        routing_provenance.push("model_selected_skip_scoring".to_string());
     }
 
     // ── SchemaRegistry task envelope validation (activated, formerly F-GAP-07) ─
@@ -1249,6 +1262,39 @@ pub(crate) async fn apply_review_gate_assemble(
     } else {
         None
     };
+
+    // ── Post-execution output validation (F-GAP-07) ────────────────────
+    // Validate the final response against the selected role's output schema,
+    // mirroring the input validation done in `resolve_request_phase`. This is
+    // advisory: violations surface as `schema_warnings`, never as a hard
+    // failure, and the response is still delivered. When the agent name has
+    // no registered schema the check is skipped (default registrations are
+    // role-keyed, e.g. "planner"/"coder").
+    let mut schema_warnings = schema_warnings;
+    if !selected_agent.is_empty() && !response_text.is_empty() {
+        let output_val = serde_json::json!({ "response": response_text });
+        let sr_guard = server
+            .registries
+            .schema_registry
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                warn!("apply_review_gate: schema_registry poisoned, recovering");
+                poisoned.into_inner()
+            });
+        if let Some(schema) = sr_guard.get(selected_agent) {
+            match schema.validate_output(&output_val) {
+                Ok(warnings) => {
+                    for w in warnings {
+                        schema_warnings.push(format!("[{}:output] {}", selected_agent, w));
+                    }
+                }
+                Err(e) => {
+                    schema_warnings.push(format!("[{}:output] {}", selected_agent, e));
+                }
+            }
+        }
+        drop(sr_guard);
+    }
 
     let result = crate::acp::helpers::response_finalizer::finalize_chat_response(
         server,

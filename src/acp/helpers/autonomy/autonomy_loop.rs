@@ -529,8 +529,6 @@ pub async fn run_autonomy_loop(
         final_response = reasoning;
     }
 
-    let all_tools_failed = total_tools > 0 && !any_tool_executed_successfully;
-
     Ok(AutonomyLoopResult {
         response: final_response,
         report: AutonomyLoopReport {

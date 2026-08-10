@@ -860,12 +860,43 @@ export class GoOnManager {
         throw new Error("fetch API not available");
       }
 
-      const response = await g.fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bodyObj),
-        signal,
-      });
+      // Combine the caller's abort signal (if any) with a default timeout so
+      // a hung backend cannot stall the stream forever (same contract as the
+      // TypeScript/Rust/Python SDKs).
+      const controller = new AbortController();
+      let timedOut = false;
+      // Keep a stable listener reference so removeEventListener below actually
+      // removes it (a fresh arrow function each time would leak listeners).
+      const onAbort = () => controller.abort();
+      if (signal?.aborted) {
+        controller.abort();
+      } else {
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }
+      const timeoutMs = options?.timeout ?? 30_000;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+
+      let response: Response;
+      try {
+        response = await g.fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bodyObj),
+          signal: controller.signal,
+        });
+      } catch (e) {
+        clearTimeout(timeoutId);
+        signal?.removeEventListener("abort", onAbort);
+        if (timedOut) {
+          throw new Error(`Streaming request timed out after ${timeoutMs}ms`);
+        }
+        throw e;
+      }
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onAbort);
 
       if (!response.ok) {
         // Non-200 response — fall back to non-streaming JSON-RPC

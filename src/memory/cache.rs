@@ -47,6 +47,245 @@ use rusqlite::{params, Connection, OptionalExtension};
 #[cfg(feature = "backend-sqlite")]
 use std::path::Path;
 
+// ─── Shared backend execution primitives ────────────────────────────────────
+// The public async methods (get/put/clear_all/entry_count/stats) are
+// duplicated across the two backends only in their connection acquisition and
+// placeholder style; the actual statements and result mapping live in the
+// per-backend `cache_*` helpers below so the business logic has a single home.
+
+/// Bound values for a cache put (prepared outside `spawn_blocking`).
+struct PutParams {
+    cache_key: String,
+    response_text: String,
+    agent_name: String,
+    now: i64,
+    expires_at: i64,
+    max_entries: i64,
+}
+
+#[cfg(feature = "backend-sqlite")]
+fn cache_get(
+    conn: &rusqlite::Connection,
+    cache_key: &str,
+    now: i64,
+) -> Result<Option<CachedResponse>> {
+    let found = conn
+        .query_row(
+            "
+            SELECT response_text, agent_name
+            FROM response_cache
+            WHERE cache_key = ?1 AND expires_at > ?2
+                ",
+            params![cache_key, now],
+            |row| {
+                Ok(CachedResponse {
+                    response_text: row.get::<_, String>(0)?,
+                    agent_name: row.get::<_, Option<String>>(1)?,
+                })
+            },
+        )
+        .optional()?;
+
+    if found.is_some() {
+        conn.execute(
+            "
+            UPDATE response_cache
+            SET hit_count = hit_count + 1,
+                last_hit_at = ?2
+            WHERE cache_key = ?1
+                ",
+            params![cache_key, now],
+        )?;
+    }
+    Ok(found)
+}
+
+#[cfg(feature = "backend-postgres")]
+fn cache_get(
+    client: &mut postgres::Client,
+    cache_key: &str,
+    now: i64,
+) -> Result<Option<CachedResponse>> {
+    let row = client.query_opt(
+        "SELECT response_text, agent_name FROM response_cache
+         WHERE cache_key = $1 AND expires_at > $2",
+        &[&cache_key, &now],
+    )?;
+    if let Some(row) = row {
+        client.execute(
+            "UPDATE response_cache SET hit_count = hit_count + 1, last_hit_at = $2
+             WHERE cache_key = $1",
+            &[&cache_key, &now],
+        )?;
+        Ok(Some(CachedResponse {
+            response_text: row.get(0),
+            agent_name: row.get(1),
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(feature = "backend-sqlite")]
+fn cache_put(conn: &rusqlite::Connection, p: &PutParams) -> Result<()> {
+    conn.execute(
+        "
+        INSERT INTO response_cache(
+            cache_key,
+            response_text,
+            agent_name,
+            created_at,
+            updated_at,
+            expires_at,
+            hit_count,
+            last_hit_at
+        )
+        VALUES(?1, ?2, ?3, ?4, ?4, ?5, 0, NULL)
+        ON CONFLICT(cache_key) DO UPDATE SET
+            response_text = excluded.response_text,
+            agent_name = excluded.agent_name,
+            updated_at = excluded.updated_at,
+            expires_at = excluded.expires_at
+            ",
+        params![
+            p.cache_key,
+            p.response_text,
+            p.agent_name,
+            p.now,
+            p.expires_at
+        ],
+    )?;
+
+    // Evict only when the table is over budget, and delete only the
+    // excess rows — previously every `put` ran a full-table sort +
+    // delete even when the cache was well below `max_entries`.
+    let row_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| row.get(0))?;
+    if row_count > p.max_entries {
+        let excess = row_count - p.max_entries;
+        const SENTINEL_LIMIT: i64 = 2_147_483_647; // max INT32 — portable replacement for SQLite's LIMIT -1
+        conn.execute(
+            "
+        DELETE FROM response_cache
+        WHERE cache_key IN (
+            SELECT cache_key
+            FROM response_cache
+            ORDER BY updated_at DESC
+            LIMIT ?1 OFFSET ?2
+        )
+            ",
+            params![excess.min(SENTINEL_LIMIT), p.max_entries],
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "backend-postgres")]
+fn cache_put(client: &mut postgres::Client, p: &PutParams) -> Result<()> {
+    client.execute(
+        "INSERT INTO response_cache
+        (cache_key, response_text, agent_name, created_at, updated_at, expires_at, hit_count)
+     VALUES ($1, $2, $3, $4, $4, $5, 0)
+     ON CONFLICT (cache_key) DO UPDATE SET
+        response_text = EXCLUDED.response_text,
+        agent_name    = EXCLUDED.agent_name,
+        updated_at    = EXCLUDED.updated_at,
+        expires_at    = EXCLUDED.expires_at",
+        &[
+            &p.cache_key,
+            &p.response_text,
+            &p.agent_name,
+            &p.now,
+            &p.expires_at,
+        ],
+    )?;
+
+    // Evict only when over budget (previously every put ran the full
+    // NOT IN subquery with a full sort even when under the limit).
+    let row_count: i64 = client
+        .query_one("SELECT COUNT(*) FROM response_cache", &[])
+        .map_err(|e| anyhow::anyhow!("count response_cache rows: {e}"))?
+        .get(0);
+    if row_count > p.max_entries {
+        client.execute(
+            "DELETE FROM response_cache
+         WHERE cache_key NOT IN (
+             SELECT cache_key FROM response_cache
+             ORDER BY updated_at DESC LIMIT $1
+         )",
+            &[&p.max_entries],
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "backend-sqlite")]
+fn cache_clear_all(conn: &rusqlite::Connection) -> Result<usize> {
+    Ok(conn.execute("DELETE FROM response_cache", [])?)
+}
+
+#[cfg(feature = "backend-postgres")]
+fn cache_clear_all(client: &mut postgres::Client) -> Result<usize> {
+    Ok(client.execute("DELETE FROM response_cache", &[])? as usize)
+}
+
+#[cfg(feature = "backend-sqlite")]
+fn cache_entry_count(conn: &rusqlite::Connection) -> Result<u64> {
+    let count = conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    Ok(count.max(0) as u64)
+}
+
+#[cfg(feature = "backend-postgres")]
+fn cache_entry_count(client: &mut postgres::Client) -> Result<u64> {
+    let row = client.query_one("SELECT COUNT(*) FROM response_cache", &[])?;
+    let count: i64 = row.get(0);
+    Ok(count.max(0) as u64)
+}
+
+#[cfg(feature = "backend-sqlite")]
+fn cache_stats(conn: &rusqlite::Connection, max_entries: usize) -> Result<ResponseCacheStats> {
+    let (entry_count_raw, total_hits_raw) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    Ok(build_stats(entry_count_raw, total_hits_raw, max_entries))
+}
+
+#[cfg(feature = "backend-postgres")]
+fn cache_stats(client: &mut postgres::Client, max_entries: usize) -> Result<ResponseCacheStats> {
+    let row = client.query_one(
+        "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
+        &[],
+    )?;
+    let entry_count_raw: i64 = row.get(0);
+    let total_hits_raw: i64 = row.get(1);
+    Ok(build_stats(entry_count_raw, total_hits_raw, max_entries))
+}
+
+/// Shared stats aggregation from raw SQL aggregates.
+fn build_stats(
+    entry_count_raw: i64,
+    total_hits_raw: i64,
+    max_entries: usize,
+) -> ResponseCacheStats {
+    let entry_count = entry_count_raw.max(0) as u64;
+    let total_hits = total_hits_raw.max(0) as u64;
+    let avg_hits_per_entry = if entry_count == 0 {
+        0.0
+    } else {
+        total_hits as f64 / entry_count as f64
+    };
+    ResponseCacheStats {
+        entry_count,
+        max_entries,
+        total_hits,
+        avg_hits_per_entry,
+    }
+}
+
 /// SQLite-based response cache
 #[cfg(feature = "backend-sqlite")]
 #[derive(Debug)]
@@ -125,37 +364,7 @@ impl ResponseCache {
         spawn_blocking(move || {
             let now = now_ts();
             let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-
-            let found = conn
-                .query_row(
-                    "
-                SELECT response_text, agent_name
-                FROM response_cache
-                WHERE cache_key = ?1 AND expires_at > ?2
-                    ",
-                    params![cache_key, now],
-                    |row| {
-                        Ok(CachedResponse {
-                            response_text: row.get::<_, String>(0)?,
-                            agent_name: row.get::<_, Option<String>>(1)?,
-                        })
-                    },
-                )
-                .optional()?;
-
-            if found.is_some() {
-                conn.execute(
-                    "
-                UPDATE response_cache
-                SET hit_count = hit_count + 1,
-                    last_hit_at = ?2
-                WHERE cache_key = ?1
-                    ",
-                    params![cache_key, now],
-                )?;
-            }
-
-            Ok(found)
+            cache_get(&conn, &cache_key, now)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -180,11 +389,11 @@ impl ResponseCache {
     ) -> Result<()> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
         let conn = self.conn.clone();
-        let cache_key = cache_key.to_string();
-        let response_text = response_text.to_string();
-        let agent_name = agent_name.to_string();
         let default_ttl_seconds = self.default_ttl_seconds;
         let max_entries = self.max_entries;
+        let response_text = response_text.to_string();
+        let agent_name = agent_name.to_string();
+        let cache_key = cache_key.to_string();
         spawn_blocking(move || {
             if response_text.trim().is_empty() {
                 return Ok(());
@@ -196,56 +405,17 @@ impl ResponseCache {
             }
 
             let now = now_ts();
-            let expires_at = now + ttl as i64;
-
-            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-
-            conn.execute(
-                "
-            INSERT INTO response_cache(
+            let params = PutParams {
                 cache_key,
                 response_text,
                 agent_name,
-                created_at,
-                updated_at,
-                expires_at,
-                hit_count,
-                last_hit_at
-            )
-            VALUES(?1, ?2, ?3, ?4, ?4, ?5, 0, NULL)
-            ON CONFLICT(cache_key) DO UPDATE SET
-                response_text = excluded.response_text,
-                agent_name = excluded.agent_name,
-                updated_at = excluded.updated_at,
-                expires_at = excluded.expires_at
-                ",
-                params![cache_key, response_text, agent_name, now, expires_at],
-            )?;
+                now,
+                expires_at: now + ttl as i64,
+                max_entries: max_entries as i64,
+            };
 
-            // Evict only when the table is over budget, and delete only the
-            // excess rows — previously every `put` ran a full-table sort +
-            // delete even when the cache was well below `max_entries`.
-            let row_count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| row.get(0))?;
-            let max_entries_i64 = max_entries as i64;
-            if row_count > max_entries_i64 {
-                let excess = row_count - max_entries_i64;
-                const SENTINEL_LIMIT: i64 = 2_147_483_647; // max INT32 — portable replacement for SQLite's LIMIT -1
-                conn.execute(
-                    "
-            DELETE FROM response_cache
-            WHERE cache_key IN (
-                SELECT cache_key
-                FROM response_cache
-                ORDER BY updated_at DESC
-                LIMIT ?1 OFFSET ?2
-            )
-                ",
-                    params![excess.min(SENTINEL_LIMIT), max_entries_i64],
-                )?;
-            }
-
-            Ok(())
+            let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache_put(&conn, &params)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -260,8 +430,7 @@ impl ResponseCache {
         let conn = self.conn.clone();
         spawn_blocking(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let affected = conn.execute("DELETE FROM response_cache", [])?;
-            Ok(affected)
+            cache_clear_all(&conn)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -276,10 +445,7 @@ impl ResponseCache {
         let conn = self.conn.clone();
         spawn_blocking(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let count = conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| {
-                row.get::<_, i64>(0)
-            })?;
-            Ok(count.max(0) as u64)
+            cache_entry_count(&conn)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -292,27 +458,7 @@ impl ResponseCache {
         let max_entries = self.max_entries;
         spawn_blocking(move || {
             let conn = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-
-            let (entry_count_raw, total_hits_raw) = conn.query_row(
-                "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
-                [],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-            )?;
-
-            let entry_count = entry_count_raw.max(0) as u64;
-            let total_hits = total_hits_raw.max(0) as u64;
-            let avg_hits_per_entry = if entry_count == 0 {
-                0.0
-            } else {
-                total_hits as f64 / entry_count as f64
-            };
-
-            Ok(ResponseCacheStats {
-                entry_count,
-                max_entries,
-                total_hits,
-                avg_hits_per_entry,
-            })
+            cache_stats(&conn, max_entries)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -503,27 +649,7 @@ impl ResponseCache {
         spawn_blocking(move || {
             let mut client = pool_get(&pool)?;
             let now = now_ts();
-
-            let row = client.query_opt(
-                "SELECT response_text, agent_name FROM response_cache
-                 WHERE cache_key = $1 AND expires_at > $2",
-                &[&cache_key, &now],
-            )?;
-
-            if let Some(row) = row {
-                client.execute(
-                    "UPDATE response_cache SET hit_count = hit_count + 1, last_hit_at = $2
-                     WHERE cache_key = $1",
-                    &[&cache_key, &now],
-                )?;
-
-                Ok(Some(CachedResponse {
-                    response_text: row.get(0),
-                    agent_name: row.get(1),
-                }))
-            } else {
-                Ok(None)
-            }
+            cache_get(&mut client, &cache_key, now)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -538,11 +664,11 @@ impl ResponseCache {
     ) -> Result<()> {
         let _permit = crate::shared::db_pool::acquire_db_permit().await;
         let pool = self.pool.write.clone();
-        let cache_key = cache_key.to_string();
-        let response_text = response_text.to_string();
-        let agent_name = agent_name.to_string();
         let default_ttl_seconds = self.default_ttl_seconds;
         let max_entries = self.max_entries;
+        let response_text = response_text.to_string();
+        let agent_name = agent_name.to_string();
+        let cache_key = cache_key.to_string();
         spawn_blocking(move || {
             if response_text.trim().is_empty() {
                 return Ok(());
@@ -552,39 +678,16 @@ impl ResponseCache {
                 return Ok(());
             }
             let mut client = pool_get(&pool)?;
-            let max_entries = max_entries as i64;
             let now = now_ts();
-            let expires_at = now + ttl as i64;
-            client.execute(
-                "INSERT INTO response_cache
-                (cache_key, response_text, agent_name, created_at, updated_at, expires_at, hit_count)
-             VALUES ($1, $2, $3, $4, $4, $5, 0)
-             ON CONFLICT (cache_key) DO UPDATE SET
-                response_text = EXCLUDED.response_text,
-                agent_name    = EXCLUDED.agent_name,
-                updated_at    = EXCLUDED.updated_at,
-                expires_at    = EXCLUDED.expires_at",
-                &[&cache_key, &response_text, &agent_name, &now, &expires_at],
-            )?;
-
-            // Evict only when over budget (previously every put ran the full
-            // NOT IN subquery with a full sort even when under the limit).
-            let row_count: i64 = client
-                .query_one("SELECT COUNT(*) FROM response_cache", &[])
-                .map_err(|e| anyhow::anyhow!("count response_cache rows: {e}"))?
-                .get(0);
-            if row_count > max_entries {
-                client.execute(
-                    "DELETE FROM response_cache
-                 WHERE cache_key NOT IN (
-                     SELECT cache_key FROM response_cache
-                     ORDER BY updated_at DESC LIMIT $1
-                 )",
-                    &[&max_entries],
-                )?;
-            }
-
-            Ok(())
+            let params = PutParams {
+                cache_key,
+                response_text,
+                agent_name,
+                now,
+                expires_at: now + ttl as i64,
+                max_entries: max_entries as i64,
+            };
+            cache_put(&mut client, &params)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -595,7 +698,7 @@ impl ResponseCache {
         let pool = self.pool.write.clone();
         spawn_blocking(move || {
             let mut client = pool_get(&pool)?;
-            Ok(client.execute("DELETE FROM response_cache", &[])? as usize)
+            cache_clear_all(&mut client)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -606,9 +709,7 @@ impl ResponseCache {
         let pool = self.pool.read.clone();
         spawn_blocking(move || {
             let mut client = pool_get(&pool)?;
-            let row = client.query_one("SELECT COUNT(*) FROM response_cache", &[])?;
-            let count: i64 = row.get(0);
-            Ok(count.max(0) as u64)
+            cache_entry_count(&mut client)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?
@@ -620,25 +721,7 @@ impl ResponseCache {
         let max_entries = self.max_entries;
         spawn_blocking(move || {
             let mut client = pool_get(&pool)?;
-            let row = client.query_one(
-                "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
-                &[],
-            )?;
-            let entry_count_raw: i64 = row.get(0);
-            let total_hits_raw: i64 = row.get(1);
-            let entry_count = entry_count_raw.max(0) as u64;
-            let total_hits = total_hits_raw.max(0) as u64;
-            let avg_hits_per_entry = if entry_count == 0 {
-                0.0
-            } else {
-                total_hits as f64 / entry_count as f64
-            };
-            Ok(ResponseCacheStats {
-                entry_count,
-                max_entries,
-                total_hits,
-                avg_hits_per_entry,
-            })
+            cache_stats(&mut client, max_entries)
         })
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {e}"))?

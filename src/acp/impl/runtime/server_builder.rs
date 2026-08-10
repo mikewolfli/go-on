@@ -505,11 +505,7 @@ pub async fn new_acp_server(
     }
 
     // B51-26: Shared wiring extracted to wire_server()
-    #[cfg(debug_assertions)]
-    eprintln!("DEBUG: about to call wire_server...");
     wire_server(&mut server, &registry).await;
-    #[cfg(debug_assertions)]
-    eprintln!("DEBUG: wire_server completed");
 
     // GAP-B52-30: Register security advisor alert channel with the alert manager.
     // Forward security alerts to the observability pipeline.

@@ -367,7 +367,17 @@ impl TaskRouter {
 
     // ==================== Private Helper Methods ====================
 
-    fn estimate_complexity(description: &str) -> u8 {
+    /// Estimate task complexity on a 1–5 scale (keyword-based).
+    ///
+    /// This is the single authoritative task-complexity classifier: the
+    /// model-selection path (`flow::analyze_task_complexity`) and the
+    /// adaptive planner (`brain_loop::plan_construction`) both delegate here
+    /// so the three former keyword tables cannot drift apart.
+    ///
+    /// Baseline is 2; `complex`/`rewrite`/`redesign`/`algorithm` add 2,
+    /// `performance`/`optimization`/`concurrent` add 1, and
+    /// `simple`/`trivial` subtract 1; the result is capped at 5.
+    pub fn estimate_complexity(description: &str) -> u8 {
         let lower = description.to_lowercase();
         let mut score = 2u8; // baseline
 

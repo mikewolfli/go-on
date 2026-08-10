@@ -768,38 +768,54 @@ describe("OpenAI-compat contracts", () => {
 // ---------------------------------------------------------------------------
 
 describe("SDK Types", () => {
-  it("should construct a ToolCall", () => {
+  // Each test constructs a typed value (compile-time contract check) and then
+  // asserts its JSON wire shape — the field names the backend actually sees.
+
+  it("should construct a ToolCall with a stable wire shape", () => {
     const tc: ToolCall = {
       tool_name: "read_file",
       arguments: { path: "/test.txt" },
       agent_name: "coder",
       duration_ms: 150,
     };
-    expect(tc.tool_name).toBe("read_file");
-    expect(tc.agent_name).toBe("coder");
+    const wire = JSON.parse(JSON.stringify(tc)) as Record<string, unknown>;
+    expect(wire.tool_name).toBe("read_file");
+    expect(wire.agent_name).toBe("coder");
+    expect(wire.duration_ms).toBe(150);
+    expect((wire.arguments as Record<string, unknown>).path).toBe("/test.txt");
   });
 
-  it("should construct a StreamChunk", () => {
+  it("should construct a StreamChunk with a stable wire shape", () => {
     const chunk: StreamChunk = {
       token: "Hello",
       done: false,
       index: 0,
       total_chars: 5,
     };
-    expect(chunk.token).toBe("Hello");
-    expect(chunk.done).toBe(false);
+    const wire = JSON.parse(JSON.stringify(chunk)) as Record<string, unknown>;
+    expect(wire.token).toBe("Hello");
+    expect(wire.done).toBe(false);
+    expect(wire.index).toBe(0);
+    expect(wire.total_chars).toBe(5);
   });
 
-  it("should construct MultimodalInput variants", () => {
+  it("should construct MultimodalInput variants with a stable wire shape", () => {
     const text: MultimodalInput = { type: "text", text: "Hello" };
-    expect(text.type).toBe("text");
+    expect(JSON.parse(JSON.stringify(text))).toEqual({
+      type: "text",
+      text: "Hello",
+    });
 
     const image: MultimodalInput = {
       type: "image",
       image_url: "data:image/png;base64,...",
       detail: "auto",
     };
-    expect(image.type).toBe("image");
+    expect(JSON.parse(JSON.stringify(image))).toEqual({
+      type: "image",
+      image_url: "data:image/png;base64,...",
+      detail: "auto",
+    });
 
     const doc: MultimodalInput = {
       type: "document",
@@ -807,17 +823,26 @@ describe("SDK Types", () => {
       mime_type: "application/pdf",
       filename: "doc.pdf",
     };
-    expect(doc.type).toBe("document");
+    expect(JSON.parse(JSON.stringify(doc))).toEqual({
+      type: "document",
+      data: "base64data",
+      mime_type: "application/pdf",
+      filename: "doc.pdf",
+    });
 
     const audio: MultimodalInput = {
       type: "audio",
       data: "base64data",
       format: "wav",
     };
-    expect(audio.type).toBe("audio");
+    expect(JSON.parse(JSON.stringify(audio))).toEqual({
+      type: "audio",
+      data: "base64data",
+      format: "wav",
+    });
   });
 
-  it("should construct an AgentInfo", () => {
+  it("should construct an AgentInfo with a stable wire shape", () => {
     const info: AgentInfo = {
       name: "coder-agent",
       agent_type: "copilot",
@@ -826,7 +851,11 @@ describe("SDK Types", () => {
       capabilities: ["coding", "general"],
       healthy: true,
     };
-    expect(info.name).toBe("coder-agent");
-    expect(info.healthy).toBe(true);
+    const wire = JSON.parse(JSON.stringify(info)) as Record<string, unknown>;
+    expect(wire.name).toBe("coder-agent");
+    expect(wire.agent_type).toBe("copilot");
+    expect(wire.healthy).toBe(true);
+    expect(wire.models).toEqual(["gpt-4o"]);
+    expect(wire.capabilities).toEqual(["coding", "general"]);
   });
 });

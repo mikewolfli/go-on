@@ -14,8 +14,7 @@ use crate::i18n::runtime::tf;
 use crate::orchestration::skill_import::{parse_skill_md, SkillImportManifest};
 
 use super::execution::{
-    extract_intent_tokens, name_similarity, normalize_name, semantic_similarity,
-    tokenize_with_stopwords, PromptBasedSkill,
+    extract_intent_tokens, normalize_name, tokenize_with_stopwords, PromptBasedSkill,
 };
 
 /// Convert a JSON schema Value (e.g. `{"type":"object","properties":{"code":{"type":"string"}}}`)
@@ -491,33 +490,36 @@ impl SkillRegistry {
         })
     }
 
+    /// Best fuzzy match for `requested` against the registered skills, using
+    /// `input` for intent extraction.
+    ///
+    /// Delegates to [`Self::discover_skills`] so there is a single scoring
+    /// formula and threshold for every fuzzy-matching entry point (previously
+    /// this method used its own formula/threshold, so the same request could
+    /// resolve differently depending on which entry point was used).
     pub fn best_match_with_input(&self, requested: &str, input: &Value) -> Option<String> {
         let normalized_requested = normalize_name(requested);
         if normalized_requested.is_empty() {
             return None;
         }
 
+        // Build a query that combines the requested skill name with intent
+        // tokens extracted from the input value, then hand it to the unified
+        // scorer (top_k = 1 → best match or None).
         let intent_tokens = extract_intent_tokens(input);
-
-        self.skills
-            .values()
-            .map(|skill| {
-                let name = skill.name().to_string();
-                let normalized_name = normalize_name(&name);
-                let name_score = name_similarity(&normalized_requested, &normalized_name);
-                let runtime_score = self.score_of(&name).unwrap_or(0.5);
-                let semantic_score = semantic_similarity(&intent_tokens, skill);
-                let composite = (0.35 * name_score + 0.25 * runtime_score + 0.40 * semantic_score)
-                    .clamp(0.0, 1.0);
-                (name.clone(), composite)
-            })
-            .filter(|(_, score)| *score >= 0.55)
-            .max_by(|left, right| {
-                left.1
-                    .partial_cmp(&right.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(name, _)| name)
+        let query = if intent_tokens.is_empty() {
+            requested.to_string()
+        } else {
+            format!(
+                "{} {}",
+                intent_tokens.iter().cloned().collect::<Vec<_>>().join(" "),
+                requested
+            )
+        };
+        self.discover_skills(&query, 1)
+            .into_iter()
+            .next()
+            .map(|desc| desc.name)
     }
 
     /// Create a new skill from a prompt template.
@@ -860,10 +862,22 @@ impl SkillRegistry {
     /// Excludes hidden skills. Uses the same weight configuration as the original
     /// `SkillDiscovery` for backward-compatible results.
     ///
-    /// This consolidates the fuzzy-matching logic previously split between
-    /// `SkillRegistry::best_match_with_input` and `skill_discovery::SkillDiscovery`.
+    /// This is the single fuzzy-matching scorer for the skill module tree:
+    /// `best_match_with_input` delegates here, and the legacy
+    /// `skill_discovery::SkillDiscovery` is a caching layer over it.
     pub fn discover_skills(&self, query: &str, top_k: usize) -> Vec<super::SkillDescriptor> {
-        const MIN_SCORE: f64 = 0.40;
+        self.discover_skills_with_min_score(query, top_k, 0.40)
+    }
+
+    /// Like [`Self::discover_skills`], but with an explicit minimum composite
+    /// score. Exposed so `SkillDiscovery` can pass a caller-provided threshold
+    /// through instead of dropping it.
+    pub(crate) fn discover_skills_with_min_score(
+        &self,
+        query: &str,
+        top_k: usize,
+        min_score: f64,
+    ) -> Vec<super::SkillDescriptor> {
         const W_NAME: f64 = 0.35;
         const W_DESC: f64 = 0.40;
         const W_RUNTIME: f64 = 0.25;
@@ -921,7 +935,7 @@ impl SkillRegistry {
                 let composite = name_overlap * W_NAME + desc_overlap * W_DESC + runtime * W_RUNTIME;
                 (desc, composite)
             })
-            .filter(|(_, score)| *score >= MIN_SCORE)
+            .filter(|(_, score)| *score >= min_score)
             .collect();
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

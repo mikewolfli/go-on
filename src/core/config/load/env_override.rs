@@ -138,6 +138,27 @@ fn is_keyring_ref(value: &str) -> bool {
 // ── Keyring / secret validation ───────────────────────────────────────────
 
 pub fn validate_external_secret_refs(config: &AppConfig) -> Result<()> {
+    // Keyring reads (`keyring::Entry::get_password` inside `validate_secret_ref`)
+    // are blocking I/O with slow D-Bus/Keychain round-trips. The callers of
+    // this validation run on tokio workers (startup validation, config reload,
+    // health checks), so run the whole validation on a dedicated OS thread
+    // whenever any agent references the keyring; env-only configs validate
+    // inline (env reads are cheap and non-blocking). Same pattern as
+    // `missing_env_vars_by_agent`.
+    if !has_keyring_refs(config) {
+        return validate_external_secret_refs_inner(config);
+    }
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| validate_external_secret_refs_inner(config))
+            .join()
+            .unwrap_or_else(|_| anyhow::bail!("external secret validation thread panicked"))
+    })
+}
+
+/// `validate_external_secret_refs` probe body (see the wrapper above for the
+/// blocking-thread rationale).
+fn validate_external_secret_refs_inner(config: &AppConfig) -> Result<()> {
     for (agent_name, agent) in config.agents() {
         if let Some(value) = agent.api_key_env.as_deref() {
             validate_secret_ref(value, &format!("agents.{}.api_key_env", agent_name))?;

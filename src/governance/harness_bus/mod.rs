@@ -192,11 +192,6 @@ impl HarnessBus {
             if self.evaluator.drain_rationalization_blocked() {
                 p.record_rationalization_block();
             }
-            // Record review overrides when the review gate resolves to Approve
-            // despite requiring manual review.
-            if self.evaluator.drain_review_override() {
-                p.record_review_override();
-            }
             match &verdict {
                 PolicyVerdict::Allow => p.allow_count = p.allow_count.saturating_add(1),
                 PolicyVerdict::Deny(v) => {
@@ -426,9 +421,6 @@ impl HarnessBus {
             tool: None,
             decision: if verdict.quality { "allow" } else { "deny" }.to_string(),
             inputs: serde_json::json!({
-                "dispatch_policy": "",
-                "execution_policy": "",
-                "governance_policy": "",
                 "violations": if verdict.quality {
                     vec![]
                 } else {

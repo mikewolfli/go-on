@@ -100,7 +100,10 @@ where
                 }
                 last_error = Some(err);
                 if attempt + 1 < max_attempts {
-                    sleep(Duration::from_secs(1_u64 << attempt)).await;
+                    // Canonical capped exponential backoff (see
+                    // [`retry_backoff_secs`]); the previous inline
+                    // `1 << attempt` grew without bound.
+                    sleep(Duration::from_secs(retry_backoff_secs(attempt as u32))).await;
                 }
             }
         }

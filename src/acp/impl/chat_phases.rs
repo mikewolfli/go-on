@@ -1557,13 +1557,22 @@ async fn stream_cache_response(
 
 async fn execute_fallback_with_vote(
     server: &AcpServer,
-    _params: &ChatParams,
+    params: &ChatParams,
     resolve_out: &ObserveOutput,
     routing_out: &ThinkOutput,
     trace: &RequestTraceContext,
     stream_observer: Option<StreamObserver>,
     _agent_attempts: Vec<Value>,
 ) -> Result<(FallbackExecutionResult, HighRiskVoteExecutionResult, bool)> {
+    // Derive the effective operation mode the same way execute_autonomy_round
+    // does, so fallback tool execution carries the real mode (approval events
+    // report safeguard/edit/full_auto instead of a hard-coded "edit").
+    let effective_mode = if params.mode.is_empty() {
+        "edit"
+    } else {
+        params.mode.as_str()
+    };
+    let is_safeguard = effective_mode == "safeguard";
     let fallback_result = execute_fallback_agents(
         server,
         resolve_out.resolved.agents.clone(),
@@ -1577,6 +1586,8 @@ async fn execute_fallback_with_vote(
         routing_out.enable_high_risk_multi_agent_vote,
         routing_out.max_vote_agents,
         &resolve_out.tenant_id,
+        effective_mode,
+        is_safeguard,
     )
     .await;
 

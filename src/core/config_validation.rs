@@ -478,7 +478,12 @@ impl ConfigValidator {
         // health report and `emit_config_warnings`).
         if let Some(runtime) = &self.config.runtime {
             if runtime.user_auth_enabled {
-                if runtime.user_auth_token_secret == "go-on-multi-user-secret" {
+                // Compare against the canonical default (single source of
+                // truth in core::config::defaults) instead of a hardcoded
+                // literal so the check cannot drift from the real default.
+                if runtime.user_auth_token_secret
+                    == crate::config::defaults::default_runtime_user_auth_token_secret()
+                {
                     result.warnings.push(ValidationWarning {
                         message: "user_auth is enabled with the default token secret 'go-on-multi-user-secret'; set a strong, unique secret via user_auth_token_secret or user_auth_token_secret_env".to_string(),
                         section: "runtime.user_auth".to_string(),

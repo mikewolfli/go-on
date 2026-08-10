@@ -225,15 +225,14 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
 
     // Spawn bridge task: StreamFrame → session/update JSON-RPC notification
     let bridge_sid = session_id_for_notification.clone();
-    // The bridge task needs an `AcpServer` to reuse the shared `send_chunk`
-    // writer. Take it from the global registry (set by both `run_acp_server`
-    // and `run_acp_http_server`); without it there is no transport to
-    // deliver notifications to, so the bridge exits early.
-    let bridge_server = crate::acp::server::current_acp_server();
+    // The bridge writes through the process-wide transport. When no ACP server
+    // is active there is no transport to deliver notifications to, so the
+    // bridge exits early (the `AcpServer` handle itself is no longer needed
+    // since `send_chunk` writes via the transport).
     let bridge_handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
-        let Some(server) = bridge_server else {
+        if crate::acp::server::current_acp_server().is_none() {
             return;
-        };
+        }
         let sid = match bridge_sid {
             Some(ref s) => s.clone(),
             None => return, // No session ID, nothing to bridge
@@ -252,14 +251,12 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         if !reasoning.is_empty() {
                             // Flush any pending message text before starting thought block
                             if !message_buf.is_empty() {
-                                send_chunk(&server, &sid, "agent_message_chunk", &message_buf)
-                                    .await;
+                                send_chunk(&sid, "agent_message_chunk", &message_buf).await;
                                 message_buf.clear();
                             }
                             thinking_buf.push_str(reasoning);
                             if thinking_buf.len() >= FLUSH_THRESHOLD {
-                                send_chunk(&server, &sid, "agent_thought_chunk", &thinking_buf)
-                                    .await;
+                                send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
                                 thinking_buf.clear();
                             }
                         }
@@ -269,14 +266,12 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                         if !token.is_empty() {
                             // Flush any pending thinking before starting message
                             if !thinking_buf.is_empty() {
-                                send_chunk(&server, &sid, "agent_thought_chunk", &thinking_buf)
-                                    .await;
+                                send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
                                 thinking_buf.clear();
                             }
                             message_buf.push_str(token);
                             if message_buf.len() >= FLUSH_THRESHOLD {
-                                send_chunk(&server, &sid, "agent_message_chunk", &message_buf)
-                                    .await;
+                                send_chunk(&sid, "agent_message_chunk", &message_buf).await;
                                 message_buf.clear();
                             }
                         }
@@ -292,7 +287,6 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                             .unwrap_or("");
                         if !phase.is_empty() && !desc.is_empty() {
                             send_chunk(
-                                &server,
                                 &sid,
                                 "agent_thought_chunk",
                                 &format!("[{}] {}", phase, desc),
@@ -378,11 +372,11 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
                 "result" | "done" => {
                     // Stream ending — flush remaining buffers
                     if !thinking_buf.is_empty() {
-                        send_chunk(&server, &sid, "agent_thought_chunk", &thinking_buf).await;
+                        send_chunk(&sid, "agent_thought_chunk", &thinking_buf).await;
                         thinking_buf.clear();
                     }
                     if !message_buf.is_empty() {
-                        send_chunk(&server, &sid, "agent_message_chunk", &message_buf).await;
+                        send_chunk(&sid, "agent_message_chunk", &message_buf).await;
                         message_buf.clear();
                     }
                 }
@@ -456,7 +450,7 @@ pub async fn session_prompt_payload(server: &AcpServer, params: Value) -> Result
 /// (`protocol_pack::mcp::acp_tools_call_payload`) and the session/prompt
 /// streaming bridge task — the former private `send_session_update_notification`
 /// (byte-identical body) was removed.
-pub async fn send_chunk(_server: &AcpServer, session_id: &str, chunk_type: &str, text: &str) {
+pub async fn send_chunk(session_id: &str, chunk_type: &str, text: &str) {
     use crate::schema::{ContentBlock, ContentChunk, SessionUpdate, TextContent};
     let update = match chunk_type {
         "agent_thought_chunk" => SessionUpdate::AgentThoughtChunk(ContentChunk::new(
@@ -478,27 +472,21 @@ pub(crate) async fn send_session_update(session_id: &str, update: SessionUpdate)
     use crate::schema::SessionNotification;
     let notif = SessionNotification::new(session_id.into(), update);
     if let Ok(value) = serde_json::to_value(&notif) {
-        let payload = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "session/update",
-            "params": value,
-        });
-        if let Some(transport) = crate::acp::transport::get_current_transport() {
-            let _ = transport.write_json_line(&payload).await;
-        }
+        // Single envelope implementation: io::write_notification_envelope builds
+        // the {"jsonrpc","method","params"} frame shared with io::send_notification
+        // (previously this rebuilt the envelope by hand).
+        let _ = crate::acp::r#impl::io::write_notification_envelope("session/update", value).await;
     }
 }
 
-/// Remove all permission state associated with a closed/deleted session:
-/// the granted-permission map, pending permission requests, and (in
-/// multi-users-server) the tenant rate-limiter entry. Shared by
-/// `session_close_payload` and `session_delete_payload` (previously two
-/// identical cleanup blocks).
+/// Remove all pending permission-request state associated with a closed/deleted
+/// session, plus (in multi-users-server) the tenant rate-limiter entry. Shared
+/// by `session_close_payload` and `session_delete_payload` (previously two
+/// identical cleanup blocks). The granted-permission map was removed: it was
+/// write-only (never read by production code — the real permission decision
+/// flows over the transport request/response channel via
+/// `AcpServer::request_client_permission`).
 async fn cleanup_session_permission_state(_server: &AcpServer, session_id: &str) {
-    {
-        let mut permissions = super::acp_permission_state().write().await;
-        permissions.remove(session_id);
-    }
     {
         let mut pending = super::acp_pending_permission_requests().write().await;
         pending.remove(session_id);
@@ -517,10 +505,6 @@ async fn register_pending_permission_request(
     mode: String,
     risk_score: f64,
 ) {
-    {
-        let mut decisions = super::acp_permission_state().write().await;
-        decisions.remove(session_id);
-    }
     let mut pending = super::acp_pending_permission_requests().write().await;
     pending.insert(
         session_id.to_string(),
@@ -756,7 +740,6 @@ pub async fn session_request_permission_payload(
     server: &AcpServer,
     params: Value,
 ) -> Result<Value> {
-    use crate::schema::PermissionOptionId;
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -767,12 +750,6 @@ pub async fn session_request_permission_payload(
         .unwrap_or_default();
 
     if !session_id.is_empty() && !option_id.is_empty() {
-        let mut permissions = super::acp_permission_state().write().await;
-        permissions.insert(
-            session_id.to_string(),
-            PermissionOptionId::new(option_id.to_string()),
-        );
-
         let pending_request = {
             let mut pending = super::acp_pending_permission_requests().write().await;
             pending.remove(session_id)
@@ -917,24 +894,16 @@ pub async fn session_config_get_payload(_server: &AcpServer, params: Value) -> R
         .and_then(Value::as_str)
         .unwrap_or_default();
 
-    let config_options = if !session_id.is_empty() {
+    // Single read-lock acquisition: both config_options and mode come from the
+    // same session entry (previously two consecutive read().await calls).
+    let (config_options, mode) = if !session_id.is_empty() {
         let state = super::acp_session_state().read().await;
-        state
-            .get(session_id)
-            .map(|s| s.config_options.clone())
-            .unwrap_or_default()
+        match state.get(session_id) {
+            Some(s) => (s.config_options.clone(), s.mode.clone()),
+            None => (HashMap::new(), String::new()),
+        }
     } else {
-        HashMap::new()
-    };
-
-    let mode = if !session_id.is_empty() {
-        let state = super::acp_session_state().read().await;
-        state
-            .get(session_id)
-            .map(|s| s.mode.clone())
-            .unwrap_or_default()
-    } else {
-        String::new()
+        (HashMap::new(), String::new())
     };
 
     let mut all_options = config_options;
